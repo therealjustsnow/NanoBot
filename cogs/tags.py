@@ -110,15 +110,43 @@ def _resolve_image(ctx, attachment, image_url) -> tuple[str | None, str | None]:
 
 
 def _tag_embed(tag: dict, name: str, guild_name: str, *, prefix="📌") -> discord.Embed:
+    """Build a rich embed for tags whose content fits (≤1500 chars)."""
     e = discord.Embed(
         title       = f"{prefix}  [{guild_name}]  {name}",
-        description = tag.get("content") or None,   # None = no description field if empty
+        description = tag.get("content") or None,
         color       = h.BLUE,
     )
     if tag.get("image_url"):
         e.set_image(url=tag["image_url"])
     e.set_footer(text="NanoBot Tags")
     return e
+
+
+async def _send_tag(
+    target,
+    tag:   dict,
+    name:  str,
+    guild_name: str,
+    *,
+    reply: bool = True,
+):
+    """
+    Send a tag. Content <= 1500 chars uses a rich embed.
+    Content 1501-2000 falls back to plain text so nothing gets cut off.
+    """
+    text    = tag.get("content") or ""
+    img_url = tag.get("image_url")
+    send    = getattr(target, "reply" if reply else "send", None) or target.send
+
+    if len(text) > 1500:
+        nl     = chr(10)
+        header = "📌 **[" + guild_name + "]  " + name + "**"
+        body   = header + nl + nl + text
+        if img_url:
+            body += nl + img_url
+        await send(body)
+    else:
+        await send(embed=_tag_embed(tag, name, guild_name))
 
 
 def _list_entry(name: str, tag: dict) -> str:
@@ -211,7 +239,7 @@ class Tags(commands.Cog):
     )
     @app_commands.describe(
         name      = "Tag name (no spaces, max 32 chars)",
-        content   = "Tag text (max 1500 chars) — optional if an image is provided",
+        content   = "Tag text (max 2000 chars) — optional if an image is provided",
         image     = "Attach an image file",
         image_url = "Or paste a direct image URL (https://...)",
     )
@@ -237,7 +265,7 @@ class Tags(commands.Cog):
     )
     @app_commands.describe(
         name      = "Tag name (no spaces, max 32 chars)",
-        content   = "Tag content (max 1500 chars) — optional if an image is provided",
+        content   = "Tag content (max 2000 chars) — optional if an image is provided",
         image     = "Attach an image file",
         image_url = "Or paste a direct image URL",
     )
@@ -287,7 +315,8 @@ class Tags(commands.Cog):
         tag  = _find(ctx.guild.id, ctx.author.id, name)
         if not tag:
             return await ctx.reply(embed=h.err(f"No tag named `{name}` found."), ephemeral=True)
-        await ctx.reply(embed=_tag_embed(tag, name, ctx.guild.name, prefix="👁️ Preview"), ephemeral=True)
+        await _send_tag(ctx, tag, name, ctx.guild.name)
+        # Note: preview always uses reply; plain-text tags won't be ephemeral but that's fine
 
     # ══════════════════════════════════════════════════════════════════════════
     #  /tag image
@@ -440,8 +469,8 @@ class Tags(commands.Cog):
                 embed=h.err("A tag needs at least some text or an image — you can't have both empty."),
                 ephemeral=True,
             )
-        if content and len(content) > 1500:
-            return await ctx.reply(embed=h.err("Tag content must be 1500 characters or fewer."), ephemeral=True)
+        if content and len(content) > 2000:
+            return await ctx.reply(embed=h.err("Tag content must be 2000 characters or fewer."), ephemeral=True)
 
         data, gid = _get_data(ctx.guild.id)
         uid = str(ctx.author.id)
@@ -491,8 +520,8 @@ class Tags(commands.Cog):
                 embed=h.err("A tag needs at least some text or an image — you can't have both empty."),
                 ephemeral=True,
             )
-        if content and len(content) > 1500:
-            return await ctx.reply(embed=h.err("Tag content must be 1500 characters or fewer."), ephemeral=True)
+        if content and len(content) > 2000:
+            return await ctx.reply(embed=h.err("Tag content must be 2000 characters or fewer."), ephemeral=True)
 
         data, gid = _get_data(ctx.guild.id)
         if name in data[gid].get("global", {}):
@@ -542,7 +571,7 @@ class Tags(commands.Cog):
         if dm_user:
             # Explicit user target → DM them
             try:
-                await dm_user.send(embed=_tag_embed(tag, name, ctx.guild.name))
+                await _send_tag(dm_user, tag, name, ctx.guild.name, reply=False)
             except discord.Forbidden:
                 return await ctx.reply(
                     embed=h.err(f"Couldn't DM **{dm_user.display_name}** — their DMs may be closed."),
@@ -553,8 +582,8 @@ class Tags(commands.Cog):
                 ephemeral=True,
             )
         else:
-            # Default: post the tag embed directly in the channel
-            await ctx.send(embed=_tag_embed(tag, name, ctx.guild.name))
+            # Default: post the tag in the channel (embed or plain text depending on length)
+            await _send_tag(ctx, tag, name, ctx.guild.name)
 
     async def _do_delete(self, ctx: commands.Context, name: str):
         name     = name.lower().strip()
