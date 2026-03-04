@@ -1,4 +1,7 @@
 {
   "token": "YOUR_BOT_TOKEN_HERE",
-  "default_prefix": "!"
+  "default_prefix": "!",
+  "owner_id": null,
+  "log_level": "INFO",
+  "log_http": false
 }
