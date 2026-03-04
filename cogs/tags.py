@@ -542,7 +542,7 @@ class Tags(commands.Cog):
         await ctx.reply(
             embed=h.ok(
                 f"Global tag **{name}** saved.{img_line}\n"
-                f"Anyone can use `{ctx.prefix}tag {name}` or `{ctx.prefix}{name}` to send it.",
+                f"Anyone can use `{ctx.prefix}tag use {name}` or `{ctx.prefix}{name}` to send it.",
                 "🌐 Global Tag Created",
             ),
             ephemeral=True,
