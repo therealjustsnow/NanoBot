@@ -159,7 +159,29 @@ class NanoBot(commands.Bot):
     async def on_message(self, message: discord.Message):
         if message.author.bot or not message.guild:
             return
+
         self.last_senders[message.channel.id] = message.author
+
+        # ── Tag shortcut: n!tagname ────────────────────────────────────────────
+        # Resolve the guild prefix, check if the word after it is NOT a real
+        # command, and try it as a tag BEFORE handing off to process_commands.
+        # Doing this here (not in CommandNotFound) means failures are never
+        # silently swallowed inside the error handler chain.
+        prefix  = self.prefixes.get(str(message.guild.id), self.default_prefix)
+        content = message.content.strip()
+
+        if content.lower().startswith(prefix.lower()):
+            after  = content[len(prefix):].strip()
+            parts  = after.split()
+            name   = parts[0].lower() if parts else ""
+
+            # Real commands always win — only fall through to tag lookup if
+            # the word isn't a registered command name or alias.
+            if name and name not in self.all_commands:
+                handled = await _try_tag_shortcut(message, self, name)
+                if handled:
+                    return   # tag sent — skip process_commands
+
         await self.process_commands(message)
 
     # ── Error Handler ──────────────────────────────────────────────────────────
@@ -219,43 +241,55 @@ class NanoBot(commands.Bot):
             return await ctx.reply(embed=e, ephemeral=True)
 
         if isinstance(error, commands.CommandNotFound):
-            if ctx.guild and ctx.invoked_with:
-                await _try_tag_shortcut(ctx, ctx.invoked_with.lower())
-            return
+            return   # tag shortcuts are handled in on_message, not here
 
         log.error(f"Unhandled error in {ctx.command}: {error}", exc_info=error)
 
 
 # ── Tag shortcut lookup ────────────────────────────────────────────────────────
-async def _try_tag_shortcut(ctx: commands.Context, name: str):
+async def _try_tag_shortcut(
+    message: discord.Message,
+    bot:     commands.Bot,
+    name:    str,
+) -> bool:
+    """
+    Look up a tag by name for the message author and send it to the channel.
+    Returns True if a tag was found and sent, False otherwise.
+    Called from on_message BEFORE process_commands so errors surface clearly.
+    """
     from utils import storage as _storage
-    data = _storage.read("tags.json")
-    gid  = str(ctx.guild.id)
-    uid  = str(ctx.author.id)
-
-    tag = (
-        data.get(gid, {}).get("personal", {}).get(uid, {}).get(name)
-        or data.get(gid, {}).get("global", {}).get(name)
-    )
-    if not tag:
-        return
-
-    if isinstance(tag, str):
-        tag = {"content": tag, "image_url": None}
-
-    e = discord.Embed(
-        title       = f"📌 [{ctx.guild.name}]  {name}",
-        description = tag["content"],
-        color       = 0x5865F2,
-    )
-    if tag.get("image_url"):
-        e.set_image(url=tag["image_url"])
-    e.set_footer(text="NanoBot Tags")
-
     try:
-        await ctx.reply(embed=e)
-    except discord.HTTPException:
-        pass
+        data = _storage.read("tags.json")
+        gid  = str(message.guild.id)
+        uid  = str(message.author.id)
+
+        # Personal tags first, then global
+        raw = (
+            data.get(gid, {}).get("personal", {}).get(uid, {}).get(name)
+            or data.get(gid, {}).get("global", {}).get(name)
+        )
+        if raw is None:
+            return False
+
+        # Normalise legacy plain-string tags
+        tag = {"content": raw, "image_url": None} if isinstance(raw, str) else raw
+
+        e = discord.Embed(
+            title       = f"📌 [{message.guild.name}]  {name}",
+            description = tag.get("content", ""),
+            color       = 0x5865F2,
+        )
+        if tag.get("image_url"):
+            e.set_image(url=tag["image_url"])
+        e.set_footer(text="NanoBot Tags")
+
+        await message.reply(embed=e)
+        log.debug(f"Tag shortcut fired: '{name}' for {message.author} in {message.guild}")
+        return True
+
+    except Exception as exc:
+        log.error(f"Tag shortcut error for '{name}': {exc}", exc_info=exc)
+        return False
 
 
 # ── Entry Point ────────────────────────────────────────────────────────────────
