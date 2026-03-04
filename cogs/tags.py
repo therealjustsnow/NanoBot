@@ -129,6 +129,9 @@ def _list_entry(name: str, tag: dict) -> str:
 class Tags(commands.Cog):
     """Quick-access text snippets with optional images — personal or server-wide."""
 
+    def __init__(self, bot: commands.Bot):
+        self.bot = bot
+
     # ══════════════════════════════════════════════════════════════════════════
     #  /tag  root — handles all prefix shorthands
     # ══════════════════════════════════════════════════════════════════════════

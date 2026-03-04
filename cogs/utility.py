@@ -398,6 +398,9 @@ _FLAT = _flat_commands()
 class Utility(commands.Cog):
     """Bot configuration and info commands."""
 
+    def __init__(self, bot: commands.Bot):
+        self.bot = bot
+
     # ══════════════════════════════════════════════════════════════════════════
     #  help
     # ══════════════════════════════════════════════════════════════════════════
