@@ -112,7 +112,7 @@ def _resolve_image(ctx, attachment, image_url) -> tuple[str | None, str | None]:
 def _tag_embed(tag: dict, name: str, guild_name: str, *, prefix="📌") -> discord.Embed:
     e = discord.Embed(
         title       = f"{prefix}  [{guild_name}]  {name}",
-        description = tag["content"],
+        description = tag.get("content") or None,   # None = no description field if empty
         color       = h.BLUE,
     )
     if tag.get("image_url"):
@@ -211,7 +211,7 @@ class Tags(commands.Cog):
     )
     @app_commands.describe(
         name      = "Tag name (no spaces, max 32 chars)",
-        content   = "Tag text (max 1500 chars)",
+        content   = "Tag text (max 1500 chars) — optional if an image is provided",
         image     = "Attach an image file",
         image_url = "Or paste a direct image URL (https://...)",
     )
@@ -219,7 +219,7 @@ class Tags(commands.Cog):
         self,
         ctx:       commands.Context,
         name:      str,
-        content:   str,
+        content:   Optional[str]               = None,
         image:     Optional[discord.Attachment] = None,
         image_url: Optional[str]               = None,
     ):
@@ -237,7 +237,7 @@ class Tags(commands.Cog):
     )
     @app_commands.describe(
         name      = "Tag name (no spaces, max 32 chars)",
-        content   = "Tag content (max 1500 chars)",
+        content   = "Tag content (max 1500 chars) — optional if an image is provided",
         image     = "Attach an image file",
         image_url = "Or paste a direct image URL",
     )
@@ -246,7 +246,7 @@ class Tags(commands.Cog):
         self,
         ctx:       commands.Context,
         name:      str,
-        content:   str,
+        content:   Optional[str]               = None,
         image:     Optional[discord.Attachment] = None,
         image_url: Optional[str]               = None,
     ):
@@ -423,17 +423,24 @@ class Tags(commands.Cog):
         self,
         ctx:      commands.Context,
         name:     str,
-        content:  str,
+        content:  str | None,
         *,
         img_url:  str | None = None,
         img_warn: str | None = None,
     ):
-        name = name.lower().strip()
+        name    = name.lower().strip()
+        content = content.strip() if content else None
+
         if " " in name:
             return await ctx.reply(embed=h.err("Tag names can't contain spaces."), ephemeral=True)
         if len(name) > 32:
             return await ctx.reply(embed=h.err("Tag name must be 32 characters or fewer."), ephemeral=True)
-        if len(content) > 1500:
+        if not content and not img_url:
+            return await ctx.reply(
+                embed=h.err("A tag needs at least some text or an image — you can't have both empty."),
+                ephemeral=True,
+            )
+        if content and len(content) > 1500:
             return await ctx.reply(embed=h.err("Tag content must be 1500 characters or fewer."), ephemeral=True)
 
         data, gid = _get_data(ctx.guild.id)
@@ -467,17 +474,24 @@ class Tags(commands.Cog):
         self,
         ctx:      commands.Context,
         name:     str,
-        content:  str,
+        content:  str | None,
         *,
         img_url:  str | None = None,
         img_warn: str | None = None,
     ):
-        name = name.lower().strip()
+        name    = name.lower().strip()
+        content = content.strip() if content else None
+
         if " " in name:
             return await ctx.reply(embed=h.err("Tag names can't contain spaces."), ephemeral=True)
         if len(name) > 32:
             return await ctx.reply(embed=h.err("Tag name must be 32 characters or fewer."), ephemeral=True)
-        if len(content) > 1500:
+        if not content and not img_url:
+            return await ctx.reply(
+                embed=h.err("A tag needs at least some text or an image — you can't have both empty."),
+                ephemeral=True,
+            )
+        if content and len(content) > 1500:
             return await ctx.reply(embed=h.err("Tag content must be 1500 characters or fewer."), ephemeral=True)
 
         data, gid = _get_data(ctx.guild.id)
