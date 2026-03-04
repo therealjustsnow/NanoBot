@@ -272,16 +272,23 @@ async def _try_tag_shortcut(
         # Normalise legacy plain-string tags
         tag = {"content": raw, "image_url": None} if isinstance(raw, str) else raw
 
-        e = discord.Embed(
-            title       = f"📌 [{message.guild.name}]  {name}",
-            description = tag.get("content", ""),
-            color       = 0x5865F2,
-        )
-        if tag.get("image_url"):
-            e.set_image(url=tag["image_url"])
-        e.set_footer(text="NanoBot Tags")
+        text    = tag.get("content") or ""
+        img_url = tag.get("image_url")
 
-        await message.reply(embed=e)
+        if len(text) > 1500:
+            header = f"📌 **[{message.guild.name}]  {name}**"
+            img_suffix = f"\n{img_url}" if img_url else ""
+            await message.reply(f"{header}\n\n{text}{img_suffix}")
+        else:
+            e = discord.Embed(
+                title       = f"📌 [{message.guild.name}]  {name}",
+                description = text or None,
+                color       = 0x5865F2,
+            )
+            if img_url:
+                e.set_image(url=img_url)
+            e.set_footer(text="NanoBot Tags")
+            await message.reply(embed=e)
         log.debug(f"Tag shortcut fired: '{name}' for {message.author} in {message.guild}")
         return True
 
