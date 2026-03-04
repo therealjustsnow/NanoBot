@@ -460,8 +460,6 @@ class Tags(commands.Cog):
         name    = name.lower().strip()
         content = content.strip() if content else None
 
-        if " " in name:
-            return await ctx.reply(embed=h.err("Tag names can't contain spaces."), ephemeral=True)
         if len(name) > 32:
             return await ctx.reply(embed=h.err("Tag name must be 32 characters or fewer."), ephemeral=True)
         if not content and not img_url:
