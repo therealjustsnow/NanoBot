@@ -260,11 +260,11 @@ class Tags(commands.Cog):
     # ══════════════════════════════════════════════════════════════════════════
     @tag.command(
         name="use",
-        description="DM a tag to yourself or someone else.",
+        description="Post a tag in this channel, or DM it to a specific user.",
     )
     @app_commands.describe(
         name    = "Tag name",
-        dm_user = "Send to this user instead of yourself",
+        dm_user = "DM the tag to this user instead of posting it here",
     )
     async def tag_use(
         self,
@@ -525,20 +525,22 @@ class Tags(commands.Cog):
                 ephemeral=True,
             )
 
-        recipient = dm_user or ctx.author
-        try:
-            await recipient.send(embed=_tag_embed(tag, name, ctx.guild.name))
-        except discord.Forbidden:
-            return await ctx.reply(
-                embed=h.err(f"Couldn't DM **{recipient.display_name}** — their DMs may be closed."),
+        if dm_user:
+            # Explicit user target → DM them
+            try:
+                await dm_user.send(embed=_tag_embed(tag, name, ctx.guild.name))
+            except discord.Forbidden:
+                return await ctx.reply(
+                    embed=h.err(f"Couldn't DM **{dm_user.display_name}** — their DMs may be closed."),
+                    ephemeral=True,
+                )
+            await ctx.reply(
+                embed=h.ok(f"Tag `{name}` sent to **{dm_user.display_name}** via DM. 📨", "📨 Tag Sent"),
                 ephemeral=True,
             )
-
-        who = "you" if recipient == ctx.author else f"**{recipient.display_name}**"
-        await ctx.reply(
-            embed=h.ok(f"Tag `{name}` sent to {who} via DM. 📨", "📨 Tag Sent"),
-            ephemeral=True,
-        )
+        else:
+            # Default: post the tag embed directly in the channel
+            await ctx.send(embed=_tag_embed(tag, name, ctx.guild.name))
 
     async def _do_delete(self, ctx: commands.Context, name: str):
         name     = name.lower().strip()
