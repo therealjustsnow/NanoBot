@@ -163,26 +163,24 @@ class NanoBot(commands.Bot):
         self.last_senders[message.channel.id] = message.author
 
         # ── Tag shortcut: n!tagname ────────────────────────────────────────────
-        # Resolve the guild prefix, check if the word after it is NOT a real
-        # command, and try it as a tag BEFORE handing off to process_commands.
-        # Doing this here (not in CommandNotFound) means failures are never
-        # silently swallowed inside the error handler chain.
-        prefix  = self.prefixes.get(str(message.guild.id), self.default_prefix)
-        content = message.content.strip()
+        # Use get_context() so discord.py does ALL prefix resolution for us
+        # (text prefix, mention prefix, per-guild prefix — all handled correctly).
+        # ctx.valid = True  → real command found, invoke it normally.
+        # ctx.valid = False + ctx.prefix is not None → prefix matched but no
+        #   command → try the word as a tag name.
+        ctx = await self.get_context(message)
 
-        if content.lower().startswith(prefix.lower()):
-            after  = content[len(prefix):].strip()
-            parts  = after.split()
-            name   = parts[0].lower() if parts else ""
+        if ctx.valid:
+            await self.invoke(ctx)
+            return
 
-            # Real commands always win — only fall through to tag lookup if
-            # the word isn't a registered command name or alias.
-            if name and name not in self.all_commands:
-                handled = await _try_tag_shortcut(message, self, name)
-                if handled:
-                    return   # tag sent — skip process_commands
-
-        await self.process_commands(message)
+        if ctx.prefix is not None:
+            # A prefix was matched but no command found — try it as a tag
+            after = message.content[len(ctx.prefix):].strip()
+            name  = after.split()[0].lower() if after.split() else ""
+            if name:
+                await _try_tag_shortcut(message, self, name)
+            # Whether tag found or not, we're done — no unknown-command noise
 
     # ── Error Handler ──────────────────────────────────────────────────────────
     async def on_command_error(self, ctx: commands.Context, error):
