@@ -498,6 +498,124 @@ def _flat_commands() -> dict[str, dict]:
 _FLAT = _flat_commands()
 
 
+# ── Help pagination ───────────────────────────────────────────────────────────
+
+def _build_help_pages(prefix: str, bot_name: str) -> list[discord.Embed]:
+    """
+    Build one embed per help category, plus a cover page.
+    Returns a list of discord.Embed objects ready to display.
+    """
+    categories = list(_HELP.items())
+    total = len(categories) + 1  # +1 for cover
+
+    def footer(page_num):
+        return "Page " + str(page_num) + " / " + str(total) + "  ·  NanoBot"
+
+    pages = []
+
+    # Cover page
+    cover = h.embed(
+        title       = chr(9889) + " NanoBot " + chr(8212) + " Command Reference",
+        description = (
+            "Prefix: `" + prefix + "` · Slash `/` · @" + bot_name + chr(10)
+            + "Most mod commands default to the **last message sender** if no user is given." + chr(10)
+            + chr(10)
+            + "Use `" + prefix + "help <command>` for a full breakdown of any command." + chr(10)
+            + chr(10)
+            + chr(10).join(
+                "**" + cat + "** " + chr(8212) + " " + str(len(cmds)) + " command" + ("s" if len(cmds) != 1 else "")
+                for cat, cmds in categories
+            )
+        ),
+        color = h.BLUE,
+    )
+    cover.set_footer(text=footer(1))
+    pages.append(cover)
+
+    # One page per category
+    for i, (category, cmds) in enumerate(categories, start=2):
+        lines = []
+        for cmd in cmds:
+            line = "`" + prefix + cmd["name"] + "`"
+            if cmd.get("aliases"):
+                line += " _(also: " + ", ".join("`" + a + "`" for a in cmd["aliases"]) + ")_"
+            line += " — " + cmd["short"]
+            lines.append(line)
+
+        e = h.embed(title=category, color=h.BLUE)
+        e.description = chr(10).join(lines) + chr(10) + chr(10) + "Use `" + prefix + "help <name>` for details on any command."
+        e.set_footer(text=footer(i))
+        pages.append(e)
+
+    return pages
+
+
+class HelpView(discord.ui.View):
+    """
+    Reaction-style navigation buttons for the paginated help command.
+    Only the original invoker can interact.
+    Buttons are disabled automatically after 120 seconds of inactivity.
+    """
+
+    def __init__(self, pages: list[discord.Embed], author: discord.Member):
+        super().__init__(timeout=120)
+        self.pages   = pages
+        self.author  = author
+        self.index   = 0
+        self.message: discord.Message | None = None
+        self._update_buttons()
+
+    def _update_buttons(self):
+        """Grey out ⬅️ on first page, ➡️ on last page."""
+        self.prev_btn.disabled = (self.index == 0)
+        self.next_btn.disabled = (self.index == len(self.pages) - 1)
+
+    async def _edit(self, interaction: discord.Interaction):
+        self._update_buttons()
+        await interaction.response.edit_message(embed=self.pages[self.index], view=self)
+
+    async def interaction_check(self, interaction: discord.Interaction) -> bool:
+        if interaction.user != self.author:
+            await interaction.response.send_message(
+                "Only " + self.author.display_name + " can navigate this help menu.",
+                ephemeral=True,
+            )
+            return False
+        return True
+
+    async def on_timeout(self):
+        """Disable all buttons when the session expires."""
+        for item in self.children:
+            item.disabled = True
+        if self.message:
+            try:
+                await self.message.edit(view=self)
+            except discord.HTTPException:
+                pass
+
+    @discord.ui.button(emoji=chr(11013) + chr(65039), style=discord.ButtonStyle.secondary)
+    async def prev_btn(self, interaction: discord.Interaction, button: discord.ui.Button):
+        self.index -= 1
+        await self._edit(interaction)
+
+    @discord.ui.button(emoji=chr(10060), style=discord.ButtonStyle.danger)
+    async def close_btn(self, interaction: discord.Interaction, button: discord.ui.Button):
+        self.stop()
+        for item in self.children:
+            item.disabled = True
+        await interaction.response.edit_message(view=self)
+        if self.message:
+            try:
+                await self.message.delete()
+            except discord.HTTPException:
+                pass
+
+    @discord.ui.button(emoji=chr(10145) + chr(65039), style=discord.ButtonStyle.secondary)
+    async def next_btn(self, interaction: discord.Interaction, button: discord.ui.Button):
+        self.index += 1
+        await self._edit(interaction)
+
+
 # ══════════════════════════════════════════════════════════════════════════════
 class Utility(commands.Cog):
     """Bot configuration and info commands."""
@@ -505,71 +623,50 @@ class Utility(commands.Cog):
     def __init__(self, bot: commands.Bot):
         self.bot = bot
 
-    # ══════════════════════════════════════════════════════════════════════════
+    # ══════════════════════════════════════════════════════════════════════
     #  help
-    # ══════════════════════════════════════════════════════════════════════════
+    # ══════════════════════════════════════════════════════════════════════
     @commands.hybrid_command(
         name="help",
-        description="Command list, or !help <command> for detailed info on one command.",
+        description="Paginated command reference. Use !help <command> for detail on one command.",
     )
-    @app_commands.describe(command="Command name for detailed help (leave blank for overview)")
+    @app_commands.describe(command="Command name for detailed help (leave blank for the full reference)")
     async def help(self, ctx: commands.Context, command: Optional[str] = None):
         prefix = self.bot.prefixes.get(str(ctx.guild.id), self.bot.default_prefix)
 
-        # ── Detail view: !help cban ────────────────────────────────────────────
+        # Detail view: !help cban  (single ephemeral embed, no pagination)
         if command:
             cmd = _FLAT.get(command.lower())
             if not cmd:
                 return await ctx.reply(
                     embed=h.err(
-                        f"No command named `{command}`.\n"
-                        f"Use `{prefix}help` to see all commands."
+                        "No command named `" + command + "`.\n"
+                        "Use `" + prefix + "help` to browse all commands."
                     ),
                     ephemeral=True,
                 )
 
-            e = h.embed(
-                title = f"📖 {prefix}{cmd['usage']}",
-                color = h.BLUE,
-            )
+            e = h.embed(title=" " + prefix + cmd["usage"], color=h.BLUE)
             e.description = cmd["desc"] + "\n\u200b"
 
             if cmd["args"]:
-                args_text = "\n".join(f"`{a}` — {d}" for a, d in cmd["args"])
+                args_text = "\n".join("`" + a + "` — " + d for a, d in cmd["args"])
                 e.add_field(name="Arguments", value=args_text, inline=False)
 
-            e.add_field(name="Required Permission", value=cmd["perms"],      inline=True)
-            e.add_field(name="Example",             value=f"`{cmd['example']}`", inline=False)
+            e.add_field(name="Required Permission", value=cmd["perms"], inline=True)
+            e.add_field(name="Example", value="`" + cmd["example"] + "`", inline=False)
 
             if cmd.get("aliases"):
-                e.add_field(name="Aliases", value=", ".join(f"`{a}`" for a in cmd["aliases"]), inline=False)
+                e.add_field(name="Aliases", value=", ".join("`" + a + "`" for a in cmd["aliases"]), inline=False)
 
-            e.set_footer(text=f"[ ] = optional  ·  < > = required  ·  NanoBot")
+            e.set_footer(text="[ ] = optional  ·  < > = required  ·  NanoBot")
             return await ctx.reply(embed=e, ephemeral=True)
 
-        # ── Overview: !help ────────────────────────────────────────────────────
-        e = h.embed(
-            title       = "⚡ NanoBot — Command Reference",
-            description = (
-                f"Prefix: `{prefix}` · Slash `/` · @{self.bot.user.display_name}\n"
-                f"Most mod commands default to the **last message sender** if no user is given.\n"
-                f"Use `{prefix}help <command>` for detailed info on any command.\n\u200b"
-            ),
-            color = h.BLUE,
-        )
-
-        for category, cmds in _HELP.items():
-            lines = []
-            for cmd in cmds:
-                line = f"`{prefix}{cmd['name']}`"
-                if cmd.get("aliases"):
-                    line += f" _(also: {', '.join(f'`{a}`' for a in cmd['aliases'])})_"
-                line += f" — {cmd['short']}"
-                lines.append(line)
-            e.add_field(name=category, value="\n".join(lines) + "\n\u200b", inline=False)
-
-        e.set_footer(text="NanoBot — Small. Fast. Built for Mobile Mods.")
-        await ctx.reply(embed=e, ephemeral=True)
+        # Paginated overview
+        pages = _build_help_pages(prefix, self.bot.user.display_name)
+        view  = HelpView(pages=pages, author=ctx.author)
+        msg   = await ctx.reply(embed=pages[0], view=view)
+        view.message = msg
 
     # ══════════════════════════════════════════════════════════════════════════
     #  prefix
