@@ -598,7 +598,7 @@ class HelpView(discord.ui.View):
         self.index -= 1
         await self._edit(interaction)
 
-    @discord.ui.button(emoji=chr(10060), style=discord.ButtonStyle.danger)
+    @discord.ui.button(emoji=chr(10060), style=discord.ButtonStyle.secondary)
     async def close_btn(self, interaction: discord.Interaction, button: discord.ui.Button):
         self.stop()
         for item in self.children:
@@ -746,7 +746,7 @@ class Utility(commands.Cog):
         e.add_field(name="🐍 Python",   value=platform.python_version(),           inline=True)
         e.add_field(name="🗄️ Storage",  value="JSON (no database)",                inline=True)
 
-        e.set_footer(text="NanoBot — Open Source · github.com/YOUR_USER/nanobot")
+        e.set_footer(text="NanoBot — Open Source · github.com/therealjustsnow/NanoBot")
         await ctx.reply(embed=e)
 
     # ══════════════════════════════════════════════════════════════════════════
@@ -864,7 +864,7 @@ class Utility(commands.Cog):
         e.add_field(
             name  = "🔗 Links",
             value = (
-                "[GitHub](https://github.com/YOUR_USER/nanobot) — Source code\n"
+                "[GitHub](https://github.com/therealjustsnow/NanoBot) — Source code\n"
                 "Open source · MIT License"
             ),
             inline=False,
