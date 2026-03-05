@@ -175,19 +175,6 @@ _HELP = {
     ],
     "🔎 Info & Notes": [
         {
-            "name": "whois",
-            "aliases": [],
-            "usage": "whois [user]",
-            "short": "User info card — mobile-optimised",
-            "desc": (
-                "Displays a clean embed with a user's ID, join date, account age, roles, "
-                "timeout status, Discord badges, and mod note count. Designed to be readable on a phone screen."
-            ),
-            "args": [("user", "User to inspect (blank = yourself)")],
-            "perms":   "None",
-            "example": "!whois @user",
-        },
-        {
             "name": "last",
             "aliases": [],
             "usage": "last",
@@ -631,6 +618,7 @@ class Utility(commands.Cog):
         description="Paginated command reference. Use !help <command> for detail on one command.",
     )
     @app_commands.describe(command="Command name for detailed help (leave blank for the full reference)")
+    @commands.cooldown(1, 5, commands.BucketType.user)
     async def help(self, ctx: commands.Context, command: Optional[str] = None):
         prefix = self.bot.prefixes.get(str(ctx.guild.id), self.bot.default_prefix)
 
@@ -722,6 +710,7 @@ class Utility(commands.Cog):
     #  ping
     # ══════════════════════════════════════════════════════════════════════════
     @commands.hybrid_command(name="ping", description="Check NanoBot's latency.")
+    @commands.cooldown(1, 10, commands.BucketType.user)
     async def ping(self, ctx: commands.Context):
         ms     = round(self.bot.latency * 1000)
         status = "🟢 Great" if ms < 100 else ("🟡 Okay" if ms < 200 else "🔴 Slow")
@@ -731,6 +720,7 @@ class Utility(commands.Cog):
     #  info
     # ══════════════════════════════════════════════════════════════════════════
     @commands.hybrid_command(name="info", description="NanoBot stats and runtime info.")
+    @commands.cooldown(1, 10, commands.BucketType.user)
     async def info(self, ctx: commands.Context):
         prefix  = self.bot.prefixes.get(str(ctx.guild.id), self.bot.default_prefix)
         latency = round(self.bot.latency * 1000)
@@ -756,6 +746,7 @@ class Utility(commands.Cog):
         name="invite",
         description="Get NanoBot's invite link with the correct permissions.",
     )
+    @commands.cooldown(1, 10, commands.BucketType.user)
     async def invite(self, ctx: commands.Context):
         # Exact permissions NanoBot needs — nothing more, nothing less
         perms = discord.Permissions(
@@ -815,6 +806,7 @@ class Utility(commands.Cog):
         name="about",
         description="What NanoBot is and why it exists.",
     )
+    @commands.cooldown(1, 10, commands.BucketType.user)
     async def about(self, ctx: commands.Context):
         e = h.embed(title="⚡ About NanoBot", color=h.BLUE)
         e.set_thumbnail(url=self.bot.user.display_avatar.url)
@@ -885,6 +877,7 @@ class Utility(commands.Cog):
         aliases=["serverinfo", "si", "guild"],
         description="Info card for this server.",
     )
+    @commands.cooldown(1, 5, commands.BucketType.user)
     async def server(self, ctx: commands.Context):
         g   = ctx.guild
         now = discord.utils.utcnow()
@@ -964,6 +957,7 @@ class Utility(commands.Cog):
         description="Public info card for a user.",
     )
     @app_commands.describe(user="User to look up (leave blank for yourself)")
+    @commands.cooldown(1, 5, commands.BucketType.user)
     async def user(self, ctx: commands.Context, user: Optional[discord.Member] = None):
         target = user or ctx.author
         now    = discord.utils.utcnow()
@@ -1034,6 +1028,16 @@ class Utility(commands.Cog):
         if badges:
             e.add_field(name="🏅 Badges", value=" · ".join(badges), inline=False)
 
+        # Note count — only shown if notes exist (fetched from storage)
+        from utils import storage as _st
+        notes = _st.read("notes.json").get(str(ctx.guild.id), {}).get(str(target.id), [])
+        if notes:
+            e.add_field(
+                name  = "📜 Mod Notes",
+                value = str(len(notes)) + " note(s) on file. Use `notes @user` to view.",
+                inline=False,
+            )
+
         e.set_footer(text="NanoBot · " + target.name)
         e.timestamp = now
         await ctx.reply(embed=e)
@@ -1047,6 +1051,7 @@ class Utility(commands.Cog):
         description="Show a user's avatar in full size.",
     )
     @app_commands.describe(user="User whose avatar to show (leave blank for yourself)")
+    @commands.cooldown(1, 5, commands.BucketType.user)
     async def avatar(self, ctx: commands.Context, user: Optional[discord.Member] = None):
         target = user or ctx.author
         av     = target.display_avatar.with_size(1024)
@@ -1060,12 +1065,12 @@ class Utility(commands.Cog):
             try:
                 url = target.display_avatar.with_format(fmt).with_size(1024).url  # type: ignore
                 formats.append("[" + fmt.upper() + "](" + url + ")")
-            except Exception:
+            except (ValueError, discord.InvalidArgument):
                 pass
         if target.display_avatar.is_animated():
             try:
                 formats.append("[GIF](" + target.display_avatar.with_format("gif").with_size(1024).url + ")")
-            except Exception:
+            except (ValueError, discord.InvalidArgument):
                 pass
 
         e.description = " · ".join(formats) if formats else ""
@@ -1086,6 +1091,7 @@ class Utility(commands.Cog):
         description="Show a user's profile banner.",
     )
     @app_commands.describe(user="User whose banner to show (leave blank for yourself)")
+    @commands.cooldown(1, 5, commands.BucketType.user)
     async def banner(self, ctx: commands.Context, user: Optional[discord.Member] = None):
         target = user or ctx.author
 
@@ -1112,12 +1118,12 @@ class Utility(commands.Cog):
         for fmt in ("png", "jpg", "webp"):
             try:
                 formats.append("[" + fmt.upper() + "](" + banner.with_format(fmt).with_size(1024).url + ")")  # type: ignore
-            except Exception:
+            except (ValueError, discord.InvalidArgument):
                 pass
         if banner.is_animated():
             try:
                 formats.append("[GIF](" + banner.with_format("gif").with_size(1024).url + ")")
-            except Exception:
+            except (ValueError, discord.InvalidArgument):
                 pass
 
         e.description = " · ".join(formats) if formats else ""
@@ -1133,6 +1139,7 @@ class Utility(commands.Cog):
         description="Info card for a server role.",
     )
     @app_commands.describe(role="The role to inspect")
+    @commands.cooldown(1, 5, commands.BucketType.user)
     async def roleinfo(self, ctx: commands.Context, *, role: discord.Role):
         now = discord.utils.utcnow()
 
@@ -1179,6 +1186,7 @@ class Utility(commands.Cog):
         name="uptime",
         description="How long NanoBot has been running since last (re)start.",
     )
+    @commands.cooldown(1, 5, commands.BucketType.user)
     async def uptime(self, ctx: commands.Context):
         now     = discord.utils.utcnow()
         delta   = now - self.bot.start_time

@@ -32,6 +32,8 @@ Tag data shape:
   Legacy plain strings are normalised silently on read.
 """
 
+import io
+import json
 import logging
 import re
 from typing import Optional
@@ -252,7 +254,7 @@ class Tags(commands.Cog):
         description="Create a personal tag with optional image.",
     )
     @app_commands.describe(
-        name      = "Tag name (no spaces, max 32 chars)",
+        name      = "Tag name (max 32 chars)",
         content   = "Tag text (max 2000 chars) — optional if an image is provided",
         image     = "Attach an image file",
         image_url = "Or paste a direct image URL (https://...)",
@@ -278,7 +280,7 @@ class Tags(commands.Cog):
         description="Create a global server tag usable by anyone. Mods only.",
     )
     @app_commands.describe(
-        name      = "Tag name (no spaces, max 32 chars)",
+        name      = "Tag name (max 32 chars)",
         content   = "Tag content (max 2000 chars) — optional if an image is provided",
         image     = "Attach an image file",
         image_url = "Or paste a direct image URL",
@@ -381,7 +383,7 @@ class Tags(commands.Cog):
         if removing:
             had = bool(tag_ref.get("image_url"))
             tag_ref["image_url"] = None
-            storage.write(_FILE, data)
+            await storage.awrite(_FILE, data)
             msg = f"Image removed from **{name}**." if had else f"**{name}** had no image anyway."
             return await ctx.reply(embed=h.ok(msg, "🖼️ Image Cleared"), ephemeral=True)
 
@@ -399,7 +401,7 @@ class Tags(commands.Cog):
             )
 
         tag_ref["image_url"] = img_url
-        storage.write(_FILE, data)
+        await storage.awrite(_FILE, data)
         scope = "global" if is_global else "personal"
         await ctx.reply(embed=h.ok(f"Image updated on {scope} tag **{name}**.", "🖼️ Image Updated"), ephemeral=True)
         if img_warn:
@@ -424,7 +426,7 @@ class Tags(commands.Cog):
         if name in personal:
             t = _norm(personal[name]); t["content"] = new_content
             data[gid]["personal"][uid][name] = t
-            storage.write(_FILE, data)
+            await storage.awrite(_FILE, data)
             return await ctx.reply(embed=h.ok(f"Personal tag **{name}** updated.", "✏️ Edited"), ephemeral=True)
 
         if ctx.author.guild_permissions.manage_messages:
@@ -432,7 +434,7 @@ class Tags(commands.Cog):
             if name in glob:
                 t = _norm(glob[name]); t["content"] = new_content
                 data[gid]["global"][name] = t
-                storage.write(_FILE, data)
+                await storage.awrite(_FILE, data)
                 return await ctx.reply(embed=h.ok(f"Global tag **{name}** updated.", "✏️ Edited"), ephemeral=True)
 
         await ctx.reply(
@@ -474,8 +476,6 @@ class Tags(commands.Cog):
         name    = name.lower().strip()
         content = content.strip() if content else None
 
-        if " " in name:
-            return await ctx.reply(embed=h.err("Tag names can't contain spaces."), ephemeral=True)
         if len(name) > 32:
             return await ctx.reply(embed=h.err("Tag name must be 32 characters or fewer."), ephemeral=True)
         if not content and not img_url:
@@ -499,7 +499,7 @@ class Tags(commands.Cog):
             )
 
         data[gid]["personal"][uid][name] = {"content": content, "image_url": img_url}
-        storage.write(_FILE, data)
+        await storage.awrite(_FILE, data)
 
         img_line = "\n🖼️ Image saved." if img_url else ""
         await ctx.reply(
@@ -525,8 +525,6 @@ class Tags(commands.Cog):
         name    = name.lower().strip()
         content = content.strip() if content else None
 
-        if " " in name:
-            return await ctx.reply(embed=h.err("Tag names can't contain spaces."), ephemeral=True)
         if len(name) > 32:
             return await ctx.reply(embed=h.err("Tag name must be 32 characters or fewer."), ephemeral=True)
         if not content and not img_url:
@@ -550,7 +548,7 @@ class Tags(commands.Cog):
             "by_id":     str(ctx.author.id),
             "by_name":   str(ctx.author),
         }
-        storage.write(_FILE, data)
+        await storage.awrite(_FILE, data)
 
         img_line = "\n🖼️ Image saved." if img_url else ""
         await ctx.reply(
@@ -608,7 +606,7 @@ class Tags(commands.Cog):
         if name in personal:
             del personal[name]
             data[gid]["personal"][uid] = personal
-            storage.write(_FILE, data)
+            await storage.awrite(_FILE, data)
             return await ctx.reply(embed=h.ok(f"Personal tag **{name}** deleted.", "🗑️ Deleted"), ephemeral=True)
 
         if ctx.author.guild_permissions.manage_messages:
@@ -616,7 +614,7 @@ class Tags(commands.Cog):
             if name in glob:
                 del glob[name]
                 data[gid]["global"] = glob
-                storage.write(_FILE, data)
+                await storage.awrite(_FILE, data)
                 return await ctx.reply(embed=h.ok(f"Global tag **{name}** deleted.", "🗑️ Deleted"), ephemeral=True)
 
         await ctx.reply(
@@ -648,6 +646,43 @@ class Tags(commands.Cog):
         e.add_field(name=f"🌐 Server Tags ({len(global_tags)})", value=g_lines + "\n\u200b", inline=False)
         e.set_footer(text="Personal tags are only visible to you  ·  NanoBot")
         await ctx.reply(embed=e, ephemeral=True)
+
+
+    # ══════════════════════════════════════════════════════════════════════════
+    #  /tag export
+    # ══════════════════════════════════════════════════════════════════════════
+    @tag.command(
+        name="export",
+        description="Download all your personal tags as a JSON file.",
+    )
+    async def tag_export(self, ctx: commands.Context):
+        data = storage.read(_FILE)
+        gid  = str(ctx.guild.id)
+        uid  = str(ctx.author.id)
+
+        personal = data.get(gid, {}).get("personal", {}).get(uid, {})
+        if not personal:
+            return await ctx.reply(
+                embed=h.info("You have no personal tags to export.", "📦 Export"),
+                ephemeral=True,
+            )
+
+        # Normalise legacy string tags before exporting
+        clean = {name: (_norm(v) if isinstance(v, str) else v) for name, v in personal.items()}
+        payload = json.dumps({"exported_by": str(ctx.author), "guild_id": gid, "tags": clean}, indent=2, ensure_ascii=False)
+
+        buf  = io.BytesIO(payload.encode("utf-8"))
+        file = discord.File(buf, filename=f"tags_{ctx.author.id}.json")
+
+        await ctx.reply(
+            embed=h.ok(
+                f"**{len(clean)}** tag(s) exported.\n"
+                "To restore tags, share this file with a bot admin.",
+                "📦 Tags Exported",
+            ),
+            file=file,
+            ephemeral=True,
+        )
 
 
 # ── Registration ───────────────────────────────────────────────────────────────

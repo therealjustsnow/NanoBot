@@ -17,6 +17,7 @@ import asyncio
 import json
 import logging
 import os
+import subprocess
 import sys
 from typing import Optional
 
@@ -173,13 +174,13 @@ class Admin(commands.Cog):
 
         await asyncio.sleep(0.5)
 
-        # Close the Discord connection gracefully before re-exec
-        await self.bot.close()
+        # Spawn a fresh process BEFORE closing so it can start initialising
+        # while this one finishes its shutdown.  subprocess.Popen works
+        # correctly on all platforms (os.execv silently fails on Windows).
+        subprocess.Popen([sys.executable] + sys.argv)
+        log.info("Spawned new process — shutting down this one")
 
-        # Re-execute: replaces this process with a fresh Python process running
-        # the same script and arguments.  Logs, data files, and config are all
-        # re-read from disk — so config changes take effect on restart too.
-        os.execv(sys.executable, [sys.executable] + sys.argv)
+        await self.bot.close()
 
     # ══════════════════════════════════════════════════════════════════════════
     #  setloglevel

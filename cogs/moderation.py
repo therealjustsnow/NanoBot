@@ -16,7 +16,6 @@ Commands:
   purge            — delete last X messages (optionally by user)
   freeze           — Discord timeout (temp mute)
   unfreeze         — remove a timeout early
-  whois            — mobile-friendly user info card
   note             — add a mod note (JSON)
   notes            — view mod notes for a user
   clearnotes       — wipe all notes for a user
@@ -130,7 +129,7 @@ class Moderation(commands.Cog):
                         log.info(f"Overdue unban: {user_id} in {guild_id}")
                     except discord.NotFound:
                         pass
-        storage.write("unban_schedules.json", cleaned)
+        await storage.awrite("unban_schedules.json", cleaned)
 
     async def _restore_slow_schedules(self):
         data    = storage.read("slow_schedules.json")
@@ -150,7 +149,7 @@ class Moderation(commands.Cog):
                         await ch.edit(slowmode_delay=0)
                     except discord.Forbidden:
                         pass
-        storage.write("slow_schedules.json", cleaned)
+        await storage.awrite("slow_schedules.json", cleaned)
 
     # ── Background task runners ────────────────────────────────────────────────
     async def _auto_unban(self, guild_id: int, user_id: int, delay: float):
@@ -167,7 +166,7 @@ class Moderation(commands.Cog):
         self._unban_tasks.pop(key, None)
         data = storage.read("unban_schedules.json")
         data.pop(key, None)
-        storage.write("unban_schedules.json", data)
+        await storage.awrite("unban_schedules.json", data)
 
     async def _auto_unslow(self, channel_id: int, delay: float):
         await asyncio.sleep(delay)
@@ -181,9 +180,9 @@ class Moderation(commands.Cog):
         self._slow_tasks.pop(channel_id, None)
         data = storage.read("slow_schedules.json")
         data.pop(str(channel_id), None)
-        storage.write("slow_schedules.json", data)
+        await storage.awrite("slow_schedules.json", data)
 
-    def _schedule_unban(self, guild_id: int, user_id: int, delay: float):
+    async def _schedule_unban(self, guild_id: int, user_id: int, delay: float):
         key = f"{guild_id}:{user_id}"
         if key in self._unban_tasks:
             self._unban_tasks[key].cancel()
@@ -193,12 +192,12 @@ class Moderation(commands.Cog):
             "guild_id": guild_id,
             "user_id":  user_id,
         }
-        storage.write("unban_schedules.json", data)
+        await storage.awrite("unban_schedules.json", data)
         self._unban_tasks[key] = asyncio.create_task(
             self._auto_unban(guild_id, user_id, delay)
         )
 
-    def _schedule_unslow(self, channel_id: int, guild_id: int, delay: float):
+    async def _schedule_unslow(self, channel_id: int, guild_id: int, delay: float):
         if channel_id in self._slow_tasks:
             self._slow_tasks[channel_id].cancel()
         data = storage.read("slow_schedules.json")
@@ -206,7 +205,7 @@ class Moderation(commands.Cog):
             "until":    datetime.now(timezone.utc).timestamp() + delay,
             "guild_id": guild_id,
         }
-        storage.write("slow_schedules.json", data)
+        await storage.awrite("slow_schedules.json", data)
         self._slow_tasks[channel_id] = asyncio.create_task(
             self._auto_unslow(channel_id, delay)
         )
@@ -275,7 +274,7 @@ class Moderation(commands.Cog):
             )
 
         if is_timed:
-            self._schedule_unban(ctx.guild.id, target.id, wait_secs)
+            await self._schedule_unban(ctx.guild.id, target.id, wait_secs)
 
         # ── Ephemeral confirmation to mod ──────────────────────────────────────
         detail_lines = [
@@ -405,7 +404,7 @@ class Moderation(commands.Cog):
             self._unban_tasks.pop(key, None)
             d = storage.read("unban_schedules.json")
             d.pop(key, None)
-            storage.write("unban_schedules.json", d)
+            await storage.awrite("unban_schedules.json", d)
 
         await ctx.reply(embed=h.ok(f"User `{uid}` has been unbanned.", "✅ Unbanned"), ephemeral=True)
         await action_log(ctx, "✅", "unban", detail=f"User ID: `{uid}`")
@@ -533,7 +532,7 @@ class Moderation(commands.Cog):
         desc = f"Slowmode set to **{h.fmt_duration(delay_secs)}** in {channel.mention}."
         if length_secs:
             desc += f"\n⏱️ Auto-disables in **{h.fmt_duration(length_secs)}**."
-            self._schedule_unslow(channel.id, ctx.guild.id, length_secs)
+            await self._schedule_unslow(channel.id, ctx.guild.id, length_secs)
         else:
             desc += "\n_Use `/slow` with no args to toggle off._"
 
@@ -706,68 +705,6 @@ class Moderation(commands.Cog):
         await action_log(ctx, "🌡️", "unfreeze", target=user)
 
     # ══════════════════════════════════════════════════════════════════════════
-    #  whois
-    # ══════════════════════════════════════════════════════════════════════════
-    @commands.hybrid_command(
-        name="whois",
-        description="Quick user info card — designed for mobile readability.",
-    )
-    @app_commands.describe(user="User to inspect (leave blank for yourself)")
-    async def whois(self, ctx: commands.Context, user: Optional[discord.Member] = None):
-        target = user or ctx.author
-        now    = discord.utils.utcnow()
-
-        created = discord.utils.format_dt(target.created_at, style="R")
-        joined  = discord.utils.format_dt(target.joined_at, style="R") if target.joined_at else "Unknown"
-
-        roles     = [r for r in reversed(target.roles) if r != ctx.guild.default_role]
-        roles_str = " ".join(r.mention for r in roles[:6])
-        if len(roles) > 6:
-            roles_str += f"\n_+{len(roles) - 6} more_"
-        if not roles:
-            roles_str = "_None_"
-
-        color = target.color.value if target.color != discord.Color.default() else h.GREY
-        e = discord.Embed(title=f"👁️ {target.display_name}", color=color)
-        e.set_thumbnail(url=target.display_avatar.url)
-
-        e.add_field(name="🆔 User ID",      value=f"`{target.id}`",              inline=True)
-        e.add_field(name="🤖 Bot",           value="Yes" if target.bot else "No", inline=True)
-        e.add_field(name="\u200b",           value="\u200b",                      inline=True)
-        e.add_field(name="📅 Joined Server", value=joined,                        inline=True)
-        e.add_field(name="📅 Account Age",   value=created,                       inline=True)
-        e.add_field(name="\u200b",           value="\u200b",                      inline=True)
-        e.add_field(name=f"🎭 Roles ({len(roles)})", value=roles_str,             inline=False)
-
-        status_parts = []
-        if target.timed_out_until and target.timed_out_until > now:
-            status_parts.append(f"🧊 Frozen until {discord.utils.format_dt(target.timed_out_until, style='R')}")
-        if target.premium_since:
-            status_parts.append(f"💎 Boosting since {discord.utils.format_dt(target.premium_since, style='R')}")
-        if status_parts:
-            e.add_field(name="📌 Status", value="\n".join(status_parts), inline=False)
-
-        flags  = target.public_flags
-        badges = []
-        if flags.staff:                  badges.append("🛡️ Discord Staff")
-        if flags.partner:                badges.append("🤝 Partner")
-        if flags.hypesquad:              badges.append("🏠 HypeSquad")
-        if flags.bug_hunter:             badges.append("🐛 Bug Hunter")
-        if flags.early_supporter:        badges.append("🏷️ Early Supporter")
-        if flags.verified_bot_developer: badges.append("🔧 Bot Dev")
-        if flags.active_developer:       badges.append("💻 Active Dev")
-        if badges:
-            e.add_field(name="🏅 Badges", value=" · ".join(badges), inline=False)
-
-        notes = storage.read("notes.json").get(str(ctx.guild.id), {}).get(str(target.id), [])
-        if notes:
-            e.add_field(name="📜 Mod Notes", value=f"{len(notes)} note(s) on file.", inline=False)
-
-        e.set_footer(text=f"NanoBot · {target.name}")
-        e.timestamp = now
-        await ctx.reply(embed=e, ephemeral=True)
-
-    # ══════════════════════════════════════════════════════════════════════════
     #  note / notes / clearnotes
     # ══════════════════════════════════════════════════════════════════════════
     @commands.hybrid_command(
@@ -789,7 +726,7 @@ class Moderation(commands.Cog):
             "by_name": str(ctx.author),
             "at":      datetime.now(timezone.utc).isoformat(),
         })
-        storage.write("notes.json", data)
+        await storage.awrite("notes.json", data)
 
         count = len(data[gid][uid])
         await ctx.reply(
@@ -834,7 +771,7 @@ class Moderation(commands.Cog):
         if gid in data and uid in data[gid]:
             count = len(data[gid][uid])
             del data[gid][uid]
-            storage.write("notes.json", data)
+            await storage.awrite("notes.json", data)
             await ctx.reply(
                 embed=h.ok(f"Cleared **{count}** note(s) for **{user.display_name}**.", "📜 Notes Cleared"),
                 ephemeral=True,
