@@ -184,51 +184,65 @@ class Tags(commands.Cog):
             return await self._show_list(ctx)
 
         # Prefix shorthand parsing
-        parts = args.split(None, 2) if args else []
+        # Split only on the first space to isolate the verb; rest stays raw.
+        parts = args.split(None, 1) if args else []
 
         if not parts:
             return await self._show_list(ctx)
 
         verb = parts[0].lower()
+        rest = parts[1] if len(parts) > 1 else ""
 
-        # ── Create shorthand: !tag + name content | !tag add name content ─────
+        # ── Create: !tag + <name> | <content> ─────────────────────────────────
+        # The | separates name from content — lets both sides have spaces.
+        # e.g.  !tag + server rules | Read #rules before posting!
         if verb in ("+", "add", "create"):
-            if len(parts) < 3:
+            if "|" not in rest:
                 return await ctx.reply(
                     embed=h.err(
-                        f"Usage: `{ctx.prefix}tag + <name> <content>`\n"
-                        f"Example: `{ctx.prefix}tag + rules Read the rules before posting!`"
+                        f"Usage: `{ctx.prefix}tag + <name> | <content>`\n"
+                        f"Use **|** to separate the tag name from its content.\n"
+                        f"Example: `{ctx.prefix}tag + server rules | Read #rules first!`"
                     ),
                     ephemeral=True,
                 )
-            await self._do_create(ctx, parts[1], parts[2])
+            tag_name, _, tag_content = rest.partition("|")
+            await self._do_create(ctx, tag_name.strip(), tag_content.strip() or None)
 
-        # ── Delete shorthand: !tag - name | !tag remove name ──────────────────
+        # ── Delete: !tag - <name>  (full remaining text is the name) ──────────
         elif verb in ("-", "remove", "delete"):
-            if len(parts) < 2:
+            if not rest:
                 return await ctx.reply(
-                    embed=h.err(f"Usage: `{ctx.prefix}tag - <name>`"),
+                    embed=h.err(
+                        f"Usage: `{ctx.prefix}tag - <name>`\n"
+                        f"Example: `{ctx.prefix}tag - server rules`"
+                    ),
                     ephemeral=True,
                 )
-            await self._do_delete(ctx, parts[1])
+            await self._do_delete(ctx, rest)
 
-        # ── Global shorthand: !tag global+ name content ────────────────────────
+        # ── Global create: !tag g+ <name> | <content> ─────────────────────────
         elif verb in ("global+", "g+", "gadd"):
             if not ctx.author.guild_permissions.manage_messages:
                 return await ctx.reply(
                     embed=h.err("You need **Manage Messages** to create global tags."),
                     ephemeral=True,
                 )
-            if len(parts) < 3:
+            if "|" not in rest:
                 return await ctx.reply(
-                    embed=h.err(f"Usage: `{ctx.prefix}tag g+ <name> <content>`"),
+                    embed=h.err(
+                        f"Usage: `{ctx.prefix}tag g+ <name> | <content>`\n"
+                        f"Example: `{ctx.prefix}tag g+ server rules | Read #rules first!`"
+                    ),
                     ephemeral=True,
                 )
-            await self._do_create_global(ctx, parts[1], parts[2])
+            tag_name, _, tag_content = rest.partition("|")
+            await self._do_create_global(ctx, tag_name.strip(), tag_content.strip() or None)
 
-        # ── Fallback: treat as tag name → use it ──────────────────────────────
+        # ── Fallback: full args is the tag name (supports spaces) ─────────────
+        # !tag server rules  →  looks up tag named "server rules"
         else:
-            await self._do_use(ctx, verb)
+            await self._do_use(ctx, args)
 
     # ══════════════════════════════════════════════════════════════════════════
     #  /tag create
@@ -460,6 +474,8 @@ class Tags(commands.Cog):
         name    = name.lower().strip()
         content = content.strip() if content else None
 
+        if " " in name:
+            return await ctx.reply(embed=h.err("Tag names can't contain spaces."), ephemeral=True)
         if len(name) > 32:
             return await ctx.reply(embed=h.err("Tag name must be 32 characters or fewer."), ephemeral=True)
         if not content and not img_url:
@@ -509,6 +525,8 @@ class Tags(commands.Cog):
         name    = name.lower().strip()
         content = content.strip() if content else None
 
+        if " " in name:
+            return await ctx.reply(embed=h.err("Tag names can't contain spaces."), ephemeral=True)
         if len(name) > 32:
             return await ctx.reply(embed=h.err("Tag name must be 32 characters or fewer."), ephemeral=True)
         if not content and not img_url:
@@ -538,7 +556,7 @@ class Tags(commands.Cog):
         await ctx.reply(
             embed=h.ok(
                 f"Global tag **{name}** saved.{img_line}\n"
-                f"Anyone can use `{ctx.prefix}tag use {name}` or `{ctx.prefix}{name}` to send it.",
+                f"Anyone can use `{ctx.prefix}tag {name}` or `{ctx.prefix}{name}` to send it.",
                 "🌐 Global Tag Created",
             ),
             ephemeral=True,
