@@ -240,14 +240,14 @@ _HELP = {
             "name": "tag",
             "aliases": [],
             "usage": "tag [shorthand or subcommand]",
-            "short": "Save & retrieve text snippets — personal or server-wide",
+            "short": "Post text snippets in channel, or DM to a user — personal or server-wide",
             "desc": (
                 "Tags let you save text (and images) and quickly DM them to yourself or others.\n\n"
                 "**Shorthand (fastest on mobile):**\n"
-                "`!tag <n>` — DM yourself tag *n*\n"
-                "`!<n>` — same, even shorter\n"
-                "`!tag + <n> <content>` — create personal tag\n"
-                "`!tag add <n> <content>` — same\n"
+                "`!tag <n>` — post tag *n* in the channel\n"
+                "`!<n>` — same, even shorter (shortcut)\n"
+                "`!tag + <n> | <content>` — create (| separates name from content)\n"
+                "`!tag add <n> | <content>` — same\n"
                 "`!tag - <n>` — delete tag\n"
                 "`!tag remove <n>` — same\n"
                 "`!tag g+ <n> <content>` — create global tag (mods)\n\n"
@@ -324,6 +324,110 @@ _HELP = {
             "args": [],
             "perms":   "Bot Owner",
             "example": "!shutdown",
+        },
+    ],
+    "🔍 Server & User Info": [
+        {
+            "name": "server",
+            "aliases": ["serverinfo", "si", "guild"],
+            "usage": "server",
+            "short": "Full server info card",
+            "desc": "Displays a detailed embed with member counts, boost level, channel breakdown, features, and more.",
+            "args": [],
+            "perms":   "None",
+            "example": "!server",
+        },
+        {
+            "name": "user",
+            "aliases": ["userinfo", "ui", "member"],
+            "usage": "user [user]",
+            "short": "Public user info card — status, roles, badges",
+            "desc": "Shows a clean user card with status, activity, join date, account age, roles and badges. Designed to be readable on mobile. Anyone can use this.",
+            "args": [("user", "User to look up (blank = yourself)")],
+            "perms":   "None",
+            "example": "!user @someone",
+        },
+        {
+            "name": "avatar",
+            "aliases": ["av", "pfp", "icon"],
+            "usage": "avatar [user]",
+            "short": "Show a user's avatar full-size",
+            "desc": "Fetches and displays a user's avatar in full 1024px resolution with download links for PNG, JPG, WEBP, and GIF (if animated). Shows server avatar if they have one set.",
+            "args": [("user", "Whose avatar to show (blank = yourself)")],
+            "perms":   "None",
+            "example": "!avatar @someone",
+        },
+        {
+            "name": "banner",
+            "aliases": ["userbanner"],
+            "usage": "banner [user]",
+            "short": "Show a user's profile banner",
+            "desc": "Fetches and displays a user's profile banner (requires a fresh API call — not cached locally).",
+            "args": [("user", "Whose banner to show (blank = yourself)")],
+            "perms":   "None",
+            "example": "!banner @someone",
+        },
+        {
+            "name": "roleinfo",
+            "aliases": ["role", "ri"],
+            "usage": "roleinfo <role>",
+            "short": "Details about a server role",
+            "desc": "Shows role color, position, member count, creation date, whether it's hoisted/mentionable, and any notable permissions it holds.",
+            "args": [("role", "The role to inspect (mention it or type its name)")],
+            "perms":   "None",
+            "example": "!roleinfo @Moderator",
+        },
+        {
+            "name": "uptime",
+            "aliases": [],
+            "usage": "uptime",
+            "short": "How long the bot has been running",
+            "desc": "Shows how long NanoBot has been online since its last start or restart.",
+            "args": [],
+            "perms":   "None",
+            "example": "!uptime",
+        },
+    ],
+    "🔍 Server & User Info": [
+        {
+            "name": "server", "aliases": ["serverinfo", "si", "guild"],
+            "usage": "server", "short": "Full server info card",
+            "desc": "Member counts, boost level, channel breakdown, features, creation date and more.",
+            "args": [], "perms": "None", "example": "!server",
+        },
+        {
+            "name": "user", "aliases": ["userinfo", "ui", "member"],
+            "usage": "user [user]", "short": "Public user info — status, roles, badges",
+            "desc": "Shows a clean user card with status, activity, join date, account age, roles and badges. Anyone can use this.",
+            "args": [("user", "User to look up (blank = yourself)")],
+            "perms": "None", "example": "!user @someone",
+        },
+        {
+            "name": "avatar", "aliases": ["av", "pfp", "icon"],
+            "usage": "avatar [user]", "short": "Show a user's avatar full-size",
+            "desc": "Fetches the avatar at 1024px with PNG/JPG/WEBP/GIF download links. Shows server avatar if set.",
+            "args": [("user", "Whose avatar to show (blank = yourself)")],
+            "perms": "None", "example": "!avatar @someone",
+        },
+        {
+            "name": "banner", "aliases": ["userbanner"],
+            "usage": "banner [user]", "short": "Show a user's profile banner",
+            "desc": "Fetches and displays the user's profile banner with download links.",
+            "args": [("user", "Whose banner to show (blank = yourself)")],
+            "perms": "None", "example": "!banner @someone",
+        },
+        {
+            "name": "roleinfo", "aliases": ["role", "ri"],
+            "usage": "roleinfo <role>", "short": "Details about a server role",
+            "desc": "Color, position, member count, creation date, hoist/mentionable status, and notable permissions.",
+            "args": [("role", "Mention it or type the name")],
+            "perms": "None", "example": "!roleinfo @Moderator",
+        },
+        {
+            "name": "uptime", "aliases": [],
+            "usage": "uptime", "short": "How long the bot has been running",
+            "desc": "Shows how long NanoBot has been online since its last start or restart.",
+            "args": [], "perms": "None", "example": "!uptime",
         },
     ],
     "⚙️ Config & Info": [
@@ -672,6 +776,348 @@ class Utility(commands.Cog):
         e.set_footer(text="NanoBot — Built by someone who actually moderates on mobile.")
         await ctx.reply(embed=e)
 
+
+
+    # ══════════════════════════════════════════════════════════════════════════
+
+    # ══════════════════════════════════════════════════════════════════════════
+    #  server
+    # ══════════════════════════════════════════════════════════════════════════
+    @commands.hybrid_command(
+        name="server",
+        aliases=["serverinfo", "si", "guild"],
+        description="Info card for this server.",
+    )
+    async def server(self, ctx: commands.Context):
+        g   = ctx.guild
+        now = discord.utils.utcnow()
+
+        total  = g.member_count or 0
+        bots   = sum(1 for m in g.members if m.bot)
+        humans = total - bots
+        online = sum(1 for m in g.members if m.status != discord.Status.offline and not m.bot)
+
+        text_ch  = len(g.text_channels)
+        voice_ch = len(g.voice_channels)
+        cats     = len(g.categories)
+        threads  = len(g.threads)
+
+        color = g.me.color if g.me.color != discord.Color.default() else h.BLUE
+        e = h.embed(title="🏰 " + g.name, color=color)
+
+        if g.icon:
+            e.set_thumbnail(url=g.icon.url)
+        if g.banner:
+            e.set_image(url=g.banner.with_size(1024).url)
+
+        e.description = g.description or ""
+
+        e.add_field(name="👑 Owner",    value=g.owner.mention if g.owner else str(g.owner_id), inline=True)
+        e.add_field(name="🆔 ID",       value="`" + str(g.id) + "`",                           inline=True)
+        e.add_field(name="📅 Created",  value=discord.utils.format_dt(g.created_at, style="R"), inline=True)
+
+        members_val = (
+            "**" + str(total) + "** total\n"
+            + "🟢 " + str(online) + " online · "
+            + "👤 " + str(humans) + " humans · "
+            + "🤖 " + str(bots) + " bots"
+        )
+        e.add_field(name="👥 Members", value=members_val, inline=True)
+
+        channels_val = (
+            "📝 " + str(text_ch) + " text · 🔊 " + str(voice_ch) + " voice\n"
+            + "📁 " + str(cats) + " categories · 🧵 " + str(threads) + " threads"
+        )
+        e.add_field(name="💬 Channels", value=channels_val, inline=True)
+        e.add_field(name="🎭 Roles",    value=str(len(g.roles) - 1), inline=True)
+
+        boosts   = g.premium_subscription_count
+        tier     = g.premium_tier
+        bar      = "🟣" * boosts + "⬛" * max(0, 14 - boosts)
+        e.add_field(
+            name  = "💎 Boost — Level " + str(tier),
+            value = bar + "\n" + str(boosts) + " boosts",
+            inline=False,
+        )
+
+        feature_map = {
+            "VERIFIED":   "✅ Verified",
+            "PARTNERED":  "🤝 Partner",
+            "COMMUNITY":  "🏘️ Community",
+            "DISCOVERABLE": "🔍 Discoverable",
+            "NEWS":       "📰 News Channels",
+            "MEMBER_VERIFICATION_GATE_ENABLED": "🚪 Membership Screening",
+        }
+        if g.vanity_url_code:
+            feature_map["VANITY_URL"] = "🔗 discord.gg/" + g.vanity_url_code
+        features = [v for k, v in feature_map.items() if k in g.features]
+        if features:
+            e.add_field(name="🏅 Features", value=" · ".join(features), inline=False)
+
+        e.set_footer(text="NanoBot · " + str(g.member_count) + " members")
+        e.timestamp = now
+        await ctx.reply(embed=e)
+
+    # ══════════════════════════════════════════════════════════════════════════
+    #  user
+    # ══════════════════════════════════════════════════════════════════════════
+    @commands.hybrid_command(
+        name="user",
+        aliases=["userinfo", "ui", "member"],
+        description="Public info card for a user.",
+    )
+    @app_commands.describe(user="User to look up (leave blank for yourself)")
+    async def user(self, ctx: commands.Context, user: Optional[discord.Member] = None):
+        target = user or ctx.author
+        now    = discord.utils.utcnow()
+
+        created = discord.utils.format_dt(target.created_at, style="R")
+        joined  = discord.utils.format_dt(target.joined_at,  style="R") if target.joined_at else "Unknown"
+
+        roles     = [r for r in reversed(target.roles) if r != ctx.guild.default_role]
+        roles_str = " ".join(r.mention for r in roles[:8])
+        if len(roles) > 8:
+            roles_str += " _+" + str(len(roles) - 8) + " more_"
+        if not roles_str:
+            roles_str = "_None_"
+
+        color = target.color.value if target.color != discord.Color.default() else h.GREY
+        e = discord.Embed(title="👤 " + target.display_name, color=color)
+        e.set_thumbnail(url=target.display_avatar.url)
+
+        e.add_field(name="🏷️ Username",     value="`" + str(target) + "`",         inline=True)
+        e.add_field(name="🆔 ID",            value="`" + str(target.id) + "`",      inline=True)
+        e.add_field(name="🤖 Bot",           value="Yes" if target.bot else "No",   inline=True)
+        e.add_field(name="📅 Joined Server", value=joined,                           inline=True)
+        e.add_field(name="📅 Account Age",   value=created,                          inline=True)
+
+        status_icons = {
+            discord.Status.online:  "🟢 Online",
+            discord.Status.idle:    "🟡 Idle",
+            discord.Status.dnd:     "🔴 Do Not Disturb",
+            discord.Status.offline: "⚫ Offline",
+        }
+        status_str = status_icons.get(target.status, "⚫ Offline")
+        if target.activity:
+            act = target.activity
+            if isinstance(act, discord.Streaming):
+                status_str += "\n🟣 Streaming **" + act.name + "**"
+            elif isinstance(act, discord.Game):
+                status_str += "\n🎮 Playing **" + act.name + "**"
+            elif isinstance(act, discord.Spotify):
+                status_str += "\n🎵 **" + act.title + "** by " + act.artist
+            elif act.name:
+                status_str += "\n▶️ " + act.name
+        e.add_field(name="📡 Status", value=status_str, inline=True)
+
+        if target.timed_out_until and target.timed_out_until > now:
+            e.add_field(
+                name  = "🧊 Timed Out",
+                value = "Until " + discord.utils.format_dt(target.timed_out_until, style="R"),
+                inline=True,
+            )
+        if target.premium_since:
+            e.add_field(
+                name  = "💎 Boosting Since",
+                value = discord.utils.format_dt(target.premium_since, style="R"),
+                inline=True,
+            )
+
+        e.add_field(name="🎭 Roles (" + str(len(roles)) + ")", value=roles_str, inline=False)
+
+        flags  = target.public_flags
+        badges = []
+        if flags.staff:                  badges.append("🛡️ Discord Staff")
+        if flags.partner:                badges.append("🤝 Partner")
+        if flags.hypesquad:              badges.append("🏠 HypeSquad")
+        if flags.bug_hunter:             badges.append("🐛 Bug Hunter")
+        if flags.early_supporter:        badges.append("🏷️ Early Supporter")
+        if flags.verified_bot_developer: badges.append("🔧 Bot Dev")
+        if flags.active_developer:       badges.append("💻 Active Dev")
+        if badges:
+            e.add_field(name="🏅 Badges", value=" · ".join(badges), inline=False)
+
+        e.set_footer(text="NanoBot · " + target.name)
+        e.timestamp = now
+        await ctx.reply(embed=e)
+
+    # ══════════════════════════════════════════════════════════════════════════
+    #  avatar
+    # ══════════════════════════════════════════════════════════════════════════
+    @commands.hybrid_command(
+        name="avatar",
+        aliases=["av", "pfp", "icon"],
+        description="Show a user's avatar in full size.",
+    )
+    @app_commands.describe(user="User whose avatar to show (leave blank for yourself)")
+    async def avatar(self, ctx: commands.Context, user: Optional[discord.Member] = None):
+        target = user or ctx.author
+        av     = target.display_avatar.with_size(1024)
+
+        color = target.color if target.color != discord.Color.default() else h.BLUE
+        e = discord.Embed(title="🖼️ " + target.display_name + "'s Avatar", color=color)
+        e.set_image(url=av.url)
+
+        formats = []
+        for fmt in ("png", "jpg", "webp"):
+            try:
+                url = target.display_avatar.with_format(fmt).with_size(1024).url  # type: ignore
+                formats.append("[" + fmt.upper() + "](" + url + ")")
+            except Exception:
+                pass
+        if target.display_avatar.is_animated():
+            try:
+                formats.append("[GIF](" + target.display_avatar.with_format("gif").with_size(1024).url + ")")
+            except Exception:
+                pass
+
+        e.description = " · ".join(formats) if formats else ""
+
+        if target.guild_avatar:
+            e.set_footer(text="Showing server avatar  ·  NanoBot")
+        else:
+            e.set_footer(text="NanoBot")
+
+        await ctx.reply(embed=e)
+
+    # ══════════════════════════════════════════════════════════════════════════
+    #  banner
+    # ══════════════════════════════════════════════════════════════════════════
+    @commands.hybrid_command(
+        name="banner",
+        aliases=["userbanner"],
+        description="Show a user's profile banner.",
+    )
+    @app_commands.describe(user="User whose banner to show (leave blank for yourself)")
+    async def banner(self, ctx: commands.Context, user: Optional[discord.Member] = None):
+        target = user or ctx.author
+
+        try:
+            fetched = await self.bot.fetch_user(target.id)
+        except discord.HTTPException:
+            fetched = None
+
+        banner = fetched.banner if fetched else None
+        if not banner:
+            return await ctx.reply(
+                embed=h.info(
+                    "**" + target.display_name + "** doesn't have a profile banner set.",
+                    "🖼️ No Banner",
+                ),
+                ephemeral=True,
+            )
+
+        color = target.color if target.color != discord.Color.default() else h.BLUE
+        e = discord.Embed(title="🖼️ " + target.display_name + "'s Banner", color=color)
+        e.set_image(url=banner.with_size(1024).url)
+
+        formats = []
+        for fmt in ("png", "jpg", "webp"):
+            try:
+                formats.append("[" + fmt.upper() + "](" + banner.with_format(fmt).with_size(1024).url + ")")  # type: ignore
+            except Exception:
+                pass
+        if banner.is_animated():
+            try:
+                formats.append("[GIF](" + banner.with_format("gif").with_size(1024).url + ")")
+            except Exception:
+                pass
+
+        e.description = " · ".join(formats) if formats else ""
+        e.set_footer(text="NanoBot")
+        await ctx.reply(embed=e)
+
+    # ══════════════════════════════════════════════════════════════════════════
+    #  roleinfo
+    # ══════════════════════════════════════════════════════════════════════════
+    @commands.hybrid_command(
+        name="roleinfo",
+        aliases=["role", "ri"],
+        description="Info card for a server role.",
+    )
+    @app_commands.describe(role="The role to inspect")
+    async def roleinfo(self, ctx: commands.Context, *, role: discord.Role):
+        now = discord.utils.utcnow()
+
+        key_perms = {
+            "administrator":    "⛔ Administrator",
+            "ban_members":      "🔨 Ban Members",
+            "kick_members":     "👢 Kick Members",
+            "manage_guild":     "⚙️ Manage Server",
+            "manage_channels":  "📢 Manage Channels",
+            "manage_messages":  "🗑️ Manage Messages",
+            "manage_roles":     "🎭 Manage Roles",
+            "moderate_members": "🧊 Timeout Members",
+            "mention_everyone": "📣 Mention Everyone",
+            "manage_webhooks":  "🔗 Manage Webhooks",
+        }
+        active_perms = [label for perm, label in key_perms.items() if getattr(role.permissions, perm, False)]
+
+        color = role.color if role.color != discord.Color.default() else h.GREY
+        e = discord.Embed(title="🎭 " + role.name, color=color)
+
+        e.add_field(name="🆔 Role ID",    value="`" + str(role.id) + "`",                              inline=True)
+        e.add_field(name="👥 Members",    value=str(len(role.members)),                                 inline=True)
+        e.add_field(name="📅 Created",    value=discord.utils.format_dt(role.created_at, style="R"),   inline=True)
+        e.add_field(name="🎨 Color",      value=str(role.color),                                        inline=True)
+        e.add_field(name="📌 Position",   value=str(role.position) + " / " + str(len(ctx.guild.roles)), inline=True)
+        e.add_field(name="💬 Mentionable", value="Yes" if role.mentionable else "No",                   inline=True)
+        e.add_field(name="📋 Hoisted",    value="Yes" if role.hoist else "No",                          inline=True)
+        e.add_field(name="🤖 Managed",    value="Yes (bot/integration)" if role.managed else "No",      inline=True)
+
+        e.add_field(
+            name  = "🔐 Key Permissions",
+            value = "\n".join(active_perms) if active_perms else "_None of note_",
+            inline=False,
+        )
+
+        e.set_footer(text="NanoBot · " + role.name)
+        e.timestamp = now
+        await ctx.reply(embed=e)
+
+    # ══════════════════════════════════════════════════════════════════════════
+    #  uptime
+    # ══════════════════════════════════════════════════════════════════════════
+    @commands.hybrid_command(
+        name="uptime",
+        description="How long NanoBot has been running since last (re)start.",
+    )
+    async def uptime(self, ctx: commands.Context):
+        now     = discord.utils.utcnow()
+        delta   = now - self.bot.start_time
+        seconds = int(delta.total_seconds())
+
+        days,    rem  = divmod(seconds, 86400)
+        hours,   rem  = divmod(rem,     3600)
+        minutes, secs = divmod(rem,     60)
+
+        def unit(n, word):
+            return str(n) + " " + word + ("s" if n != 1 else "")
+
+        parts = []
+        if days:                parts.append(unit(days,    "day"))
+        if hours:               parts.append(unit(hours,   "hour"))
+        if minutes:             parts.append(unit(minutes, "minute"))
+        if secs or not parts:   parts.append(unit(secs,    "second"))
+
+        # Join: "1 day, 2 hours, 3 minutes and 4 seconds"
+        if len(parts) > 1:
+            uptime_str = ", ".join("**" + p + "**" for p in parts[:-1])
+            uptime_str += " and **" + parts[-1] + "**"
+        else:
+            uptime_str = "**" + parts[0] + "**"
+
+        e = h.embed(title="⏱️ Uptime", color=h.BLUE)
+        e.description = (
+            "NanoBot has been running for " + uptime_str + ".\n"
+            "Online since "
+            + discord.utils.format_dt(self.bot.start_time, style="F")
+            + " ("
+            + discord.utils.format_dt(self.bot.start_time, style="R")
+            + ")"
+        )
+        e.set_footer(text="NanoBot")
+        await ctx.reply(embed=e)
 
 # ── Registration ───────────────────────────────────────────────────────────────
 async def setup(bot: commands.Bot):

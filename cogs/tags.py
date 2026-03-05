@@ -636,7 +636,7 @@ class Tags(commands.Cog):
 
         e = h.embed(title="🏷️ Tag List", color=h.BLUE)
         e.description = (
-            f"`{prefix}tag <name>` or `{prefix}<name>` → DM it to yourself\n"
+            f"`{prefix}tag <name>` or `{prefix}<name>` → post it in the channel\n"
             f"`{prefix}tag + <name> <content>` → create  ·  `{prefix}tag - <name>` → delete\n"
             f"🖼️ = has image\n\u200b"
         )
