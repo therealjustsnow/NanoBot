@@ -141,8 +141,10 @@ class NanoBot(commands.Bot):
 
     def save_prefixes(self):
         os.makedirs("data", exist_ok=True)
-        with open("data/prefixes.json", "w") as f:
+        tmp = "data/prefixes.json.tmp"
+        with open(tmp, "w", encoding="utf-8") as f:
             json.dump(self.prefixes, f, indent=2)
+        os.replace(tmp, "data/prefixes.json")
 
     # ── Events ─────────────────────────────────────────────────────────────────
     async def on_ready(self):
@@ -239,6 +241,16 @@ class NanoBot(commands.Bot):
             e.set_footer(text="NanoBot")
             return await ctx.reply(embed=e, ephemeral=True)
 
+        if isinstance(error, commands.CommandOnCooldown):
+            secs = round(error.retry_after)
+            unit = "second" if secs == 1 else "seconds"
+            e = discord.Embed(
+                description=f"⏱️ Slow down! Try again in **{secs} {unit}**.",
+                color=0xFEE75C,
+            )
+            e.set_footer(text="NanoBot")
+            return await ctx.reply(embed=e, ephemeral=True)
+
         if isinstance(error, commands.CommandNotFound):
             return   # tag shortcuts are handled in on_message, not here
 
@@ -305,6 +317,18 @@ async def main():
     token = os.getenv("DISCORD_TOKEN") or cfg.get("token")
     if not token:
         log.error("❌ No token found. Set DISCORD_TOKEN env var or add it to config.json")
+        return
+
+    # Validate config — log warnings for non-fatal issues, abort on fatal ones
+    from utils.config import validate as _validate_cfg
+    for issue in _validate_cfg(cfg):
+        if issue.fatal:
+            log.critical(f"Config error [{issue.field}]: {issue.message}")
+        else:
+            log.warning(f"Config warning [{issue.field}]: {issue.message}")
+    fatal_issues = [i for i in _validate_cfg(cfg) if i.fatal]
+    if fatal_issues:
+        log.critical("Aborting — fix config.json and restart.")
         return
 
     bot = NanoBot(cfg)
