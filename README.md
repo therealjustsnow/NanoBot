@@ -47,7 +47,7 @@ NanoBot fixes that.
 ### 2. Install
 
 ```bash
-git clone https://github.com/YOUR_USER/nanobot.git
+git clone https://github.com/therealjustsnow/NanoBot.git
 cd nanobot
 pip install -r requirements.txt
 ```
