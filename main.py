@@ -101,6 +101,7 @@ class NanoBot(commands.Bot):
         self.default_prefix: str        = cfg.get("default_prefix", "!")
         self.prefixes: dict[str, str]   = {}
         self.last_senders: dict[int, discord.Member] = {}
+        self.start_time = discord.utils.utcnow()
 
         # Owner ID: config override takes priority over the application owner
         raw_owner = cfg.get("owner_id")

@@ -14,7 +14,7 @@ If you moderate from mobile, you already know:
 - Slowmode adjustments take too many taps
 - You can't always grab IDs easily
 - Cleaning messages is clunky
-- Some bots assume you're on desktop
+- Most bots assume you're on desktop
 
 NanoBot fixes that.
 
@@ -26,9 +26,12 @@ NanoBot fixes that.
 - ✅ "Last sender" targeting — no need to copy IDs on mobile
 - ✅ Timed bans with auto-unban (survives bot restarts)
 - ✅ Timed slowmode with auto-disable
-- ✅ Personal + global tag system (DMs you snippets instantly)
+- ✅ Personal + global tag system with multi-word names and image support
+- ✅ Tag shortcuts — `n!tagname` fires any tag in one tap
 - ✅ Mod notes stored in JSON — no database needed
-- ✅ Mobile-optimized info cards
+- ✅ Server, user, avatar, banner, and role info cards
+- ✅ Owner-only admin commands — reload, restart, shutdown, live log viewer
+- ✅ Configurable log level via `config.json` (no restart needed)
 - ✅ Per-server custom prefix
 - ✅ Zero database — everything is plain JSON files
 
@@ -41,305 +44,317 @@ NanoBot fixes that.
 - Python 3.11+
 - A Discord bot application ([discord.com/developers](https://discord.com/developers/applications))
 
-### 2. Required Bot Permissions
-
-Enable these in the Discord Developer Portal:
-
-**Privileged Gateway Intents (required):**
-- ✅ Server Members Intent
-- ✅ Message Content Intent
-
-**Bot Permissions:**
-- Ban Members
-- Kick Members
-- Manage Channels
-- Manage Messages
-- Moderate Members (for timeouts)
-- Read Messages / View Channels
-- Send Messages
-- Embed Links
-
-### 3. Install & Run
+### 2. Install
 
 ```bash
-# Clone the repo
 git clone https://github.com/YOUR_USER/nanobot.git
 cd nanobot
-
-# Install dependencies
 pip install -r requirements.txt
-
-# Add your token (edit config.json)
-# OR set as an environment variable:
-export DISCORD_TOKEN=your_token_here
-
-# Run
-python main.py
 ```
 
-### 4. config.json
+### 3. Config
+
+Edit `config.json`:
 
 ```json
 {
   "token": "YOUR_BOT_TOKEN_HERE",
-  "default_prefix": "!"
+  "default_prefix": "n!",
+  "owner_id": null,
+  "log_level": "INFO",
+  "log_http": false
 }
 ```
 
+| Key | Description |
+|-----|-------------|
+| `token` | Your bot token from the Developer Portal |
+| `default_prefix` | Default prefix for all servers (can be changed per-server with `/prefix`) |
+| `owner_id` | Your Discord user ID — overrides the app owner for admin commands. Leave `null` to use the app owner automatically |
+| `log_level` | `DEBUG` / `INFO` / `WARNING` / `ERROR` — can also be changed live with `!setloglevel` |
+| `log_http` | Set `true` to log every raw HTTP request (very verbose, useful for debugging) |
+
 > ⚠️ **Never commit `config.json` to git.** It's already in `.gitignore`.
+
+You can also set the token via environment variable:
+```bash
+export DISCORD_TOKEN=your_token_here
+```
+
+### 4. Discord Developer Portal
+
+Enable these **Privileged Gateway Intents** in your app's Bot settings:
+- ✅ **Server Members Intent**
+- ✅ **Message Content Intent**
+
+Without these, prefix commands and most mod commands will silently fail.
+
+### 5. Run
+
+```bash
+# Recommended — runs a pre-flight check then launches
+python run.py
+
+# Or skip the check and launch directly
+python main.py
+```
+
+Logs are written to `logs/nanobot.log` (rotating, max 5 MB × 3 files).
 
 ---
 
 ## Commands
 
-All commands work as slash commands (`/`), prefix commands (default `!`), and @mention (`@NanoBot command`).
+All commands work as slash commands (`/`), prefix commands (default `n!`), and @mention.
 
-Most commands that take a `user` argument will automatically **target the last person who sent a message** in the channel if you leave it blank — ideal for mobile where copying IDs is painful.
+Most commands that take a `user` argument will automatically **target the last person who sent a message** in the channel if you leave it blank — ideal for mobile where copying IDs is a pain.
+
+Commands are listed alphabetically within each section.
+
+---
+
+### 🔧 Admin *(owner only)*
+
+Restricted to the bot owner set via `owner_id` in `config.json`, or the Discord application owner.
+
+#### `!logs [lines]`
+Tail `logs/nanobot.log` right in Discord. Default 20 lines, max 50. Great for checking errors from your phone without SSH.
+
+#### `!reload [cog|all]`
+Hot-reload a cog without restarting the bot.
+```
+!reload all           → reload every cog
+!reload moderation    → reload only cogs/moderation.py
+```
+
+#### `!restart`
+Gracefully close the connection and re-execute the process. Config changes take effect immediately.
+
+#### `!setloglevel <level>`
+Change log verbosity live and save it to `config.json`. No restart needed.
+```
+!setloglevel DEBUG    → verbose
+!setloglevel INFO     → normal
+!setloglevel WARNING  → quiet
+```
+
+#### `!shutdown`
+Flush logs and close the connection cleanly.
 
 ---
 
 ### 🔨 Banning
 
-#### `/cban` (alias: `cleanban`)
-Ban + delete message history + optional timed auto-unban + optional DM.
-
-| Argument | Type | Default | Description |
-|----------|------|---------|-------------|
-| `user` | Member | _last sender_ | Who to ban |
-| `days` | 1–7 | `7` | Days of message history to delete |
-| `wait` | Duration | _none_ | Auto-unban after this time (e.g. `1h`, `30m`, `7d`) |
-| `message` | Text | _default_ | DM to send the user |
-
-```
-/cban                          → ban the last sender, 7d history, no auto-unban
-/cban @user                    → ban @user, 7d history
-/cban @user 1                  → ban, 1 day of history deleted
-/cban @user 7 1h               → ban, 7d history, unban in 1 hour
-/cban @user 7 24h Read the rules before rejoining.
-```
-
-Auto-unbans survive bot restarts (persisted to `data/unban_schedules.json`).
-
----
-
 #### `/ban`
-Permanent ban with optional DM. No auto-unban.
+Permanent ban with optional DM. Defaults to last sender.
 
-```
-/ban                  → ban last sender
-/ban @user            → ban @user
-/ban @user You've violated rule 3.
-```
-
----
-
-#### `/unban`
-Unban by User ID (the only way to unban since they've left the server).
-
-```
-/unban 123456789012345678
-```
-
----
-
-### 👢 Other Actions
-
-#### `/kick`
-Kick with optional DM. Defaults to last sender.
-
-```
-/kick               → kick last sender
-/kick @user         → kick @user
-/kick @user Please read the rules and rejoin.
-```
-
----
-
-#### `/freeze`
-Discord Timeout (temp mute). User can't speak, react, or join VCs.
+#### `/cban` *(alias: cleanban)*
+Clean ban — delete message history + optional timed auto-unban + optional DM.
 
 | Argument | Default | Description |
 |----------|---------|-------------|
-| `user` | _last sender_ | Who to freeze |
-| `duration` | `10m` | How long (e.g. `5m`, `1h`, `1d`, max 28 days) |
-| `reason` | _none_ | Optional reason |
+| `user` | *last sender* | Who to ban |
+| `days` | `7` | Days of message history to delete (1–7) |
+| `wait` | *none* | Auto-unban after (e.g. `1h`, `30m`, `7d`) |
+| `message` | *default* | DM sent to the user |
 
-```
-/freeze                  → freeze last sender for 10 minutes
-/freeze @user            → freeze @user for 10 minutes
-/freeze @user 1h         → freeze for 1 hour
-/freeze @user 30m Calm down please.
-```
+Auto-unbans survive restarts (stored in `data/unban_schedules.json`).
+
+#### `/unban`
+Unban by user ID.
 
 ---
+
+### 📢 Channel Controls
+
+#### `/lock`
+Toggle @everyone send permissions in a channel. Run again to unlock.
+
+#### `/purge`
+Bulk delete last X messages (1–100). Optional user filter.
+
+#### `/slow`
+Set slowmode with optional auto-disable timer.
+
+| Argument | Default | Description |
+|----------|---------|-------------|
+| `delay` | *toggle* | e.g. `30s`, `2m` (max 5 min) |
+| `length` | *indefinite* | Auto-disable after e.g. `10m`, `1h` (max 7 days) |
+
+Auto-disable survives restarts.
+
+---
+
+### ⚙️ Configuration & Info
+
+#### `/about`
+NanoBot's story, philosophy, and tech stack.
+
+#### `/info`
+Bot stats — latency, servers, prefix, Python and discord.py version.
+
+#### `/invite`
+Invite link with exactly the permissions NanoBot needs.
+
+#### `/ping`
+Check latency.
+
+#### `/prefix [new_prefix]`
+View or change the prefix for this server. Admins only for changes.
+
+#### `/uptime`
+How long NanoBot has been running since the last start or `!restart`.
+
+---
+
+### 🔎 Info & Notes
+
+#### `/clearnotes`
+Wipe all mod notes for a user. Admin only.
+
+#### `/last`
+Show who last sent a message in the channel — the target for no-arg commands like `/kick`.
+
+#### `/note`
+Add an internal mod note about a user. Never visible to the user.
+
+#### `/notes`
+View notes for a user (last 8). Mod only.
+
+#### `/whois`
+Detailed mod-focused user card — ID, join date, account age, roles, timeout status, badges, and note count.
+
+---
+
+### 👢 Kicking & Timeouts
+
+#### `/freeze`
+Discord Timeout. User can't speak, react, or join VCs.
+
+| Argument | Default | Description |
+|----------|---------|-------------|
+| `user` | *last sender* | Who to freeze |
+| `duration` | `10m` | How long (max 28 days) |
+| `reason` | *none* | Optional reason |
+
+#### `/kick`
+Kick with optional DM. Defaults to last sender.
 
 #### `/unfreeze`
 Remove a timeout early.
 
 ---
 
-### 📢 Channel Controls
+### 🔍 Server & User Info
 
-#### `/slow`
-Toggle slowmode on/off — or set a specific delay with an optional auto-disable timer.
+#### `/avatar` *(aliases: av, pfp, icon)*
+Show a user's avatar at 1024px with PNG/JPG/WEBP/GIF download links. Shows server avatar if set.
 
-| Argument | Default | Description |
-|----------|---------|-------------|
-| `delay` | _toggle_ | Delay e.g. `30s`, `2m`, `5m` (max 5 min) |
-| `length` | _indefinite_ | Auto-disable after e.g. `10m`, `1h`, `3d` (max 7 days) |
+#### `/banner` *(alias: userbanner)*
+Show a user's profile banner with download links.
 
-```
-/slow              → if slowmode is on, disable it. If off, enable at 60s.
-/slow 30s          → set to 30 second slowmode
-/slow 2m 1h        → 2 minute slowmode, auto-removes in 1 hour
-```
+#### `/roleinfo` *(aliases: role, ri)*
+Role details — color, position, member count, creation date, hoist/mentionable flags, and notable permissions.
 
-Auto-disable survives bot restarts.
+#### `/server` *(aliases: serverinfo, si, guild)*
+Full server info — member counts, channel breakdown, boost level, role count, creation date, notable features.
 
----
-
-#### `/lock`
-Toggle @everyone's ability to send messages in a channel. Run again to unlock.
-
-```
-/lock                → lock current channel
-/lock #general       → lock a specific channel
-/lock #general Raid happening, locking for safety.
-```
-
----
-
-#### `/purge`
-Bulk delete the last X messages (1–100). Optional user filter.
-
-```
-/purge 10             → delete last 10 messages
-/purge 50 @user       → delete last 50 messages from @user only
-```
-
----
-
-### 🔎 Info & Notes
-
-#### `/whois`
-User info card, designed to be readable on mobile. Shows ID, join date, account age, roles, timeout status, and badges.
-
-```
-/whois              → your own info
-/whois @user        → info on @user
-```
-
-Also shows a note count if that user has mod notes on file.
-
----
-
-#### `/last`
-Show (or confirm) who last sent a message in the current channel — this is who commands like `/kick` with no args will target.
-
----
-
-#### `/note`
-Add an internal mod note about a user. Notes are stored in JSON and never visible to the user.
-
-```
-/note @user Warned about spam in #general.
-```
-
----
-
-#### `/notes`
-View all notes for a user (shows last 8, mod-only).
-
----
-
-#### `/clearnotes`
-Wipe all notes for a user (admin-only).
+#### `/user` *(aliases: userinfo, ui, member)*
+Public user card — status, activity, join date, account age, roles, badges, boost and timeout status. Anyone can use this.
 
 ---
 
 ### 🏷️ Tags
 
-Tags are saved text snippets. Use them to DM yourself (or someone else) a quick piece of text — rules, warnings, FAQs, template messages, etc.
+Saved text snippets up to 2000 characters with optional images. Post in channel with one tap.
 
-- **Personal tags** — only you can see and use them
-- **Global tags** — anyone on the server can use them (mod-only creation)
+- **Personal tags** — only you can create and see them
+- **Global tags** — anyone can use, mods-only to create
 
-#### `/tag` or `/tag list`
-List your personal tags and the server's global tags.
+#### Slash commands
 
-#### `/tag create <name> <content>`
-Create a personal tag.
-```
-/tag create rules Please read #rules before posting.
-```
+| Command | Description |
+|---------|-------------|
+| `/tag` or `/tag list` | List all tags (alphabetical) |
+| `/tag create <n> [content] [image]` | Create a personal tag |
+| `/tag global <n> [content] [image]` | Create a global tag *(mods only)* |
+| `/tag use <n> [user]` | Post in channel, or DM to a specific user |
+| `/tag preview <n>` | Preview a tag (ephemeral) |
+| `/tag edit <n> <content>` | Update content |
+| `/tag delete <n>` | Delete a tag |
+| `/tag image <n>` | Add or replace a tag's image |
 
-#### `/tag global <name> <content>` _(mods only)_
-Create a global server tag anyone can use.
-```
-/tag global warn This message is a formal warning. Further violations may result in a ban.
-```
+#### Prefix shorthands
 
-#### `/tag use <name> [dm_user]`
-DM yourself a tag. Or DM it to someone else.
-```
-/tag use rules              → DMs you the "rules" tag
-/tag use warn @troublemaker → DMs the tag to @troublemaker
-```
+Tag names can contain spaces. Use `|` to separate name from content when creating.
 
-#### `/tag edit <name> <new_content>`
-Update a tag's content.
-
-#### `/tag delete <name>`
-Delete a personal tag (or a global tag if you're a mod).
-
----
-
-### ⚙️ Configuration
-
-#### `/prefix [new_prefix]`
-View or change the bot's prefix for this server. Leave blank to see the current prefix.
+| Shorthand | Description |
+|-----------|-------------|
+| `n!tag` | List all tags |
+| `n!tag <n>` | Post tag in channel |
+| `n!<n>` | Same — even shorter |
+| `n!tag + <n> \| <content>` | Create personal tag |
+| `n!tag - <n>` | Delete personal tag |
+| `n!tag g+ <n> \| <content>` | Create global tag *(mods only)* |
 
 ```
-/prefix        → shows current prefix
-/prefix ?      → changes prefix to ?
+n!tag + server rules | Read #rules before posting!
+n!server rules            → posts the "server rules" tag
+n!welcome                 → posts the "welcome" tag
+n!tag - server rules      → deletes it
 ```
 
-Only administrators can change the prefix.
+> Tags over 1500 characters are sent as plain text to stay within Discord's embed limit.
 
 ---
 
 ## Data Storage
 
-NanoBot stores everything in the `data/` folder as JSON files:
+All data lives in `data/` as plain JSON. No migrations, no setup, easy to back up.
 
 | File | Contents |
 |------|----------|
-| `prefixes.json` | Per-guild custom prefixes |
-| `tags.json` | Personal and global tags per guild |
 | `notes.json` | Mod notes per user per guild |
-| `unban_schedules.json` | Pending timed unbans (survives restarts) |
-| `slow_schedules.json` | Pending timed slowmode removals (survives restarts) |
+| `prefixes.json` | Per-guild custom prefixes |
+| `slow_schedules.json` | Pending timed slowmode removals |
+| `tags.json` | Personal and global tags per guild |
+| `unban_schedules.json` | Pending timed unbans |
 
-All files are human-readable and easy to edit or back up. No migrations, no setup.
+Logs → `logs/nanobot.log` (5 MB rotating, 3 files kept).
+
+---
+
+## Project Structure
+
+```
+nanobot/
+├── main.py              ← Bot core, error handler, tag shortcuts
+├── run.py               ← Pre-flight checker + launcher
+├── config.json          ← Token, prefix, log level, owner ID
+├── requirements.txt
+├── .gitignore
+├── README.md
+├── cogs/
+│   ├── admin.py         ← reload / restart / shutdown / logs / setloglevel
+│   ├── moderation.py    ← ban / cban / unban / kick / freeze / unfreeze / slow / lock / purge / whois / note / notes / clearnotes / last
+│   ├── tags.py          ← tag system (personal + global, images, multi-word names, shortcuts)
+│   └── utility.py       ← about / avatar / banner / help / info / invite / ping / prefix / roleinfo / server / uptime / user
+└── utils/
+    ├── helpers.py        ← embed builders, duration parser
+    └── storage.py        ← JSON read/write
+```
 
 ---
 
 ## Philosophy
 
-NanoBot is:
-
-- **Small** — one Python file per concern, no over-engineering
-- **Fast** — JSON reads are instant at this scale
-- **Intentional** — every feature exists because mobile mods actually need it
-- **Honest** — no fake "enterprise" features, no upsell
-
-Not enterprise. Not bloated. Just useful.
+NanoBot is intentionally small. It doesn't try to replace every mod bot — it tries to make the things you do every day faster and less annoying. Not enterprise. Not overengineered. Just useful.
 
 ---
 
 ## Contributing
 
-Pull requests welcome. Keep the spirit of the project in mind: if a new command doesn't make moderation on mobile easier, it probably doesn't belong here.
+Pull requests welcome. Keep the spirit in mind: if a new command doesn't make moderation on mobile faster or easier, it probably doesn't belong here.
 
 ---
 

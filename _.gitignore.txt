@@ -1,0 +1,26 @@
+# Config (contains bot token — NEVER commit this)
+config.json
+
+# Bot data (JSON storage — contains server/user data)
+data/
+
+# Log files
+logs/
+
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+.env
+venv/
+.venv/
+env/
+
+# OS
+.DS_Store
+Thumbs.db
+
+# IDE
+.vscode/
+.idea/
+*.swp
