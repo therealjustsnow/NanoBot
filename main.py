@@ -116,6 +116,7 @@ class NanoBot(commands.Bot):
             "cogs.moderation",
             "cogs.tags",
             "cogs.utility",
+            "cogs.reminders",
             "cogs.admin",       # owner-only: reload / shutdown / restart
         )
         for cog in cogs:
