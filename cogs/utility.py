@@ -417,6 +417,41 @@ _HELP = {
             "args": [], "perms": "None", "example": "!uptime",
         },
     ],
+    "⏰ Reminders": [
+        {
+            "name": "remindme", "aliases": ["rm"],
+            "usage": "remindme <message with duration>",
+            "short": "Set a reminder for yourself",
+            "desc": "Remind yourself about something after a set time. Include the duration in your message (e.g. 'call mum 30m') or pass it separately. Delivered by DM, falls back to channel ping if DMs are closed.",
+            "args": [
+                ("message", "What to remind you about — put the duration at the end"),
+                ("time",    "Duration if not in message: 8h, 30m, 2 hours, 1 day"),
+                ("dm",      "DM the reminder (default: yes)"),
+            ],
+            "perms": "None", "example": "!remindme stand up in 1 hour",
+        },
+        {
+            "name": "remind", "aliases": [],
+            "usage": "remind <@user> <message with duration>",
+            "short": "Set a reminder for another user",
+            "desc": "Remind someone else about something. By default posts a channel ping; use dm=yes to DM them instead.",
+            "args": [
+                ("user",    "Who to remind"),
+                ("message", "What to remind them about — duration at the end"),
+                ("time",    "Duration if not in message"),
+                ("dm",      "DM them instead of pinging in channel (default: no)"),
+            ],
+            "perms": "None", "example": "!remind @user check that PR 2h",
+        },
+        {
+            "name": "reminders", "aliases": ["reminder"],
+            "usage": "reminders [cancel <id>]",
+            "short": "List or cancel your active reminders",
+            "desc": "With no args: lists all your active reminders sorted by due time. With 'cancel <id>': cancels the reminder with that ID (shown when the reminder was set).",
+            "args": [("id", "6-character reminder ID to cancel")],
+            "perms": "None", "example": "!reminders cancel abc123",
+        },
+    ],
     "⚙️ Config & Info": [
         {
             "name": "prefix",
@@ -487,12 +522,19 @@ _FLAT = _flat_commands()
 
 # ── Help pagination ───────────────────────────────────────────────────────────
 
-def _build_help_pages(prefix: str, bot_name: str) -> list[discord.Embed]:
+_OWNER_CATEGORIES = {"🔧 Owner / Admin"}
+
+
+def _build_help_pages(prefix: str, bot_name: str, *, is_owner: bool = False) -> list[discord.Embed]:
     """
     Build one embed per help category, plus a cover page.
+    Owner-only categories are hidden from non-owners.
     Returns a list of discord.Embed objects ready to display.
     """
-    categories = list(_HELP.items())
+    categories = [
+        (cat, cmds) for cat, cmds in _HELP.items()
+        if is_owner or cat not in _OWNER_CATEGORIES
+    ]
     total = len(categories) + 1  # +1 for cover
 
     def footer(page_num):
@@ -625,6 +667,10 @@ class Utility(commands.Cog):
         # Detail view: !help cban  (single ephemeral embed, no pagination)
         if command:
             cmd = _FLAT.get(command.lower())
+            # Hide owner-only commands from non-owners
+            if cmd and cmd.get("perms") == "Bot Owner":
+                if not await self.bot.is_owner(ctx.author):
+                    cmd = None
             if not cmd:
                 return await ctx.reply(
                     embed=h.err(
@@ -651,7 +697,8 @@ class Utility(commands.Cog):
             return await ctx.reply(embed=e, ephemeral=True)
 
         # Paginated overview
-        pages = _build_help_pages(prefix, self.bot.user.display_name)
+        is_owner = await self.bot.is_owner(ctx.author)
+        pages = _build_help_pages(prefix, self.bot.user.display_name, is_owner=is_owner)
         view  = HelpView(pages=pages, author=ctx.author)
         msg   = await ctx.reply(embed=pages[0], view=view)
         view.message = msg
