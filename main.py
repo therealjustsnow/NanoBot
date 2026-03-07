@@ -19,6 +19,8 @@ import os
 import discord
 from discord.ext import commands
 
+from utils import db
+
 # ── Config (read once at module level so logging init can use it) ──────────────
 def _load_config() -> dict:
     cfg = {}
