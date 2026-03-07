@@ -4,6 +4,8 @@
 
 NanoBot is a lightweight Discord moderation bot built for one specific goal: help moderators who are on their phone get things done fast. No bloated dashboards. No confusing panels. No database setup. Just clean, simple commands that work.
 
+**[💬 Support Server](https://discord.gg/M7fjxNg72s)** · **[GitHub](https://github.com/therealjustsnow/NanoBot)**
+
 ---
 
 ## Why NanoBot?
@@ -187,6 +189,9 @@ Auto-disable survives restarts.
 
 ### ⚙️ Configuration & Info
 
+#### `/support` *(aliases: helpserver)*
+Get an invite link to the NanoBot support server.
+
 #### `/about`
 NanoBot's story, philosophy, and tech stack.
 
@@ -338,7 +343,7 @@ nanobot/
 │   ├── admin.py         ← reload / restart / shutdown / logs / setloglevel
 │   ├── moderation.py    ← ban / cban / unban / kick / freeze / unfreeze / slow / lock / purge / whois / note / notes / clearnotes / last
 │   ├── tags.py          ← tag system (personal + global, images, multi-word names, shortcuts)
-│   └── utility.py       ← about / avatar / banner / help / info / invite / ping / prefix / roleinfo / server / uptime / user
+│   └── utility.py       ← about / avatar / support / banner / help / info / invite / ping / prefix / roleinfo / server / uptime / user
 └── utils/
     ├── helpers.py        ← embed builders, duration parser
     └── storage.py        ← JSON read/write
