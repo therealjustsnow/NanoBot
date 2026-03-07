@@ -110,7 +110,8 @@ class NanoBot(commands.Bot):
     # ── Startup ────────────────────────────────────────────────────────────────
     async def setup_hook(self):
         os.makedirs("data", exist_ok=True)
-        self._load_prefixes()
+        await db.init()
+        await self._load_prefixes()
 
         cogs = (
             "cogs.moderation",
@@ -134,18 +135,14 @@ class NanoBot(commands.Bot):
         return await super().is_owner(user)
 
     # ── Prefix persistence ─────────────────────────────────────────────────────
-    def _load_prefixes(self):
-        path = "data/prefixes.json"
-        if os.path.exists(path):
-            with open(path) as f:
-                self.prefixes = json.load(f)
+    async def _load_prefixes(self):
+        """Load per-guild prefixes from SQLite into the in-memory dict."""
+        self.prefixes = await db.get_all_prefixes()
 
-    def save_prefixes(self):
-        os.makedirs("data", exist_ok=True)
-        tmp = "data/prefixes.json.tmp"
-        with open(tmp, "w", encoding="utf-8") as f:
-            json.dump(self.prefixes, f, indent=2)
-        os.replace(tmp, "data/prefixes.json")
+    async def save_prefix(self, guild_id: int, prefix: str):
+        """Persist a single guild prefix to SQLite and update in-memory dict."""
+        self.prefixes[str(guild_id)] = prefix
+        await db.set_prefix(guild_id, prefix)
 
     # ── Events ─────────────────────────────────────────────────────────────────
     async def on_ready(self):
@@ -269,22 +266,10 @@ async def _try_tag_shortcut(
     Returns True if a tag was found and sent, False otherwise.
     Called from on_message BEFORE process_commands so errors surface clearly.
     """
-    from utils import storage as _storage
     try:
-        data = _storage.read("tags.json")
-        gid  = str(message.guild.id)
-        uid  = str(message.author.id)
-
-        # Personal tags first, then global
-        raw = (
-            data.get(gid, {}).get("personal", {}).get(uid, {}).get(name)
-            or data.get(gid, {}).get("global", {}).get(name)
-        )
-        if raw is None:
+        tag = await db.get_tag(message.guild.id, name, message.author.id)
+        if tag is None:
             return False
-
-        # Normalise legacy plain-string tags
-        tag = {"content": raw, "image_url": None} if isinstance(raw, str) else raw
 
         text    = tag.get("content") or ""
         img_url = tag.get("image_url")
@@ -334,8 +319,11 @@ async def main():
 
     bot = NanoBot(cfg)
     log.info("🚀 Starting NanoBot...")
-    async with bot:
-        await bot.start(token)
+    try:
+        async with bot:
+            await bot.start(token)
+    finally:
+        await db.close()
 
 
 if __name__ == "__main__":
