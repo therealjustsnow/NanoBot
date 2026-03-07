@@ -768,7 +768,7 @@ class Utility(commands.Cog):
     # ══════════════════════════════════════════════════════════════════════════
     @commands.hybrid_command(
         name="support",
-        aliases=["server", "helpserver"],
+        aliases=["helpserver"],
         description="Get a link to the NanoBot support server.",
     )
     @commands.cooldown(1, 10, commands.BucketType.user)
