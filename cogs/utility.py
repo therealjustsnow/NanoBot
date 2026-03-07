@@ -494,6 +494,16 @@ _HELP = {
             "example": "!invite",
         },
         {
+            "name": "support",
+            "aliases": ["helpserver"],
+            "usage": "support",
+            "short": "Link to the NanoBot support server",
+            "desc": "Posts an invite link to the official NanoBot support server where you can get help, report bugs, or suggest features.",
+            "args": [],
+            "perms": "None",
+            "example": "!support",
+        },
+        {
             "name": "about",
             "aliases": [],
             "usage": "about",
@@ -740,8 +750,7 @@ class Utility(commands.Cog):
         if " " in new_prefix:
             return await ctx.reply(embed=h.err("Prefix can't contain spaces."), ephemeral=True)
 
-        self.bot.prefixes[str(ctx.guild.id)] = new_prefix
-        self.bot.save_prefixes()
+        await self.bot.save_prefix(ctx.guild.id, new_prefix)
 
         await ctx.reply(
             embed=h.ok(
@@ -752,6 +761,27 @@ class Utility(commands.Cog):
             ),
             ephemeral=True,
         )
+
+
+    # ══════════════════════════════════════════════════════════════════════════
+    #  support
+    # ══════════════════════════════════════════════════════════════════════════
+    @commands.hybrid_command(
+        name="support",
+        aliases=["server", "helpserver"],
+        description="Get a link to the NanoBot support server.",
+    )
+    @commands.cooldown(1, 10, commands.BucketType.user)
+    async def support(self, ctx: commands.Context):
+        e = h.embed(title="💬 NanoBot Support", color=h.BLUE)
+        e.description = (
+            "Need help? Found a bug? Have a suggestion?\n\n"
+            "[**Join the NanoBot Support Server**](https://discord.gg/M7fjxNg72s)\n\n"
+            "You can also open an issue on "
+            "[GitHub](https://github.com/therealjustsnow/NanoBot/issues)."
+        )
+        e.set_footer(text="NanoBot")
+        await ctx.reply(embed=e)
 
     # ══════════════════════════════════════════════════════════════════════════
     #  ping
@@ -1075,13 +1105,13 @@ class Utility(commands.Cog):
         if badges:
             e.add_field(name="🏅 Badges", value=" · ".join(badges), inline=False)
 
-        # Note count — only shown if notes exist (fetched from storage)
-        from utils import storage as _st
-        notes = _st.read("notes.json").get(str(ctx.guild.id), {}).get(str(target.id), [])
-        if notes:
+        # Note count — only shown if notes exist
+        from utils import db as _db
+        _note_count = await _db.get_note_count(ctx.guild.id, target.id)
+        if _note_count:
             e.add_field(
                 name  = "📜 Mod Notes",
-                value = str(len(notes)) + " note(s) on file. Use `notes @user` to view.",
+                value = str(_note_count) + " note(s) on file. Use `notes @user` to view.",
                 inline=False,
             )
 
