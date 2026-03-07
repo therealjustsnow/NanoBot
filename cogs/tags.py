@@ -42,12 +42,11 @@ import discord
 from discord import app_commands
 from discord.ext import commands
 
+from utils import db
 from utils import helpers as h
-from utils import storage
 
 log = logging.getLogger("NanoBot.tags")
 
-_FILE     = "tags.json"
 _CDN_HOSTS = ("cdn.discordapp.com", "media.discordapp.net", "attachments.discord.media")
 
 
@@ -58,28 +57,6 @@ def _norm(v) -> dict:
     if isinstance(v, str):
         return {"content": v, "image_url": None}
     return v
-
-
-def _get_data(guild_id: int) -> tuple[dict, str]:
-    data = storage.read(_FILE)
-    gid  = str(guild_id)
-    if gid not in data:
-        data[gid] = {"global": {}, "personal": {}}
-    return data, gid
-
-
-def _find(guild_id: int, user_id: int, name: str) -> dict | None:
-    """Personal first, then global. Returns normalised dict or None."""
-    data = storage.read(_FILE)
-    gid  = str(guild_id)
-    uid  = str(user_id)
-    v = data.get(gid, {}).get("personal", {}).get(uid, {}).get(name)
-    if v is not None:
-        return _norm(v)
-    v = data.get(gid, {}).get("global", {}).get(name)
-    if v is not None:
-        return _norm(v)
-    return None
 
 
 def _cdn_warn(url: str) -> str | None:
@@ -328,7 +305,7 @@ class Tags(commands.Cog):
     @app_commands.describe(name="Tag name to preview")
     async def tag_preview(self, ctx: commands.Context, name: str):
         name = name.lower().strip()
-        tag  = _find(ctx.guild.id, ctx.author.id, name)
+        tag  = await db.get_tag(ctx.guild.id, name, ctx.author.id)
         if not tag:
             return await ctx.reply(embed=h.err(f"No tag named `{name}` found."), ephemeral=True)
         await _send_tag(ctx, tag, name, ctx.guild.name)
@@ -353,25 +330,17 @@ class Tags(commands.Cog):
         image:     Optional[discord.Attachment] = None,
         image_url: Optional[str]               = None,
     ):
-        name     = name.lower().strip()
-        data     = storage.read(_FILE)
-        gid, uid = str(ctx.guild.id), str(ctx.author.id)
+        name = name.lower().strip()
+        uid  = str(ctx.author.id)
 
-        tag_ref   = None
+        # Determine scope — personal first, then global (if mod)
         is_global = False
-
-        personal = data.get(gid, {}).get("personal", {}).get(uid, {})
-        if name in personal:
-            data[gid]["personal"][uid][name] = _norm(personal[name])
-            tag_ref = data[gid]["personal"][uid][name]
-        elif ctx.author.guild_permissions.manage_messages:
-            glob = data.get(gid, {}).get("global", {})
-            if name in glob:
-                data[gid]["global"][name] = _norm(glob[name])
-                tag_ref = data[gid]["global"][name]
-                is_global = True
-
-        if tag_ref is None:
+        if await db.tag_exists(ctx.guild.id, uid, name):
+            scope = uid
+        elif ctx.author.guild_permissions.manage_messages and await db.tag_exists(ctx.guild.id, "global", name):
+            scope     = "global"
+            is_global = True
+        else:
             return await ctx.reply(
                 embed=h.err(f"Tag `{name}` not found or you don't have permission to edit it."),
                 ephemeral=True,
@@ -381,9 +350,9 @@ class Tags(commands.Cog):
             image_url and image_url.strip().lower() == "remove"
         )
         if removing:
-            had = bool(tag_ref.get("image_url"))
-            tag_ref["image_url"] = None
-            await storage.awrite(_FILE, data)
+            tag = await db.get_tag(ctx.guild.id, name, ctx.author.id)
+            had = bool(tag and tag.get("image_url"))
+            await db.update_tag_image(ctx.guild.id, scope, name, None)
             msg = f"Image removed from **{name}**." if had else f"**{name}** had no image anyway."
             return await ctx.reply(embed=h.ok(msg, "🖼️ Image Cleared"), ephemeral=True)
 
@@ -400,10 +369,9 @@ class Tags(commands.Cog):
                 ephemeral=True,
             )
 
-        tag_ref["image_url"] = img_url
-        await storage.awrite(_FILE, data)
-        scope = "global" if is_global else "personal"
-        await ctx.reply(embed=h.ok(f"Image updated on {scope} tag **{name}**.", "🖼️ Image Updated"), ephemeral=True)
+        await db.update_tag_image(ctx.guild.id, scope, name, img_url)
+        scope_label = "global" if is_global else "personal"
+        await ctx.reply(embed=h.ok(f"Image updated on {scope_label} tag **{name}**.", "🖼️ Image Updated"), ephemeral=True)
         if img_warn:
             await ctx.send(embed=h.warn(img_warn, "⚠️ CDN Warning"), ephemeral=True)
 
@@ -419,23 +387,15 @@ class Tags(commands.Cog):
         name = name.lower().strip()
         if len(new_content) > 1500:
             return await ctx.reply(embed=h.err("Content must be 1500 characters or fewer."), ephemeral=True)
-        data     = storage.read(_FILE)
-        gid, uid = str(ctx.guild.id), str(ctx.author.id)
+        uid = str(ctx.author.id)
 
-        personal = data.get(gid, {}).get("personal", {}).get(uid, {})
-        if name in personal:
-            t = _norm(personal[name]); t["content"] = new_content
-            data[gid]["personal"][uid][name] = t
-            await storage.awrite(_FILE, data)
+        if await db.tag_exists(ctx.guild.id, uid, name):
+            await db.update_tag_content(ctx.guild.id, uid, name, new_content)
             return await ctx.reply(embed=h.ok(f"Personal tag **{name}** updated.", "✏️ Edited"), ephemeral=True)
 
-        if ctx.author.guild_permissions.manage_messages:
-            glob = data.get(gid, {}).get("global", {})
-            if name in glob:
-                t = _norm(glob[name]); t["content"] = new_content
-                data[gid]["global"][name] = t
-                await storage.awrite(_FILE, data)
-                return await ctx.reply(embed=h.ok(f"Global tag **{name}** updated.", "✏️ Edited"), ephemeral=True)
+        if ctx.author.guild_permissions.manage_messages and await db.tag_exists(ctx.guild.id, "global", name):
+            await db.update_tag_content(ctx.guild.id, "global", name, new_content)
+            return await ctx.reply(embed=h.ok(f"Global tag **{name}** updated.", "✏️ Edited"), ephemeral=True)
 
         await ctx.reply(
             embed=h.err(f"Tag `{name}` not found or you don't have permission to edit it."),
@@ -486,10 +446,9 @@ class Tags(commands.Cog):
         if content and len(content) > 2000:
             return await ctx.reply(embed=h.err("Tag content must be 2000 characters or fewer."), ephemeral=True)
 
-        data, gid = _get_data(ctx.guild.id)
         uid = str(ctx.author.id)
 
-        if data[gid].setdefault("personal", {}).setdefault(uid, {}).get(name):
+        if await db.tag_exists(ctx.guild.id, uid, name):
             return await ctx.reply(
                 embed=h.err(
                     f"Tag `{name}` already exists.\n"
@@ -498,8 +457,7 @@ class Tags(commands.Cog):
                 ephemeral=True,
             )
 
-        data[gid]["personal"][uid][name] = {"content": content, "image_url": img_url}
-        await storage.awrite(_FILE, data)
+        await db.set_tag(ctx.guild.id, uid, name, content, img_url)
 
         img_line = "\n🖼️ Image saved." if img_url else ""
         await ctx.reply(
@@ -535,20 +493,16 @@ class Tags(commands.Cog):
         if content and len(content) > 2000:
             return await ctx.reply(embed=h.err("Tag content must be 2000 characters or fewer."), ephemeral=True)
 
-        data, gid = _get_data(ctx.guild.id)
-        if name in data[gid].get("global", {}):
+        if await db.tag_exists(ctx.guild.id, "global", name):
             return await ctx.reply(
                 embed=h.err(f"Global tag `{name}` already exists. Use `/tag edit {name}` to update it."),
                 ephemeral=True,
             )
 
-        data[gid].setdefault("global", {})[name] = {
-            "content":   content,
-            "image_url": img_url,
-            "by_id":     str(ctx.author.id),
-            "by_name":   str(ctx.author),
-        }
-        await storage.awrite(_FILE, data)
+        await db.set_tag(
+            ctx.guild.id, "global", name, content, img_url,
+            by_id=str(ctx.author.id), by_name=str(ctx.author),
+        )
 
         img_line = "\n🖼️ Image saved." if img_url else ""
         await ctx.reply(
@@ -570,7 +524,7 @@ class Tags(commands.Cog):
         dm_user: Optional[discord.Member] = None,
     ):
         name = name.lower().strip()
-        tag  = _find(ctx.guild.id, ctx.author.id, name)
+        tag  = await db.get_tag(ctx.guild.id, name, ctx.author.id)
         if not tag:
             return await ctx.reply(
                 embed=h.err(
@@ -598,23 +552,14 @@ class Tags(commands.Cog):
             await _send_tag(ctx, tag, name, ctx.guild.name)
 
     async def _do_delete(self, ctx: commands.Context, name: str):
-        name     = name.lower().strip()
-        data     = storage.read(_FILE)
-        gid, uid = str(ctx.guild.id), str(ctx.author.id)
+        name = name.lower().strip()
+        uid  = str(ctx.author.id)
 
-        personal = data.get(gid, {}).get("personal", {}).get(uid, {})
-        if name in personal:
-            del personal[name]
-            data[gid]["personal"][uid] = personal
-            await storage.awrite(_FILE, data)
+        if await db.delete_tag(ctx.guild.id, uid, name):
             return await ctx.reply(embed=h.ok(f"Personal tag **{name}** deleted.", "🗑️ Deleted"), ephemeral=True)
 
         if ctx.author.guild_permissions.manage_messages:
-            glob = data.get(gid, {}).get("global", {})
-            if name in glob:
-                del glob[name]
-                data[gid]["global"] = glob
-                await storage.awrite(_FILE, data)
+            if await db.delete_tag(ctx.guild.id, "global", name):
                 return await ctx.reply(embed=h.ok(f"Global tag **{name}** deleted.", "🗑️ Deleted"), ephemeral=True)
 
         await ctx.reply(
@@ -623,14 +568,10 @@ class Tags(commands.Cog):
         )
 
     async def _show_list(self, ctx: commands.Context):
-        data = storage.read(_FILE)
-        gid  = str(ctx.guild.id)
-        uid  = str(ctx.author.id)
+        personal_tags = await db.get_personal_tags(ctx.guild.id, ctx.author.id)
+        global_tags   = await db.get_global_tags(ctx.guild.id)
 
-        personal_tags = {n: _norm(v) for n, v in data.get(gid, {}).get("personal", {}).get(uid, {}).items()}
-        global_tags   = {n: _norm(v) for n, v in data.get(gid, {}).get("global", {}).items()}
-
-        prefix = self.bot.prefixes.get(gid, self.bot.default_prefix)
+        prefix = self.bot.prefixes.get(str(ctx.guild.id), self.bot.default_prefix)
 
         e = h.embed(title="🏷️ Tag List", color=h.BLUE)
         e.description = (
@@ -656,20 +597,15 @@ class Tags(commands.Cog):
         description="Download all your personal tags as a JSON file.",
     )
     async def tag_export(self, ctx: commands.Context):
-        data = storage.read(_FILE)
-        gid  = str(ctx.guild.id)
-        uid  = str(ctx.author.id)
-
-        personal = data.get(gid, {}).get("personal", {}).get(uid, {})
+        personal = await db.get_personal_tags(ctx.guild.id, ctx.author.id)
         if not personal:
             return await ctx.reply(
                 embed=h.info("You have no personal tags to export.", "📦 Export"),
                 ephemeral=True,
             )
 
-        # Normalise legacy string tags before exporting
-        clean = {name: (_norm(v) if isinstance(v, str) else v) for name, v in personal.items()}
-        payload = json.dumps({"exported_by": str(ctx.author), "guild_id": gid, "tags": clean}, indent=2, ensure_ascii=False)
+        clean = personal
+        payload = json.dumps({"exported_by": str(ctx.author), "guild_id": str(ctx.guild.id), "tags": clean}, indent=2, ensure_ascii=False)
 
         buf  = io.BytesIO(payload.encode("utf-8"))
         file = discord.File(buf, filename=f"tags_{ctx.author.id}.json")

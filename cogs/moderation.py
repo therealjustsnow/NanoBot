@@ -31,8 +31,8 @@ import discord
 from discord import app_commands
 from discord.ext import commands
 
+from utils import db
 from utils import helpers as h
-from utils import storage
 
 log = logging.getLogger("NanoBot.moderation")
 
@@ -109,9 +109,8 @@ class Moderation(commands.Cog):
         )
 
     async def _restore_unban_schedules(self):
-        data    = storage.read("unban_schedules.json")
-        now     = datetime.now(timezone.utc).timestamp()
-        cleaned = {}
+        data = await db.get_all_unbans()
+        now  = datetime.now(timezone.utc).timestamp()
         for key, info in data.items():
             remaining = info["until"] - now
             guild_id  = int(info["guild_id"])
@@ -119,7 +118,6 @@ class Moderation(commands.Cog):
             if remaining > 0:
                 task = asyncio.create_task(self._auto_unban(guild_id, user_id, remaining))
                 self._unban_tasks[key] = task
-                cleaned[key] = info
             else:
                 guild = self.bot.get_guild(guild_id)
                 if guild:
@@ -129,19 +127,17 @@ class Moderation(commands.Cog):
                         log.info(f"Overdue unban: {user_id} in {guild_id}")
                     except discord.NotFound:
                         pass
-        await storage.awrite("unban_schedules.json", cleaned)
+                await db.remove_unban(key)
 
     async def _restore_slow_schedules(self):
-        data    = storage.read("slow_schedules.json")
-        now     = datetime.now(timezone.utc).timestamp()
-        cleaned = {}
+        data = await db.get_all_slows()
+        now  = datetime.now(timezone.utc).timestamp()
         for cid_str, info in data.items():
             remaining  = info["until"] - now
             channel_id = int(cid_str)
             if remaining > 0:
                 task = asyncio.create_task(self._auto_unslow(channel_id, remaining))
                 self._slow_tasks[channel_id] = task
-                cleaned[cid_str] = info
             else:
                 ch = self.bot.get_channel(channel_id)
                 if ch:
@@ -149,7 +145,7 @@ class Moderation(commands.Cog):
                         await ch.edit(slowmode_delay=0)
                     except discord.Forbidden:
                         pass
-        await storage.awrite("slow_schedules.json", cleaned)
+                await db.remove_slow(channel_id)
 
     # ── Background task runners ────────────────────────────────────────────────
     async def _auto_unban(self, guild_id: int, user_id: int, delay: float):
@@ -164,9 +160,7 @@ class Moderation(commands.Cog):
                 pass
         key = f"{guild_id}:{user_id}"
         self._unban_tasks.pop(key, None)
-        data = storage.read("unban_schedules.json")
-        data.pop(key, None)
-        await storage.awrite("unban_schedules.json", data)
+        await db.remove_unban(key)
 
     async def _auto_unslow(self, channel_id: int, delay: float):
         await asyncio.sleep(delay)
@@ -178,21 +172,13 @@ class Moderation(commands.Cog):
             except discord.Forbidden:
                 pass
         self._slow_tasks.pop(channel_id, None)
-        data = storage.read("slow_schedules.json")
-        data.pop(str(channel_id), None)
-        await storage.awrite("slow_schedules.json", data)
+        await db.remove_slow(channel_id)
 
     async def _schedule_unban(self, guild_id: int, user_id: int, delay: float):
         key = f"{guild_id}:{user_id}"
         if key in self._unban_tasks:
             self._unban_tasks[key].cancel()
-        data = storage.read("unban_schedules.json")
-        data[key] = {
-            "until":    datetime.now(timezone.utc).timestamp() + delay,
-            "guild_id": guild_id,
-            "user_id":  user_id,
-        }
-        await storage.awrite("unban_schedules.json", data)
+        await db.set_unban(key, guild_id, user_id, datetime.now(timezone.utc).timestamp() + delay)
         self._unban_tasks[key] = asyncio.create_task(
             self._auto_unban(guild_id, user_id, delay)
         )
@@ -200,12 +186,7 @@ class Moderation(commands.Cog):
     async def _schedule_unslow(self, channel_id: int, guild_id: int, delay: float):
         if channel_id in self._slow_tasks:
             self._slow_tasks[channel_id].cancel()
-        data = storage.read("slow_schedules.json")
-        data[str(channel_id)] = {
-            "until":    datetime.now(timezone.utc).timestamp() + delay,
-            "guild_id": guild_id,
-        }
-        await storage.awrite("slow_schedules.json", data)
+        await db.set_slow(channel_id, guild_id, datetime.now(timezone.utc).timestamp() + delay)
         self._slow_tasks[channel_id] = asyncio.create_task(
             self._auto_unslow(channel_id, delay)
         )
@@ -402,9 +383,7 @@ class Moderation(commands.Cog):
         if key in self._unban_tasks:
             self._unban_tasks[key].cancel()
             self._unban_tasks.pop(key, None)
-            d = storage.read("unban_schedules.json")
-            d.pop(key, None)
-            await storage.awrite("unban_schedules.json", d)
+            await db.remove_unban(key)
 
         await ctx.reply(embed=h.ok(f"User `{uid}` has been unbanned.", "✅ Unbanned"), ephemeral=True)
         await action_log(ctx, "✅", "unban", detail=f"User ID: `{uid}`")
@@ -717,18 +696,11 @@ class Moderation(commands.Cog):
         if len(content) > 1000:
             return await ctx.reply(embed=h.err("Note must be 1000 characters or fewer."), ephemeral=True)
 
-        data = storage.read("notes.json")
-        gid  = str(ctx.guild.id)
-        uid  = str(user.id)
-        data.setdefault(gid, {}).setdefault(uid, []).append({
-            "note":    content,
-            "by_id":   str(ctx.author.id),
-            "by_name": str(ctx.author),
-            "at":      datetime.now(timezone.utc).isoformat(),
-        })
-        await storage.awrite("notes.json", data)
-
-        count = len(data[gid][uid])
+        count = await db.add_note(
+            ctx.guild.id, user.id, content,
+            str(ctx.author.id), str(ctx.author),
+            datetime.now(timezone.utc).isoformat(),
+        )
         await ctx.reply(
             embed=h.ok(f"Note #{count} added for **{user.display_name}**.\n> {content[:300]}", "📜 Note Saved"),
             ephemeral=True,
@@ -738,8 +710,7 @@ class Moderation(commands.Cog):
     @app_commands.describe(user="User whose notes to view")
     @commands.has_permissions(manage_messages=True)
     async def notes(self, ctx: commands.Context, user: discord.Member):
-        data       = storage.read("notes.json")
-        user_notes = data.get(str(ctx.guild.id), {}).get(str(user.id), [])
+        user_notes = await db.get_notes(ctx.guild.id, user.id)
 
         if not user_notes:
             return await ctx.reply(
@@ -765,13 +736,8 @@ class Moderation(commands.Cog):
     @app_commands.describe(user="User whose notes to clear")
     @commands.has_permissions(administrator=True)
     async def clearnotes(self, ctx: commands.Context, user: discord.Member):
-        data = storage.read("notes.json")
-        gid  = str(ctx.guild.id)
-        uid  = str(user.id)
-        if gid in data and uid in data[gid]:
-            count = len(data[gid][uid])
-            del data[gid][uid]
-            await storage.awrite("notes.json", data)
+        count = await db.clear_notes(ctx.guild.id, user.id)
+        if count:
             await ctx.reply(
                 embed=h.ok(f"Cleared **{count}** note(s) for **{user.display_name}**.", "📜 Notes Cleared"),
                 ephemeral=True,

@@ -49,12 +49,11 @@ import discord
 from discord import app_commands
 from discord.ext import commands
 
+from utils import db
 from utils import helpers as h
-from utils import storage
 
 log = logging.getLogger("NanoBot.reminders")
 
-_FILE       = "reminders.json"
 _MAX        = 25          # max active reminders per user
 _MIN_SECS   = 60          # 1 minute
 _MAX_SECS   = 365 * 86400 # 1 year
@@ -72,10 +71,6 @@ def _now() -> float:
     return datetime.now(timezone.utc).timestamp()
 
 
-def _user_reminders(data: dict, user_id: str) -> dict:
-    """All reminders belonging to a specific user (target_id)."""
-    return {k: v for k, v in data.items() if v.get("target_id") == user_id}
-
 
 # ══════════════════════════════════════════════════════════════════════════════
 class Reminders(commands.Cog):
@@ -88,25 +83,22 @@ class Reminders(commands.Cog):
     # ── Restore on restart ─────────────────────────────────────────────────────
     @commands.Cog.listener()
     async def on_restore_schedules(self):
-        data    = storage.read(_FILE)
-        now     = _now()
-        kept    = {}
+        data  = await db.get_all_reminders()
+        now   = _now()
+        fired = 0
 
         for rid, info in data.items():
             remaining = info["due"] - now
 
             if remaining <= 0:
-                # Overdue — fire immediately
                 asyncio.create_task(self._fire(info, delay=0))
                 log.info(f"Overdue reminder {rid} — firing immediately")
+                fired += 1
             else:
                 self._tasks[rid] = asyncio.create_task(self._fire(info, delay=remaining))
-                kept[rid] = info
                 log.debug(f"Restored reminder {rid} — fires in {remaining:.0f}s")
 
-        # Rewrite without the ones that just fired
-        await storage.awrite(_FILE, kept)
-        log.info(f"Reminders: restored {len(self._tasks)} active, fired {len(data) - len(kept)} overdue")
+        log.info(f"Reminders: restored {len(self._tasks)} active, fired {fired} overdue")
 
     # ── Background fire ────────────────────────────────────────────────────────
     async def _fire(self, info: dict, *, delay: float):
@@ -167,20 +159,13 @@ class Reminders(commands.Cog):
 
         # ── Clean up storage and task dict ────────────────────────────────────
         self._tasks.pop(rid, None)
-        data = storage.read(_FILE)
-        data.pop(rid, None)
-        await storage.awrite(_FILE, data)
+        await db.remove_reminder(rid)
 
     # ── Scheduling ─────────────────────────────────────────────────────────────
     async def _schedule(self, info: dict):
         """Persist a reminder and create its asyncio task."""
-        rid = info["id"]
-
-        data = storage.read(_FILE)
-        data[rid] = info
-        await storage.awrite(_FILE, data)
-
-        self._tasks[rid] = asyncio.create_task(
+        await db.set_reminder(info)
+        self._tasks[info["id"]] = asyncio.create_task(
             self._fire(info, delay=info["due"] - _now())
         )
 
@@ -216,9 +201,7 @@ class Reminders(commands.Cog):
             )
 
         # Check the target user's active reminder count
-        data       = storage.read(_FILE)
-        user_rems  = _user_reminders(data, str(target.id))
-        if len(user_rems) >= _MAX:
+        if await db.count_user_reminders(target.id) >= _MAX:
             return await ctx.reply(
                 embed=h.err(
                     f"{'You have' if target == ctx.author else target.display_name + ' has'} "
@@ -377,8 +360,7 @@ class Reminders(commands.Cog):
 
     # ── List helper ────────────────────────────────────────────────────────────
     async def _list(self, ctx: commands.Context):
-        data      = storage.read(_FILE)
-        user_rems = _user_reminders(data, str(ctx.author.id))
+        user_rems = await db.get_user_reminders(ctx.author.id)
 
         if not user_rems:
             return await ctx.reply(
@@ -419,15 +401,18 @@ class Reminders(commands.Cog):
 
     # ── Cancel helper ──────────────────────────────────────────────────────────
     async def _cancel(self, ctx: commands.Context, rid: str):
-        data = storage.read(_FILE)
-
-        if rid not in data:
-            return await ctx.reply(
-                embed=h.err(f"No reminder with ID `{rid}` found.\nUse `reminders` to see your active ones."),
-                ephemeral=True,
-            )
-
-        info = data[rid]
+        # Look up in user's own reminders first, then globally (to check ownership)
+        user_rems = await db.get_user_reminders(ctx.author.id)
+        if rid in user_rems:
+            info = user_rems[rid]
+        else:
+            all_rems = await db.get_all_reminders()
+            if rid not in all_rems:
+                return await ctx.reply(
+                    embed=h.err(f"No reminder with ID `{rid}` found.\nUse `reminders` to see your active ones."),
+                    ephemeral=True,
+                )
+            info = all_rems[rid]
 
         # Only the target or the person who set it can cancel
         allowed = {info.get("target_id"), info.get("set_by_id")}
@@ -442,9 +427,7 @@ class Reminders(commands.Cog):
         if task:
             task.cancel()
 
-        # Remove from storage
-        data.pop(rid)
-        await storage.awrite(_FILE, data)
+        await db.remove_reminder(rid)
 
         due_dt = datetime.fromtimestamp(info["due"], tz=timezone.utc)
         await ctx.reply(
