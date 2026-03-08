@@ -300,7 +300,7 @@ class Tags(commands.Cog):
     # ══════════════════════════════════════════════════════════════════════════
     @tag.command(
         name="preview",
-        description="Preview a tag here (only you see it) without DMing anyone.",
+        description="Preview a tag — only you see this response.",
     )
     @app_commands.describe(name="Tag name to preview")
     async def tag_preview(self, ctx: commands.Context, name: str):
@@ -308,97 +308,88 @@ class Tags(commands.Cog):
         tag  = await db.get_tag(ctx.guild.id, name, ctx.author.id)
         if not tag:
             return await ctx.reply(embed=h.err(f"No tag named `{name}` found."), ephemeral=True)
-        await _send_tag(ctx, tag, name, ctx.guild.name)
-        # Note: preview always uses reply; plain-text tags won't be ephemeral but that's fine
-
-    # ══════════════════════════════════════════════════════════════════════════
-    #  /tag image
-    # ══════════════════════════════════════════════════════════════════════════
-    @tag.command(
-        name="image",
-        description="Add, replace, or remove the image on a tag.",
-    )
-    @app_commands.describe(
-        name      = "Tag name",
-        image     = "New image (leave both blank to REMOVE the image)",
-        image_url = "New image URL — or type 'remove' to clear it",
-    )
-    async def tag_image(
-        self,
-        ctx:       commands.Context,
-        name:      str,
-        image:     Optional[discord.Attachment] = None,
-        image_url: Optional[str]               = None,
-    ):
-        name = name.lower().strip()
-        uid  = str(ctx.author.id)
-
-        # Determine scope — personal first, then global (if mod)
-        is_global = False
-        if await db.tag_exists(ctx.guild.id, uid, name):
-            scope = uid
-        elif ctx.author.guild_permissions.manage_messages and await db.tag_exists(ctx.guild.id, "global", name):
-            scope     = "global"
-            is_global = True
+        # Always ephemeral so only the invoker sees the preview
+        text    = tag.get("content") or ""
+        img_url = tag.get("image_url")
+        if len(text) > 1500:
+            await ctx.reply(
+                f"📌 **[{ctx.guild.name}]  {name}**\n\n{text}" + (f"\n{img_url}" if img_url else ""),
+                ephemeral=True,
+            )
         else:
-            return await ctx.reply(
-                embed=h.err(f"Tag `{name}` not found or you don't have permission to edit it."),
-                ephemeral=True,
-            )
-
-        removing = (image is None and image_url is None) or (
-            image_url and image_url.strip().lower() == "remove"
-        )
-        if removing:
-            tag = await db.get_tag(ctx.guild.id, name, ctx.author.id)
-            had = bool(tag and tag.get("image_url"))
-            await db.update_tag_image(ctx.guild.id, scope, name, None)
-            msg = f"Image removed from **{name}**." if had else f"**{name}** had no image anyway."
-            return await ctx.reply(embed=h.ok(msg, "🖼️ Image Cleared"), ephemeral=True)
-
-        img_url, img_warn = _resolve_image(ctx, image, image_url)
-        if not img_url:
-            if img_warn:
-                return await ctx.reply(embed=h.err(img_warn), ephemeral=True)
-            return await ctx.reply(
-                embed=h.err(
-                    "No image found.\n"
-                    "• Attach an image file, or paste a `https://` URL\n"
-                    "• Type `remove` in the `image_url` field to clear the image"
-                ),
-                ephemeral=True,
-            )
-
-        await db.update_tag_image(ctx.guild.id, scope, name, img_url)
-        scope_label = "global" if is_global else "personal"
-        await ctx.reply(embed=h.ok(f"Image updated on {scope_label} tag **{name}**.", "🖼️ Image Updated"), ephemeral=True)
-        if img_warn:
-            await ctx.send(embed=h.warn(img_warn, "⚠️ CDN Warning"), ephemeral=True)
+            await ctx.reply(embed=_tag_embed(tag, name, ctx.guild.name, prefix="👁️"), ephemeral=True)
 
     # ══════════════════════════════════════════════════════════════════════════
     #  /tag edit
     # ══════════════════════════════════════════════════════════════════════════
     @tag.command(
         name="edit",
-        description="Edit the text content of a tag. Use /tag image to change the image.",
+        description="Edit a tag's content and/or image.",
     )
-    @app_commands.describe(name="Tag name", new_content="New content (max 1500 chars)")
-    async def tag_edit(self, ctx: commands.Context, name: str, *, new_content: str):
+    @app_commands.describe(
+        name        = "Tag name",
+        new_content = "New text content (max 2000 chars — leave blank to keep existing)",
+        image       = "New image attachment (leave blank to keep existing)",
+        image_url   = "New image URL — or type 'remove' to clear the image",
+    )
+    async def tag_edit(
+        self,
+        ctx:         commands.Context,
+        name:        str,
+        new_content: Optional[str]               = None,
+        image:       Optional[discord.Attachment] = None,
+        image_url:   Optional[str]               = None,
+    ):
         name = name.lower().strip()
-        if len(new_content) > 1500:
-            return await ctx.reply(embed=h.err("Content must be 1500 characters or fewer."), ephemeral=True)
-        uid = str(ctx.author.id)
+        uid  = str(ctx.author.id)
 
+        # Determine scope
         if await db.tag_exists(ctx.guild.id, uid, name):
-            await db.update_tag_content(ctx.guild.id, uid, name, new_content)
-            return await ctx.reply(embed=h.ok(f"Personal tag **{name}** updated.", "✏️ Edited"), ephemeral=True)
+            scope = uid
+        elif ctx.author.guild_permissions.manage_messages and await db.tag_exists(ctx.guild.id, "global", name):
+            scope = "global"
+        else:
+            return await ctx.reply(
+                embed=h.err(f"Tag `{name}` not found or you don't have permission to edit it."),
+                ephemeral=True,
+            )
 
-        if ctx.author.guild_permissions.manage_messages and await db.tag_exists(ctx.guild.id, "global", name):
-            await db.update_tag_content(ctx.guild.id, "global", name, new_content)
-            return await ctx.reply(embed=h.ok(f"Global tag **{name}** updated.", "✏️ Edited"), ephemeral=True)
+        if new_content is not None and len(new_content) > 2000:
+            return await ctx.reply(embed=h.err("Content must be 2000 characters or fewer."), ephemeral=True)
 
+        changes = []
+
+        if new_content is not None:
+            await db.update_tag_content(ctx.guild.id, scope, name, new_content)
+            changes.append("📝 Text updated")
+
+        # Image handling
+        remove_img = image_url and image_url.strip().lower() == "remove"
+        if remove_img:
+            await db.update_tag_image(ctx.guild.id, scope, name, None)
+            changes.append("🖼️ Image removed")
+        elif image or image_url:
+            img_url, img_warn = _resolve_image(ctx, image, image_url)
+            if img_url:
+                await db.update_tag_image(ctx.guild.id, scope, name, img_url)
+                changes.append("🖼️ Image updated")
+                if img_warn:
+                    await ctx.send(embed=h.warn(img_warn, "⚠️ CDN Warning"), ephemeral=True)
+            elif img_warn:
+                return await ctx.reply(embed=h.err(img_warn), ephemeral=True)
+
+        if not changes:
+            return await ctx.reply(
+                embed=h.warn("Nothing to change — provide new_content, image, or image_url."),
+                ephemeral=True,
+            )
+
+        scope_label = "personal" if scope == uid else "global"
         await ctx.reply(
-            embed=h.err(f"Tag `{name}` not found or you don't have permission to edit it."),
+            embed=h.ok(
+                f"{scope_label.title()} tag **{name}** updated.\n" + "  ·  ".join(changes),
+                "✏️ Tag Edited",
+            ),
             ephemeral=True,
         )
 
@@ -459,11 +450,11 @@ class Tags(commands.Cog):
 
         await db.set_tag(ctx.guild.id, uid, name, content, img_url)
 
-        img_line = "\n🖼️ Image saved." if img_url else ""
+        img_line = "\n🖼️ Image attached." if img_url else ""
         await ctx.reply(
             embed=h.ok(
-                f"Tag **{name}** saved.{img_line}\n"
-                f"Use `{ctx.prefix}tag {name}` or `{ctx.prefix}{name}` to send it anytime.",
+                f"Personal tag **{name}** created.{img_line}\n"
+                f"Only you can see it. Use `/{ctx.prefix}tag use {name}` or `{ctx.prefix}{name}` to post it.",
                 "🏷️ Tag Created",
             ),
             ephemeral=True,
@@ -504,11 +495,11 @@ class Tags(commands.Cog):
             by_id=str(ctx.author.id), by_name=str(ctx.author),
         )
 
-        img_line = "\n🖼️ Image saved." if img_url else ""
+        img_line = "\n🖼️ Image attached." if img_url else ""
         await ctx.reply(
             embed=h.ok(
-                f"Global tag **{name}** saved.{img_line}\n"
-                f"Anyone can use `{ctx.prefix}tag {name}` or `{ctx.prefix}{name}` to send it.",
+                f"Global tag **{name}** created.{img_line}\n"
+                f"Anyone can use it: `/tag use {name}` or `{ctx.prefix}{name}`.",
                 "🌐 Global Tag Created",
             ),
             ephemeral=True,
