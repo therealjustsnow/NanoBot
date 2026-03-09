@@ -65,6 +65,11 @@ def has_role_perms():
     return _check("manage_roles")
 
 
+def has_move_perms():
+    """Requires move_members for both (moveall)."""
+    return _check("move_members")
+
+
 def has_admin_perms():
     """Requires administrator for the user (bot check omitted — bot is usually admin)."""
     def decorator(func):
