@@ -7,7 +7,7 @@
 ╚═╝  ╚═══╝╚═╝  ╚═╝╚═╝  ╚═══╝ ╚═════╝ ╚═════╝  ╚═════╝    ╚═╝
 
 Small. Fast. Built for Mobile Mods.
-A lightweight Discord moderation bot — no database, just JSON.
+A lightweight Discord moderation bot — SQLite-backed, zero cloud dependency.
 """
 
 import asyncio
@@ -120,6 +120,8 @@ class NanoBot(commands.Bot):
             "cogs.tags",
             "cogs.utility",
             "cogs.reminders",
+            "cogs.warnings",    # per-server warning system
+            "cogs.welcome",     # per-server welcome / leave messages
             "cogs.admin",       # owner-only: reload / shutdown / restart
         )
         for cog in cogs:
@@ -158,6 +160,30 @@ class NanoBot(commands.Bot):
             )
         )
         self.dispatch("restore_schedules")
+
+    async def on_command(self, ctx: commands.Context):
+        """Log every successful command invocation."""
+        guild_info = f"{ctx.guild.name} ({ctx.guild.id})" if ctx.guild else "DM"
+        log.info(
+            f"CMD  {ctx.command}  |  "
+            f"{ctx.author} ({ctx.author.id})  |  "
+            f"#{ctx.channel}  |  "
+            f"{guild_info}"
+        )
+
+    async def on_guild_join(self, guild: discord.Guild):
+        """Log when the bot is added to a new server."""
+        log.info(
+            f"➕ Joined server: {guild.name} ({guild.id})  |  "
+            f"{guild.member_count} members  |  "
+            f"Owner: {guild.owner} ({guild.owner_id})"
+        )
+
+    async def on_guild_remove(self, guild: discord.Guild):
+        """Log when the bot is removed from a server."""
+        log.info(
+            f"➖ Left server: {guild.name} ({guild.id})"
+        )
 
     async def on_message(self, message: discord.Message):
         if message.author.bot or not message.guild:
