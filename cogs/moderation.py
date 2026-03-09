@@ -8,12 +8,18 @@ Commands:
   softban          — ban + immediately unban (deletes messages, no lasting ban)
   massban          — ban multiple IDs at once
   unban            — unban by user ID
+  tempban          — timed ban with auto-unban (simpler than cban)
   kick             — kick + DM
   slow             — toggle / set slowmode (optional timed auto-disable)
   lock             — toggle channel lock for @everyone
+  hide             — hide a channel from @everyone
+  unhide           — restore @everyone visibility
   purge            — bulk-delete with filters (bots, user, contains, starts/ends with)
   snailpurge       — slow unrestricted delete with confirmation
   clean            — delete recent bot messages
+  echo             — make the bot send a message
+  nuke             — clone channel + delete original (wipes all messages)
+  moveall          — move all members between voice channels
   freeze           — Discord timeout (temp mute)
   unfreeze         — remove a timeout early
   addrole          — give a role to a user
@@ -40,7 +46,7 @@ from utils import db
 from utils import helpers as h
 from utils.checks import (
     has_ban_perms, has_kick_perms, has_mod_perms,
-    has_channel_perms, has_timeout_perms, has_role_perms,
+    has_channel_perms, has_timeout_perms, has_role_perms, has_move_perms,
 )
 
 log = logging.getLogger("NanoBot.moderation")
@@ -76,6 +82,48 @@ async def action_log(ctx, emoji, action, *, target=None, detail=""):
         await ctx.channel.send(embed=e)
     except discord.HTTPException:
         pass
+
+
+# ── Nuke confirmation view ────────────────────────────────────────────────────
+class NukeConfirm(discord.ui.View):
+    """Ephemeral confirm/cancel buttons for /nuke. Times out after 30 s."""
+
+    def __init__(self, author: discord.Member):
+        super().__init__(timeout=30)
+        self.author  = author
+        self.outcome: bool | None = None
+        self.message: discord.Message | None = None
+
+    async def interaction_check(self, interaction: discord.Interaction) -> bool:
+        if interaction.user != self.author:
+            await interaction.response.send_message("That's not your nuke to confirm.", ephemeral=True)
+            return False
+        return True
+
+    async def on_timeout(self):
+        for item in self.children:
+            item.disabled = True
+        if self.message:
+            try:
+                await self.message.edit(view=self)
+            except discord.HTTPException:
+                pass
+
+    @discord.ui.button(label="💥 Nuke it", style=discord.ButtonStyle.danger)
+    async def confirm_btn(self, interaction: discord.Interaction, button: discord.ui.Button):
+        self.outcome = True
+        self.stop()
+        await interaction.response.edit_message(
+            embed=discord.Embed(description="💥 Nuking…", color=0xED4245), view=None
+        )
+
+    @discord.ui.button(label="Cancel", style=discord.ButtonStyle.secondary)
+    async def cancel_btn(self, interaction: discord.Interaction, button: discord.ui.Button):
+        self.outcome = False
+        self.stop()
+        await interaction.response.edit_message(
+            embed=discord.Embed(description="✅ Nuke cancelled.", color=0x57F287), view=None
+        )
 
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -674,6 +722,245 @@ class Moderation(commands.Cog):
         e.set_thumbnail(url=target.display_avatar.url)
         e.set_footer(text="This is who /kick, /freeze, etc. will target with no user specified  ·  NanoBot")
         await ctx.reply(embed=e, ephemeral=True)
+
+
+    # ══════════════════════════════════════════════════════════════════════════
+    #  tempban
+    # ══════════════════════════════════════════════════════════════════════════
+    @commands.hybrid_command(name="tempban", description="Ban a user for a set duration. Auto-unbans when it expires.")
+    @app_commands.describe(
+        user     = "Who to ban (blank = last sender)",
+        duration = "How long — e.g. 1h, 12h, 7d (min 1 minute)",
+        reason   = "Optional reason",
+    )
+    @has_ban_perms()
+    async def tempban(
+        self,
+        ctx,
+        user:     Optional[discord.Member] = None,
+        duration: str                      = "24h",
+        *,
+        reason:   Optional[str]            = None,
+    ):
+        target = await resolve_target(self.bot, ctx.channel.id, user)
+        if not target:
+            return await ctx.reply(embed=h.err("No user specified and no recent sender tracked."), ephemeral=True)
+        if target == ctx.author:
+            return await ctx.reply(embed=h.err("You can't ban yourself."), ephemeral=True)
+        if not can_target(ctx.author, target):
+            return await ctx.reply(embed=h.err(f"**{target.display_name}** outranks you."), ephemeral=True)
+
+        wait_secs = h.parse_duration(duration)
+        if not wait_secs or wait_secs < 60:
+            return await ctx.reply(
+                embed=h.err("Invalid duration. Use e.g. `1h`, `12h`, `7d` (minimum 1 minute)."),
+                ephemeral=True,
+            )
+
+        dm_text = f"You've been temporarily banned from **{ctx.guild.name}** for **{h.fmt_duration(wait_secs)}**."
+        if reason:
+            dm_text += f"\nReason: {reason}"
+        dm_sent = await try_dm(target, dm_text)
+
+        try:
+            await ctx.guild.ban(
+                target,
+                reason=(
+                    f"tempban by {ctx.author} ({ctx.author.id}) — {h.fmt_duration(wait_secs)}"
+                    + (f": {reason}" if reason else "")
+                ),
+                delete_message_days=0,
+            )
+        except discord.Forbidden:
+            return await ctx.reply(embed=h.err("I don't have permission to ban."), ephemeral=True)
+
+        await self._schedule_unban(ctx.guild.id, target.id, wait_secs)
+        log.info(f"tempban: {target} ({target.id}) for {h.fmt_duration(wait_secs)} by {ctx.author} in {ctx.guild}")
+
+        await ctx.reply(
+            embed=h.ok(
+                f"**{target.display_name}** (`{target.id}`) banned for **{h.fmt_duration(wait_secs)}**.\n"
+                f"📨 DM {'sent' if dm_sent else 'failed (closed DMs)'}.\n"
+                f"⏱️ Auto-unban scheduled.",
+                "⏱️ Temp Ban",
+            ),
+            ephemeral=True,
+        )
+        await action_log(
+            ctx, "⏱️", "tempban", target=target,
+            detail=f"Duration: {h.fmt_duration(wait_secs)}" + (f" · {reason}" if reason else ""),
+        )
+
+    # ══════════════════════════════════════════════════════════════════════════
+    #  nuke
+    # ══════════════════════════════════════════════════════════════════════════
+    @commands.hybrid_command(
+        name="nuke",
+        description="Clone this channel and delete the original — permanently wipes all messages.",
+    )
+    @app_commands.describe(reason="Optional reason (shown in audit log)")
+    @has_channel_perms()
+    async def nuke(self, ctx, *, reason: Optional[str] = None):
+        view = NukeConfirm(ctx.author)
+        msg  = await ctx.reply(
+            embed=h.warn(
+                f"⚠️ **This will permanently delete ALL messages** in {ctx.channel.mention}.\n"
+                f"The channel will be recreated with identical settings.\n\n"
+                f"_Only {ctx.author.mention} can confirm. Expires in 30 seconds._",
+                "💥 Nuke — Confirm",
+            ),
+            ephemeral=True,
+            view=view,
+        )
+        view.message = msg
+        await view.wait()
+
+        if not view.outcome:
+            return  # cancelled or timed out
+
+        channel = ctx.channel
+        pos     = channel.position
+        rsn     = f"nuke by {ctx.author} ({ctx.author.id})" + (f": {reason}" if reason else "")
+
+        try:
+            new_ch = await channel.clone(reason=rsn)
+            await new_ch.edit(position=pos)
+            await channel.delete(reason=rsn)
+        except discord.Forbidden:
+            return  # can't send anything — channel was already gone or perms changed
+
+        log.warning(f"nuke: #{channel.name} ({channel.id}) by {ctx.author} in {ctx.guild}")
+
+        e = h.ok(
+            f"Channel nuked by **{ctx.author.display_name}**." + (f"\n📝 {reason}" if reason else ""),
+            "💥 Nuked",
+        )
+        e.set_footer(text="NanoBot · All previous messages have been deleted.")
+        await new_ch.send(embed=e)
+
+    # ══════════════════════════════════════════════════════════════════════════
+    #  hide / unhide
+    # ══════════════════════════════════════════════════════════════════════════
+    @commands.hybrid_command(name="hide", description="Hide a channel from @everyone.")
+    @app_commands.describe(channel="Channel to hide (default: current)")
+    @has_channel_perms()
+    async def hide(self, ctx, channel: Optional[discord.TextChannel] = None):
+        target   = channel or ctx.channel
+        everyone = ctx.guild.default_role
+        ow       = target.overwrites_for(everyone)
+
+        if ow.view_channel is False:
+            return await ctx.reply(
+                embed=h.info(f"{target.mention} is already hidden from @everyone.", "👁️ Already Hidden"),
+                ephemeral=True,
+            )
+
+        ow.view_channel = False
+        await target.set_permissions(everyone, overwrite=ow, reason=f"hide by {ctx.author}")
+        log.info(f"hide: #{target.name} by {ctx.author} in {ctx.guild}")
+        await ctx.reply(embed=h.ok(f"{target.mention} is now **hidden** from @everyone. 🙈", "👁️ Hidden"), ephemeral=True)
+        await action_log(ctx, "🙈", "hide", detail=f"in #{target.name}")
+
+    @commands.hybrid_command(name="unhide", description="Restore @everyone visibility on a hidden channel.")
+    @app_commands.describe(channel="Channel to unhide (default: current)")
+    @has_channel_perms()
+    async def unhide(self, ctx, channel: Optional[discord.TextChannel] = None):
+        target   = channel or ctx.channel
+        everyone = ctx.guild.default_role
+        ow       = target.overwrites_for(everyone)
+
+        if ow.view_channel is not False:
+            return await ctx.reply(
+                embed=h.info(f"{target.mention} isn't hidden from @everyone.", "👁️ Not Hidden"),
+                ephemeral=True,
+            )
+
+        ow.view_channel = None
+        await target.set_permissions(everyone, overwrite=ow, reason=f"unhide by {ctx.author}")
+        log.info(f"unhide: #{target.name} by {ctx.author} in {ctx.guild}")
+        await ctx.reply(embed=h.ok(f"{target.mention} is now **visible** to @everyone. 👁️", "👁️ Unhidden"), ephemeral=True)
+        await action_log(ctx, "👁️", "unhide", detail=f"in #{target.name}")
+
+    # ══════════════════════════════════════════════════════════════════════════
+    #  echo
+    # ══════════════════════════════════════════════════════════════════════════
+    @commands.hybrid_command(name="echo", description="Send a message as NanoBot.")
+    @app_commands.describe(
+        message = "The message to send",
+        channel = "Where to send it (default: current channel)",
+    )
+    @has_mod_perms()
+    async def echo(self, ctx, channel: Optional[discord.TextChannel] = None, *, message: str):
+        target = channel or ctx.channel
+        try:
+            await target.send(message)
+        except discord.Forbidden:
+            return await ctx.reply(embed=h.err(f"I can't send messages in {target.mention}."), ephemeral=True)
+
+        log.info(f"echo: by {ctx.author} in #{target} / {ctx.guild}: {message[:100]}")
+
+        if target != ctx.channel:
+            await ctx.reply(embed=h.ok(f"Message sent in {target.mention}.", "📢 Sent"), ephemeral=True)
+        elif ctx.interaction:
+            # Slash: acknowledge silently since the message is already visible
+            await ctx.reply(embed=h.ok("Message sent.", "📢 Sent"), ephemeral=True)
+        else:
+            # Prefix: delete the trigger message so only the echo is visible
+            try:
+                await ctx.message.delete()
+            except discord.HTTPException:
+                pass
+
+    # ══════════════════════════════════════════════════════════════════════════
+    #  moveall
+    # ══════════════════════════════════════════════════════════════════════════
+    @commands.hybrid_command(name="moveall", description="Move all members from one voice channel to another.")
+    @app_commands.describe(
+        to_channel   = "Destination voice channel",
+        from_channel = "Source voice channel (default: your current VC)",
+    )
+    @has_move_perms()
+    async def moveall(
+        self,
+        ctx,
+        to_channel:   discord.VoiceChannel,
+        from_channel: Optional[discord.VoiceChannel] = None,
+    ):
+        source = from_channel
+        if not source:
+            if ctx.author.voice and ctx.author.voice.channel:
+                source = ctx.author.voice.channel
+            else:
+                return await ctx.reply(
+                    embed=h.err("Specify a source channel or join a voice channel first."),
+                    ephemeral=True,
+                )
+
+        if source == to_channel:
+            return await ctx.reply(embed=h.err("Source and destination are the same channel."), ephemeral=True)
+
+        members = list(source.members)
+        if not members:
+            return await ctx.reply(
+                embed=h.info(f"{source.mention} has no members to move.", "🔊 Empty Channel"),
+                ephemeral=True,
+            )
+
+        await ctx.defer(ephemeral=True)
+        moved, failed = 0, 0
+        for member in members:
+            try:
+                await member.move_to(to_channel, reason=f"moveall by {ctx.author}")
+                moved += 1
+            except discord.HTTPException:
+                failed += 1
+
+        log.info(f"moveall: {moved} moved from #{source} → #{to_channel} by {ctx.author} in {ctx.guild}")
+        parts = [f"Moved **{moved}** member(s) from {source.mention} → {to_channel.mention}."]
+        if failed:
+            parts.append(f"⚠️ Failed to move {failed}.")
+        await ctx.send(embed=h.ok(" ".join(parts), "🔊 Members Moved"), ephemeral=True)
+        await action_log(ctx, "🔊", "moveall", detail=f"{moved} from #{source.name} → #{to_channel.name}")
 
 
 async def setup(bot):

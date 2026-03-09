@@ -80,6 +80,18 @@ _HELP = {
             "args": [("user_id", "The user's Discord ID"), ("reason", "Optional reason (shown in audit log)")],
             "perms": "Ban Members", "example": "!unban 123456789012345678",
         },
+        {
+            "name": "tempban", "aliases": [],
+            "usage": "tempban [user] [duration] [reason]",
+            "short": "Ban a user for a set time — auto-unbans when it expires",
+            "desc": "Simpler than /cban for quick timed bans. Auto-unban survives bot restarts. Defaults to last sender if no user given.",
+            "args": [
+                ("user",     "Who to ban (blank = last sender)"),
+                ("duration", "How long: `1h`, `12h`, `7d` (default 24h, min 1 minute)"),
+                ("reason",   "Optional reason"),
+            ],
+            "perms": "Ban Members", "example": "!tempban @user 3d Repeated rule violations",
+        },
     ],
     "👢 Kicking & Timeouts": [
         {
@@ -154,6 +166,49 @@ _HELP = {
             "desc": "Removes NanoBot's own messages from the channel. Good for tidying up after a command spam session.",
             "args": [("amount", "Messages to scan (1–100, default 50)")],
             "perms": "Manage Messages", "example": "!clean 20",
+        },
+        {
+            "name": "nuke", "aliases": [],
+            "usage": "nuke [reason]",
+            "short": "Wipe a channel — clones it then deletes the original",
+            "desc": "Recreates the channel with identical settings and permissions, deleting all message history. Requires button confirmation. Cannot be undone.",
+            "args": [("reason", "Optional reason (shown in audit log)")],
+            "perms": "Manage Channels", "example": "!nuke raid cleanup",
+        },
+        {
+            "name": "hide", "aliases": [],
+            "usage": "hide [channel]",
+            "short": "Hide a channel from @everyone",
+            "desc": "Sets view_channel=False for @everyone on the target channel. Use /unhide to reverse.",
+            "args": [("channel", "Channel to hide (default: current channel)")],
+            "perms": "Manage Channels", "example": "!hide #staff-only",
+        },
+        {
+            "name": "unhide", "aliases": [],
+            "usage": "unhide [channel]",
+            "short": "Restore @everyone visibility on a hidden channel",
+            "desc": "Resets the view_channel override for @everyone. Use /hide to hide again.",
+            "args": [("channel", "Channel to unhide (default: current channel)")],
+            "perms": "Manage Channels", "example": "!unhide #announcements",
+        },
+        {
+            "name": "echo", "aliases": [],
+            "usage": "echo [channel] <message>",
+            "short": "Send a message as NanoBot",
+            "desc": "Posts a message in the current or specified channel. Prefix mode deletes your trigger message for a cleaner look.",
+            "args": [("channel", "Where to send it (default: current channel)"), ("message", "The text to send")],
+            "perms": "Manage Messages", "example": "!echo #announcements Server maintenance in 10 minutes!",
+        },
+        {
+            "name": "moveall", "aliases": [],
+            "usage": "moveall <to_channel> [from_channel]",
+            "short": "Move all VC members from one channel to another",
+            "desc": "Moves every member from the source VC to the destination. If no source is given, uses your current voice channel.",
+            "args": [
+                ("to_channel",   "Destination voice channel"),
+                ("from_channel", "Source voice channel (blank = your current VC)"),
+            ],
+            "perms": "Move Members", "example": "!moveall #General",
         },
     ],
     "🎭 Roles": [
@@ -470,7 +525,61 @@ def _flat_commands() -> dict[str, dict]:
 _FLAT = _flat_commands()
 
 
-# ── Help pagination ───────────────────────────────────────────────────────────
+# ── Category keyword → full category name ─────────────────────────────────────
+# Used by !help <category> to let users browse by topic without needing
+# to type the exact emoji-prefixed category title.
+_CATEGORY_ALIASES: dict[str, str] = {
+    # 🔨 Banning
+    "ban": "🔨 Banning", "banning": "🔨 Banning", "bans": "🔨 Banning",
+    # 👢 Kicking & Timeouts
+    "kick": "👢 Kicking & Timeouts", "kicking": "👢 Kicking & Timeouts",
+    "timeout": "👢 Kicking & Timeouts", "timeouts": "👢 Kicking & Timeouts",
+    "mute": "👢 Kicking & Timeouts", "freeze": "👢 Kicking & Timeouts",
+    # 📢 Channel Controls
+    "channel": "📢 Channel Controls", "channels": "📢 Channel Controls",
+    "purge": "📢 Channel Controls", "lock": "📢 Channel Controls",
+    "nuke": "📢 Channel Controls", "voice": "📢 Channel Controls",
+    # 🎭 Roles
+    "roles": "🎭 Roles",
+    # ⚠️ Warnings
+    "warn": "⚠️ Warnings", "warning": "⚠️ Warnings", "warnings": "⚠️ Warnings",
+    # 🔎 Info & Notes
+    "note": "🔎 Info & Notes", "notes": "🔎 Info & Notes",
+    # 🏷️ Tags
+    "tag": "🏷️ Tags", "tags": "🏷️ Tags",
+    # 👋 Welcome & Leave
+    "welcome": "👋 Welcome & Leave", "leave": "👋 Welcome & Leave", "join": "👋 Welcome & Leave",
+    # 🔍 Server & User Info
+    "server": "🔍 Server & User Info", "profile": "🔍 Server & User Info",
+    "avatar": "🔍 Server & User Info", "userinfo": "🔍 Server & User Info",
+    # ⏰ Reminders
+    "reminder": "⏰ Reminders", "reminders": "⏰ Reminders", "remind": "⏰ Reminders",
+    # ⚙️ Config & Info
+    "config": "⚙️ Config & Info", "settings": "⚙️ Config & Info",
+    "utility": "⚙️ Config & Info", "general": "⚙️ Config & Info",
+    # 🔧 Owner / Admin
+    "admin": "🔧 Owner / Admin", "owner": "🔧 Owner / Admin",
+    "reload": "🔧 Owner / Admin",
+}
+
+
+def _build_category_embed(cat_name: str, cmds: list, prefix: str) -> discord.Embed:
+    """Single-embed view of all commands in one help category."""
+    lines = []
+    for cmd in cmds:
+        entry = f"`/{cmd['name']}`"
+        if cmd.get("aliases"):
+            shown = cmd["aliases"][:2]
+            entry += " _(also: " + ", ".join(f"`{a}`" for a in shown) + ")_"
+        entry += f"  —  {cmd['short']}"
+        if cmd.get("perms") and cmd["perms"] not in ("None", "Bot Owner"):
+            entry += f"  · _{cmd['perms']}_"
+        lines.append(entry)
+
+    e = h.embed(title=cat_name, color=h.BLUE)
+    e.description = "\n".join(lines)
+    e.set_footer(text=f"Use `{prefix}help <command>` for full argument details  ·  NanoBot")
+    return e
 
 _OWNER_CATEGORIES = {"🔧 Owner / Admin"}
 
@@ -499,7 +608,8 @@ def _build_help_pages(prefix: str, bot_name: str, *, is_owner: bool = False) -> 
             "Prefix: `" + prefix + "` · Slash `/` · @" + bot_name + chr(10)
             + "Most mod commands default to the **last message sender** if no user is given." + chr(10)
             + chr(10)
-            + "Use `" + prefix + "help <command>` for a full breakdown of any command." + chr(10)
+            + "`" + prefix + "help <command>` — full detail on any command" + chr(10)
+            + "`" + prefix + "help <category>` — browse a category (e.g. `" + prefix + "help banning`)" + chr(10)
             + chr(10)
             + chr(10).join(
                 "**" + cat + "** " + chr(8212) + " " + str(len(cmds)) + " command" + ("s" if len(cmds) != 1 else "")
@@ -605,49 +715,62 @@ class Utility(commands.Cog):
     # ══════════════════════════════════════════════════════════════════════
     #  help
     # ══════════════════════════════════════════════════════════════════════
+    # ══════════════════════════════════════════════════════════════════════
+    #  help
+    # ══════════════════════════════════════════════════════════════════════
     @commands.hybrid_command(
         name="help",
-        description="Paginated command reference. Use !help <command> for detail on one command.",
+        description="Command reference. Use /help <command> for detail, or /help <category> to browse.",
     )
-    @app_commands.describe(command="Command name for detailed help (leave blank for the full reference)")
+    @app_commands.describe(command="Command name for detail, or a category keyword (e.g. banning, tags, channel)")
     @commands.cooldown(1, 5, commands.BucketType.user)
     async def help(self, ctx: commands.Context, command: Optional[str] = None):
-        prefix = self.bot.prefixes.get(str(ctx.guild.id), self.bot.default_prefix)
+        prefix   = self.bot.prefixes.get(str(ctx.guild.id), self.bot.default_prefix)
+        is_owner = await self.bot.is_owner(ctx.author)
 
-        # Detail view: !help cban  (single ephemeral embed, no pagination)
         if command:
-            cmd = _FLAT.get(command.lower())
-            # Hide owner-only commands from non-owners
-            if cmd and cmd.get("perms") == "Bot Owner":
-                if not await self.bot.is_owner(ctx.author):
-                    cmd = None
-            if not cmd:
+            key = command.lower().strip()
+
+            # ── 1. Exact command / alias lookup ───────────────────────────────
+            cmd = _FLAT.get(key)
+            if cmd and cmd.get("perms") == "Bot Owner" and not is_owner:
+                cmd = None  # hide owner commands from non-owners
+
+            if cmd:
+                e = h.embed(title=" " + prefix + cmd["usage"], color=h.BLUE)
+                e.description = cmd["desc"] + "\n\u200b"
+                if cmd["args"]:
+                    e.add_field(
+                        name  = "Arguments",
+                        value = "\n".join("`" + a + "` — " + d for a, d in cmd["args"]),
+                        inline=False,
+                    )
+                e.add_field(name="Required Permission", value=cmd["perms"], inline=True)
+                e.add_field(name="Example", value="`" + cmd["example"] + "`", inline=False)
+                if cmd.get("aliases"):
+                    e.add_field(name="Aliases", value=", ".join("`" + a + "`" for a in cmd["aliases"]), inline=False)
+                e.set_footer(text="[ ] = optional  ·  < > = required  ·  NanoBot")
+                return await ctx.reply(embed=e, ephemeral=True)
+
+            # ── 2. Category keyword lookup ──────────────────────────────────
+            cat_name = _CATEGORY_ALIASES.get(key)
+            if cat_name and (cat_name not in _OWNER_CATEGORIES or is_owner) and cat_name in _HELP:
                 return await ctx.reply(
-                    embed=h.err(
-                        "No command named `" + command + "`.\n"
-                        "Use `" + prefix + "help` to browse all commands."
-                    ),
+                    embed=_build_category_embed(cat_name, _HELP[cat_name], prefix),
                     ephemeral=True,
                 )
 
-            e = h.embed(title=" " + prefix + cmd["usage"], color=h.BLUE)
-            e.description = cmd["desc"] + "\n\u200b"
+            # ── 3. Nothing found ────────────────────────────────────────────
+            return await ctx.reply(
+                embed=h.err(
+                    "No command or category named `" + command + "`.\n"
+                    "Use `" + prefix + "help` to browse all categories, or try:\n"
+                    "`" + prefix + "help banning`  ·  `" + prefix + "help tags`  ·  `" + prefix + "help channel`"
+                ),
+                ephemeral=True,
+            )
 
-            if cmd["args"]:
-                args_text = "\n".join("`" + a + "` — " + d for a, d in cmd["args"])
-                e.add_field(name="Arguments", value=args_text, inline=False)
-
-            e.add_field(name="Required Permission", value=cmd["perms"], inline=True)
-            e.add_field(name="Example", value="`" + cmd["example"] + "`", inline=False)
-
-            if cmd.get("aliases"):
-                e.add_field(name="Aliases", value=", ".join("`" + a + "`" for a in cmd["aliases"]), inline=False)
-
-            e.set_footer(text="[ ] = optional  ·  < > = required  ·  NanoBot")
-            return await ctx.reply(embed=e, ephemeral=True)
-
-        # Paginated overview
-        is_owner = await self.bot.is_owner(ctx.author)
+        # Paginated category overview
         pages = _build_help_pages(prefix, self.bot.user.display_name, is_owner=is_owner)
         view  = HelpView(pages=pages, author=ctx.author)
         msg   = await ctx.reply(embed=pages[0], view=view)
@@ -844,7 +967,7 @@ class Utility(commands.Cog):
                 "the bot targets whoever last spoke in the channel.\n"
                 "**Tag shortcuts** — `!tagname` fires any tag with one tap.\n"
                 "**Clean embeds** — every response is designed to be readable on a small screen.\n"
-                "**No database** — everything is plain JSON. Portable, readable, easy to back up.\n"
+                "**SQLite storage** — single portable file, zero cloud dependency, easy to back up.\n"
                 "**No bloat** — commands exist because mobile mods actually need them."
             ),
             inline=False,
@@ -864,7 +987,7 @@ class Utility(commands.Cog):
             name  = "📦 Tech",
             value = (
                 f"Built with Python {platform.python_version()} + discord.py {discord.__version__}\n"
-                "Storage: JSON files (no database, no cloud dependency)\n"
+                "Storage: SQLite (aiosqlite) — single portable file, no server needed.\n"
                 "Self-host friendly — if you can run Python, you can run NanoBot."
             ),
             inline=False,

@@ -454,7 +454,7 @@ class Tags(commands.Cog):
         await ctx.reply(
             embed=h.ok(
                 f"Personal tag **{name}** created.{img_line}\n"
-                f"Only you can see it. Use `/{ctx.prefix}tag use {name}` or `{ctx.prefix}{name}` to post it.",
+                f"Only you can see it. Use `/tag use {name}` or `{ctx.prefix}{name}` to post it.",
                 "🏷️ Tag Created",
             ),
             ephemeral=True,
