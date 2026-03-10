@@ -391,13 +391,18 @@ async def get_all_slows() -> dict:
 #  Reminders
 # ══════════════════════════════════════════════════════════════════════════════
 
+async def reminder_id_exists(rid: str) -> bool:
+    async with _conn().execute(
+        "SELECT 1 FROM reminders WHERE id=? LIMIT 1", (rid,)
+    ) as cur:
+        return await cur.fetchone() is not None
+
+
 async def set_reminder(info: dict) -> None:
     await _conn().execute(
-        """INSERT INTO reminders
+        """INSERT OR IGNORE INTO reminders
            (id, target_id, set_by_id, guild_id, channel_id, message, due, duration, dm)
-           VALUES (?,?,?,?,?,?,?,?,?)
-           ON CONFLICT(id) DO UPDATE SET
-               due=excluded.due, message=excluded.message""",
+           VALUES (?,?,?,?,?,?,?,?,?)""",
         (
             info["id"], info["target_id"], info["set_by_id"],
             info["guild_id"], info["channel_id"], info["message"],
