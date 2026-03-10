@@ -47,6 +47,7 @@ from utils import helpers as h
 from utils.checks import (
     has_ban_perms, has_kick_perms, has_mod_perms,
     has_channel_perms, has_timeout_perms, has_role_perms, has_move_perms,
+    has_admin_perms,
 )
 
 log = logging.getLogger("NanoBot.moderation")
