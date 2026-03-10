@@ -58,14 +58,6 @@ _HELP = {
             "perms": "Ban Members", "example": "!ban @user You have been permanently banned.",
         },
         {
-            "name": "softban", "aliases": [],
-            "usage": "softban [user] [days] [reason]",
-            "short": "Ban + immediately unban — deletes messages, no lasting ban",
-            "desc": "Bans then immediately unbans. Useful for wiping a spammer's messages without actually keeping them banned. They can rejoin.",
-            "args": [("user", "Who to softban"), ("days", "Days of history to delete (1–7, default 7)"), ("reason", "Optional reason")],
-            "perms": "Ban Members", "example": "!softban @spammer 7",
-        },
-        {
             "name": "massban", "aliases": [],
             "usage": "massban <id1 id2 ...> [reason]",
             "short": "Ban multiple users by ID at once",
@@ -324,11 +316,11 @@ _HELP = {
             "desc": (
                 "Tags let you save text (and images) and fire them instantly.\n\n"
                 "**Shorthand:**\n"
-                "`!tag <n>` — post tag\n"
-                "`!<n>` — same, even shorter\n"
-                "`!tag + <n> | <content>` — create personal tag\n"
-                "`!tag - <n>` — delete tag\n"
-                "`!tag g+ <n> | <content>` — create global tag (mods)\n\n"
+                "`n!tag <n>` — post tag\n"
+                "`n!<n>` — same, even shorter\n"
+                "`n!tag + <n> | <content>` — create personal tag\n"
+                "`n!tag - <n>` — delete tag\n"
+                "`n!tag g+ <n> | <content>` — create global tag (mods)\n\n"
                 "**Subcommands:**\n"
                 "`/tag create`, `/tag global`, `/tag use`, `/tag preview`,\n"
                 "`/tag edit`, `/tag delete`, `/tag list`, `/tag export`"
