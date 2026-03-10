@@ -34,10 +34,11 @@ _HELP = {
         {
             "name": "cban", "aliases": ["cleanban"],
             "usage": "cban [user] [days] [wait] [message]",
-            "short": "Ban + purge history + optional timed unban",
+            "short": "Ban + wipe message history + optional timed unban",
             "desc": (
-                "The mobile mod's best friend. Bans a user, deletes their message history, "
-                "optionally DMs them, and can auto-unban after a set time. "
+                "The mobile mod's best friend. Always deletes message history (1–7 days), "
+                "optionally DMs the user, and optionally auto-unbans after a set time. "
+                "Use this when someone spammed or posted bad content and you need the evidence gone too. "
                 "Defaults to the last message sender if no user is given."
             ),
             "args": [
@@ -52,7 +53,7 @@ _HELP = {
             "name": "ban", "aliases": [],
             "usage": "ban [user] [message]",
             "short": "Permanently ban a user with optional DM",
-            "desc": "Permanent ban. Targets last sender if no user is specified. Default DM does not include a rejoin link.",
+            "desc": "Permanent ban with no message history deletion. Targets last sender if no user is specified.",
             "args": [("user", "Who to ban (blank = last sender)"), ("message", "DM to send (omit for default)")],
             "perms": "Ban Members", "example": "!ban @user You have been permanently banned.",
         },
@@ -83,8 +84,14 @@ _HELP = {
         {
             "name": "tempban", "aliases": [],
             "usage": "tempban [user] [duration] [reason]",
-            "short": "Ban a user for a set time — auto-unbans when it expires",
-            "desc": "Simpler than /cban for quick timed bans. Auto-unban survives bot restarts. Defaults to last sender if no user given.",
+            "short": "Timed ban — no message deletion, just a duration",
+            "desc": (
+                "Simple timed ban with no history deletion. Use this when you want to cool someone off "
+                "for a set time without touching their messages. "
+                "Auto-unban survives restarts. Defaults to last sender if no user given.\n\n"
+                "**vs /cban:** cban always deletes message history — use it when content needs to be wiped. "
+                "tempban leaves messages intact."
+            ),
             "args": [
                 ("user",     "Who to ban (blank = last sender)"),
                 ("duration", "How long: `1h`, `12h`, `7d` (default 24h, min 1 minute)"),
@@ -481,6 +488,18 @@ _HELP = {
             "perms": "Bot Owner", "example": "!reload all\n!reload moderation",
         },
         {
+            "name": "update", "aliases": ["pull"],
+            "usage": "update",
+            "short": "Git pull + reload all cogs (owner only)",
+            "desc": (
+                "Runs `git pull` and reports the output, then reloads all cogs. "
+                "Does NOT restart the process — main.py changes won't take effect until `!restart`. "
+                "Cog changes (moderation, tags, etc.) take effect immediately."
+            ),
+            "args": [],
+            "perms": "Bot Owner", "example": "!update",
+        },
+        {
             "name": "setloglevel", "aliases": ["loglevel", "loglvl"],
             "usage": "setloglevel <level>",
             "short": "Change log verbosity live (owner only)",
@@ -559,7 +578,7 @@ _CATEGORY_ALIASES: dict[str, str] = {
     "utility": "⚙️ Config & Info", "general": "⚙️ Config & Info",
     # 🔧 Owner / Admin
     "admin": "🔧 Owner / Admin", "owner": "🔧 Owner / Admin",
-    "reload": "🔧 Owner / Admin",
+    "reload": "🔧 Owner / Admin", "update": "🔧 Owner / Admin",
 }
 
 
@@ -948,6 +967,8 @@ class Utility(commands.Cog):
     )
     @commands.cooldown(1, 10, commands.BucketType.user)
     async def about(self, ctx: commands.Context):
+        prefix = self.bot.prefixes.get(str(ctx.guild.id), self.bot.default_prefix) if ctx.guild else self.bot.default_prefix
+
         e = h.embed(title="⚡ About NanoBot", color=h.BLUE)
         e.set_thumbnail(url=self.bot.user.display_avatar.url)
 
@@ -965,7 +986,7 @@ class Utility(commands.Cog):
             value = (
                 "**Last-sender targeting** — most mod commands work with no user specified; "
                 "the bot targets whoever last spoke in the channel.\n"
-                "**Tag shortcuts** — `!tagname` fires any tag with one tap.\n"
+                f"**Tag shortcuts** — `{prefix}tagname` fires any tag with one tap.\n"
                 "**Clean embeds** — every response is designed to be readable on a small screen.\n"
                 "**SQLite storage** — single portable file, zero cloud dependency, easy to back up.\n"
                 "**No bloat** — commands exist because mobile mods actually need them."

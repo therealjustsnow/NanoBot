@@ -7,6 +7,7 @@ All commands here require the invoker to be the bot owner
 
 Commands:
   reload  [cog|all]  — hot-reload one cog or every cog
+  update             — git pull + reload all cogs
   shutdown           — graceful shutdown (flushes logs, closes connection)
   restart            — graceful shutdown then re-exec the process
   setloglevel <lvl>  — change log level live and persist to config.json
@@ -33,6 +34,9 @@ _ALL_COGS = (
     "cogs.moderation",
     "cogs.tags",
     "cogs.utility",
+    "cogs.reminders",
+    "cogs.warnings",
+    "cogs.welcome",
     "cogs.admin",
 )
 
@@ -181,6 +185,103 @@ class Admin(commands.Cog):
         log.info("Spawned new process — shutting down this one")
 
         await self.bot.close()
+
+    # ══════════════════════════════════════════════════════════════════════════
+    #  update
+    # ══════════════════════════════════════════════════════════════════════════
+    @commands.command(
+        name="update",
+        aliases=["pull"],
+        help="Pull the latest code from git and reload all cogs.\n\nRuns: git pull\nThen reloads every cog in _ALL_COGS.\nDoes NOT restart the process — use !restart for that.",
+    )
+    async def update(self, ctx: commands.Context):
+        """
+        !update
+
+        1. Runs `git pull` and reports the output.
+        2. If the pull succeeds, reloads all cogs.
+        3. Reports per-cog reload results.
+
+        Does not restart the process — use !restart if you need main.py changes to take effect.
+        """
+        await ctx.defer()
+
+        # ── Step 1: git pull ───────────────────────────────────────────────────
+        try:
+            result = subprocess.run(
+                ["git", "pull"],
+                capture_output=True,
+                text=True,
+                timeout=30,
+            )
+            stdout = result.stdout.strip()
+            stderr = result.stderr.strip()
+            git_ok = result.returncode == 0
+        except FileNotFoundError:
+            return await ctx.reply(
+                embed=h.err(
+                    "`git` not found. Make sure git is installed and NanoBot was cloned from a repo.\n"
+                    "If you're running from a zip/download, use `!reload all` instead."
+                ),
+                ephemeral=True,
+            )
+        except subprocess.TimeoutExpired:
+            return await ctx.reply(
+                embed=h.err("Git pull timed out after 30 seconds."),
+                ephemeral=True,
+            )
+
+        git_output = stdout or stderr or "_(no output)_"
+        # Trim for embed safety
+        if len(git_output) > 900:
+            git_output = git_output[:900] + "\n…(truncated)"
+
+        if not git_ok:
+            e = h.embed(title="📥 Update — Git Pull Failed", color=h.RED if hasattr(h, 'RED') else 0xED4245)
+            e.description = f"```\n{git_output}\n```"
+            e.set_footer(text="Cogs were NOT reloaded  ·  NanoBot Admin")
+            log.error(f"git pull failed (rc={result.returncode}): {git_output}")
+            return await ctx.reply(embed=e)
+
+        log.info(f"git pull OK by {ctx.author}: {stdout[:200]}")
+
+        # ── Step 2: reload all cogs ────────────────────────────────────────────
+        reload_results = []
+        for ext in _ALL_COGS:
+            try:
+                await self.bot.reload_extension(ext)
+                reload_results.append(f"✅ `{ext}`")
+                log.info(f"update: reloaded {ext}")
+            except commands.ExtensionNotLoaded:
+                try:
+                    await self.bot.load_extension(ext)
+                    reload_results.append(f"✅ `{ext}` _(loaded fresh)_")
+                except Exception as exc:
+                    reload_results.append(f"❌ `{ext}`: {exc}")
+                    log.error(f"update: failed to load {ext}: {exc}", exc_info=exc)
+            except Exception as exc:
+                reload_results.append(f"❌ `{ext}`: {exc}")
+                log.error(f"update: failed to reload {ext}: {exc}", exc_info=exc)
+
+        had_errors = any(r.startswith("❌") for r in reload_results)
+
+        e = h.embed(
+            title  = "📥 Update Complete" if not had_errors else "📥 Update — Reload Errors",
+            color  = h.GREEN if not had_errors else h.YELLOW,
+        )
+        e.add_field(name="📦 Git Pull", value=f"```\n{git_output}\n```", inline=False)
+        e.add_field(name="🔄 Cog Reloads", value="\n".join(reload_results), inline=False)
+
+        already_latest = "already up to date" in stdout.lower()
+        if already_latest:
+            e.set_footer(text="Already up to date — cogs reloaded anyway  ·  NanoBot Admin")
+        elif not had_errors:
+            e.set_footer(text=f"Pulled + reloaded {len(_ALL_COGS)} cog(s)  ·  NanoBot Admin")
+        else:
+            e.set_footer(text="Some cogs failed to reload — check logs  ·  NanoBot Admin")
+
+        log.info(f"update complete: git_ok={git_ok}, reload_errors={had_errors}, by {ctx.author}")
+        await ctx.reply(embed=e)
 
     # ══════════════════════════════════════════════════════════════════════════
     #  setloglevel

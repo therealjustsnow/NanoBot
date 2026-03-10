@@ -702,7 +702,7 @@ class Moderation(commands.Cog):
 
     @commands.hybrid_command(name="clearnotes", description="Delete all mod notes for a user. Admin only.")
     @app_commands.describe(user="User whose notes to clear")
-    @commands.has_permissions(administrator=True)
+    @has_admin_perms()
     async def clearnotes(self, ctx, user: discord.Member):
         count = await db.clear_notes(ctx.guild.id, user.id)
         if count:

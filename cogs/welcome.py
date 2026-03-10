@@ -97,12 +97,16 @@ class Welcome(commands.Cog):
     # ── Events ─────────────────────────────────────────────────────────────────
     @commands.Cog.listener()
     async def on_member_join(self, member: discord.Member):
+        if member.bot:
+            return
         cfg = await db.get_welcome_config(member.guild.id)
         if cfg and cfg["enabled"]:
             await _send_event(self.bot, member, cfg, "welcome")
 
     @commands.Cog.listener()
     async def on_member_remove(self, member: discord.Member):
+        if member.bot:
+            return
         cfg = await db.get_leave_config(member.guild.id)
         if cfg and cfg["enabled"]:
             await _send_event(self.bot, member, cfg, "leave")
@@ -141,6 +145,7 @@ class Welcome(commands.Cog):
         await self._do_set(ctx, "welcome", enabled, channel, title, content, image_url, dm)
 
     @welcome.command(name="test", description="Preview the welcome message as if you just joined.")
+    @has_admin_perms()
     async def welcome_test(self, ctx: commands.Context):
         cfg = await db.get_welcome_config(ctx.guild.id)
         if not cfg or not cfg.get("enabled"):
@@ -185,6 +190,7 @@ class Welcome(commands.Cog):
         await self._do_set(ctx, "leave", enabled, channel, title, content, image_url, dm)
 
     @leave.command(name="test", description="Preview the leave message as if you just left.")
+    @has_admin_perms()
     async def leave_test(self, ctx: commands.Context):
         cfg = await db.get_leave_config(ctx.guild.id)
         if not cfg or not cfg.get("enabled"):
