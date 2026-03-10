@@ -210,10 +210,9 @@ class Reminders(commands.Cog):
                 ephemeral=True,
             )
 
-        # Generate a unique ID
-        existing = set(data.keys())
+        # Generate a collision-free unique ID
         rid = _new_id()
-        while rid in existing:
+        while await db.reminder_id_exists(rid):
             rid = _new_id()
 
         due = _now() + secs
