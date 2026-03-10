@@ -5,7 +5,6 @@ Core moderation commands — designed for speed on mobile.
 Commands:
   cban / cleanban  — ban + purge history + optional timed unban + DM
   ban              — permanent ban + DM
-  softban          — ban + immediately unban (deletes messages, no lasting ban)
   massban          — ban multiple IDs at once
   unban            — unban by user ID
   tempban          — timed ban with auto-unban (simpler than cban)
@@ -271,29 +270,6 @@ class Moderation(commands.Cog):
         await ctx.reply(embed=h.ok(f"**{target.display_name}** (`{target.id}`) permanently banned.\n📨 DM {'sent' if dm_sent else 'failed'}.","🔨 Banned"), ephemeral=True)
         await action_log(ctx, "🔨", "ban", target=target)
 
-    # ══════════════════════════════════════════════════════════════════════════
-    #  softban
-    # ══════════════════════════════════════════════════════════════════════════
-    @commands.hybrid_command(name="softban", description="Ban then immediately unban — deletes messages without lasting ban.")
-    @app_commands.describe(user="Who to softban", days="Days of history to delete (1–7, default 7)", reason="Optional reason")
-    @has_ban_perms()
-    async def softban(self, ctx, user: Optional[discord.Member]=None, days: Optional[int]=7, *, reason: Optional[str]=None):
-        target = await resolve_target(self.bot, ctx.channel.id, user)
-        if not target: return await ctx.reply(embed=h.err("No user specified."), ephemeral=True)
-        if target == ctx.author: return await ctx.reply(embed=h.err("You can't softban yourself."), ephemeral=True)
-        if not can_target(ctx.author, target): return await ctx.reply(embed=h.err(f"**{target.display_name}** outranks you."), ephemeral=True)
-
-        days = max(1, min(7, days or 7))
-        rsn  = reason or f"softban by {ctx.author} ({ctx.author.id})"
-        try:
-            await ctx.guild.ban(target, reason=rsn, delete_message_days=days)
-            await ctx.guild.unban(target, reason=rsn + " (softban — immediate unban)")
-        except discord.Forbidden:
-            return await ctx.reply(embed=h.err("I don't have permission to ban/unban."), ephemeral=True)
-
-        log.info(f"softban: {target} ({target.id}) by {ctx.author} in {ctx.guild} | days={days}")
-        await ctx.reply(embed=h.ok(f"**{target.display_name}** softbanned.\n🗂️ Deleted **{days}d** of messages — they can rejoin.", "🧹 Softbanned"), ephemeral=True)
-        await action_log(ctx, "🧹", "softban", target=target, detail=f"{days}d history cleared")
 
     # ══════════════════════════════════════════════════════════════════════════
     #  massban
