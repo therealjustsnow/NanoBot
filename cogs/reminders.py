@@ -200,12 +200,24 @@ class Reminders(commands.Cog):
                 ephemeral=True,
             )
 
-        # Check the target user's active reminder count
-        if await db.count_user_reminders(target.id) >= _MAX:
+        # Check the target user's active reminder count (voters get a higher cap)
+        try:
+            from cogs.votes import get_reminder_limit
+            user_max = await get_reminder_limit(target.id)
+        except Exception:
+            user_max = _MAX
+
+        if await db.count_user_reminders(target.id) >= user_max:
+            from cogs.votes import VOTER_REMINDER_MAX, DEFAULT_REMINDER_MAX
+            subject = "You have" if target == ctx.author else f"{target.display_name} has"
+            if user_max == DEFAULT_REMINDER_MAX:
+                tip = f" Vote for NanoBot (`/vote`) to unlock **{VOTER_REMINDER_MAX}** slots."
+            else:
+                tip = ""
             return await ctx.reply(
                 embed=h.err(
-                    f"{'You have' if target == ctx.author else target.display_name + ' has'} "
-                    f"too many active reminders (**{_MAX}** max). Cancel some first."
+                    f"{subject} too many active reminders (**{user_max}** max). "
+                    f"Cancel some first.{tip}"
                 ),
                 ephemeral=True,
             )
