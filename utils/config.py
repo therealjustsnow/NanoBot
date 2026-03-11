@@ -20,6 +20,10 @@ _SCHEMA = {
     "owner_id":       (None,  False, "Your Discord user ID (int or null)"),
     "log_level":      (str,   False, "Logging verbosity (DEBUG/INFO/WARNING/ERROR/CRITICAL)"),
     "log_http":       (bool,  False, "Log raw HTTP requests (true/false)"),
+    "topgg_token":    (str, False, "top.gg AUTH token (str or null"),
+    "dbl_token":      (str, False, "dbl AUTH token (str or null)"),
+    "vote_webhook_port":    (int, False, "an open port required to get votes"),
+    "vote_webhook_secret":    (str, False, "the secret used by dbl and top.gg to verify"),
 }
 
 
