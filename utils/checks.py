@@ -35,6 +35,7 @@ def _check(user_perm: str, bot_perm: str | None = None):
 
 # ── Moderation ─────────────────────────────────────────────────────────────────
 
+
 def has_ban_perms():
     """Requires ban_members for both the user and the bot."""
     return _check("ban_members")
@@ -72,6 +73,8 @@ def has_move_perms():
 
 def has_admin_perms():
     """Requires administrator for the user (bot check omitted — bot is usually admin)."""
+
     def decorator(func):
         return commands.has_permissions(administrator=True)(func)
+
     return decorator

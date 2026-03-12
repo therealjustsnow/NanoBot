@@ -54,12 +54,13 @@ from utils import helpers as h
 
 log = logging.getLogger("NanoBot.reminders")
 
-_MAX        = 25          # max active reminders per user
-_MIN_SECS   = 60          # 1 minute
-_MAX_SECS   = 365 * 86400 # 1 year
+_MAX = 25  # max active reminders per user
+_MIN_SECS = 60  # 1 minute
+_MAX_SECS = 365 * 86400  # 1 year
 
 
 # ── Helpers ────────────────────────────────────────────────────────────────────
+
 
 def _new_id() -> str:
     """6-character alphanumeric ID — short enough to type on mobile."""
@@ -71,20 +72,19 @@ def _now() -> float:
     return datetime.now(timezone.utc).timestamp()
 
 
-
 # ══════════════════════════════════════════════════════════════════════════════
 class Reminders(commands.Cog):
     """Reminder commands — set it and forget it."""
 
     def __init__(self, bot: commands.Bot):
-        self.bot   = bot
+        self.bot = bot
         self._tasks: dict[str, asyncio.Task] = {}  # reminder_id → Task
 
     # ── Restore on restart ─────────────────────────────────────────────────────
     @commands.Cog.listener()
     async def on_restore_schedules(self):
-        data  = await db.get_all_reminders()
-        now   = _now()
+        data = await db.get_all_reminders()
+        now = _now()
         fired = 0
 
         for rid, info in data.items():
@@ -95,10 +95,14 @@ class Reminders(commands.Cog):
                 log.info(f"Overdue reminder {rid} — firing immediately")
                 fired += 1
             else:
-                self._tasks[rid] = asyncio.create_task(self._fire(info, delay=remaining))
+                self._tasks[rid] = asyncio.create_task(
+                    self._fire(info, delay=remaining)
+                )
                 log.debug(f"Restored reminder {rid} — fires in {remaining:.0f}s")
 
-        log.info(f"Reminders: restored {len(self._tasks)} active, fired {fired} overdue")
+        log.info(
+            f"Reminders: restored {len(self._tasks)} active, fired {fired} overdue"
+        )
 
     # ── Background fire ────────────────────────────────────────────────────────
     async def _fire(self, info: dict, *, delay: float):
@@ -106,21 +110,21 @@ class Reminders(commands.Cog):
         if delay > 0:
             await asyncio.sleep(delay)
 
-        rid        = info["id"]
-        target_id  = int(info["target_id"])
-        set_by_id  = int(info["set_by_id"])
+        rid = info["id"]
+        target_id = int(info["target_id"])
+        set_by_id = int(info["set_by_id"])
         channel_id = int(info["channel_id"])
-        guild_id   = int(info["guild_id"])
-        message    = info["message"]
-        use_dm     = info.get("dm", True)
-        due        = info["due"]
+        guild_id = int(info["guild_id"])
+        message = info["message"]
+        use_dm = info.get("dm", True)
+        due = info["due"]
 
         set_at_ts = due - info.get("duration", 0)
 
         e = discord.Embed(
-            title       = "⏰ Reminder",
-            description = message,
-            color       = h.BLUE,
+            title="⏰ Reminder",
+            description=message,
+            color=h.BLUE,
         )
         e.set_footer(text="NanoBot Reminders")
         e.timestamp = datetime.now(timezone.utc)
@@ -141,7 +145,9 @@ class Reminders(commands.Cog):
                     delivered = True
                     log.debug(f"Reminder {rid} delivered via DM to {target_id}")
                 except discord.Forbidden:
-                    log.debug(f"Reminder {rid}: DMs closed for {target_id}, falling back to channel")
+                    log.debug(
+                        f"Reminder {rid}: DMs closed for {target_id}, falling back to channel"
+                    )
 
         # ── Fall back to channel ping ──────────────────────────────────────────
         if not delivered:
@@ -152,10 +158,14 @@ class Reminders(commands.Cog):
                     delivered = True
                     log.debug(f"Reminder {rid} delivered via channel {channel_id}")
                 except (discord.Forbidden, discord.HTTPException) as exc:
-                    log.warning(f"Reminder {rid}: could not deliver to channel {channel_id}: {exc}")
+                    log.warning(
+                        f"Reminder {rid}: could not deliver to channel {channel_id}: {exc}"
+                    )
 
         if not delivered:
-            log.warning(f"Reminder {rid} for {target_id} could not be delivered anywhere")
+            log.warning(
+                f"Reminder {rid} for {target_id} could not be delivered anywhere"
+            )
 
         # ── Clean up storage and task dict ────────────────────────────────────
         self._tasks.pop(rid, None)
@@ -172,16 +182,18 @@ class Reminders(commands.Cog):
     # ── Core create logic ──────────────────────────────────────────────────────
     async def _create(
         self,
-        ctx:      commands.Context,
-        target:   discord.Member,
-        message:  str,
-        secs:     int,
-        use_dm:   bool,
+        ctx: commands.Context,
+        target: discord.Member,
+        message: str,
+        secs: int,
+        use_dm: bool,
     ):
         """Validate and schedule a reminder. Used by all command variants."""
         if secs < _MIN_SECS:
             return await ctx.reply(
-                embed=h.err(f"Minimum reminder time is **1 minute**. Got {h.fmt_duration(secs)}."),
+                embed=h.err(
+                    f"Minimum reminder time is **1 minute**. Got {h.fmt_duration(secs)}."
+                ),
                 ephemeral=True,
             )
         if secs > _MAX_SECS:
@@ -203,13 +215,17 @@ class Reminders(commands.Cog):
         # Check the target user's active reminder count (voters get a higher cap)
         try:
             from cogs.votes import get_reminder_limit
+
             user_max = await get_reminder_limit(target.id)
         except Exception:
             user_max = _MAX
 
         if await db.count_user_reminders(target.id) >= user_max:
             from cogs.votes import VOTER_REMINDER_MAX, DEFAULT_REMINDER_MAX
-            subject = "You have" if target == ctx.author else f"{target.display_name} has"
+
+            subject = (
+                "You have" if target == ctx.author else f"{target.display_name} has"
+            )
             if user_max == DEFAULT_REMINDER_MAX:
                 tip = f" Vote for NanoBot (`/vote`) to unlock **{VOTER_REMINDER_MAX}** slots."
             else:
@@ -230,15 +246,15 @@ class Reminders(commands.Cog):
         due = _now() + secs
 
         info = {
-            "id":         rid,
-            "target_id":  str(target.id),
-            "set_by_id":  str(ctx.author.id),
-            "guild_id":   str(ctx.guild.id),
+            "id": rid,
+            "target_id": str(target.id),
+            "set_by_id": str(ctx.author.id),
+            "guild_id": str(ctx.guild.id),
             "channel_id": str(ctx.channel.id),
-            "message":    message.strip(),
-            "due":        due,
-            "duration":   secs,
-            "dm":         use_dm,
+            "message": message.strip(),
+            "due": due,
+            "duration": secs,
+            "dm": use_dm,
         }
 
         await self._schedule(info)
@@ -250,9 +266,12 @@ class Reminders(commands.Cog):
             f"📝 **{message.strip()[:200]}**",
             f"⏰ {discord.utils.format_dt(due_dt, style='R')} "
             f"({discord.utils.format_dt(due_dt, style='f')})",
-            f"📬 Delivery: {'DM' if use_dm else 'channel ping'} "
-            f"(falls back to channel if DMs are closed)" if use_dm else
-            f"📬 Delivery: channel ping",
+            (
+                f"📬 Delivery: {'DM' if use_dm else 'channel ping'} "
+                f"(falls back to channel if DMs are closed)"
+                if use_dm
+                else f"📬 Delivery: channel ping"
+            ),
             f"🆔 ID: `{rid}`  _(use to cancel)_",
         ]
         if not is_self:
@@ -276,23 +295,23 @@ class Reminders(commands.Cog):
         description="Set a reminder for yourself. Duration can be part of the message.",
     )
     @app_commands.describe(
-        message = "What to remind you about — include the time at the end: 'do this 8h' or 'do this in 8 hours'",
-        time    = "Duration if not in the message (e.g. 8h, 30m, 2 hours) — ignored if message already has one",
-        dm      = "DM you the reminder (default: yes, falls back to channel if DMs closed)",
+        message="What to remind you about — include the time at the end: 'do this 8h' or 'do this in 8 hours'",
+        time="Duration if not in the message (e.g. 8h, 30m, 2 hours) — ignored if message already has one",
+        dm="DM you the reminder (default: yes, falls back to channel if DMs closed)",
     )
     @commands.cooldown(1, 5, commands.BucketType.user)
     async def remindme(
         self,
-        ctx:     commands.Context,
+        ctx: commands.Context,
         *,
         message: str,
-        time:    Optional[str] = None,
-        dm:      Optional[bool] = True,
+        time: Optional[str] = None,
+        dm: Optional[bool] = True,
     ):
         # Duration can be embedded in message or in the time arg
         cleaned, secs = h.parse_duration_from_end(message)
         if secs is None and time:
-            secs    = h.parse_duration(time)
+            secs = h.parse_duration(time)
             cleaned = message
         if secs is None:
             return await ctx.reply(
@@ -303,7 +322,9 @@ class Reminders(commands.Cog):
                 ephemeral=True,
             )
 
-        await self._create(ctx, ctx.author, cleaned or message, secs, dm if dm is not None else True)
+        await self._create(
+            ctx, ctx.author, cleaned or message, secs, dm if dm is not None else True
+        )
 
     # ══════════════════════════════════════════════════════════════════════════
     #  /remind @user
@@ -313,27 +334,29 @@ class Reminders(commands.Cog):
         description="Set a reminder for another user.",
     )
     @app_commands.describe(
-        user    = "Who to remind",
-        message = "What to remind them about — include the time at the end",
-        time    = "Duration if not in the message (e.g. 1h, 30m)",
-        dm      = "DM them the reminder (default: no — posts a channel ping instead)",
+        user="Who to remind",
+        message="What to remind them about — include the time at the end",
+        time="Duration if not in the message (e.g. 1h, 30m)",
+        dm="DM them the reminder (default: no — posts a channel ping instead)",
     )
     @commands.cooldown(1, 5, commands.BucketType.user)
     async def remind(
         self,
-        ctx:     commands.Context,
-        user:    discord.Member,
+        ctx: commands.Context,
+        user: discord.Member,
         *,
         message: str,
-        time:    Optional[str] = None,
-        dm:      Optional[bool] = False,
+        time: Optional[str] = None,
+        dm: Optional[bool] = False,
     ):
         if user.bot:
-            return await ctx.reply(embed=h.err("You can't set reminders for bots."), ephemeral=True)
+            return await ctx.reply(
+                embed=h.err("You can't set reminders for bots."), ephemeral=True
+            )
 
         cleaned, secs = h.parse_duration_from_end(message)
         if secs is None and time:
-            secs    = h.parse_duration(time)
+            secs = h.parse_duration(time)
             cleaned = message
         if secs is None:
             return await ctx.reply(
@@ -344,7 +367,9 @@ class Reminders(commands.Cog):
                 ephemeral=True,
             )
 
-        await self._create(ctx, user, cleaned or message, secs, dm if dm is not None else False)
+        await self._create(
+            ctx, user, cleaned or message, secs, dm if dm is not None else False
+        )
 
     # ══════════════════════════════════════════════════════════════════════════
     #  /reminders  (list + cancel)
@@ -364,8 +389,12 @@ class Reminders(commands.Cog):
     async def reminders_list(self, ctx: commands.Context):
         await self._list(ctx)
 
-    @reminders.command(name="cancel", description="Cancel an active reminder by its ID.")
-    @app_commands.describe(reminder_id="The 6-character ID shown when the reminder was set")
+    @reminders.command(
+        name="cancel", description="Cancel an active reminder by its ID."
+    )
+    @app_commands.describe(
+        reminder_id="The 6-character ID shown when the reminder was set"
+    )
     async def reminders_cancel(self, ctx: commands.Context, reminder_id: str):
         await self._cancel(ctx, reminder_id.strip().lower())
 
@@ -375,21 +404,26 @@ class Reminders(commands.Cog):
 
         if not user_rems:
             return await ctx.reply(
-                embed=h.info("You have no active reminders.\nUse `remindme` to set one.", "⏰ Reminders"),
+                embed=h.info(
+                    "You have no active reminders.\nUse `remindme` to set one.",
+                    "⏰ Reminders",
+                ),
                 ephemeral=True,
             )
 
         e = h.embed(
-            title  = f"⏰ Your Reminders ({len(user_rems)}/{_MAX})",
-            color  = h.BLUE,
+            title=f"⏰ Your Reminders ({len(user_rems)}/{_MAX})",
+            color=h.BLUE,
         )
 
         now = _now()
         for rid, info in sorted(user_rems.items(), key=lambda x: x[1]["due"]):
-            due_dt    = datetime.fromtimestamp(info["due"], tz=timezone.utc)
+            due_dt = datetime.fromtimestamp(info["due"], tz=timezone.utc)
             remaining = max(0, info["due"] - now)
-            msg_preview = info["message"][:80] + ("…" if len(info["message"]) > 80 else "")
-            delivery  = "DM" if info.get("dm") else "channel ping"
+            msg_preview = info["message"][:80] + (
+                "…" if len(info["message"]) > 80 else ""
+            )
+            delivery = "DM" if info.get("dm") else "channel ping"
 
             # Show who set it if it wasn't self-set
             set_note = ""
@@ -398,8 +432,8 @@ class Reminders(commands.Cog):
                 set_note = f"\nSet by: {setter.display_name if setter else '?'}"
 
             e.add_field(
-                name  = f"`{rid}` — {discord.utils.format_dt(due_dt, style='R')}",
-                value = (
+                name=f"`{rid}` — {discord.utils.format_dt(due_dt, style='R')}",
+                value=(
                     f"{msg_preview}\n"
                     f"📬 {delivery} · ⏱️ {h.fmt_duration(int(remaining))}{set_note}\n"
                     f"_Cancel: `{ctx.prefix or '/'}reminders cancel {rid}`_"
@@ -420,7 +454,9 @@ class Reminders(commands.Cog):
             all_rems = await db.get_all_reminders()
             if rid not in all_rems:
                 return await ctx.reply(
-                    embed=h.err(f"No reminder with ID `{rid}` found.\nUse `reminders` to see your active ones."),
+                    embed=h.err(
+                        f"No reminder with ID `{rid}` found.\nUse `reminders` to see your active ones."
+                    ),
                     ephemeral=True,
                 )
             info = all_rems[rid]

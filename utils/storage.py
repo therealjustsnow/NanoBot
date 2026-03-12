@@ -61,7 +61,7 @@ def write(filename: str, data: dict) -> None:
     Only use this at startup or shutdown when no event loop is running.
     In async (cog) code use awrite() instead.
     """
-    p   = _path(filename)
+    p = _path(filename)
     tmp = p + ".tmp"
     with open(tmp, "w", encoding="utf-8") as f:
         json.dump(data, f, indent=2, ensure_ascii=False)

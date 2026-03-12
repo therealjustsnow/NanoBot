@@ -18,16 +18,31 @@ import sqlite3
 import sys
 from datetime import datetime, timezone
 
-_DATA  = "data"
-_DB    = os.path.join(_DATA, "nanobot.db")
+_DATA = "data"
+_DB = os.path.join(_DATA, "nanobot.db")
 
 # ── ANSI colour helpers ────────────────────────────────────────────────────────
 _USE_COLOUR = sys.platform != "win32" or os.getenv("TERM")
-def _c(code, text): return f"\033[{code}m{text}\033[0m" if _USE_COLOUR else text
-def ok(msg):   print(f"  {_c('32', '✅')} {msg}")
-def skip(msg): print(f"  {_c('33', '⚠️ ')} {msg}")
-def info(msg): print(f"  {_c('34', 'ℹ️ ')} {msg}")
-def err(msg):  print(f"  {_c('31', '❌')} {msg}")
+
+
+def _c(code, text):
+    return f"\033[{code}m{text}\033[0m" if _USE_COLOUR else text
+
+
+def ok(msg):
+    print(f"  {_c('32', '✅')} {msg}")
+
+
+def skip(msg):
+    print(f"  {_c('33', '⚠️ ')} {msg}")
+
+
+def info(msg):
+    print(f"  {_c('34', 'ℹ️ ')} {msg}")
+
+
+def err(msg):
+    print(f"  {_c('31', '❌')} {msg}")
 
 
 def _read_json(filename: str) -> dict:
@@ -115,9 +130,15 @@ def migrate(db: sqlite3.Connection):
             cur.execute(
                 "INSERT OR IGNORE INTO tags (guild_id, scope, name, content, image_url, by_id, by_name) "
                 "VALUES (?,?,?,?,?,?,?)",
-                (guild_id, "global", name,
-                 tag.get("content"), tag.get("image_url"),
-                 tag.get("by_id"), tag.get("by_name")),
+                (
+                    guild_id,
+                    "global",
+                    name,
+                    tag.get("content"),
+                    tag.get("image_url"),
+                    tag.get("by_id"),
+                    tag.get("by_name"),
+                ),
             )
             tag_count += cur.rowcount
 
@@ -128,8 +149,15 @@ def migrate(db: sqlite3.Connection):
                 cur.execute(
                     "INSERT OR IGNORE INTO tags (guild_id, scope, name, content, image_url, by_id, by_name) "
                     "VALUES (?,?,?,?,?,?,?)",
-                    (guild_id, user_id, name,
-                     tag.get("content"), tag.get("image_url"), None, None),
+                    (
+                        guild_id,
+                        user_id,
+                        name,
+                        tag.get("content"),
+                        tag.get("image_url"),
+                        None,
+                        None,
+                    ),
                 )
                 tag_count += cur.rowcount
 
@@ -146,9 +174,14 @@ def migrate(db: sqlite3.Connection):
                 cur.execute(
                     "INSERT INTO notes (guild_id, user_id, content, by_id, by_name, created_at) "
                     "VALUES (?,?,?,?,?,?)",
-                    (guild_id, user_id, n.get("note", ""),
-                     n.get("by_id", ""), n.get("by_name", ""),
-                     n.get("at", datetime.now(timezone.utc).isoformat())),
+                    (
+                        guild_id,
+                        user_id,
+                        n.get("note", ""),
+                        n.get("by_id", ""),
+                        n.get("by_name", ""),
+                        n.get("at", datetime.now(timezone.utc).isoformat()),
+                    ),
                 )
                 note_count += 1
     db.commit()
@@ -213,9 +246,14 @@ def migrate(db: sqlite3.Connection):
                 "(id, target_id, set_by_id, guild_id, channel_id, message, due, duration, dm) "
                 "VALUES (?,?,?,?,?,?,?,?,?)",
                 (
-                    info["id"], info["target_id"], info["set_by_id"],
-                    info["guild_id"], info["channel_id"], info["message"],
-                    info["due"], info.get("duration", 0),
+                    info["id"],
+                    info["target_id"],
+                    info["set_by_id"],
+                    info["guild_id"],
+                    info["channel_id"],
+                    info["message"],
+                    info["due"],
+                    info.get("duration", 0),
                     1 if info.get("dm", True) else 0,
                 ),
             )
@@ -236,7 +274,9 @@ def main():
     already_exists = os.path.exists(_DB)
     if already_exists:
         size = os.path.getsize(_DB) // 1024
-        info(f"nanobot.db already exists ({size} KB) — duplicate rows will be skipped (INSERT OR IGNORE).")
+        info(
+            f"nanobot.db already exists ({size} KB) — duplicate rows will be skipped (INSERT OR IGNORE)."
+        )
     else:
         info("Creating new nanobot.db...")
 

@@ -18,15 +18,30 @@ import sys
 # ── ANSI colours ───────────────────────────────────────────────────────────────
 _USE_COLOUR = sys.platform != "win32" or os.getenv("TERM")
 
+
 def _c(code, text):
     return f"\033[{code}m{text}\033[0m" if _USE_COLOUR else text
 
-def ok(msg):   print(f"  {_c('32', '✅')} {msg}")
-def fail(msg): print(f"  {_c('31', '❌')} {msg}"); return False
-def warn(msg): print(f"  {_c('33', '⚠️ ')} {msg}")
-def head(msg): print(f"\n{_c('1;34', msg)}")
+
+def ok(msg):
+    print(f"  {_c('32', '✅')} {msg}")
+
+
+def fail(msg):
+    print(f"  {_c('31', '❌')} {msg}")
+    return False
+
+
+def warn(msg):
+    print(f"  {_c('33', '⚠️ ')} {msg}")
+
+
+def head(msg):
+    print(f"\n{_c('1;34', msg)}")
+
 
 _errors = []
+
 
 def err(msg):
     _errors.append(msg)
@@ -34,6 +49,7 @@ def err(msg):
 
 
 # ══════════════════════════════════════════════════════════════════════════════
+
 
 def check_python():
     head("Python Version")
@@ -59,10 +75,13 @@ def check_dependencies():
     else:
         try:
             import discord as _d
+
             ver = _d.__version__
             parts = tuple(int(x) for x in ver.split(".")[:2])
             if parts < (2, 3):
-                warn(f"discord.py {ver} — version 2.3.0+ recommended (pip install -U discord.py)")
+                warn(
+                    f"discord.py {ver} — version 2.3.0+ recommended (pip install -U discord.py)"
+                )
             else:
                 ok(f"discord.py {ver}")
         except Exception:
@@ -75,8 +94,8 @@ def check_file_structure():
     head("File Structure")
     all_good = True
 
-    required_dirs  = ["cogs", "utils"]
-    optional_dirs  = ["data"]
+    required_dirs = ["cogs", "utils"]
+    optional_dirs = ["data"]
     required_files = [
         "main.py",
         "config.json",
@@ -102,7 +121,9 @@ def check_file_structure():
         if os.path.isdir(d):
             ok(f"Directory  {d}/")
         else:
-            warn(f"Directory {d}/ not found — will be created automatically on first run")
+            warn(
+                f"Directory {d}/ not found — will be created automatically on first run"
+            )
 
     for f in required_files:
         if os.path.isfile(f):
@@ -143,7 +164,7 @@ def check_config():
 
     # ── Token ──────────────────────────────────────────────────────────────────
     env_token = os.getenv("DISCORD_TOKEN", "")
-    token     = cfg.get("token", "")
+    token = cfg.get("token", "")
 
     if env_token:
         ok("Token: DISCORD_TOKEN env var found (overrides config.json)")
@@ -195,7 +216,9 @@ def check_config():
     if not isinstance(log_http, bool):
         warn("log_http: should be true or false — defaulting to false")
     else:
-        ok(f"log_http: {str(log_http).lower()}  {'(verbose HTTP logging ON)' if log_http else '(discord.http at WARNING — normal)'}")
+        ok(
+            f"log_http: {str(log_http).lower()}  {'(verbose HTTP logging ON)' if log_http else '(discord.http at WARNING — normal)'}"
+        )
 
     # ── Owner ID ───────────────────────────────────────────────────────────────
     owner_id = cfg.get("owner_id")
@@ -205,7 +228,9 @@ def check_config():
         err(f"owner_id: '{owner_id}' is not a valid Discord user ID (must be a number)")
         all_good = False
     else:
-        ok(f"owner_id: {owner_id} (overrides application owner for !reload / !shutdown / etc.)")
+        ok(
+            f"owner_id: {owner_id} (overrides application owner for !reload / !shutdown / etc.)"
+        )
 
     return all_good
 
@@ -245,8 +270,10 @@ def check_logs_dir():
         )
         if log_files:
             latest = log_files[0]
-            size   = os.path.getsize(os.path.join("logs", latest))
-            ok(f"logs/ exists  ({len(log_files)} file(s), latest: {latest} [{size // 1024} KB])")
+            size = os.path.getsize(os.path.join("logs", latest))
+            ok(
+                f"logs/ exists  ({len(log_files)} file(s), latest: {latest} [{size // 1024} KB])"
+            )
         else:
             ok("logs/ exists (empty — log file created on first run)")
     else:
@@ -265,9 +292,10 @@ def check_logs_dir():
 
 # ══════════════════════════════════════════════════════════════════════════════
 
+
 def main():
     print(_c("1;36", "\n⚡ NanoBot — Pre-flight Check"))
-    print(_c("90",   "   Small. Fast. Built for Mobile Mods.\n"))
+    print(_c("90", "   Small. Fast. Built for Mobile Mods.\n"))
 
     results = [
         check_python(),
@@ -286,13 +314,19 @@ def main():
         print(_c("1;32", "  ✅ All checks passed!"))
     else:
         count = sum(1 for r in results if not r)
-        print(_c("1;31", f"  ❌ {count} check(s) failed — resolve the issues above first."))
+        print(
+            _c(
+                "1;31",
+                f"  ❌ {count} check(s) failed — resolve the issues above first.",
+            )
+        )
 
     check_only = "--check" in sys.argv
 
     if passed and not check_only:
         print(_c("90", "\n  Launching NanoBot in 2 seconds...  (Ctrl+C to cancel)\n"))
         import time
+
         try:
             time.sleep(2)
         except KeyboardInterrupt:
@@ -303,7 +337,7 @@ def main():
         import importlib.util as ilu
 
         spec = ilu.spec_from_file_location("main", "main.py")
-        mod  = ilu.module_from_spec(spec)
+        mod = ilu.module_from_spec(spec)
         spec.loader.exec_module(mod)
         asyncio.run(mod.main())
 

@@ -52,6 +52,7 @@ _CDN_HOSTS = ("cdn.discordapp.com", "media.discordapp.net", "attachments.discord
 
 # ── Data helpers ───────────────────────────────────────────────────────────────
 
+
 def _norm(v) -> dict:
     """Upgrade legacy plain-string tags to dict shape."""
     if isinstance(v, str):
@@ -91,9 +92,9 @@ def _resolve_image(ctx, attachment, image_url) -> tuple[str | None, str | None]:
 def _tag_embed(tag: dict, name: str, guild_name: str, *, prefix="📌") -> discord.Embed:
     """Build a rich embed for tags whose content fits (≤1500 chars)."""
     e = discord.Embed(
-        title       = f"{prefix}  [{guild_name}]  {name}",
-        description = tag.get("content") or None,
-        color       = h.BLUE,
+        title=f"{prefix}  [{guild_name}]  {name}",
+        description=tag.get("content") or None,
+        color=h.BLUE,
     )
     if tag.get("image_url"):
         e.set_image(url=tag["image_url"])
@@ -103,8 +104,8 @@ def _tag_embed(tag: dict, name: str, guild_name: str, *, prefix="📌") -> disco
 
 async def _send_tag(
     target,
-    tag:   dict,
-    name:  str,
+    tag: dict,
+    name: str,
     guild_name: str,
     *,
     reply: bool = True,
@@ -113,14 +114,14 @@ async def _send_tag(
     Send a tag. Content <= 1500 chars uses a rich embed.
     Content 1501-2000 falls back to plain text so nothing gets cut off.
     """
-    text    = tag.get("content") or ""
+    text = tag.get("content") or ""
     img_url = tag.get("image_url")
-    send    = getattr(target, "reply" if reply else "send", None) or target.send
+    send = getattr(target, "reply" if reply else "send", None) or target.send
 
     if len(text) > 1500:
-        nl     = chr(10)
+        nl = chr(10)
         header = "📌 **[" + guild_name + "]  " + name + "**"
-        body   = header + nl + nl + text
+        body = header + nl + nl + text
         if img_url:
             body += nl + img_url
         await send(body)
@@ -216,7 +217,9 @@ class Tags(commands.Cog):
                     ephemeral=True,
                 )
             tag_name, _, tag_content = rest.partition("|")
-            await self._do_create_global(ctx, tag_name.strip(), tag_content.strip() or None)
+            await self._do_create_global(
+                ctx, tag_name.strip(), tag_content.strip() or None
+            )
 
         # ── Fallback: full args is the tag name (supports spaces) ─────────────
         # !tag server rules  →  looks up tag named "server rules"
@@ -231,18 +234,18 @@ class Tags(commands.Cog):
         description="Create a personal tag with optional image.",
     )
     @app_commands.describe(
-        name      = "Tag name (max 32 chars)",
-        content   = "Tag text (max 2000 chars) — optional if an image is provided",
-        image     = "Attach an image file",
-        image_url = "Or paste a direct image URL (https://...)",
+        name="Tag name (max 32 chars)",
+        content="Tag text (max 2000 chars) — optional if an image is provided",
+        image="Attach an image file",
+        image_url="Or paste a direct image URL (https://...)",
     )
     async def tag_create(
         self,
-        ctx:       commands.Context,
-        name:      str,
-        content:   Optional[str]               = None,
-        image:     Optional[discord.Attachment] = None,
-        image_url: Optional[str]               = None,
+        ctx: commands.Context,
+        name: str,
+        content: Optional[str] = None,
+        image: Optional[discord.Attachment] = None,
+        image_url: Optional[str] = None,
     ):
         img_url, img_warn = _resolve_image(ctx, image, image_url)
         if img_url is None and img_warn:
@@ -257,24 +260,26 @@ class Tags(commands.Cog):
         description="Create a global server tag usable by anyone. Mods only.",
     )
     @app_commands.describe(
-        name      = "Tag name (max 32 chars)",
-        content   = "Tag content (max 2000 chars) — optional if an image is provided",
-        image     = "Attach an image file",
-        image_url = "Or paste a direct image URL",
+        name="Tag name (max 32 chars)",
+        content="Tag content (max 2000 chars) — optional if an image is provided",
+        image="Attach an image file",
+        image_url="Or paste a direct image URL",
     )
     @commands.has_permissions(manage_messages=True)
     async def tag_global(
         self,
-        ctx:       commands.Context,
-        name:      str,
-        content:   Optional[str]               = None,
-        image:     Optional[discord.Attachment] = None,
-        image_url: Optional[str]               = None,
+        ctx: commands.Context,
+        name: str,
+        content: Optional[str] = None,
+        image: Optional[discord.Attachment] = None,
+        image_url: Optional[str] = None,
     ):
         img_url, img_warn = _resolve_image(ctx, image, image_url)
         if img_url is None and img_warn:
             return await ctx.reply(embed=h.err(img_warn), ephemeral=True)
-        await self._do_create_global(ctx, name, content, img_url=img_url, img_warn=img_warn)
+        await self._do_create_global(
+            ctx, name, content, img_url=img_url, img_warn=img_warn
+        )
 
     # ══════════════════════════════════════════════════════════════════════════
     #  /tag use
@@ -284,13 +289,13 @@ class Tags(commands.Cog):
         description="Post a tag in this channel, or DM it to a specific user.",
     )
     @app_commands.describe(
-        name    = "Tag name",
-        dm_user = "DM the tag to this user instead of posting it here",
+        name="Tag name",
+        dm_user="DM the tag to this user instead of posting it here",
     )
     async def tag_use(
         self,
-        ctx:     commands.Context,
-        name:    str,
+        ctx: commands.Context,
+        name: str,
         dm_user: Optional[discord.Member] = None,
     ):
         await self._do_use(ctx, name.lower().strip(), dm_user=dm_user)
@@ -305,19 +310,24 @@ class Tags(commands.Cog):
     @app_commands.describe(name="Tag name to preview")
     async def tag_preview(self, ctx: commands.Context, name: str):
         name = name.lower().strip()
-        tag  = await db.get_tag(ctx.guild.id, name, ctx.author.id)
+        tag = await db.get_tag(ctx.guild.id, name, ctx.author.id)
         if not tag:
-            return await ctx.reply(embed=h.err(f"No tag named `{name}` found."), ephemeral=True)
+            return await ctx.reply(
+                embed=h.err(f"No tag named `{name}` found."), ephemeral=True
+            )
         # Always ephemeral so only the invoker sees the preview
-        text    = tag.get("content") or ""
+        text = tag.get("content") or ""
         img_url = tag.get("image_url")
         if len(text) > 1500:
             await ctx.reply(
-                f"📌 **[{ctx.guild.name}]  {name}**\n\n{text}" + (f"\n{img_url}" if img_url else ""),
+                f"📌 **[{ctx.guild.name}]  {name}**\n\n{text}"
+                + (f"\n{img_url}" if img_url else ""),
                 ephemeral=True,
             )
         else:
-            await ctx.reply(embed=_tag_embed(tag, name, ctx.guild.name, prefix="👁️"), ephemeral=True)
+            await ctx.reply(
+                embed=_tag_embed(tag, name, ctx.guild.name, prefix="👁️"), ephemeral=True
+            )
 
     # ══════════════════════════════════════════════════════════════════════════
     #  /tag edit
@@ -327,35 +337,41 @@ class Tags(commands.Cog):
         description="Edit a tag's content and/or image.",
     )
     @app_commands.describe(
-        name        = "Tag name",
-        new_content = "New text content (max 2000 chars — leave blank to keep existing)",
-        image       = "New image attachment (leave blank to keep existing)",
-        image_url   = "New image URL — or type 'remove' to clear the image",
+        name="Tag name",
+        new_content="New text content (max 2000 chars — leave blank to keep existing)",
+        image="New image attachment (leave blank to keep existing)",
+        image_url="New image URL — or type 'remove' to clear the image",
     )
     async def tag_edit(
         self,
-        ctx:         commands.Context,
-        name:        str,
-        new_content: Optional[str]               = None,
-        image:       Optional[discord.Attachment] = None,
-        image_url:   Optional[str]               = None,
+        ctx: commands.Context,
+        name: str,
+        new_content: Optional[str] = None,
+        image: Optional[discord.Attachment] = None,
+        image_url: Optional[str] = None,
     ):
         name = name.lower().strip()
-        uid  = str(ctx.author.id)
+        uid = str(ctx.author.id)
 
         # Determine scope
         if await db.tag_exists(ctx.guild.id, uid, name):
             scope = uid
-        elif ctx.author.guild_permissions.manage_messages and await db.tag_exists(ctx.guild.id, "global", name):
+        elif ctx.author.guild_permissions.manage_messages and await db.tag_exists(
+            ctx.guild.id, "global", name
+        ):
             scope = "global"
         else:
             return await ctx.reply(
-                embed=h.err(f"Tag `{name}` not found or you don't have permission to edit it."),
+                embed=h.err(
+                    f"Tag `{name}` not found or you don't have permission to edit it."
+                ),
                 ephemeral=True,
             )
 
         if new_content is not None and len(new_content) > 2000:
-            return await ctx.reply(embed=h.err("Content must be 2000 characters or fewer."), ephemeral=True)
+            return await ctx.reply(
+                embed=h.err("Content must be 2000 characters or fewer."), ephemeral=True
+            )
 
         changes = []
 
@@ -374,20 +390,25 @@ class Tags(commands.Cog):
                 await db.update_tag_image(ctx.guild.id, scope, name, img_url)
                 changes.append("🖼️ Image updated")
                 if img_warn:
-                    await ctx.send(embed=h.warn(img_warn, "⚠️ CDN Warning"), ephemeral=True)
+                    await ctx.send(
+                        embed=h.warn(img_warn, "⚠️ CDN Warning"), ephemeral=True
+                    )
             elif img_warn:
                 return await ctx.reply(embed=h.err(img_warn), ephemeral=True)
 
         if not changes:
             return await ctx.reply(
-                embed=h.warn("Nothing to change — provide new_content, image, or image_url."),
+                embed=h.warn(
+                    "Nothing to change — provide new_content, image, or image_url."
+                ),
                 ephemeral=True,
             )
 
         scope_label = "personal" if scope == uid else "global"
         await ctx.reply(
             embed=h.ok(
-                f"{scope_label.title()} tag **{name}** updated.\n" + "  ·  ".join(changes),
+                f"{scope_label.title()} tag **{name}** updated.\n"
+                + "  ·  ".join(changes),
                 "✏️ Tag Edited",
             ),
             ephemeral=True,
@@ -407,7 +428,9 @@ class Tags(commands.Cog):
     # ══════════════════════════════════════════════════════════════════════════
     #  /tag list
     # ══════════════════════════════════════════════════════════════════════════
-    @tag.command(name="list", description="List your personal tags and global server tags.")
+    @tag.command(
+        name="list", description="List your personal tags and global server tags."
+    )
     async def tag_list(self, ctx: commands.Context):
         await self._show_list(ctx)
 
@@ -417,25 +440,32 @@ class Tags(commands.Cog):
 
     async def _do_create(
         self,
-        ctx:      commands.Context,
-        name:     str,
-        content:  str | None,
+        ctx: commands.Context,
+        name: str,
+        content: str | None,
         *,
-        img_url:  str | None = None,
+        img_url: str | None = None,
         img_warn: str | None = None,
     ):
-        name    = name.lower().strip()
+        name = name.lower().strip()
         content = content.strip() if content else None
 
         if len(name) > 32:
-            return await ctx.reply(embed=h.err("Tag name must be 32 characters or fewer."), ephemeral=True)
+            return await ctx.reply(
+                embed=h.err("Tag name must be 32 characters or fewer."), ephemeral=True
+            )
         if not content and not img_url:
             return await ctx.reply(
-                embed=h.err("A tag needs at least some text or an image — you can't have both empty."),
+                embed=h.err(
+                    "A tag needs at least some text or an image — you can't have both empty."
+                ),
                 ephemeral=True,
             )
         if content and len(content) > 2000:
-            return await ctx.reply(embed=h.err("Tag content must be 2000 characters or fewer."), ephemeral=True)
+            return await ctx.reply(
+                embed=h.err("Tag content must be 2000 characters or fewer."),
+                ephemeral=True,
+            )
 
         uid = str(ctx.author.id)
 
@@ -464,35 +494,49 @@ class Tags(commands.Cog):
 
     async def _do_create_global(
         self,
-        ctx:      commands.Context,
-        name:     str,
-        content:  str | None,
+        ctx: commands.Context,
+        name: str,
+        content: str | None,
         *,
-        img_url:  str | None = None,
+        img_url: str | None = None,
         img_warn: str | None = None,
     ):
-        name    = name.lower().strip()
+        name = name.lower().strip()
         content = content.strip() if content else None
 
         if len(name) > 32:
-            return await ctx.reply(embed=h.err("Tag name must be 32 characters or fewer."), ephemeral=True)
+            return await ctx.reply(
+                embed=h.err("Tag name must be 32 characters or fewer."), ephemeral=True
+            )
         if not content and not img_url:
             return await ctx.reply(
-                embed=h.err("A tag needs at least some text or an image — you can't have both empty."),
+                embed=h.err(
+                    "A tag needs at least some text or an image — you can't have both empty."
+                ),
                 ephemeral=True,
             )
         if content and len(content) > 2000:
-            return await ctx.reply(embed=h.err("Tag content must be 2000 characters or fewer."), ephemeral=True)
+            return await ctx.reply(
+                embed=h.err("Tag content must be 2000 characters or fewer."),
+                ephemeral=True,
+            )
 
         if await db.tag_exists(ctx.guild.id, "global", name):
             return await ctx.reply(
-                embed=h.err(f"Global tag `{name}` already exists. Use `/tag edit {name}` to update it."),
+                embed=h.err(
+                    f"Global tag `{name}` already exists. Use `/tag edit {name}` to update it."
+                ),
                 ephemeral=True,
             )
 
         await db.set_tag(
-            ctx.guild.id, "global", name, content, img_url,
-            by_id=str(ctx.author.id), by_name=str(ctx.author),
+            ctx.guild.id,
+            "global",
+            name,
+            content,
+            img_url,
+            by_id=str(ctx.author.id),
+            by_name=str(ctx.author),
         )
 
         img_line = "\n🖼️ Image attached." if img_url else ""
@@ -509,13 +553,13 @@ class Tags(commands.Cog):
 
     async def _do_use(
         self,
-        ctx:     commands.Context,
-        name:    str,
+        ctx: commands.Context,
+        name: str,
         *,
         dm_user: Optional[discord.Member] = None,
     ):
         name = name.lower().strip()
-        tag  = await db.get_tag(ctx.guild.id, name, ctx.author.id)
+        tag = await db.get_tag(ctx.guild.id, name, ctx.author.id)
         if not tag:
             return await ctx.reply(
                 embed=h.err(
@@ -531,11 +575,16 @@ class Tags(commands.Cog):
                 await _send_tag(dm_user, tag, name, ctx.guild.name, reply=False)
             except discord.Forbidden:
                 return await ctx.reply(
-                    embed=h.err(f"Couldn't DM **{dm_user.display_name}** — their DMs may be closed."),
+                    embed=h.err(
+                        f"Couldn't DM **{dm_user.display_name}** — their DMs may be closed."
+                    ),
                     ephemeral=True,
                 )
             await ctx.reply(
-                embed=h.ok(f"Tag `{name}` sent to **{dm_user.display_name}** via DM. 📨", "📨 Tag Sent"),
+                embed=h.ok(
+                    f"Tag `{name}` sent to **{dm_user.display_name}** via DM. 📨",
+                    "📨 Tag Sent",
+                ),
                 ephemeral=True,
             )
         else:
@@ -544,23 +593,31 @@ class Tags(commands.Cog):
 
     async def _do_delete(self, ctx: commands.Context, name: str):
         name = name.lower().strip()
-        uid  = str(ctx.author.id)
+        uid = str(ctx.author.id)
 
         if await db.delete_tag(ctx.guild.id, uid, name):
-            return await ctx.reply(embed=h.ok(f"Personal tag **{name}** deleted.", "🗑️ Deleted"), ephemeral=True)
+            return await ctx.reply(
+                embed=h.ok(f"Personal tag **{name}** deleted.", "🗑️ Deleted"),
+                ephemeral=True,
+            )
 
         if ctx.author.guild_permissions.manage_messages:
             if await db.delete_tag(ctx.guild.id, "global", name):
-                return await ctx.reply(embed=h.ok(f"Global tag **{name}** deleted.", "🗑️ Deleted"), ephemeral=True)
+                return await ctx.reply(
+                    embed=h.ok(f"Global tag **{name}** deleted.", "🗑️ Deleted"),
+                    ephemeral=True,
+                )
 
         await ctx.reply(
-            embed=h.err(f"Tag `{name}` not found or you don't have permission to delete it."),
+            embed=h.err(
+                f"Tag `{name}` not found or you don't have permission to delete it."
+            ),
             ephemeral=True,
         )
 
     async def _show_list(self, ctx: commands.Context):
         personal_tags = await db.get_personal_tags(ctx.guild.id, ctx.author.id)
-        global_tags   = await db.get_global_tags(ctx.guild.id)
+        global_tags = await db.get_global_tags(ctx.guild.id)
 
         prefix = self.bot.prefixes.get(str(ctx.guild.id), self.bot.default_prefix)
 
@@ -571,14 +628,27 @@ class Tags(commands.Cog):
             f"🖼️ = has image\n\u200b"
         )
 
-        p_lines = "  ".join(_list_entry(n, t) for n, t in sorted(personal_tags.items())) or "_None yet_"
-        g_lines = "  ".join(_list_entry(n, t) for n, t in sorted(global_tags.items()))   or "_None yet_"
+        p_lines = (
+            "  ".join(_list_entry(n, t) for n, t in sorted(personal_tags.items()))
+            or "_None yet_"
+        )
+        g_lines = (
+            "  ".join(_list_entry(n, t) for n, t in sorted(global_tags.items()))
+            or "_None yet_"
+        )
 
-        e.add_field(name=f"🔒 Your Tags ({len(personal_tags)})",    value=p_lines + "\n\u200b", inline=False)
-        e.add_field(name=f"🌐 Server Tags ({len(global_tags)})", value=g_lines + "\n\u200b", inline=False)
+        e.add_field(
+            name=f"🔒 Your Tags ({len(personal_tags)})",
+            value=p_lines + "\n\u200b",
+            inline=False,
+        )
+        e.add_field(
+            name=f"🌐 Server Tags ({len(global_tags)})",
+            value=g_lines + "\n\u200b",
+            inline=False,
+        )
         e.set_footer(text="Personal tags are only visible to you  ·  NanoBot")
         await ctx.reply(embed=e, ephemeral=True)
-
 
     # ══════════════════════════════════════════════════════════════════════════
     #  /tag export
@@ -601,7 +671,7 @@ class Tags(commands.Cog):
             ensure_ascii=False,
         )
 
-        buf  = io.BytesIO(payload.encode("utf-8"))
+        buf = io.BytesIO(payload.encode("utf-8"))
         file = discord.File(buf, filename=f"tags_{ctx.author.id}.json")
 
         await ctx.reply(
@@ -621,7 +691,9 @@ class Tags(commands.Cog):
         description="Import personal tags from a file exported by /tag export.",
     )
     @app_commands.describe(file="The JSON file produced by /tag export.")
-    async def tag_import(self, ctx: commands.Context, file: Optional[discord.Attachment] = None):
+    async def tag_import(
+        self, ctx: commands.Context, file: Optional[discord.Attachment] = None
+    ):
         # Prefix fallback: check message attachments
         if file is None:
             if ctx.message.attachments:
@@ -642,7 +714,10 @@ class Tags(commands.Cog):
         # Basic sanity checks on the attachment
         if not attachment.filename.endswith(".json"):
             return await ctx.reply(
-                embed=h.err("That doesn't look like a tags export file (expected a .json).", "📦 Import"),
+                embed=h.err(
+                    "That doesn't look like a tags export file (expected a .json).",
+                    "📦 Import",
+                ),
                 ephemeral=True,
             )
         if attachment.size > 512_000:  # 512 KB — very generous for tags
@@ -657,21 +732,26 @@ class Tags(commands.Cog):
             data = json.loads(raw.decode("utf-8"))
         except (UnicodeDecodeError, json.JSONDecodeError):
             return await ctx.reply(
-                embed=h.err("Couldn't read that file — is it a valid tags export?", "📦 Import"),
+                embed=h.err(
+                    "Couldn't read that file — is it a valid tags export?", "📦 Import"
+                ),
                 ephemeral=True,
             )
 
         tags = data.get("tags") if isinstance(data, dict) else None
         if not isinstance(tags, dict) or not tags:
             return await ctx.reply(
-                embed=h.err("No tags found in that file, or the format isn't recognised.", "📦 Import"),
+                embed=h.err(
+                    "No tags found in that file, or the format isn't recognised.",
+                    "📦 Import",
+                ),
                 ephemeral=True,
             )
 
-        scope      = str(ctx.author.id)
-        imported   = 0
-        skipped    = 0
-        bad        = 0
+        scope = str(ctx.author.id)
+        imported = 0
+        skipped = 0
+        bad = 0
 
         for name, meta in tags.items():
             # Validate each tag entry
@@ -679,7 +759,7 @@ class Tags(commands.Cog):
                 bad += 1
                 continue
 
-            content   = meta.get("content")
+            content = meta.get("content")
             image_url = meta.get("image_url")
 
             # Must have at least one of content or image_url, and name must be valid
@@ -699,24 +779,30 @@ class Tags(commands.Cog):
                 continue
 
             await db.set_tag(
-                guild_id  = ctx.guild.id,
-                scope     = scope,
-                name      = name,
-                content   = content,
-                image_url = image_url,
-                by_id     = str(ctx.author.id),
-                by_name   = str(ctx.author),
+                guild_id=ctx.guild.id,
+                scope=scope,
+                name=name,
+                content=content,
+                image_url=image_url,
+                by_id=str(ctx.author.id),
+                by_name=str(ctx.author),
             )
             imported += 1
 
         # Build result summary
         parts = [f"**{imported}** tag(s) imported."]
         if skipped:
-            parts.append(f"**{skipped}** skipped (already exist — use `/tag edit` to update them).")
+            parts.append(
+                f"**{skipped}** skipped (already exist — use `/tag edit` to update them)."
+            )
         if bad:
             parts.append(f"**{bad}** skipped (invalid entries in the file).")
 
-        embed = h.ok("\n".join(parts), "📦 Tags Imported") if imported else h.info("\n".join(parts), "📦 Tags Imported")
+        embed = (
+            h.ok("\n".join(parts), "📦 Tags Imported")
+            if imported
+            else h.info("\n".join(parts), "📦 Tags Imported")
+        )
         await ctx.reply(embed=embed, ephemeral=True)
 
 
