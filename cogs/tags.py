@@ -585,7 +585,7 @@ class Tags(commands.Cog):
     # ══════════════════════════════════════════════════════════════════════════
     @tag.command(
         name="export",
-        description="Download all your personal tags as a JSON file.",
+        description="Download all your personal tags as a JSON file you can re-import later.",
     )
     async def tag_export(self, ctx: commands.Context):
         personal = await db.get_personal_tags(ctx.guild.id, ctx.author.id)
@@ -595,21 +595,123 @@ class Tags(commands.Cog):
                 ephemeral=True,
             )
 
-        clean = personal
-        payload = json.dumps({"exported_by": str(ctx.author), "guild_id": str(ctx.guild.id), "tags": clean}, indent=2, ensure_ascii=False)
+        payload = json.dumps(
+            {"exported_by": str(ctx.author), "tags": personal},
+            indent=2,
+            ensure_ascii=False,
+        )
 
         buf  = io.BytesIO(payload.encode("utf-8"))
         file = discord.File(buf, filename=f"tags_{ctx.author.id}.json")
 
         await ctx.reply(
             embed=h.ok(
-                f"**{len(clean)}** tag(s) exported.\n"
-                "To restore tags, share this file with a bot admin.",
+                f"**{len(personal)}** tag(s) exported.\n"
+                "Use `/tag import` with this file to restore them in any server.",
                 "📦 Tags Exported",
             ),
             file=file,
             ephemeral=True,
         )
+
+    #  /tag import
+    # ══════════════════════════════════════════════════════════════════════════
+    @tag.command(
+        name="import",
+        description="Import personal tags from a file exported by /tag export.",
+    )
+    async def tag_import(self, ctx: commands.Context):
+        if not ctx.message.attachments:
+            return await ctx.reply(
+                embed=h.err(
+                    "Attach your exported tags JSON file to the message.\n"
+                    "Example: `/tag import` with a file attached.",
+                    "📦 Import",
+                ),
+                ephemeral=True,
+            )
+
+        attachment = ctx.message.attachments[0]
+
+        # Basic sanity checks on the attachment
+        if not attachment.filename.endswith(".json"):
+            return await ctx.reply(
+                embed=h.err("That doesn't look like a tags export file (expected a .json).", "📦 Import"),
+                ephemeral=True,
+            )
+        if attachment.size > 512_000:  # 512 KB — very generous for tags
+            return await ctx.reply(
+                embed=h.err("That file is too large to be a tags export.", "📦 Import"),
+                ephemeral=True,
+            )
+
+        # Download and parse
+        try:
+            raw = await attachment.read()
+            data = json.loads(raw.decode("utf-8"))
+        except (UnicodeDecodeError, json.JSONDecodeError):
+            return await ctx.reply(
+                embed=h.err("Couldn't read that file — is it a valid tags export?", "📦 Import"),
+                ephemeral=True,
+            )
+
+        tags = data.get("tags") if isinstance(data, dict) else None
+        if not isinstance(tags, dict) or not tags:
+            return await ctx.reply(
+                embed=h.err("No tags found in that file, or the format isn't recognised.", "📦 Import"),
+                ephemeral=True,
+            )
+
+        scope      = str(ctx.author.id)
+        imported   = 0
+        skipped    = 0
+        bad        = 0
+
+        for name, meta in tags.items():
+            # Validate each tag entry
+            if not isinstance(name, str) or not isinstance(meta, dict):
+                bad += 1
+                continue
+
+            content   = meta.get("content")
+            image_url = meta.get("image_url")
+
+            # Must have at least one of content or image_url, and name must be valid
+            if not name or len(name) > 64:
+                bad += 1
+                continue
+            if not content and not image_url:
+                bad += 1
+                continue
+            if content and len(content) > 2000:
+                bad += 1
+                continue
+
+            # Skip if the user already has a tag with this name in this guild
+            if await db.tag_exists(ctx.guild.id, scope, name):
+                skipped += 1
+                continue
+
+            await db.set_tag(
+                guild_id  = ctx.guild.id,
+                scope     = scope,
+                name      = name,
+                content   = content,
+                image_url = image_url,
+                by_id     = str(ctx.author.id),
+                by_name   = str(ctx.author),
+            )
+            imported += 1
+
+        # Build result summary
+        parts = [f"**{imported}** tag(s) imported."]
+        if skipped:
+            parts.append(f"**{skipped}** skipped (already exist — use `/tag edit` to update them).")
+        if bad:
+            parts.append(f"**{bad}** skipped (invalid entries in the file).")
+
+        embed = h.ok("\n".join(parts), "📦 Tags Imported") if imported else h.info("\n".join(parts), "📦 Tags Imported")
+        await ctx.reply(embed=embed, ephemeral=True)
 
 
 # ── Registration ───────────────────────────────────────────────────────────────
