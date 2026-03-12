@@ -620,18 +620,9 @@ class Tags(commands.Cog):
         name="import",
         description="Import personal tags from a file exported by /tag export.",
     )
-    async def tag_import(self, ctx: commands.Context):
-        if not ctx.message.attachments:
-            return await ctx.reply(
-                embed=h.err(
-                    "Attach your exported tags JSON file to the message.\n"
-                    "Example: `/tag import` with a file attached.",
-                    "📦 Import",
-                ),
-                ephemeral=True,
-            )
-
-        attachment = ctx.message.attachments[0]
+    @app_commands.describe(file="The JSON file produced by /tag export.")
+    async def tag_import(self, ctx: commands.Context, file: discord.Attachment):
+        attachment = file
 
         # Basic sanity checks on the attachment
         if not attachment.filename.endswith(".json"):
