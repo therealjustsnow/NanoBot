@@ -3,28 +3,28 @@ cogs/votes.py — v2.2.0
 Bot list integration for top.gg and discordbotlist.com.
 
 Features:
-  - Posts server count to both sites every 30 minutes
+  - Posts server count to DBL every 30 minutes
   - Receives vote webhooks via an aiohttp HTTP server
   - DMs the user when their vote cooldown resets (opt-out with /vote notify off)
   - Extra reminder slots for voters (50 vs 25)
   - /vote command — links, status, and streak
 
 Config keys (config.json):
-  topgg_token       — top.gg bot token (Authorization header)
+  topgg_v1_token    — top.gg v1 API token (Bearer, from Integrations & API settings)
   dbl_token         — discordbotlist.com bot token
   vote_webhook_port — port to listen on (default 5000)
-  vote_webhook_secret — secret passed in webhook Authorization header
-                        (set the same value in each site's webhook settings)
+  vote_webhook_secret — shared secret for webhook verification
+                        top.gg: HMAC-SHA256 (x-topgg-signature header)
+                        DBL:    plain Authorization header match
 
 Webhook URLs to register on each site:
-  top.gg:            http://YOUR_IP:PORT/webhook/topgg
+  top.gg:             http://YOUR_IP:PORT/webhook/topgg
   discordbotlist.com: http://YOUR_IP:PORT/webhook/dbl
-
-Both sites' webhook payloads are normalised before processing, so the
-reward logic is site-agnostic.
 """
 
 import asyncio
+import hashlib
+import hmac
 import json
 import logging
 import time
@@ -43,8 +43,8 @@ from utils import helpers as h
 log = logging.getLogger("NanoBot.votes")
 
 # ── Constants ──────────────────────────────────────────────────────────────────
-_TOPGG_API   = "https://top.gg/api"
-_DBL_API     = "https://discordbotlist.com/api/v1"
+_TOPGG_API_V1 = "https://top.gg/api/v1"
+_DBL_API      = "https://discordbotlist.com/api/v1"
 
 _TOPGG_VOTE  = "https://top.gg/bot/{bot_id}/vote"
 _DBL_VOTE    = "https://discordbotlist.com/bots/{bot_id}/upvote"
@@ -92,9 +92,9 @@ class Votes(commands.Cog):
 
     def __init__(self, bot: commands.Bot, cfg: dict):
         self.bot             = bot
-        self.topgg_token: str | None = cfg.get("topgg_token")
-        self.dbl_token:   str | None = cfg.get("dbl_token")
-        self.webhook_port: int       = int(cfg.get("vote_webhook_port", 5000))
+        self.topgg_v1_token: str | None = cfg.get("topgg_v1_token")    # v1 — commands sync + future stats
+        self.dbl_token:      str | None = cfg.get("dbl_token")
+        self.webhook_port: int          = int(cfg.get("vote_webhook_port", 5000))
         self.webhook_secret: str | None = cfg.get("vote_webhook_secret")
         self._http_runner: aiohttp.web.AppRunner | None = None
         self._session: aiohttp.ClientSession | None = None
@@ -105,26 +105,31 @@ class Votes(commands.Cog):
         await self._start_webhook_server()
         self.post_stats.start()
         self.notify_loop.start()
-        # Sync commands to DBL once the bot is ready — fire-and-forget task
+        # Sync commands to both sites once the bot is ready — fire-and-forget
         self.bot.loop.create_task(self._sync_dbl_commands())
+        self.bot.loop.create_task(self._sync_topgg_commands())
         log.info("Votes cog loaded — webhook server started, stat loop running")
+
+    async def _fetch_discord_commands(self) -> list | None:
+        """Fetch globally synced commands from Discord's API. Returns None on failure."""
+        await self.bot.wait_until_ready()
+        try:
+            cmds = await self.bot.http.get_global_commands(self.bot.user.id)
+            if not cmds:
+                log.info("Commands sync: no global commands found — skipping")
+                return None
+            return cmds
+        except Exception as exc:
+            log.warning(f"Commands sync: failed to fetch from Discord: {exc}")
+            return None
 
     async def _sync_dbl_commands(self):
         """POST the bot's slash commands to discordbotlist.com once on startup."""
         if not self.dbl_token:
             return
 
-        await self.bot.wait_until_ready()
-
-        # Fetch the globally synced commands from Discord's own API
-        try:
-            app_commands_list = await self.bot.http.get_global_commands(self.bot.user.id)
-        except Exception as exc:
-            log.warning(f"DBL commands sync: failed to fetch commands from Discord: {exc}")
-            return
-
-        if not app_commands_list:
-            log.info("DBL commands sync: no global commands found — skipping")
+        cmds = await self._fetch_discord_commands()
+        if not cmds:
             return
 
         bot_id = self.bot.user.id
@@ -132,15 +137,40 @@ class Votes(commands.Cog):
             async with self._session.post(
                 f"{_DBL_API}/bots/{bot_id}/commands",
                 headers={"Authorization": self.dbl_token},
-                json=app_commands_list,
+                json=cmds,
             ) as r:
                 if r.status == 200:
-                    log.info(f"DBL commands synced: {len(app_commands_list)} command(s) posted")
+                    log.info(f"DBL commands synced: {len(cmds)} command(s) posted")
                 else:
                     body = await r.text()
                     log.warning(f"DBL commands sync failed: HTTP {r.status} — {body[:200]}")
         except Exception as exc:
             log.warning(f"DBL commands sync error: {exc}")
+
+    async def _sync_topgg_commands(self):
+        """POST the bot's slash commands to top.gg using the v1 API."""
+        if not self.topgg_v1_token:
+            return
+
+        cmds = await self._fetch_discord_commands()
+        if not cmds:
+            return
+
+        # top.gg v1 API — endpoint: POST /api/v1/projects/@me/commands
+        # Requires: Authorization: Bearer <v1_token>
+        try:
+            async with self._session.post(
+                f"{_TOPGG_API_V1}/projects/@me/commands",
+                headers={"Authorization": f"Bearer {self.topgg_v1_token}"},
+                json=cmds,
+            ) as r:
+                if r.status in (200, 204):
+                    log.info(f"top.gg commands synced: {len(cmds)} command(s) posted")
+                else:
+                    body = await r.text()
+                    log.warning(f"top.gg commands sync failed: HTTP {r.status} — {body[:200]}")
+        except Exception as exc:
+            log.warning(f"top.gg commands sync error: {exc}")
 
     async def cog_unload(self):
         self.post_stats.cancel()
@@ -165,32 +195,67 @@ class Votes(commands.Cog):
         log.info(f"Vote webhook server listening on :{self.webhook_port}")
 
     def _check_auth(self, request: aiohttp.web.Request) -> bool:
-        """Validate the Authorization header against the configured secret."""
+        """Validate the Authorization header against the configured secret (DBL)."""
         if not self.webhook_secret:
-            return True   # No secret configured — accept all (not recommended for prod)
+            return True
         auth = request.headers.get("Authorization", "")
         return auth == self.webhook_secret
 
+    def _verify_topgg_signature(self, raw_body: bytes, sig_header: str) -> bool:
+        """Verify top.gg v1 HMAC-SHA256 signature.
+
+        Header format: t={unix_timestamp},v1={hmac_sha256_hex}
+        Message:       {timestamp}.{raw_body}
+        """
+        if not self.webhook_secret:
+            return True  # No secret configured — accept all (not recommended for prod)
+
+        try:
+            parts = dict(part.split("=", 1) for part in sig_header.split(","))
+            timestamp = parts["t"]
+            expected  = parts["v1"]
+        except (KeyError, ValueError):
+            return False
+
+        message  = f"{timestamp}.".encode() + raw_body
+        computed = hmac.new(
+            self.webhook_secret.encode(),
+            message,
+            hashlib.sha256,
+        ).hexdigest()
+
+        return hmac.compare_digest(computed, expected)
+
     async def _handle_topgg(self, request: aiohttp.web.Request) -> aiohttp.web.Response:
-        if not self._check_auth(request):
-            log.warning("top.gg webhook: rejected — bad Authorization header")
+        raw_body = await request.read()
+
+        sig_header = request.headers.get("x-topgg-signature", "")
+        if not self._verify_topgg_signature(raw_body, sig_header):
+            log.warning("top.gg webhook: rejected — signature verification failed")
             return aiohttp.web.Response(status=401)
 
         try:
-            data = await request.json()
+            data = json.loads(raw_body)
         except Exception:
             return aiohttp.web.Response(status=400)
 
-        # top.gg payload: {"user": "userid", "type": "upvote"|"test", ...}
-        user_id = int(data.get("user", 0))
-        is_test = data.get("type") == "test"
+        event_type = data.get("type")
 
-        if user_id:
-            log.info(f"top.gg vote received: user={user_id} test={is_test}")
-            if not is_test:
-                await self._process_vote(user_id, "topgg")
-            else:
-                log.info("top.gg test webhook — not recording vote")
+        # top.gg v1 payload: {"type": "vote.create"|"webhook.test", "data": {...}}
+        if event_type == "webhook.test":
+            log.info("top.gg test webhook received — not recording vote")
+            return aiohttp.web.Response(status=200)
+
+        if event_type == "vote.create":
+            try:
+                user_id    = int(data["data"]["user"]["platform_id"])
+                expires_at = data["data"].get("expires_at")  # ISO8601 — for future use
+            except (KeyError, ValueError, TypeError):
+                log.warning("top.gg vote.create: malformed payload")
+                return aiohttp.web.Response(status=400)
+
+            log.info(f"top.gg vote received: user={user_id}")
+            await self._process_vote(user_id, "topgg")
 
         return aiohttp.web.Response(status=200)
 
@@ -257,20 +322,8 @@ class Votes(commands.Cog):
         guild_count = len(self.bot.guilds)
         bot_id = self.bot.user.id
 
-        if self.topgg_token:
-            try:
-                async with self._session.post(
-                    f"{_TOPGG_API}/bots/{bot_id}/stats",
-                    headers={"Authorization": self.topgg_token},
-                    json={"server_count": guild_count},
-                ) as r:
-                    if r.status == 200:
-                        log.info(f"top.gg stats posted: {guild_count} servers")
-                    else:
-                        log.warning(f"top.gg stats post failed: HTTP {r.status}")
-            except Exception as exc:
-                log.warning(f"top.gg stats post error: {exc}")
-
+        # top.gg v1 does not yet have a stats posting endpoint.
+        # DBL stat posting only for now.
         if self.dbl_token:
             try:
                 async with self._session.post(
