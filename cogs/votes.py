@@ -3,7 +3,7 @@ cogs/votes.py — v2.2.0
 Bot list integration for top.gg and discordbotlist.com.
 
 Features:
-  - Posts server count to DBL every 30 minutes
+  - Posts server count to DBL every 12 hours
   - Receives vote webhooks via an aiohttp HTTP server
   - DMs the user when their vote cooldown resets (opt-out with /vote notify off)
   - Extra reminder slots for voters (50 vs 25)
@@ -316,7 +316,7 @@ class Votes(commands.Cog):
         log.info(f"Vote processed: user={user_id} site={site} streak={streak}")
 
     # ── Stat posting loop ──────────────────────────────────────────────────────
-    @tasks.loop(minutes=30)
+    @tasks.loop(minutes=720)
     async def post_stats(self):
         await self.bot.wait_until_ready()
         guild_count = len(self.bot.guilds)
