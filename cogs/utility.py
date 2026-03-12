@@ -9,6 +9,7 @@ Commands:
   info    — runtime stats
   invite  — bot invite link with correct permissions
   about   — what NanoBot is and why it exists
+  source  — view the source code of any bot command
 """
 
 import logging
@@ -403,6 +404,18 @@ _HELP = {
             "desc": "Shows how long NanoBot has been online since its last start or restart.",
             "args": [], "perms": "None", "example": "!uptime",
         },
+        {
+            "name": "source", "aliases": ["src"],
+            "usage": "source [command]", "short": "View the source code of any bot command",
+            "desc": (
+                "Fetches the Python source of a command using inspect.getsource(). "
+                "Short sources are shown inline in a code block; longer ones are sent as a "
+                ".py file attachment so Discord doesn't truncate them. "
+                "Subcommands are supported — e.g. `!source tag create`."
+            ),
+            "args": [("command", "Command name to inspect (blank = usage hint)")],
+            "perms": "None", "example": "!source ban",
+        },
     ],
     "⏰ Reminders": [
         {
@@ -563,6 +576,7 @@ _CATEGORY_ALIASES: dict[str, str] = {
     # 🔍 Server & User Info
     "server": "🔍 Server & User Info", "profile": "🔍 Server & User Info",
     "avatar": "🔍 Server & User Info", "userinfo": "🔍 Server & User Info",
+    "source": "🔍 Server & User Info", "src": "🔍 Server & User Info",
     # ⏰ Reminders
     "reminder": "⏰ Reminders", "reminders": "⏰ Reminders", "remind": "⏰ Reminders",
     # ⚙️ Config & Info
@@ -1377,6 +1391,108 @@ class Utility(commands.Cog):
         )
         e.set_footer(text="NanoBot")
         await ctx.reply(embed=e)
+
+    # ══════════════════════════════════════════════════════════════════════════
+    #  source
+    # ══════════════════════════════════════════════════════════════════════════
+    @commands.command(
+        name="source",
+        aliases=["src"],
+        help=(
+            "Show the source code of any bot command.\n\n"
+            "Examples:\n"
+            "  !source ping\n"
+            "  !source ban\n"
+            "  !source tag create\n\n"
+            "Short sources are shown inline; longer ones arrive as a .py file."
+        ),
+    )
+    @commands.cooldown(1, 5, commands.BucketType.user)
+    async def source(self, ctx: commands.Context, *, command_name: Optional[str] = None):
+        """
+        !source [command]
+
+        Fetches the Python source of a command via inspect.getsource().
+        Short sources are shown inline in a code block; longer ones are sent
+        as a .py file attachment so Discord doesn't truncate them.
+        Subcommands are resolved by their full qualified name, e.g. "tag create".
+        """
+        import inspect
+        import io
+        import os
+        import textwrap
+
+        # ── No argument → usage hint ───────────────────────────────────────────
+        if command_name is None:
+            e = h.embed(
+                title="📄 Source",
+                description=(
+                    "Pass a command name to see its source code.\n"
+                    "Example: `!source ban`\n\n"
+                    "Subcommands work too: `!source tag create`"
+                ),
+                color=h.BLURPLE,
+            )
+            e.set_footer(text="NanoBot  ·  inspect.getsource()")
+            return await ctx.reply(embed=e)
+
+        # ── Resolve the command object ─────────────────────────────────────────
+        cmd = self.bot.get_command(command_name)
+        if cmd is None:
+            e = h.embed(
+                description=f"❌ No command named **{discord.utils.escape_markdown(command_name)}** found.",
+                color=h.RED,
+            )
+            e.set_footer(text="NanoBot")
+            return await ctx.reply(embed=e)
+
+        # ── Pull the source ────────────────────────────────────────────────────
+        try:
+            callback = getattr(cmd, "callback", cmd)
+            raw_source = inspect.getsource(callback)
+        except (OSError, TypeError) as exc:
+            e = h.embed(
+                description=f"❌ Could not retrieve source: `{exc}`",
+                color=h.RED,
+            )
+            e.set_footer(text="NanoBot")
+            return await ctx.reply(embed=e)
+
+        source_text = textwrap.dedent(raw_source)
+
+        # ── File path for the footer ───────────────────────────────────────────
+        try:
+            source_file = inspect.getfile(callback)
+            try:
+                source_file = os.path.relpath(source_file)
+            except ValueError:
+                pass  # Windows cross-drive relpath can fail — keep absolute
+        except (OSError, TypeError):
+            source_file = "<unknown>"
+
+        # ── Inline (≤ ~1950 chars) or file attachment ──────────────────────────
+        if len(source_text) <= 1950:
+            e = h.embed(
+                title=f"📄 Source: `{cmd.qualified_name}`",
+                description=f"```py\n{source_text}\n```",
+                color=h.BLURPLE,
+            )
+            e.set_footer(text=f"{source_file}  ·  NanoBot")
+            return await ctx.reply(embed=e)
+
+        filename = f"{cmd.qualified_name.replace(' ', '_')}.py"
+        file_obj = discord.File(
+            fp=io.BytesIO(source_text.encode()),
+            filename=filename,
+        )
+        e = h.embed(
+            title=f"📄 Source: `{cmd.qualified_name}`",
+            description=f"Source is **{len(source_text):,} chars** — attached as `{filename}`.",
+            color=h.BLURPLE,
+        )
+        e.set_footer(text=f"{source_file}  ·  NanoBot")
+        await ctx.reply(embed=e, file=file_obj)
+
 
 # ── Registration ───────────────────────────────────────────────────────────────
 async def setup(bot: commands.Bot):
