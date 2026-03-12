@@ -38,6 +38,7 @@ _ALL_COGS = (
     "cogs.warnings",
     "cogs.welcome",
     "cogs.admin",
+    "cogs.votes",
 )
 
 _VALID_LEVELS = ("DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL")
