@@ -53,17 +53,17 @@ log = logging.getLogger("NanoBot.automod")
 TIMEOUT_SECONDS = 600  # 10 minutes for the "timeout" action
 
 RULE_LABELS: dict[str, str] = {
-    "spam":     "💬 Spam",
-    "invites":  "📨 Invite Links",
-    "links":    "🔗 External Links",
-    "caps":     "🔠 Caps Abuse",
+    "spam": "💬 Spam",
+    "invites": "📨 Invite Links",
+    "links": "🔗 External Links",
+    "caps": "🔠 Caps Abuse",
     "mentions": "📣 Mass Mentions",
     "badwords": "🤬 Bad Words",
 }
 
 ACTION_LABELS: dict[str, str] = {
-    "delete":  "🗑️ Delete",
-    "warn":    "⚠️ Delete + Warn",
+    "delete": "🗑️ Delete",
+    "warn": "⚠️ Delete + Warn",
     "timeout": "🔇 Delete + Timeout",
 }
 
@@ -90,7 +90,7 @@ def _check_spam(guild_id: int, user_id: int, count: int, window: int) -> bool:
     (sent `count` or more messages within the last `window` seconds).
     """
     now = time.monotonic()
-    q   = _spam_tracker[guild_id][user_id]
+    q = _spam_tracker[guild_id][user_id]
     q.append(now)
     cutoff = now - window
     while q and q[0] < cutoff:
@@ -104,6 +104,7 @@ def _clear_spam(guild_id: int, user_id: int) -> None:
 
 
 # ── Rule-check helpers ─────────────────────────────────────────────────────────
+
 
 def _has_invite(content: str) -> bool:
     return bool(_RE_INVITE.search(content))
@@ -135,18 +136,19 @@ def _has_badword(content: str, words: list[str]) -> str | None:
 
 # ── Action executor ────────────────────────────────────────────────────────────
 
+
 async def _execute_action(
-    message:  discord.Message,
-    action:   str,
-    rule:     str,
-    detail:   str,
+    message: discord.Message,
+    action: str,
+    rule: str,
+    detail: str,
 ) -> None:
     """
     Delete the offending message and optionally warn/timeout the author.
     Silently handles permission errors so a missing perm never crashes the listener.
     """
     member = message.author
-    guild  = message.guild
+    guild = message.guild
 
     # Always delete first
     try:
@@ -166,7 +168,9 @@ async def _execute_action(
                 color=h.YELLOW,
             )
         )
-        asyncio.get_event_loop().call_later(6, asyncio.ensure_future, _soft_delete(notice))
+        asyncio.get_event_loop().call_later(
+            6, asyncio.ensure_future, _soft_delete(notice)
+        )
     except (discord.Forbidden, discord.HTTPException):
         pass
 
@@ -174,8 +178,11 @@ async def _execute_action(
         now = datetime.now(timezone.utc)
         try:
             count = await db.add_warning(
-                guild.id, member.id, reason_text,
-                "AutoMod", "AutoMod",
+                guild.id,
+                member.id,
+                reason_text,
+                "AutoMod",
+                "AutoMod",
                 now.isoformat(),
             )
             log.info(
@@ -196,7 +203,9 @@ async def _execute_action(
                     pass
             elif warn_cfg["kick_at"] and count >= warn_cfg["kick_at"]:
                 try:
-                    await guild.kick(member, reason=f"NanoBot auto-kick: {count} warnings (AutoMod)")
+                    await guild.kick(
+                        member, reason=f"NanoBot auto-kick: {count} warnings (AutoMod)"
+                    )
                 except discord.Forbidden:
                     pass
 
@@ -205,7 +214,9 @@ async def _execute_action(
 
     if action == "timeout":
         try:
-            until = discord.utils.utcnow() + __import__("datetime").timedelta(seconds=TIMEOUT_SECONDS)
+            until = discord.utils.utcnow() + __import__("datetime").timedelta(
+                seconds=TIMEOUT_SECONDS
+            )
             await member.timeout(until, reason=reason_text)
             log.info(f"AutoMod timed out {member} ({member.id}) in {guild} — {rule}")
         except discord.Forbidden:
@@ -222,6 +233,7 @@ async def _soft_delete(message: discord.Message) -> None:
 
 
 # ── Autocomplete helpers ───────────────────────────────────────────────────────
+
 
 async def _rule_autocomplete(
     interaction: discord.Interaction,
@@ -274,7 +286,9 @@ class AutoMod(commands.Cog):
     )
 
     # ── /automod status ────────────────────────────────────────────────────────
-    @automod_group.command(name="status", description="Show the current AutoMod configuration.")
+    @automod_group.command(
+        name="status", description="Show the current AutoMod configuration."
+    )
     @has_admin_perms()
     async def am_status(self, interaction: discord.Interaction):
         cfg = await db.get_automod_config(interaction.guild_id)
@@ -291,14 +305,16 @@ class AutoMod(commands.Cog):
             return
 
         status = "🟢 Enabled" if cfg["enabled"] else "🔴 Disabled"
-        rules  = cfg["rules"]
-        lines  = [f"**Status:** {status}\n"]
+        rules = cfg["rules"]
+        lines = [f"**Status:** {status}\n"]
 
         for key, label in RULE_LABELS.items():
             r = rules.get(key, {})
             if r.get("enabled"):
-                action = ACTION_LABELS.get(r.get("action", "delete"), r.get("action", "delete"))
-                extra  = ""
+                action = ACTION_LABELS.get(
+                    r.get("action", "delete"), r.get("action", "delete")
+                )
+                extra = ""
                 if key == "spam":
                     extra = f" · {r.get('count', 5)} msgs / {r.get('seconds', 5)}s"
                 elif key == "caps":
@@ -310,8 +326,8 @@ class AutoMod(commands.Cog):
                 lines.append(f"❌ ~~{label}~~")
 
         # Ignores
-        ignore_chs  = cfg.get("ignore_channels", [])
-        ignore_rls  = cfg.get("ignore_roles", [])
+        ignore_chs = cfg.get("ignore_channels", [])
+        ignore_rls = cfg.get("ignore_roles", [])
         if ignore_chs or ignore_rls:
             lines.append("")
             if ignore_chs:
@@ -339,7 +355,9 @@ class AutoMod(commands.Cog):
         )
 
     # ── /automod disable ───────────────────────────────────────────────────────
-    @automod_group.command(name="disable", description="Disable AutoMod for this server.")
+    @automod_group.command(
+        name="disable", description="Disable AutoMod for this server."
+    )
     @has_admin_perms()
     async def am_disable(self, interaction: discord.Interaction):
         await db.set_automod_enabled(interaction.guild_id, False)
@@ -350,38 +368,46 @@ class AutoMod(commands.Cog):
         )
 
     # ── /automod rule ──────────────────────────────────────────────────────────
-    @automod_group.command(name="rule", description="Toggle a rule on/off and set its action.")
+    @automod_group.command(
+        name="rule", description="Toggle a rule on/off and set its action."
+    )
     @app_commands.describe(
-        rule    = "Which rule to configure",
-        enabled = "Turn this rule on or off",
-        action  = "What to do when the rule triggers",
+        rule="Which rule to configure",
+        enabled="Turn this rule on or off",
+        action="What to do when the rule triggers",
     )
     @app_commands.autocomplete(rule=_rule_autocomplete, action=_action_autocomplete)
     @has_admin_perms()
     async def am_rule(
         self,
         interaction: discord.Interaction,
-        rule:        str,
-        enabled:     bool,
-        action:      str = "delete",
+        rule: str,
+        enabled: bool,
+        action: str = "delete",
     ):
         if rule not in RULE_LABELS:
             await interaction.response.send_message(
-                embed=h.err(f"Unknown rule `{rule}`. Valid rules: {', '.join(RULE_LABELS)}"),
+                embed=h.err(
+                    f"Unknown rule `{rule}`. Valid rules: {', '.join(RULE_LABELS)}"
+                ),
                 ephemeral=True,
             )
             return
         if action not in ACTION_LABELS:
             await interaction.response.send_message(
-                embed=h.err(f"Unknown action `{action}`. Valid actions: {', '.join(ACTION_LABELS)}"),
+                embed=h.err(
+                    f"Unknown action `{action}`. Valid actions: {', '.join(ACTION_LABELS)}"
+                ),
                 ephemeral=True,
             )
             return
 
-        await db.set_automod_rule(interaction.guild_id, rule, enabled=enabled, action=action)
+        await db.set_automod_rule(
+            interaction.guild_id, rule, enabled=enabled, action=action
+        )
         self._invalidate(interaction.guild_id)
 
-        state  = "enabled" if enabled else "disabled"
+        state = "enabled" if enabled else "disabled"
         a_label = ACTION_LABELS[action]
         await interaction.response.send_message(
             embed=h.ok(
@@ -397,17 +423,19 @@ class AutoMod(commands.Cog):
         description="Set the spam detection threshold (messages per time window).",
     )
     @app_commands.describe(
-        count   = "Number of messages that triggers the rule (e.g. 5)",
-        seconds = "Time window in seconds (e.g. 5)",
+        count="Number of messages that triggers the rule (e.g. 5)",
+        seconds="Time window in seconds (e.g. 5)",
     )
     @has_admin_perms()
     async def am_spam(
         self,
         interaction: discord.Interaction,
-        count:       app_commands.Range[int, 2, 30],
-        seconds:     app_commands.Range[int, 2, 60],
+        count: app_commands.Range[int, 2, 30],
+        seconds: app_commands.Range[int, 2, 60],
     ):
-        await db.set_automod_rule(interaction.guild_id, "spam", count=count, seconds=seconds)
+        await db.set_automod_rule(
+            interaction.guild_id, "spam", count=count, seconds=seconds
+        )
         self._invalidate(interaction.guild_id)
         await interaction.response.send_message(
             embed=h.ok(
@@ -423,19 +451,21 @@ class AutoMod(commands.Cog):
         description="Configure the caps-abuse filter.",
     )
     @app_commands.describe(
-        percent    = "Minimum uppercase % to trigger (e.g. 70)",
-        min_length = "Minimum message length in characters before checking caps (e.g. 10)",
+        percent="Minimum uppercase % to trigger (e.g. 70)",
+        min_length="Minimum message length in characters before checking caps (e.g. 10)",
     )
     @has_admin_perms()
     async def am_caps(
         self,
         interaction: discord.Interaction,
-        percent:     app_commands.Range[int, 10, 100] = 70,
-        min_length:  app_commands.Range[int, 5, 200]  = 10,
+        percent: app_commands.Range[int, 10, 100] = 70,
+        min_length: app_commands.Range[int, 5, 200] = 10,
     ):
         await db.set_automod_rule(
-            interaction.guild_id, "caps",
-            percent=percent, min_length=min_length,
+            interaction.guild_id,
+            "caps",
+            percent=percent,
+            min_length=min_length,
         )
         self._invalidate(interaction.guild_id)
         await interaction.response.send_message(
@@ -451,12 +481,14 @@ class AutoMod(commands.Cog):
         name="mentions",
         description="Set the max @mentions allowed in a single message.",
     )
-    @app_commands.describe(limit="Trigger if a message has this many mentions or more (e.g. 5)")
+    @app_commands.describe(
+        limit="Trigger if a message has this many mentions or more (e.g. 5)"
+    )
     @has_admin_perms()
     async def am_mentions(
         self,
         interaction: discord.Interaction,
-        limit:       app_commands.Range[int, 2, 30] = 5,
+        limit: app_commands.Range[int, 2, 30] = 5,
     ):
         await db.set_automod_rule(interaction.guild_id, "mentions", limit=limit)
         self._invalidate(interaction.guild_id)
@@ -481,7 +513,9 @@ class AutoMod(commands.Cog):
     async def bw_add(self, interaction: discord.Interaction, word: str):
         word = word.lower().strip()
         if not word:
-            await interaction.response.send_message(embed=h.err("Word cannot be empty."), ephemeral=True)
+            await interaction.response.send_message(
+                embed=h.err("Word cannot be empty."), ephemeral=True
+            )
             return
         added = await db.add_automod_badword(interaction.guild_id, word)
         if added:
@@ -503,7 +537,9 @@ class AutoMod(commands.Cog):
         removed = await db.remove_automod_badword(interaction.guild_id, word)
         if removed:
             await interaction.response.send_message(
-                embed=h.ok(f"Removed `{word}` from the bad-word filter.", "🤬 Word Removed"),
+                embed=h.ok(
+                    f"Removed `{word}` from the bad-word filter.", "🤬 Word Removed"
+                ),
                 ephemeral=True,
             )
         else:
@@ -512,7 +548,9 @@ class AutoMod(commands.Cog):
                 ephemeral=True,
             )
 
-    @badword_group.command(name="list", description="List all filtered words (shown only to you).")
+    @badword_group.command(
+        name="list", description="List all filtered words (shown only to you)."
+    )
     @has_admin_perms()
     async def bw_list(self, interaction: discord.Interaction):
         words = await db.get_automod_badwords(interaction.guild_id)
@@ -523,7 +561,9 @@ class AutoMod(commands.Cog):
             )
             return
         listed = "\n".join(f"• `{w}`" for w in sorted(words))
-        e = h.embed("🤬 Bad Word Filter", f"**{len(words)} word(s):**\n\n{listed}", h.BLUE)
+        e = h.embed(
+            "🤬 Bad Word Filter", f"**{len(words)} word(s):**\n\n{listed}", h.BLUE
+        )
         await interaction.response.send_message(embed=e, ephemeral=True)
 
     # ── /automod ignore ────────────────────────────────────────────────────────
@@ -541,16 +581,24 @@ class AutoMod(commands.Cog):
         interaction: discord.Interaction,
         channel: discord.TextChannel,
     ):
-        toggled = await db.toggle_automod_ignore(interaction.guild_id, "channel", channel.id)
+        toggled = await db.toggle_automod_ignore(
+            interaction.guild_id, "channel", channel.id
+        )
         self._invalidate(interaction.guild_id)
         if toggled == "added":
             await interaction.response.send_message(
-                embed=h.ok(f"{channel.mention} is now **exempt** from AutoMod.", "✅ Channel Exempted"),
+                embed=h.ok(
+                    f"{channel.mention} is now **exempt** from AutoMod.",
+                    "✅ Channel Exempted",
+                ),
                 ephemeral=True,
             )
         else:
             await interaction.response.send_message(
-                embed=h.ok(f"{channel.mention} is **no longer exempt** from AutoMod.", "🔄 Exemption Removed"),
+                embed=h.ok(
+                    f"{channel.mention} is **no longer exempt** from AutoMod.",
+                    "🔄 Exemption Removed",
+                ),
                 ephemeral=True,
             )
 
@@ -562,12 +610,18 @@ class AutoMod(commands.Cog):
         self._invalidate(interaction.guild_id)
         if toggled == "added":
             await interaction.response.send_message(
-                embed=h.ok(f"{role.mention} is now **exempt** from AutoMod.", "✅ Role Exempted"),
+                embed=h.ok(
+                    f"{role.mention} is now **exempt** from AutoMod.",
+                    "✅ Role Exempted",
+                ),
                 ephemeral=True,
             )
         else:
             await interaction.response.send_message(
-                embed=h.ok(f"{role.mention} is **no longer exempt** from AutoMod.", "🔄 Exemption Removed"),
+                embed=h.ok(
+                    f"{role.mention} is **no longer exempt** from AutoMod.",
+                    "🔄 Exemption Removed",
+                ),
                 ephemeral=True,
             )
 
@@ -597,18 +651,20 @@ class AutoMod(commands.Cog):
         if member_role_ids & set(cfg.get("ignore_roles", [])):
             return
 
-        rules   = cfg["rules"]
+        rules = cfg["rules"]
         content = message.content or ""
 
         # ── Spam ──────────────────────────────────────────────────────────────
         r = rules.get("spam", {})
         if r.get("enabled"):
-            count   = r.get("count", 5)
+            count = r.get("count", 5)
             seconds = r.get("seconds", 5)
             if _check_spam(message.guild.id, message.author.id, count, seconds):
                 _clear_spam(message.guild.id, message.author.id)
                 await _execute_action(
-                    message, r.get("action", "warn"), "spam",
+                    message,
+                    r.get("action", "warn"),
+                    "spam",
                     f"{count} messages in {seconds}s",
                 )
                 return  # one action per message
@@ -617,7 +673,9 @@ class AutoMod(commands.Cog):
         r = rules.get("invites", {})
         if r.get("enabled") and _has_invite(content):
             await _execute_action(
-                message, r.get("action", "delete"), "invites",
+                message,
+                r.get("action", "delete"),
+                "invites",
                 "Discord invite link",
             )
             return
@@ -626,7 +684,9 @@ class AutoMod(commands.Cog):
         r = rules.get("links", {})
         if r.get("enabled") and _has_link(content) and not _has_invite(content):
             await _execute_action(
-                message, r.get("action", "delete"), "links",
+                message,
+                r.get("action", "delete"),
+                "links",
                 "External URL",
             )
             return
@@ -638,7 +698,9 @@ class AutoMod(commands.Cog):
             threshold = r.get("percent", 70)
             if len(content) >= min_len and _caps_percent(content) >= threshold:
                 await _execute_action(
-                    message, r.get("action", "warn"), "caps",
+                    message,
+                    r.get("action", "warn"),
+                    "caps",
                     f">{threshold}% uppercase",
                 )
                 return
@@ -649,7 +711,9 @@ class AutoMod(commands.Cog):
             limit = r.get("limit", 5)
             if _mention_count(message) >= limit:
                 await _execute_action(
-                    message, r.get("action", "warn"), "mentions",
+                    message,
+                    r.get("action", "warn"),
+                    "mentions",
                     f"{_mention_count(message)} mentions",
                 )
                 return
@@ -661,7 +725,9 @@ class AutoMod(commands.Cog):
             match = _has_badword(content, words)
             if match:
                 await _execute_action(
-                    message, r.get("action", "delete"), "badwords",
+                    message,
+                    r.get("action", "delete"),
+                    "badwords",
                     f"Filtered word",
                 )
                 return

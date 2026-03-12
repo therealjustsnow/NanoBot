@@ -54,18 +54,18 @@ ALL_EVENTS: list[str] = [
 ]
 
 EVENT_LABELS: dict[str, str] = {
-    "msg_delete":     "🗑️  Message Deleted",
-    "msg_edit":       "✏️  Message Edited",
-    "member_join":    "📥  Member Joined",
-    "member_leave":   "📤  Member Left",
-    "member_ban":     "🔨  Member Banned",
-    "member_unban":   "🔓  Member Unbanned",
-    "nick_change":    "📝  Nickname Changed",
-    "role_update":    "🎭  Roles Updated",
+    "msg_delete": "🗑️  Message Deleted",
+    "msg_edit": "✏️  Message Edited",
+    "member_join": "📥  Member Joined",
+    "member_leave": "📤  Member Left",
+    "member_ban": "🔨  Member Banned",
+    "member_unban": "🔓  Member Unbanned",
+    "nick_change": "📝  Nickname Changed",
+    "role_update": "🎭  Roles Updated",
     "channel_create": "📢  Channel Created",
     "channel_delete": "💥  Channel Deleted",
-    "role_create":    "✨  Role Created",
-    "role_delete":    "🗑️  Role Deleted",
+    "role_create": "✨  Role Created",
+    "role_delete": "🗑️  Role Deleted",
 }
 
 
@@ -124,7 +124,7 @@ class EventToggleSelect(discord.ui.Select):
 
         if chosen:
             lines = "\n".join(f"• {EVENT_LABELS[k]}" for k in ALL_EVENTS if k in chosen)
-            desc  = f"Audit log events updated:\n\n{lines}"
+            desc = f"Audit log events updated:\n\n{lines}"
         else:
             desc = "All audit log events have been **disabled**."
 
@@ -168,7 +168,9 @@ class AuditLog(commands.Cog):
         guild_only=True,
     )
 
-    @auditlog_group.command(name="channel", description="Set the channel for audit log entries.")
+    @auditlog_group.command(
+        name="channel", description="Set the channel for audit log entries."
+    )
     @app_commands.describe(channel="The text channel to post audit logs in.")
     @has_admin_perms()
     async def al_channel(
@@ -212,11 +214,15 @@ class AuditLog(commands.Cog):
     async def al_disable(self, interaction: discord.Interaction):
         await db.set_auditlog_enabled(interaction.guild_id, False)
         await interaction.response.send_message(
-            embed=h.ok("Audit log **disabled**. No events will be logged.", "🔕 Audit Log Off"),
+            embed=h.ok(
+                "Audit log **disabled**. No events will be logged.", "🔕 Audit Log Off"
+            ),
             ephemeral=True,
         )
 
-    @auditlog_group.command(name="events", description="Toggle which events get logged.")
+    @auditlog_group.command(
+        name="events", description="Toggle which events get logged."
+    )
     @has_admin_perms()
     async def al_events(self, interaction: discord.Interaction):
         cfg = await db.get_auditlog_config(interaction.guild_id)
@@ -232,7 +238,9 @@ class AuditLog(commands.Cog):
             ephemeral=True,
         )
 
-    @auditlog_group.command(name="status", description="Show the current audit log configuration.")
+    @auditlog_group.command(
+        name="status", description="Show the current audit log configuration."
+    )
     @has_admin_perms()
     async def al_status(self, interaction: discord.Interaction):
         cfg = await db.get_auditlog_config(interaction.guild_id)
@@ -250,10 +258,12 @@ class AuditLog(commands.Cog):
 
         ch = interaction.guild.get_channel(int(cfg["channel_id"]))
         ch_mention = ch.mention if ch else f"⚠️ Unknown (`{cfg['channel_id']}`)"
-        status     = "🟢 Enabled" if cfg["enabled"] else "🔴 Disabled"
-        events     = set(cfg["events"])
-        on_lines   = "\n".join(f"✅ {EVENT_LABELS[k]}" for k in ALL_EVENTS if k in events)
-        off_lines  = "\n".join(f"❌ {EVENT_LABELS[k]}" for k in ALL_EVENTS if k not in events)
+        status = "🟢 Enabled" if cfg["enabled"] else "🔴 Disabled"
+        events = set(cfg["events"])
+        on_lines = "\n".join(f"✅ {EVENT_LABELS[k]}" for k in ALL_EVENTS if k in events)
+        off_lines = "\n".join(
+            f"❌ {EVENT_LABELS[k]}" for k in ALL_EVENTS if k not in events
+        )
         body_parts = [
             f"**Channel:** {ch_mention}",
             f"**Status:** {status}",
@@ -281,10 +291,16 @@ class AuditLog(commands.Cog):
             title="🗑️ Message Deleted",
             color=h.RED,
         )
-        e.add_field(name="Author",   value=f"{message.author.mention} (`{message.author.id}`)", inline=True)
-        e.add_field(name="Channel",  value=message.channel.mention,                             inline=True)
+        e.add_field(
+            name="Author",
+            value=f"{message.author.mention} (`{message.author.id}`)",
+            inline=True,
+        )
+        e.add_field(name="Channel", value=message.channel.mention, inline=True)
         if message.content:
-            preview = message.content[:1000] + ("…" if len(message.content) > 1000 else "")
+            preview = message.content[:1000] + (
+                "…" if len(message.content) > 1000 else ""
+            )
             e.add_field(name="Content", value=preview, inline=False)
         if message.attachments:
             e.add_field(
@@ -301,7 +317,7 @@ class AuditLog(commands.Cog):
         if not before.guild or before.author.bot:
             return
         if before.content == after.content:
-            return   # embed-only updates, pin notifications, etc.
+            return  # embed-only updates, pin notifications, etc.
         ch = await _get_log_channel(self.bot, before.guild, "msg_edit")
         if not ch:
             return
@@ -311,12 +327,16 @@ class AuditLog(commands.Cog):
             color=h.YELLOW,
             url=after.jump_url,
         )
-        e.add_field(name="Author",  value=f"{before.author.mention} (`{before.author.id}`)", inline=True)
-        e.add_field(name="Channel", value=before.channel.mention,                             inline=True)
+        e.add_field(
+            name="Author",
+            value=f"{before.author.mention} (`{before.author.id}`)",
+            inline=True,
+        )
+        e.add_field(name="Channel", value=before.channel.mention, inline=True)
         b_prev = before.content[:500] + ("…" if len(before.content) > 500 else "")
-        a_prev = after.content[:500]  + ("…" if len(after.content)  > 500 else "")
+        a_prev = after.content[:500] + ("…" if len(after.content) > 500 else "")
         e.add_field(name="Before", value=b_prev or "_empty_", inline=False)
-        e.add_field(name="After",  value=a_prev or "_empty_", inline=False)
+        e.add_field(name="After", value=a_prev or "_empty_", inline=False)
         e.set_footer(text=f"NanoBot Audit Log  •  User ID: {before.author.id}")
         e.timestamp = discord.utils.utcnow()
         await _send_log(ch, e)
@@ -338,8 +358,8 @@ class AuditLog(commands.Cog):
             color=h.GREEN,
         )
         e.set_thumbnail(url=member.display_avatar.url)
-        e.add_field(name="Account Age", value=age_str,             inline=True)
-        e.add_field(name="Member #",    value=str(member.guild.member_count), inline=True)
+        e.add_field(name="Account Age", value=age_str, inline=True)
+        e.add_field(name="Member #", value=str(member.guild.member_count), inline=True)
         e.set_footer(text=f"NanoBot Audit Log  •  ID: {member.id}")
         e.timestamp = discord.utils.utcnow()
         await _send_log(ch, e)
@@ -380,12 +400,20 @@ class AuditLog(commands.Cog):
 
         # Try to fetch audit log reason
         try:
-            async for entry in guild.audit_logs(limit=1, action=discord.AuditLogAction.ban):
+            async for entry in guild.audit_logs(
+                limit=1, action=discord.AuditLogAction.ban
+            ):
                 if entry.target and entry.target.id == user.id:
                     if entry.user:
-                        e.add_field(name="Banned By", value=f"{entry.user.mention} (`{entry.user.id}`)", inline=True)
+                        e.add_field(
+                            name="Banned By",
+                            value=f"{entry.user.mention} (`{entry.user.id}`)",
+                            inline=True,
+                        )
                     if entry.reason:
-                        e.add_field(name="Reason", value=entry.reason[:512], inline=False)
+                        e.add_field(
+                            name="Reason", value=entry.reason[:512], inline=False
+                        )
                     break
         except discord.Forbidden:
             pass
@@ -420,27 +448,41 @@ class AuditLog(commands.Cog):
             ch = await _get_log_channel(self.bot, before.guild, "nick_change")
             if ch:
                 e = discord.Embed(title="📝 Nickname Changed", color=h.BLUE)
-                e.add_field(name="Member", value=f"{after.mention} (`{after.id}`)", inline=False)
-                e.add_field(name="Before", value=before.nick or before.name, inline=True)
-                e.add_field(name="After",  value=after.nick  or after.name,  inline=True)
+                e.add_field(
+                    name="Member", value=f"{after.mention} (`{after.id}`)", inline=False
+                )
+                e.add_field(
+                    name="Before", value=before.nick or before.name, inline=True
+                )
+                e.add_field(name="After", value=after.nick or after.name, inline=True)
                 e.set_footer(text=f"NanoBot Audit Log  •  ID: {after.id}")
                 e.timestamp = discord.utils.utcnow()
                 await _send_log(ch, e)
 
         # ── Role changes ───────────────────────────────────────────────────────
         before_roles = set(before.roles)
-        after_roles  = set(after.roles)
-        added   = after_roles  - before_roles
+        after_roles = set(after.roles)
+        added = after_roles - before_roles
         removed = before_roles - after_roles
-        if (added or removed):
+        if added or removed:
             ch = await _get_log_channel(self.bot, before.guild, "role_update")
             if ch:
                 e = discord.Embed(title="🎭 Roles Updated", color=h.BLUE)
-                e.add_field(name="Member", value=f"{after.mention} (`{after.id}`)", inline=False)
+                e.add_field(
+                    name="Member", value=f"{after.mention} (`{after.id}`)", inline=False
+                )
                 if added:
-                    e.add_field(name="➕ Added",   value=" ".join(r.mention for r in added),   inline=True)
+                    e.add_field(
+                        name="➕ Added",
+                        value=" ".join(r.mention for r in added),
+                        inline=True,
+                    )
                 if removed:
-                    e.add_field(name="➖ Removed", value=" ".join(r.mention for r in removed), inline=True)
+                    e.add_field(
+                        name="➖ Removed",
+                        value=" ".join(r.mention for r in removed),
+                        inline=True,
+                    )
                 e.set_footer(text=f"NanoBot Audit Log  •  ID: {after.id}")
                 e.timestamp = discord.utils.utcnow()
                 await _send_log(ch, e)
@@ -456,7 +498,9 @@ class AuditLog(commands.Cog):
             description=f"**#{channel.name}** (`{channel.id}`)",
             color=h.GREEN,
         )
-        e.add_field(name="Type",     value=str(channel.type).replace("_", " ").title(), inline=True)
+        e.add_field(
+            name="Type", value=str(channel.type).replace("_", " ").title(), inline=True
+        )
         if hasattr(channel, "category") and channel.category:
             e.add_field(name="Category", value=channel.category.name, inline=True)
         e.set_footer(text="NanoBot Audit Log")
@@ -474,7 +518,9 @@ class AuditLog(commands.Cog):
             description=f"**#{channel.name}** (`{channel.id}`)",
             color=h.RED,
         )
-        e.add_field(name="Type", value=str(channel.type).replace("_", " ").title(), inline=True)
+        e.add_field(
+            name="Type", value=str(channel.type).replace("_", " ").title(), inline=True
+        )
         if hasattr(channel, "category") and channel.category:
             e.add_field(name="Category", value=channel.category.name, inline=True)
         e.set_footer(text="NanoBot Audit Log")
@@ -492,8 +538,10 @@ class AuditLog(commands.Cog):
             description=f"**{role.name}** (`{role.id}`)",
             color=role.color if role.color.value else h.GREEN,
         )
-        e.add_field(name="Mentionable", value="Yes" if role.mentionable else "No", inline=True)
-        e.add_field(name="Hoisted",     value="Yes" if role.hoist       else "No", inline=True)
+        e.add_field(
+            name="Mentionable", value="Yes" if role.mentionable else "No", inline=True
+        )
+        e.add_field(name="Hoisted", value="Yes" if role.hoist else "No", inline=True)
         e.set_footer(text="NanoBot Audit Log")
         e.timestamp = discord.utils.utcnow()
         await _send_log(ch, e)
