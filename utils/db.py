@@ -103,6 +103,8 @@ async def init() -> None:
     await _ensure_warnings_tables()
     await _ensure_welcome_tables()
     await _ensure_votes_table()
+    await _ensure_auditlog_table()
+    await _ensure_automod_tables()
     log.info(f"Database ready: {_DB_PATH}")
 
 
@@ -123,7 +125,6 @@ def _conn() -> aiosqlite.Connection:
 # ══════════════════════════════════════════════════════════════════════════════
 #  Tags
 # ══════════════════════════════════════════════════════════════════════════════
-
 
 async def get_tag(guild_id: int, name: str, user_id: int) -> dict | None:
     """Personal tag first, then global. Returns dict or None."""
@@ -154,9 +155,7 @@ async def get_personal_tags(guild_id: int, user_id: int) -> dict:
         (str(guild_id), str(user_id)),
     ) as cur:
         rows = await cur.fetchall()
-    return {
-        r["name"]: {"content": r["content"], "image_url": r["image_url"]} for r in rows
-    }
+    return {r["name"]: {"content": r["content"], "image_url": r["image_url"]} for r in rows}
 
 
 async def get_global_tags(guild_id: int) -> dict:
@@ -169,10 +168,8 @@ async def get_global_tags(guild_id: int) -> dict:
         rows = await cur.fetchall()
     return {
         r["name"]: {
-            "content": r["content"],
-            "image_url": r["image_url"],
-            "by_id": r["by_id"],
-            "by_name": r["by_name"],
+            "content": r["content"], "image_url": r["image_url"],
+            "by_id": r["by_id"],    "by_name": r["by_name"],
         }
         for r in rows
     }
@@ -187,13 +184,13 @@ async def tag_exists(guild_id: int, scope: str, name: str) -> bool:
 
 
 async def set_tag(
-    guild_id: int,
-    scope: str,  # "global" or str(user_id)
-    name: str,
-    content: str | None,
+    guild_id:  int,
+    scope:     str,     # "global" or str(user_id)
+    name:      str,
+    content:   str | None,
     image_url: str | None,
-    by_id: str | None = None,
-    by_name: str | None = None,
+    by_id:     str | None = None,
+    by_name:   str | None = None,
 ) -> None:
     """Insert or replace a tag."""
     await _conn().execute(
@@ -209,9 +206,7 @@ async def set_tag(
     await _conn().commit()
 
 
-async def update_tag_image(
-    guild_id: int, scope: str, name: str, image_url: str | None
-) -> None:
+async def update_tag_image(guild_id: int, scope: str, name: str, image_url: str | None) -> None:
     await _conn().execute(
         "UPDATE tags SET image_url=? WHERE guild_id=? AND scope=? AND name=?",
         (image_url, str(guild_id), scope, name),
@@ -219,9 +214,7 @@ async def update_tag_image(
     await _conn().commit()
 
 
-async def update_tag_content(
-    guild_id: int, scope: str, name: str, content: str
-) -> None:
+async def update_tag_content(guild_id: int, scope: str, name: str, content: str) -> None:
     await _conn().execute(
         "UPDATE tags SET content=? WHERE guild_id=? AND scope=? AND name=?",
         (content, str(guild_id), scope, name),
@@ -263,14 +256,9 @@ async def find_tag_scope(guild_id: int, name: str, user_id: int) -> str | None:
 #  Notes
 # ══════════════════════════════════════════════════════════════════════════════
 
-
 async def add_note(
-    guild_id: int,
-    user_id: int,
-    content: str,
-    by_id: str,
-    by_name: str,
-    created_at: str,
+    guild_id: int, user_id: int, content: str,
+    by_id: str, by_name: str, created_at: str,
 ) -> int:
     """Add a note. Returns total note count for that user in that guild."""
     await _conn().execute(
@@ -295,15 +283,8 @@ async def get_notes(guild_id: int, user_id: int) -> list[dict]:
         (str(guild_id), str(user_id)),
     ) as cur:
         rows = await cur.fetchall()
-    return [
-        {
-            "note": r["content"],
-            "by_id": r["by_id"],
-            "by_name": r["by_name"],
-            "at": r["created_at"],
-        }
-        for r in rows
-    ]
+    return [{"note": r["content"], "by_id": r["by_id"],
+              "by_name": r["by_name"], "at": r["created_at"]} for r in rows]
 
 
 async def get_note_count(guild_id: int, user_id: int) -> int:
@@ -328,7 +309,6 @@ async def clear_notes(guild_id: int, user_id: int) -> int:
 # ══════════════════════════════════════════════════════════════════════════════
 #  Prefixes
 # ══════════════════════════════════════════════════════════════════════════════
-
 
 async def get_prefix(guild_id: int) -> str | None:
     async with _conn().execute(
@@ -358,7 +338,6 @@ async def get_all_prefixes() -> dict[str, str]:
 #  Unban schedules
 # ══════════════════════════════════════════════════════════════════════════════
 
-
 async def set_unban(key: str, guild_id: int, user_id: int, until: float) -> None:
     await _conn().execute(
         "INSERT INTO unban_schedules (key, guild_id, user_id, until) VALUES (?,?,?,?) "
@@ -378,20 +357,13 @@ async def get_all_unbans() -> dict:
         "SELECT key, guild_id, user_id, until FROM unban_schedules"
     ) as cur:
         rows = await cur.fetchall()
-    return {
-        r["key"]: {
-            "guild_id": r["guild_id"],
-            "user_id": r["user_id"],
-            "until": r["until"],
-        }
-        for r in rows
-    }
+    return {r["key"]: {"guild_id": r["guild_id"], "user_id": r["user_id"], "until": r["until"]}
+            for r in rows}
 
 
 # ══════════════════════════════════════════════════════════════════════════════
 #  Slow schedules
 # ══════════════════════════════════════════════════════════════════════════════
-
 
 async def set_slow(channel_id: int, guild_id: int, until: float) -> None:
     await _conn().execute(
@@ -414,15 +386,13 @@ async def get_all_slows() -> dict:
         "SELECT channel_id, guild_id, until FROM slow_schedules"
     ) as cur:
         rows = await cur.fetchall()
-    return {
-        r["channel_id"]: {"guild_id": r["guild_id"], "until": r["until"]} for r in rows
-    }
+    return {r["channel_id"]: {"guild_id": r["guild_id"], "until": r["until"]}
+            for r in rows}
 
 
 # ══════════════════════════════════════════════════════════════════════════════
 #  Reminders
 # ══════════════════════════════════════════════════════════════════════════════
-
 
 async def reminder_id_exists(rid: str) -> bool:
     async with _conn().execute(
@@ -437,14 +407,9 @@ async def set_reminder(info: dict) -> None:
            (id, target_id, set_by_id, guild_id, channel_id, message, due, duration, dm)
            VALUES (?,?,?,?,?,?,?,?,?)""",
         (
-            info["id"],
-            info["target_id"],
-            info["set_by_id"],
-            info["guild_id"],
-            info["channel_id"],
-            info["message"],
-            info["due"],
-            info.get("duration", 0),
+            info["id"], info["target_id"], info["set_by_id"],
+            info["guild_id"], info["channel_id"], info["message"],
+            info["due"], info.get("duration", 0),
             1 if info.get("dm", True) else 0,
         ),
     )
@@ -485,22 +450,21 @@ async def count_user_reminders(user_id: int) -> int:
 
 def _reminder_row(r: aiosqlite.Row) -> dict:
     return {
-        "id": r["id"],
-        "target_id": r["target_id"],
-        "set_by_id": r["set_by_id"],
-        "guild_id": r["guild_id"],
+        "id":         r["id"],
+        "target_id":  r["target_id"],
+        "set_by_id":  r["set_by_id"],
+        "guild_id":   r["guild_id"],
         "channel_id": r["channel_id"],
-        "message": r["message"],
-        "due": r["due"],
-        "duration": r["duration"],
-        "dm": bool(r["dm"]),
+        "message":    r["message"],
+        "due":        r["due"],
+        "duration":   r["duration"],
+        "dm":         bool(r["dm"]),
     }
 
 
 # ══════════════════════════════════════════════════════════════════════════════
 #  Warnings
 # ══════════════════════════════════════════════════════════════════════════════
-
 
 async def _ensure_warnings_tables():
     await _conn().execute("""
@@ -529,12 +493,8 @@ async def _ensure_warnings_tables():
 
 
 async def add_warning(
-    guild_id: int,
-    user_id: int,
-    reason: str,
-    by_id: str,
-    by_name: str,
-    created_at: str,
+    guild_id: int, user_id: int, reason: str,
+    by_id: str, by_name: str, created_at: str,
 ) -> int:
     """Add a warning. Returns new total warning count for that user."""
     await _conn().execute(
@@ -558,15 +518,8 @@ async def get_warnings(guild_id: int, user_id: int) -> list[dict]:
         (str(guild_id), str(user_id)),
     ) as cur:
         rows = await cur.fetchall()
-    return [
-        {
-            "id": r["id"],
-            "reason": r["reason"],
-            "by_name": r["by_name"],
-            "at": r["created_at"],
-        }
-        for r in rows
-    ]
+    return [{"id": r["id"], "reason": r["reason"],
+              "by_name": r["by_name"], "at": r["created_at"]} for r in rows]
 
 
 async def get_warning_count(guild_id: int, user_id: int) -> int:
@@ -594,17 +547,11 @@ async def get_warn_config(guild_id: int) -> dict:
     ) as cur:
         row = await cur.fetchone()
     if row:
-        return {
-            "kick_at": row["kick_at"],
-            "ban_at": row["ban_at"],
-            "dm_user": bool(row["dm_user"]),
-        }
+        return {"kick_at": row["kick_at"], "ban_at": row["ban_at"], "dm_user": bool(row["dm_user"])}
     return {"kick_at": 0, "ban_at": 0, "dm_user": True}
 
 
-async def set_warn_config(
-    guild_id: int, kick_at: int, ban_at: int, dm_user: bool
-) -> None:
+async def set_warn_config(guild_id: int, kick_at: int, ban_at: int, dm_user: bool) -> None:
     await _conn().execute(
         "INSERT INTO warn_config (guild_id, kick_at, ban_at, dm_user) VALUES (?,?,?,?) "
         "ON CONFLICT(guild_id) DO UPDATE SET kick_at=excluded.kick_at, "
@@ -617,7 +564,6 @@ async def set_warn_config(
 # ══════════════════════════════════════════════════════════════════════════════
 #  Welcome / Leave
 # ══════════════════════════════════════════════════════════════════════════════
-
 
 async def _ensure_welcome_tables():
     await _conn().execute("""
@@ -654,12 +600,12 @@ async def _get_event_config(table: str, guild_id: int) -> dict | None:
     if not row:
         return None
     return {
-        "enabled": bool(row["enabled"]),
+        "enabled":    bool(row["enabled"]),
         "channel_id": row["channel_id"],
-        "title": row["title"],
-        "content": row["content"],
-        "image_url": row["image_url"],
-        "dm": bool(row["dm"]),
+        "title":      row["title"],
+        "content":    row["content"],
+        "image_url":  row["image_url"],
+        "dm":         bool(row["dm"]),
     }
 
 
@@ -704,7 +650,6 @@ async def set_leave_config(guild_id: int, **kwargs) -> None:
 #  Votes
 # ══════════════════════════════════════════════════════════════════════════════
 
-
 async def _ensure_votes_table():
     await _conn().execute("""
         CREATE TABLE IF NOT EXISTS votes (
@@ -740,8 +685,8 @@ async def record_vote(user_id: int, site: str) -> dict:
 
     if row:
         elapsed = now - row["voted_at"]
-        streak = (row["streak"] + 1) if elapsed <= cooldown else 1
-        notify = bool(row["notify"])
+        streak  = (row["streak"] + 1) if elapsed <= cooldown else 1
+        notify  = bool(row["notify"])
     else:
         streak = 1
         notify = True
@@ -756,13 +701,7 @@ async def record_vote(user_id: int, site: str) -> dict:
     )
     await _conn().commit()
 
-    return {
-        "user_id": uid,
-        "site": site,
-        "voted_at": now,
-        "streak": streak,
-        "notify": notify,
-    }
+    return {"user_id": uid, "site": site, "voted_at": now, "streak": streak, "notify": notify}
 
 
 async def get_vote(user_id: int, site: str) -> dict | None:
@@ -774,11 +713,11 @@ async def get_vote(user_id: int, site: str) -> dict | None:
     if not row:
         return None
     return {
-        "user_id": row["user_id"],
-        "site": row["site"],
+        "user_id":  row["user_id"],
+        "site":     row["site"],
         "voted_at": row["voted_at"],
-        "streak": row["streak"],
-        "notify": bool(row["notify"]),
+        "streak":   row["streak"],
+        "notify":   bool(row["notify"]),
     }
 
 
@@ -799,12 +738,8 @@ async def get_all_votes_for_notify() -> list[dict]:
     ) as cur:
         rows = await cur.fetchall()
     return [
-        {
-            "user_id": r["user_id"],
-            "site": r["site"],
-            "voted_at": r["voted_at"],
-            "streak": r["streak"],
-        }
+        {"user_id": r["user_id"], "site": r["site"],
+         "voted_at": r["voted_at"], "streak": r["streak"]}
         for r in rows
     ]
 
@@ -818,3 +753,250 @@ async def has_voted_recently(user_id: int, site: str) -> bool:
         return False
     cooldown = 12 * 3600 if site == "topgg" else 24 * 3600
     return (time.time() - row["voted_at"]) < cooldown
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+#  Audit Log
+# ══════════════════════════════════════════════════════════════════════════════
+
+import json as _json
+
+_ALL_AUDIT_EVENTS: list[str] = [
+    "msg_delete",
+    "msg_edit",
+    "member_join",
+    "member_leave",
+    "member_ban",
+    "member_unban",
+    "nick_change",
+    "role_update",
+    "channel_create",
+    "channel_delete",
+    "role_create",
+    "role_delete",
+]
+
+
+async def _ensure_auditlog_table() -> None:
+    await _conn().execute("""
+        CREATE TABLE IF NOT EXISTS auditlog_config (
+            guild_id    TEXT PRIMARY KEY,
+            channel_id  TEXT,
+            enabled     INTEGER NOT NULL DEFAULT 0,
+            events      TEXT    -- JSON array of enabled event keys; NULL = all
+        )
+    """)
+    await _conn().commit()
+
+
+async def get_auditlog_config(guild_id: int) -> dict | None:
+    """Return the audit log config for a guild, or None if never configured."""
+    async with _conn().execute(
+        "SELECT channel_id, enabled, events FROM auditlog_config WHERE guild_id=?",
+        (str(guild_id),),
+    ) as cur:
+        row = await cur.fetchone()
+    if not row:
+        return None
+    raw_events = row["events"]
+    events = _json.loads(raw_events) if raw_events else list(_ALL_AUDIT_EVENTS)
+    return {
+        "channel_id": row["channel_id"],
+        "enabled": bool(row["enabled"]),
+        "events": events,
+    }
+
+
+async def set_auditlog_channel(guild_id: int, channel_id: int) -> None:
+    """Set (or update) the log channel for a guild."""
+    await _conn().execute(
+        """INSERT INTO auditlog_config (guild_id, channel_id, enabled, events)
+           VALUES (?, ?, 0, NULL)
+           ON CONFLICT(guild_id) DO UPDATE SET channel_id=excluded.channel_id""",
+        (str(guild_id), str(channel_id)),
+    )
+    await _conn().commit()
+
+
+async def set_auditlog_enabled(guild_id: int, enabled: bool) -> None:
+    """Enable or disable audit logging for a guild."""
+    await _conn().execute(
+        """INSERT INTO auditlog_config (guild_id, channel_id, enabled, events)
+           VALUES (?, NULL, ?, NULL)
+           ON CONFLICT(guild_id) DO UPDATE SET enabled=excluded.enabled""",
+        (str(guild_id), 1 if enabled else 0),
+    )
+    await _conn().commit()
+
+
+async def set_auditlog_events(guild_id: int, events: set[str]) -> None:
+    """Persist the set of enabled event keys for a guild."""
+    await _conn().execute(
+        """INSERT INTO auditlog_config (guild_id, channel_id, enabled, events)
+           VALUES (?, NULL, 0, ?)
+           ON CONFLICT(guild_id) DO UPDATE SET events=excluded.events""",
+        (str(guild_id), _json.dumps(sorted(events))),
+    )
+    await _conn().commit()
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+#  AutoMod
+# ══════════════════════════════════════════════════════════════════════════════
+
+_DEFAULT_RULES: dict = {
+    "spam":     {"enabled": False, "count": 5, "seconds": 5, "action": "warn"},
+    "invites":  {"enabled": False, "action": "delete"},
+    "links":    {"enabled": False, "action": "delete"},
+    "caps":     {"enabled": False, "percent": 70, "min_length": 10, "action": "warn"},
+    "mentions": {"enabled": False, "limit": 5, "action": "warn"},
+    "badwords": {"enabled": False, "action": "delete"},
+}
+
+
+async def _ensure_automod_tables() -> None:
+    await _conn().executescript("""
+        CREATE TABLE IF NOT EXISTS automod_config (
+            guild_id        TEXT PRIMARY KEY,
+            enabled         INTEGER NOT NULL DEFAULT 0,
+            rules           TEXT NOT NULL DEFAULT '{}',
+            ignore_channels TEXT NOT NULL DEFAULT '[]',
+            ignore_roles    TEXT NOT NULL DEFAULT '[]'
+        );
+
+        CREATE TABLE IF NOT EXISTS automod_badwords (
+            guild_id TEXT NOT NULL,
+            word     TEXT NOT NULL,
+            PRIMARY KEY (guild_id, word)
+        );
+    """)
+    await _conn().commit()
+
+
+def _parse_automod_row(row: aiosqlite.Row) -> dict:
+    rules = _json.loads(row["rules"]) if row["rules"] else {}
+    # Merge with defaults so new rule keys are always present
+    merged = {}
+    for key, defaults in _DEFAULT_RULES.items():
+        merged[key] = {**defaults, **rules.get(key, {})}
+    return {
+        "enabled":         bool(row["enabled"]),
+        "rules":           merged,
+        "ignore_channels": _json.loads(row["ignore_channels"] or "[]"),
+        "ignore_roles":    _json.loads(row["ignore_roles"] or "[]"),
+    }
+
+
+async def get_automod_config(guild_id: int) -> dict | None:
+    """Return the automod config for a guild, or None if never configured."""
+    async with _conn().execute(
+        "SELECT enabled, rules, ignore_channels, ignore_roles "
+        "FROM automod_config WHERE guild_id=?",
+        (str(guild_id),),
+    ) as cur:
+        row = await cur.fetchone()
+    return _parse_automod_row(row) if row else None
+
+
+async def _upsert_automod(guild_id: int) -> dict:
+    """Ensure a row exists for the guild and return the current raw rules dict."""
+    async with _conn().execute(
+        "SELECT rules FROM automod_config WHERE guild_id=?", (str(guild_id),)
+    ) as cur:
+        row = await cur.fetchone()
+    if row:
+        return _json.loads(row["rules"]) if row["rules"] else {}
+    await _conn().execute(
+        "INSERT INTO automod_config (guild_id, enabled, rules, ignore_channels, ignore_roles) "
+        "VALUES (?, 0, '{}', '[]', '[]')",
+        (str(guild_id),),
+    )
+    await _conn().commit()
+    return {}
+
+
+async def set_automod_enabled(guild_id: int, enabled: bool) -> None:
+    await _upsert_automod(guild_id)
+    await _conn().execute(
+        "UPDATE automod_config SET enabled=? WHERE guild_id=?",
+        (1 if enabled else 0, str(guild_id)),
+    )
+    await _conn().commit()
+
+
+async def set_automod_rule(guild_id: int, rule: str, **kwargs) -> None:
+    """
+    Update fields for a single rule. Only provided kwargs are changed;
+    existing fields are preserved.
+    """
+    rules = await _upsert_automod(guild_id)
+    current = rules.get(rule, dict(_DEFAULT_RULES.get(rule, {})))
+    current.update(kwargs)
+    rules[rule] = current
+    await _conn().execute(
+        "UPDATE automod_config SET rules=? WHERE guild_id=?",
+        (_json.dumps(rules), str(guild_id)),
+    )
+    await _conn().commit()
+
+
+async def toggle_automod_ignore(
+    guild_id: int, kind: str, target_id: int
+) -> str:
+    """
+    Toggle a channel or role exemption. kind = "channel" | "role".
+    Returns "added" or "removed".
+    """
+    await _upsert_automod(guild_id)
+    col = "ignore_channels" if kind == "channel" else "ignore_roles"
+    async with _conn().execute(
+        f"SELECT {col} FROM automod_config WHERE guild_id=?", (str(guild_id),)
+    ) as cur:
+        row = await cur.fetchone()
+    lst = _json.loads(row[col] or "[]")
+    sid = str(target_id)
+    if sid in lst:
+        lst.remove(sid)
+        result = "removed"
+    else:
+        lst.append(sid)
+        result = "added"
+    await _conn().execute(
+        f"UPDATE automod_config SET {col}=? WHERE guild_id=?",
+        (_json.dumps(lst), str(guild_id)),
+    )
+    await _conn().commit()
+    return result
+
+
+async def add_automod_badword(guild_id: int, word: str) -> bool:
+    """Add a word to the filter. Returns True if inserted, False if already exists."""
+    try:
+        await _conn().execute(
+            "INSERT INTO automod_badwords (guild_id, word) VALUES (?, ?)",
+            (str(guild_id), word.lower()),
+        )
+        await _conn().commit()
+        return True
+    except aiosqlite.IntegrityError:
+        return False
+
+
+async def remove_automod_badword(guild_id: int, word: str) -> bool:
+    """Remove a word from the filter. Returns True if a row was deleted."""
+    cur = await _conn().execute(
+        "DELETE FROM automod_badwords WHERE guild_id=? AND word=?",
+        (str(guild_id), word.lower()),
+    )
+    await _conn().commit()
+    return cur.rowcount > 0
+
+
+async def get_automod_badwords(guild_id: int) -> list[str]:
+    """Return all bad words for a guild."""
+    async with _conn().execute(
+        "SELECT word FROM automod_badwords WHERE guild_id=? ORDER BY word ASC",
+        (str(guild_id),),
+    ) as cur:
+        rows = await cur.fetchall()
+    return [r["word"] for r in rows]
