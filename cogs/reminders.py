@@ -404,6 +404,7 @@ class Reminders(commands.Cog):
 
         try:
             from cogs.votes import get_reminder_limit
+
             user_max = await get_reminder_limit(ctx.author.id)
         except Exception:
             user_max = _MAX
