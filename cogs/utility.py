@@ -1801,7 +1801,7 @@ class Utility(commands.Cog):
                 color=h.BLUE,
             )
             e.set_footer(text="NanoBot  ·  inspect.getsource()")
-            return await ctx.reply(embed=e)
+            return await ctx.reply(embed=e, ephemeral=True)
 
         # ── Resolve the command object ─────────────────────────────────────────
         cmd = self.bot.get_command(command_name)
@@ -1811,7 +1811,7 @@ class Utility(commands.Cog):
                 color=h.RED,
             )
             e.set_footer(text="NanoBot")
-            return await ctx.reply(embed=e)
+            return await ctx.reply(embed=e, ephemeral=True)
 
         # ── Pull the source ────────────────────────────────────────────────────
         try:
@@ -1823,7 +1823,7 @@ class Utility(commands.Cog):
                 color=h.RED,
             )
             e.set_footer(text="NanoBot")
-            return await ctx.reply(embed=e)
+            return await ctx.reply(embed=e, ephemeral=True)
 
         source_text = textwrap.dedent(raw_source)
 
@@ -1845,7 +1845,7 @@ class Utility(commands.Cog):
                 color=h.BLUE,
             )
             e.set_footer(text=f"{source_file}  ·  NanoBot")
-            return await ctx.reply(embed=e)
+            return await ctx.reply(embed=e, ephemeral=True)
 
         filename = f"{cmd.qualified_name.replace(' ', '_')}.py"
         file_obj = discord.File(
@@ -1858,7 +1858,7 @@ class Utility(commands.Cog):
             color=h.BLUE,
         )
         e.set_footer(text=f"{source_file}  ·  NanoBot")
-        await ctx.reply(embed=e, file=file_obj)
+        await ctx.reply(embed=e, file=file_obj, ephemeral=True)
 
 
 # ── Registration ───────────────────────────────────────────────────────────────
