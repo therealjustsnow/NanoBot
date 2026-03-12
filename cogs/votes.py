@@ -316,7 +316,7 @@ class Votes(commands.Cog):
         log.info(f"Vote processed: user={user_id} site={site} streak={streak}")
 
     # ── Stat posting loop ──────────────────────────────────────────────────────
-    @tasks.loop(minutes=30)
+    @tasks.loop(minutes=720)
     async def post_stats(self):
         await self.bot.wait_until_ready()
         guild_count = len(self.bot.guilds)
