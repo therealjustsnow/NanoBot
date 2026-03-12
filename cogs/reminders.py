@@ -402,6 +402,12 @@ class Reminders(commands.Cog):
     async def _list(self, ctx: commands.Context):
         user_rems = await db.get_user_reminders(ctx.author.id)
 
+        try:
+            from cogs.votes import get_reminder_limit
+            user_max = await get_reminder_limit(ctx.author.id)
+        except Exception:
+            user_max = _MAX
+
         if not user_rems:
             return await ctx.reply(
                 embed=h.info(
@@ -412,7 +418,7 @@ class Reminders(commands.Cog):
             )
 
         e = h.embed(
-            title=f"⏰ Your Reminders ({len(user_rems)}/{_MAX})",
+            title=f"⏰ Your Reminders ({len(user_rems)}/{user_max})",
             color=h.BLUE,
         )
 
@@ -441,7 +447,7 @@ class Reminders(commands.Cog):
                 inline=False,
             )
 
-        e.set_footer(text=f"NanoBot Reminders · {len(user_rems)}/{_MAX} active")
+        e.set_footer(text=f"NanoBot Reminders · {len(user_rems)}/{user_max} active")
         await ctx.reply(embed=e, ephemeral=True)
 
     # ── Cancel helper ──────────────────────────────────────────────────────────
