@@ -316,14 +316,26 @@ class Votes(commands.Cog):
         log.info(f"Vote processed: user={user_id} site={site} streak={streak}")
 
     # ── Stat posting loop ──────────────────────────────────────────────────────
-    @tasks.loop(minutes=720)
+    @tasks.loop(minutes=30)
     async def post_stats(self):
         await self.bot.wait_until_ready()
         guild_count = len(self.bot.guilds)
         bot_id = self.bot.user.id
 
-        # top.gg v1 does not yet have a stats posting endpoint.
-        # DBL stat posting only for now.
+        if self.topgg_v1_token:
+            try:
+                async with self._session.post(
+                    f"https://top.gg/api/bots/{bot_id}/stats",
+                    headers={"Authorization": self.topgg_v1_token},
+                    json={"server_count": guild_count},
+                ) as r:
+                    if r.status == 200:
+                        log.info(f"top.gg stats posted: {guild_count} servers")
+                    else:
+                        log.warning(f"top.gg stats post failed: HTTP {r.status}")
+            except Exception as exc:
+                log.warning(f"top.gg stats post error: {exc}")
+
         if self.dbl_token:
             try:
                 async with self._session.post(
