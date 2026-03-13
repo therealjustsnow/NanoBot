@@ -37,6 +37,11 @@ NanoBot fixes that.
 - ✅ Mod notes — private, invisible to users, SQLite-backed
 - ✅ Owner-only admin commands — reload, restart, shutdown, live log viewer
 - ✅ Per-server custom prefix
+- ✅ Button-based self-assignable role panels — persistent, mobile-first, toggle or single-choice modes
+- ✅ Role panel autogen — colours, pronouns, age ranges, regions in one command
+- ✅ Passive auto-moderation — spam, invite links, caps, mass mentions, bad words, external URLs
+- ✅ Per-server audit log — 12 toggleable event types posted to a configurable channel
+- ✅ top.gg and discordbotlist.com integration — vote webhooks, streaks, voter rewards
 - ✅ SQLite storage — single portable file, zero cloud dependency, easy to back up
 - ✅ Configurable log level (no restart needed)
 
@@ -53,7 +58,7 @@ NanoBot fixes that.
 
 ```bash
 git clone https://github.com/therealjustsnow/NanoBot.git
-cd nanobot
+cd NanoBot
 pip install -r requirements.txt
 ```
 
@@ -67,21 +72,29 @@ Edit `config.json`:
   "default_prefix": "n!",
   "owner_id": null,
   "log_level": "INFO",
-  "log_http": false
+  "log_http": false,
+  "topgg_v1_token": null,
+  "dbl_token": null,
+  "vote_webhook_port": 5000,
+  "vote_webhook_secret": null
 }
 ```
 
-| Key | Description |
-|-----|-------------|
-| `token` | Your bot token from the Developer Portal |
-| `default_prefix` | Default prefix for all servers (changeable per-server with `/prefix`) |
-| `owner_id` | Your Discord user ID — overrides app owner for admin commands. Leave `null` to use app owner |
-| `log_level` | `DEBUG` / `INFO` / `WARNING` / `ERROR` — changeable live with `!setloglevel` |
-| `log_http` | `true` to log every raw HTTP request (very verbose, for debugging) |
+| Key | Required | Description |
+|-----|----------|-------------|
+| `token` | ✅ | Your bot token from the Developer Portal |
+| `default_prefix` | | Default prefix for all servers (changeable per-server with `/prefix`). Default: `n!` |
+| `owner_id` | | Your Discord user ID — overrides app owner for admin commands. Leave `null` to use app owner |
+| `log_level` | | `DEBUG` / `INFO` / `WARNING` / `ERROR` — changeable live with `!setloglevel`. Default: `INFO` |
+| `log_http` | | `true` to log every raw HTTP request (very verbose, for debugging). Default: `false` |
+| `topgg_v1_token` | | top.gg v1 API token (Bearer) for command syncing |
+| `dbl_token` | | discordbotlist.com bot token for stat posting and command syncing |
+| `vote_webhook_port` | | Port for the vote webhook HTTP server. Default: `5000` |
+| `vote_webhook_secret` | | Shared secret to verify incoming vote webhooks from both sites |
 
 > ⚠️ **Never commit `config.json` to git.** It's in `.gitignore`.
 
-Token via environment variable also works:
+Token via environment variable also works — and takes priority over `config.json`:
 ```bash
 export DISCORD_TOKEN=your_token_here
 ```
@@ -97,8 +110,11 @@ Without these, prefix commands and most mod commands will silently fail.
 ### 5. Run
 
 ```bash
-# Recommended — pre-flight check then launch
+# Recommended — pre-flight check then auto-launch
 python run.py
+
+# Check only, don't launch
+python run.py --check
 
 # Or launch directly
 python main.py
@@ -174,10 +190,48 @@ Restricted to the bot owner set via `owner_id` in `config.json`, or the Discord 
 
 ### 🎭 Roles
 
+#### Mod role assignment
+
 | Command | Description |
 |---------|-------------|
-| `/addrole <user> <role>` | Assign a role. Role must be below NanoBot's highest role. |
+| `/addrole <user> <role>` | Assign a role to a user. Role must be below NanoBot's highest role. |
 | `/removerole <user> <role>` | Remove a role from a user. |
+
+#### Self-assignable role panels
+
+Button-based panels members can use themselves — no commands, no typing, one tap. Panels are persistent and survive bot restarts. Requires Manage Roles.
+
+**Panel management:**
+
+| Command | Description |
+|---------|-------------|
+| `/roles panel create` | Create a new panel (not posted yet) |
+| `/roles panel post` | Post or re-post a panel to a channel |
+| `/roles panel edit` | Edit a panel's title, description, or mode |
+| `/roles panel delete` | Delete a panel and remove its posted message |
+| `/roles panel list` | List all panels in this server |
+| `/roles add` | Add a role to a panel (label, emoji, and button colour are all customisable) |
+| `/roles remove` | Remove a role from a panel |
+
+**Panel modes:**
+
+| Mode | Behaviour |
+|------|-----------|
+| `toggle` | Click to add, click again to remove — members can hold multiple roles |
+| `single` | Radio-style: picking a new role automatically removes any other role from the same panel |
+
+**Auto-generation** *(requires Administrator)*:
+
+Instantly creates a full set of roles and posts a ready-to-use panel in one command. Skips roles that already exist. Auto-positions created roles just below NanoBot's top role. All autogen commands accept up to 5 existing roles to append to the generated panel.
+
+| Command | What it creates |
+|---------|----------------|
+| `/roles autogen colors` | 18 cosmetic colour roles (Red, Blue, Gold…) — single-choice panel |
+| `/roles autogen pronouns` | She/Her, He/Him, They/Them, It/Its, Any/All — toggle panel |
+| `/roles autogen age` | 13-17, 18-20, 21-25, 26-30, 31+ — single-choice panel |
+| `/roles autogen region` | 7 world regions (N. America, Europe, Asia…) — toggle panel |
+
+> Only one autogen can run at a time per server — a second attempt is rejected immediately rather than queuing.
 
 ---
 
@@ -189,6 +243,80 @@ Restricted to the bot owner set via `owner_id` in `config.json`, or the Discord 
 | `/warnings <user>` | View all warnings for a user (last 8 shown with dates and moderators). |
 | `/clearwarnings <user>` | Permanently wipe all warnings for a user. Admin only. |
 | `/warnconfig [kick_at] [ban_at] [dm_user]` | Configure per-server thresholds. No args shows current config. |
+
+---
+
+### 🛡️ Auto-Moderation
+
+Passive rule enforcement — watches every message and acts automatically. All rules are individually togglable with their own action. Exempt channels and roles are skipped for all rules.
+
+**Commands** (all require Manage Server):
+
+| Command | Description |
+|---------|-------------|
+| `/automod status` | Full config overview for the server |
+| `/automod enable` | Master on switch |
+| `/automod disable` | Master off switch |
+| `/automod rule` | Toggle a rule on/off and set its action |
+| `/automod spam` | Set spam detection message count and time window |
+| `/automod caps` | Set caps percentage threshold and minimum message length |
+| `/automod mentions` | Set per-message mention limit |
+| `/automod badword add` | Add a word to the server filter |
+| `/automod badword remove` | Remove a word from the server filter |
+| `/automod badword list` | List all filtered words (ephemeral) |
+| `/automod ignore` | Add or remove exempt channels or roles |
+
+**Rules:**
+
+| Rule | What it catches |
+|------|----------------|
+| `spam` | X messages from the same user within Y seconds |
+| `invites` | Discord invite links (`discord.gg`, `discord.com/invite`) |
+| `links` | Any external URL |
+| `caps` | Messages above a configurable % uppercase (min length guard) |
+| `mentions` | Too many @mentions in a single message |
+| `badwords` | Configurable per-server word list |
+
+**Actions** (set per rule):
+
+| Action | What happens |
+|--------|-------------|
+| `delete` | Silently delete the offending message |
+| `warn` | Delete + add a formal warning (triggers warnconfig auto-kick/ban) |
+| `timeout` | Delete + 10-minute Discord timeout |
+
+---
+
+### 📋 Audit Log
+
+Per-server event feed posted to a configurable channel. Each event type is individually toggleable.
+
+**Commands** (all require Manage Server):
+
+| Command | Description |
+|---------|-------------|
+| `/auditlog channel <#channel>` | Set the channel to post events to |
+| `/auditlog enable` | Enable audit logging for this server |
+| `/auditlog disable` | Disable audit logging for this server |
+| `/auditlog events` | Toggle individual event types on/off |
+| `/auditlog status` | Show current configuration |
+
+**Events logged:**
+
+| Event | Description |
+|-------|-------------|
+| `msg_delete` | Message deleted |
+| `msg_edit` | Message edited |
+| `member_join` | Member joined the server |
+| `member_leave` | Member left the server |
+| `member_ban` | Member banned |
+| `member_unban` | Member unbanned |
+| `nick_change` | Nickname changed |
+| `role_update` | Member roles added or removed |
+| `channel_create` | Channel created |
+| `channel_delete` | Channel deleted |
+| `role_create` | Role created |
+| `role_delete` | Role deleted |
 
 ---
 
@@ -225,7 +353,7 @@ Template variables in title/content: `{user}`, `{mention}`, `{server}`, `{count}
 
 Saved text snippets (up to 2000 chars) with optional images. Post in channel in one tap.
 
-- **Personal tags** — only you can create and use them  
+- **Personal tags** — only you can create and use them
 - **Global tags** — anyone can use; Manage Messages required to create
 
 #### Slash commands
@@ -233,12 +361,12 @@ Saved text snippets (up to 2000 chars) with optional images. Post in channel in 
 | Command | Description |
 |---------|-------------|
 | `/tag` or `/tag list` | List your personal tags and all global tags |
-| `/tag create <name> [content] [image]` | Create a personal tag |
-| `/tag global <name> [content] [image]` | Create a server-wide global tag *(Manage Messages)* |
-| `/tag use <name> [user]` | Post in channel, or DM to a specific user |
-| `/tag preview <name>` | Preview a tag — only you see the response |
-| `/tag edit <name> [content] [image]` | Update a tag's content or image |
-| `/tag delete <name>` | Delete a tag |
+| `/tag create <n> [content] [image]` | Create a personal tag |
+| `/tag global <n> [content] [image]` | Create a server-wide global tag *(Manage Messages)* |
+| `/tag use <n> [user]` | Post in channel, or DM to a specific user |
+| `/tag preview <n>` | Preview a tag — only you see the response |
+| `/tag edit <n> [content] [image]` | Update a tag's content or image |
+| `/tag delete <n>` | Delete a tag |
 | `/tag export` | Download all your personal tags as a JSON file |
 
 #### Prefix shorthands
@@ -246,11 +374,11 @@ Saved text snippets (up to 2000 chars) with optional images. Post in channel in 
 | Shorthand | Description |
 |-----------|-------------|
 | `n!tag` | List all tags |
-| `n!tag <name>` | Post tag in channel |
-| `n!<name>` | Even shorter — fires any tag directly |
-| `n!tag + <name> \| <content>` | Create a personal tag |
-| `n!tag - <name>` | Delete a personal tag |
-| `n!tag g+ <name> \| <content>` | Create a global tag *(mods only)* |
+| `n!tag <n>` | Post tag in channel |
+| `n!<n>` | Even shorter — fires any tag directly |
+| `n!tag + <n> \| <content>` | Create a personal tag |
+| `n!tag - <n>` | Delete a personal tag |
+| `n!tag g+ <n> \| <content>` | Create a global tag *(mods only)* |
 
 ```
 n!tag + rules | Read #rules before posting!
@@ -276,6 +404,8 @@ n!tag - rules               → deletes it
 
 ### ⏰ Reminders
 
+Voters on top.gg or discordbotlist.com get an increased limit of 50 active reminders (default is 25).
+
 | Command | Description |
 |---------|-------------|
 | `/remindme <message with duration>` | Set a reminder for yourself. Duration goes at the end. |
@@ -287,6 +417,26 @@ n!tag - rules               → deletes it
 !remindme stand up 1h
 !remindme check that PR 30m
 ```
+
+---
+
+### 🗳️ Voting
+
+| Command | Description |
+|---------|-------------|
+| `/vote` | View vote links, your current streak, and cooldown status for each site |
+| `/vote notify on\|off` | Opt in or out of DM cooldown reset notifications |
+
+Voting on [top.gg](https://top.gg) or [discordbotlist.com](https://discordbotlist.com) unlocks a higher reminder limit (50 vs 25) and tracks your vote streak. You'll receive a DM when your cooldown resets so you can vote again.
+
+**Webhook setup** (if self-hosting and want vote tracking):
+
+| Site | Webhook URL |
+|------|-------------|
+| top.gg | `http://YOUR_IP:PORT/webhook/topgg` |
+| discordbotlist.com | `http://YOUR_IP:PORT/webhook/dbl` |
+
+Set `vote_webhook_port` and `vote_webhook_secret` in `config.json`, then register the URLs in each site's bot settings.
 
 ---
 
@@ -320,6 +470,8 @@ All data lives in a single `data/nanobot.db` SQLite file. No external database, 
 | `unban_schedules` | Pending timed unbans |
 | `slow_schedules` | Pending timed slowmode removals |
 | `reminders` | Active reminders |
+| `votes` | Vote records, streaks, and notification preferences |
+| `role_panels` | Panel definitions, entries, and posted message references |
 
 Logs → `logs/nanobot.log` (5 MB rotating, 3 files kept).
 
@@ -328,7 +480,7 @@ Logs → `logs/nanobot.log` (5 MB rotating, 3 files kept).
 ## Project Structure
 
 ```
-nanobot/
+NanoBot/
 ├── main.py              ← Bot core, prefix resolution, event handlers, tag shortcuts
 ├── run.py               ← Pre-flight checker + launcher
 ├── config.json          ← Token, prefix, log level, owner ID  (not committed to git)
@@ -341,22 +493,27 @@ nanobot/
 │   └── nanobot.log      ← Rotating log file (auto-created)
 ├── cogs/
 │   ├── admin.py         ← reload / restart / shutdown / setloglevel / logs  (owner only)
+│   ├── automod.py       ← passive rule enforcement (spam / invites / links / caps / mentions / badwords)
+│   ├── auditlog.py      ← per-server event feed (12 toggleable event types)
 │   ├── moderation.py    ← ban / cban / tempban / softban / massban / unban / kick
 │   │                       freeze / unfreeze / slow / lock / hide / unhide
 │   │                       purge / snailpurge / clean / echo / nuke / moveall
 │   │                       addrole / removerole / note / notes / clearnotes
 │   │                       channelinfo / last
 │   ├── reminders.py     ← remindme / remind / reminders list+cancel
+│   ├── roles.py         ← self-assignable role panels (persistent buttons, toggle/single modes, autogen)
 │   ├── tags.py          ← tag system (personal + global, images, shortcuts)
 │   ├── utility.py       ← help / prefix / ping / info / invite / about / support
 │   │                       server / user / avatar / banner / roleinfo / uptime
+│   ├── votes.py         ← top.gg + discordbotlist.com integration, vote webhooks, rewards
 │   ├── warnings.py      ← warn / warnings / clearwarnings / warnconfig
 │   └── welcome.py       ← welcome / leave  (set + test for each)
 └── utils/
     ├── checks.py         ← Combined user + bot permission decorators
     ├── config.py         ← Config loader and validation
     ├── db.py             ← Async SQLite layer (aiosqlite)
-    └── helpers.py        ← Embed builders, duration parser, color constants
+    ├── helpers.py        ← Embed builders, duration parser, color constants
+    └── storage.py        ← Atomic JSON key-value storage (legacy/internal use)
 ```
 
 ---
