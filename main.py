@@ -21,6 +21,7 @@ from discord.ext import commands
 
 from utils import db
 
+
 # ── Config (read once at module level so logging init can use it) ──────────────
 def _load_config() -> dict:
     cfg = {}
@@ -31,6 +32,7 @@ def _load_config() -> dict:
             except json.JSONDecodeError:
                 pass
     return cfg
+
 
 _CFG = _load_config()
 
@@ -43,6 +45,7 @@ _CFG = _load_config()
 
 _VALID_LEVELS = {"DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"}
 
+
 def _setup_logging(cfg: dict) -> logging.Logger:
     os.makedirs("logs", exist_ok=True)
 
@@ -54,15 +57,17 @@ def _setup_logging(cfg: dict) -> logging.Logger:
 
     # ── Rotating file handler (plain text, no ANSI) ───────────────────────────
     file_handler = logging.handlers.RotatingFileHandler(
-        filename    = "logs/nanobot.log",
-        maxBytes    = 5 * 1024 * 1024,   # 5 MB per file
-        backupCount = 3,                  # keep 3 backups → ≤ 15 MB total
-        encoding    = "utf-8",
+        filename="logs/nanobot.log",
+        maxBytes=5 * 1024 * 1024,  # 5 MB per file
+        backupCount=3,  # keep 3 backups → ≤ 15 MB total
+        encoding="utf-8",
     )
-    file_handler.setFormatter(logging.Formatter(
-        fmt     = "%(asctime)s [%(levelname)-8s] %(name)s: %(message)s",
-        datefmt = "%Y-%m-%d %H:%M:%S",
-    ))
+    file_handler.setFormatter(
+        logging.Formatter(
+            fmt="%(asctime)s [%(levelname)-8s] %(name)s: %(message)s",
+            datefmt="%Y-%m-%d %H:%M:%S",
+        )
+    )
 
     # ── discord.utils.setup_logging — console + discord.* tree ────────────────
     discord.utils.setup_logging(level=level, root=True)
@@ -73,6 +78,7 @@ def _setup_logging(cfg: dict) -> logging.Logger:
     logging.getLogger("discord.http").setLevel(http_level)
 
     return logging.getLogger("NanoBot")
+
 
 log = _setup_logging(_CFG)
 
@@ -91,7 +97,7 @@ class NanoBot(commands.Bot):
     def __init__(self, cfg: dict):
         intents = discord.Intents.default()
         intents.message_content = True
-        intents.members          = True
+        intents.members = True
 
         super().__init__(
             command_prefix=get_prefix,
@@ -100,8 +106,8 @@ class NanoBot(commands.Bot):
             description="NanoBot — Small. Fast. Built for Mobile Mods.",
         )
 
-        self.default_prefix: str        = cfg.get("default_prefix", "!")
-        self.prefixes: dict[str, str]   = {}
+        self.default_prefix: str = cfg.get("default_prefix", "!")
+        self.prefixes: dict[str, str] = {}
         self.last_senders: dict[int, discord.Member] = {}
         self.start_time = discord.utils.utcnow()
 
@@ -121,9 +127,9 @@ class NanoBot(commands.Bot):
             "cogs.utility",
             "cogs.reminders",
             "cogs.recurring",
-            "cogs.warnings",    # per-server warning system
-            "cogs.welcome",     # per-server welcome / leave messages
-            "cogs.admin",       # owner-only: reload / shutdown / restart
+            "cogs.warnings",  # per-server warning system
+            "cogs.welcome",  # per-server welcome / leave messages
+            "cogs.admin",  # owner-only: reload / shutdown / restart
             "cogs.votes",
         )
         for cog in cogs:
@@ -154,7 +160,9 @@ class NanoBot(commands.Bot):
     async def on_ready(self):
         log.info(f"🤖 Online as {self.user} (ID: {self.user.id})")
         log.info(f"📡 Connected to {len(self.guilds)} server(s)")
-        log.info(f"🔑 Owner: {'config override' if self.config_owner_id else 'application owner'}")
+        log.info(
+            f"🔑 Owner: {'config override' if self.config_owner_id else 'application owner'}"
+        )
         await self.change_presence(
             activity=discord.Activity(
                 type=discord.ActivityType.watching,
@@ -183,9 +191,7 @@ class NanoBot(commands.Bot):
 
     async def on_guild_remove(self, guild: discord.Guild):
         """Log when the bot is removed from a server."""
-        log.info(
-            f"➖ Left server: {guild.name} ({guild.id})"
-        )
+        log.info(f"➖ Left server: {guild.name} ({guild.id})")
 
     async def on_message(self, message: discord.Message):
         if message.author.bot or not message.guild:
@@ -208,7 +214,7 @@ class NanoBot(commands.Bot):
         if ctx.prefix is not None:
             # A prefix was matched but no command found — try the entire
             # remaining text as a tag name (supports multi-word tag names).
-            after = message.content[len(ctx.prefix):].strip()
+            after = message.content[len(ctx.prefix) :].strip()
             if after:
                 await _try_tag_shortcut(message, self, after.lower())
             # Whether tag found or not, we're done — no unknown-command noise
@@ -220,7 +226,9 @@ class NanoBot(commands.Bot):
 
         if isinstance(error, commands.MissingPermissions):
             cmd_name = ctx.command.name if ctx.command else "that command"
-            missing  = ", ".join(p.replace("_", " ").title() for p in error.missing_permissions)
+            missing = ", ".join(
+                p.replace("_", " ").title() for p in error.missing_permissions
+            )
             e = discord.Embed(
                 description=(
                     f"**{ctx.author.display_name}**, you don't have the permissions needed "
@@ -233,7 +241,9 @@ class NanoBot(commands.Bot):
 
         if isinstance(error, commands.BotMissingPermissions):
             cmd_name = ctx.command.name if ctx.command else "that"
-            missing  = ", ".join(p.replace("_", " ").title() for p in error.missing_permissions)
+            missing = ", ".join(
+                p.replace("_", " ").title() for p in error.missing_permissions
+            )
             e = discord.Embed(
                 description=(
                     f"I'm missing permissions to run `{cmd_name}`.\n"
@@ -280,7 +290,7 @@ class NanoBot(commands.Bot):
             return await ctx.reply(embed=e, ephemeral=True)
 
         if isinstance(error, commands.CommandNotFound):
-            return   # tag shortcuts are handled in on_message, not here
+            return  # tag shortcuts are handled in on_message, not here
 
         log.error(f"Unhandled error in {ctx.command}: {error}", exc_info=error)
 
@@ -288,8 +298,8 @@ class NanoBot(commands.Bot):
 # ── Tag shortcut lookup ────────────────────────────────────────────────────────
 async def _try_tag_shortcut(
     message: discord.Message,
-    bot:     commands.Bot,
-    name:    str,
+    bot: commands.Bot,
+    name: str,
 ) -> bool:
     """
     Look up a tag by name for the message author and send it to the channel.
@@ -301,7 +311,7 @@ async def _try_tag_shortcut(
         if tag is None:
             return False
 
-        text    = tag.get("content") or ""
+        text = tag.get("content") or ""
         img_url = tag.get("image_url")
 
         if len(text) > 1500:
@@ -310,15 +320,17 @@ async def _try_tag_shortcut(
             await message.reply(f"{header}\n\n{text}{img_suffix}")
         else:
             e = discord.Embed(
-                title       = f"📌 [{message.guild.name}]  {name}",
-                description = text or None,
-                color       = 0x5865F2,
+                title=f"📌 [{message.guild.name}]  {name}",
+                description=text or None,
+                color=0x5865F2,
             )
             if img_url:
                 e.set_image(url=img_url)
             e.set_footer(text="NanoBot Tags")
             await message.reply(embed=e)
-        log.debug(f"Tag shortcut fired: '{name}' for {message.author} in {message.guild}")
+        log.debug(
+            f"Tag shortcut fired: '{name}' for {message.author} in {message.guild}"
+        )
         return True
 
     except Exception as exc:
@@ -332,11 +344,14 @@ async def main():
 
     token = os.getenv("DISCORD_TOKEN") or cfg.get("token")
     if not token:
-        log.error("❌ No token found. Set DISCORD_TOKEN env var or add it to config.json")
+        log.error(
+            "❌ No token found. Set DISCORD_TOKEN env var or add it to config.json"
+        )
         return
 
     # Validate config — log warnings for non-fatal issues, abort on fatal ones
     from utils.config import validate as _validate_cfg
+
     for issue in _validate_cfg(cfg):
         if issue.fatal:
             log.critical(f"Config error [{issue.field}]: {issue.message}")
