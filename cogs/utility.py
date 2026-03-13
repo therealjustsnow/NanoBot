@@ -585,10 +585,19 @@ _HELP = {
                 "stays readable on mobile instead of showing a truncated message."
             ),
             "args": [
-                ("interval", "How often to remind you — pick a preset or type your own (min 1 hour)"),
+                (
+                    "interval",
+                    "How often to remind you — pick a preset or type your own (min 1 hour)",
+                ),
                 ("message", "What to remind you about (up to 500 characters)"),
-                ("label", "Short display name shown in your list, e.g. 'Payday' (optional, max 50 chars)"),
-                ("dm", "DM you the reminder (default: yes, falls back to channel ping if DMs are closed)"),
+                (
+                    "label",
+                    "Short display name shown in your list, e.g. 'Payday' (optional, max 50 chars)",
+                ),
+                (
+                    "dm",
+                    "DM you the reminder (default: yes, falls back to channel ping if DMs are closed)",
+                ),
             ],
             "perms": "None",
             "example": "!every 2w Payday!\n!every daily Stand up meeting\n!every weekly Review my goals",
@@ -606,7 +615,12 @@ _HELP = {
                 "`cancel <id>` — permanently delete the recurring reminder\n\n"
                 "IDs are 6 characters, shown when you set the reminder and in the list."
             ),
-            "args": [("id", "6-character recurring reminder ID (from `/recurring` list or when set)")],
+            "args": [
+                (
+                    "id",
+                    "6-character recurring reminder ID (from `/recurring` list or when set)",
+                )
+            ],
             "perms": "None",
             "example": "!recurring\n!recurring pause abc123\n!recurring resume abc123\n!recurring cancel abc123",
         },
