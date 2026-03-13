@@ -64,9 +64,9 @@ from utils import helpers as h
 
 log = logging.getLogger("NanoBot.recurring")
 
-_MAX      = 10             # max recurring reminders per user
-_MIN_SECS = 3_600          # 1 hour minimum interval
-_MAX_SECS = 365 * 86_400   # 1 year maximum interval
+_MAX = 10  # max recurring reminders per user
+_MIN_SECS = 3_600  # 1 hour minimum interval
+_MAX_SECS = 365 * 86_400  # 1 year maximum interval
 
 
 # ── Helpers ────────────────────────────────────────────────────────────────────
@@ -85,14 +85,14 @@ def _now() -> float:
 # ── Autocomplete ───────────────────────────────────────────────────────────────
 
 _INTERVAL_SUGGESTIONS = [
-    ("Hourly",           "1h"),
-    ("Every 6 hours",    "6h"),
-    ("Every 12 hours",   "12h"),
-    ("Daily",            "daily"),
-    ("Every 2 days",     "2d"),
-    ("Every 3 days",     "3d"),
-    ("Weekly",           "weekly"),
-    ("Every 2 weeks",    "2w"),
+    ("Hourly", "1h"),
+    ("Every 6 hours", "6h"),
+    ("Every 12 hours", "12h"),
+    ("Daily", "daily"),
+    ("Every 2 days", "2d"),
+    ("Every 3 days", "3d"),
+    ("Weekly", "weekly"),
+    ("Every 2 weeks", "2w"),
     ("Monthly (30 days)", "monthly"),
 ]
 
@@ -129,7 +129,7 @@ class Recurring(commands.Cog):
         data = await db.get_all_recurring()
         now = _now()
         restored = 0
-        overdue  = 0
+        overdue = 0
 
         for rid, info in data.items():
             if info["paused"]:
@@ -150,9 +150,7 @@ class Recurring(commands.Cog):
                 log.debug(f"Restored recurring {rid} — fires in {remaining:.0f}s")
                 restored += 1
 
-        log.info(
-            f"Recurring: restored {restored} active, fired {overdue} overdue"
-        )
+        log.info(f"Recurring: restored {restored} active, fired {overdue} overdue")
 
     # ── Background fire ────────────────────────────────────────────────────────
 
@@ -168,26 +166,26 @@ class Recurring(commands.Cog):
             self._tasks.pop(info["id"], None)
             return
 
-        rid        = fresh["id"]
-        target_id  = int(fresh["target_id"])
-        set_by_id  = int(fresh["set_by_id"])
+        rid = fresh["id"]
+        target_id = int(fresh["target_id"])
+        set_by_id = int(fresh["set_by_id"])
         channel_id = int(fresh["channel_id"])
-        message    = fresh["message"]
-        use_dm     = fresh.get("dm", True)
-        label      = fresh.get("label")
-        interval   = fresh["interval"]
+        message = fresh["message"]
+        use_dm = fresh.get("dm", True)
+        label = fresh.get("label")
+        interval = fresh["interval"]
         fire_count = fresh["fire_count"] + 1
 
         e = discord.Embed(
-            title       = f"🔁 {label}" if label else "🔁 Recurring Reminder",
-            description = message,
-            color       = h.BLUE,
+            title=f"🔁 {label}" if label else "🔁 Recurring Reminder",
+            description=message,
+            color=h.BLUE,
         )
         e.set_footer(text=f"NanoBot · repeats every {h.fmt_interval(int(interval))}")
         e.timestamp = datetime.now(timezone.utc)
 
         if set_by_id != target_id:
-            setter      = self.bot.get_user(set_by_id)
+            setter = self.bot.get_user(set_by_id)
             setter_name = setter.display_name if setter else f"user {set_by_id}"
             e.add_field(name="Set by", value=setter_name, inline=True)
 
@@ -214,18 +212,20 @@ class Recurring(commands.Cog):
                     log.warning(f"Recurring {rid}: channel delivery failed: {exc}")
 
         if not delivered:
-            log.warning(f"Recurring {rid} for {target_id} could not be delivered anywhere")
+            log.warning(
+                f"Recurring {rid} for {target_id} could not be delivered anywhere"
+            )
 
         # ── Advance next_due ──────────────────────────────────────────────────
         # Advance by one interval, then skip ahead if multiple cycles were
         # missed (e.g. bot was down for several days). This ensures the next
         # fire is always in the future without rapid catch-up spam.
-        now      = _now()
+        now = _now()
         next_due = fresh["next_due"] + interval
         while next_due <= now:
             next_due += interval
 
-        fresh["next_due"]   = next_due
+        fresh["next_due"] = next_due
         fresh["fire_count"] = fire_count
         await db.update_recurring(fresh)
 
@@ -336,27 +336,27 @@ class Recurring(commands.Cog):
         while await db.recurring_id_exists(rid):
             rid = _new_id()
 
-        now  = _now()
+        now = _now()
         info = {
-            "id":         rid,
-            "target_id":  str(ctx.author.id),
-            "set_by_id":  str(ctx.author.id),
-            "guild_id":   str(ctx.guild.id) if ctx.guild else "0",
+            "id": rid,
+            "target_id": str(ctx.author.id),
+            "set_by_id": str(ctx.author.id),
+            "guild_id": str(ctx.guild.id) if ctx.guild else "0",
             "channel_id": str(ctx.channel.id),
-            "message":    message,
-            "interval":   float(secs),
-            "next_due":   now + secs,
-            "dm":         dm if dm is not None else True,
-            "paused":     False,
+            "message": message,
+            "interval": float(secs),
+            "next_due": now + secs,
+            "dm": dm if dm is not None else True,
+            "paused": False,
             "fire_count": 0,
-            "label":      label or None,
+            "label": label or None,
         }
 
         await self._schedule(info)
 
-        due_dt  = datetime.fromtimestamp(info["next_due"], tz=timezone.utc)
+        due_dt = datetime.fromtimestamp(info["next_due"], tz=timezone.utc)
         display = label if label else message[:60] + ("…" if len(message) > 60 else "")
-        lines   = [
+        lines = [
             f"📝 {display}",
             f"🔁 Every **{h.fmt_interval(secs)}**",
             f"⏭️ First fire: {discord.utils.format_dt(due_dt, style='R')}",
@@ -399,7 +399,9 @@ class Recurring(commands.Cog):
         name="pause",
         description="Pause a recurring reminder — it won't fire until you resume it.",
     )
-    @app_commands.describe(reminder_id="The 6-character ID shown when the reminder was set")
+    @app_commands.describe(
+        reminder_id="The 6-character ID shown when the reminder was set"
+    )
     async def recurring_pause(self, ctx: commands.Context, reminder_id: str):
         await self._pause(ctx, reminder_id.strip().lower())
 
@@ -443,16 +445,16 @@ class Recurring(commands.Cog):
         )
 
         for info in rows:  # already ordered by next_due ASC from DB
-            rid      = info["id"]
-            label    = info.get("label")
-            msg      = info["message"]
+            rid = info["id"]
+            label = info.get("label")
+            msg = info["message"]
             interval = int(info["interval"])
-            paused   = info["paused"]
-            count    = info["fire_count"]
+            paused = info["paused"]
+            count = info["fire_count"]
 
             # Mobile-friendly display — label beats truncated message
             display = label if label else (msg[:50] + ("…" if len(msg) > 50 else ""))
-            due_dt  = datetime.fromtimestamp(info["next_due"], tz=timezone.utc)
+            due_dt = datetime.fromtimestamp(info["next_due"], tz=timezone.utc)
             delivery = "DM" if info.get("dm") else "channel"
 
             if paused:
@@ -462,8 +464,8 @@ class Recurring(commands.Cog):
                 status_icon = ""
                 status_line = f"⏭️ {discord.utils.format_dt(due_dt, style='R')}"
 
-            fired_note  = f" · fired ×{count}" if count else ""
-            prefix      = ctx.prefix or "/"
+            fired_note = f" · fired ×{count}" if count else ""
+            prefix = ctx.prefix or "/"
             cancel_hint = f"`{prefix}recurring cancel {rid}`"
 
             e.add_field(
@@ -532,10 +534,10 @@ class Recurring(commands.Cog):
             )
 
         # Reschedule from now — don't fire immediately for resumed reminders
-        now             = _now()
-        next_due        = now + info["interval"]
+        now = _now()
+        next_due = now + info["interval"]
         info["next_due"] = next_due
-        info["paused"]   = False
+        info["paused"] = False
         await db.update_recurring(info)
 
         self._tasks[rid] = asyncio.create_task(
@@ -543,7 +545,7 @@ class Recurring(commands.Cog):
         )
 
         due_dt = datetime.fromtimestamp(next_due, tz=timezone.utc)
-        label  = info.get("label") or info["message"][:60]
+        label = info.get("label") or info["message"][:60]
         await ctx.reply(
             embed=h.ok(
                 f"Resumed `{rid}` — _{label}_\n\n"
@@ -568,7 +570,7 @@ class Recurring(commands.Cog):
 
         await db.remove_recurring(rid)
 
-        label     = info.get("label") or info["message"][:80]
+        label = info.get("label") or info["message"][:80]
         fire_word = "time" if info["fire_count"] == 1 else "times"
         await ctx.reply(
             embed=h.ok(
@@ -609,6 +611,7 @@ class Recurring(commands.Cog):
 
 
 # ── Registration ───────────────────────────────────────────────────────────────
+
 
 async def setup(bot: commands.Bot):
     await bot.add_cog(Recurring(bot))
