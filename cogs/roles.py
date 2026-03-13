@@ -1,5 +1,5 @@
 """
-cogs/roles.py — v1.0.0
+cogs/roles.py — v1.1.0
 Button-based self-assignable role panels — designed for mobile.
 
 Panels are persistent (survive bot restarts) and posted to any channel.
@@ -9,18 +9,23 @@ Modes:
   single  — radio-style: picking a role removes any other role from the same panel
 
 Commands (all /roles, require Manage Roles):
-  /roles panel create    — Create a new panel (not yet posted)
-  /roles panel post      — Post or re-post a panel to a channel
-  /roles panel edit      — Edit the title / description / mode
-  /roles panel delete    — Delete a panel and its message
-  /roles panel list      — List all panels in this server
+  /roles panel create          — Create a new panel (not yet posted)
+  /roles panel post            — Post or re-post a panel to a channel
+  /roles panel edit            — Edit the title / description / mode
+  /roles panel delete          — Delete a panel and its message
+  /roles panel list            — List all panels in this server
 
-  /roles add             — Add a role to a panel
-  /roles remove          — Remove a role from a panel
+  /roles add                   — Add a role to a panel
+  /roles remove                — Remove a role from a panel
 
-  /roles colorgen        — Auto-generate 18 cosmetic colour roles, create a
-                           single-mode panel, auto-position roles below the
-                           bot's own role, and post the panel.
+  /roles autogen colors        — Generate 18 cosmetic colour roles + panel
+  /roles autogen pronouns      — Generate She/Her, He/Him, They/Them + panel
+  /roles autogen age           — Generate age-range roles + panel
+  /roles autogen region        — Generate 7 world-region roles + panel
+
+  All autogen commands accept up to 5 extra existing roles to append to the panel.
+  Only one autogen can run at a time per server — a second attempt is rejected
+  immediately rather than queuing.
 """
 
 import asyncio
@@ -39,28 +44,96 @@ from utils.checks import has_role_perms, has_admin_perms
 
 log = logging.getLogger("NanoBot.roles")
 
-# ── Colour palette for /roles colorgen ────────────────────────────────────────
-# (name, hex_int) — chosen to look vibrant and distinct in Discord dark mode
-COLOUR_PALETTE: list[tuple[str, int]] = [
-    ("🔴 Red", 0xE74C3C),
-    ("🟠 Orange", 0xE67E22),
-    ("🟡 Yellow", 0xF4D03F),
-    ("🟢 Green", 0x2ECC71),
-    ("🌿 Mint", 0x1ABC9C),
-    ("🔵 Blue", 0x3498DB),
-    ("🌊 Cyan", 0x00BCD4),
-    ("💙 Navy", 0x1F618D),
-    ("🟣 Purple", 0x9B59B6),
-    ("🔮 Violet", 0x6C3483),
-    ("🩷 Pink", 0xFF6EB4),
-    ("🌸 Rose", 0xE91E8C),
-    ("🤎 Brown", 0xA0522D),
-    ("🧡 Amber", 0xF39C12),
-    ("🌻 Gold", 0xD4AC0D),
-    ("🩶 Silver", 0x95A5A6),
-    ("⬜ White", 0xECF0F1),
-    ("🖤 Charcoal", 0x546E7A),
+# ── Autogen palettes ───────────────────────────────────────────────────────────
+# Each entry is (display_name, discord_colour_int | None).
+# None = no colour assigned (role appears default white — right for functional roles).
+
+COLOUR_PALETTE: list[tuple[str, int | None]] = [
+    ("🔴 Red",       0xE74C3C),
+    ("🟠 Orange",    0xE67E22),
+    ("🟡 Yellow",    0xF4D03F),
+    ("🟢 Green",     0x2ECC71),
+    ("🌿 Mint",      0x1ABC9C),
+    ("🔵 Blue",      0x3498DB),
+    ("🌊 Cyan",      0x00BCD4),
+    ("💙 Navy",      0x1F618D),
+    ("🟣 Purple",    0x9B59B6),
+    ("🔮 Violet",    0x6C3483),
+    ("🩷 Pink",      0xFF6EB4),
+    ("🌸 Rose",      0xE91E8C),
+    ("🤎 Brown",     0xA0522D),
+    ("🧡 Amber",     0xF39C12),
+    ("🌻 Gold",      0xD4AC0D),
+    ("🩶 Silver",    0x95A5A6),
+    ("⬜ White",     0xECF0F1),
+    ("🖤 Charcoal",  0x546E7A),
 ]
+
+PRONOUN_PALETTE: list[tuple[str, int | None]] = [
+    ("She/Her",   None),
+    ("He/Him",    None),
+    ("They/Them", None),
+    ("It/Its",    None),
+    ("Any/All",   None),
+]
+
+AGE_PALETTE: list[tuple[str, int | None]] = [
+    ("13-17", None),
+    ("18-20", None),
+    ("21-25", None),
+    ("26-30", None),
+    ("31+",   None),
+]
+
+REGION_PALETTE: list[tuple[str, int | None]] = [
+    ("🌎 North America", None),
+    ("🌎 South America", None),
+    ("🌍 Europe",        None),
+    ("🌍 Africa",        None),
+    ("🌍 Middle East",   None),
+    ("🌏 Asia",          None),
+    ("🌏 Oceania",       None),
+]
+
+# ── Autogen config per kind ────────────────────────────────────────────────────
+# (panel_title, panel_description, mode, palette)
+_AUTOGEN_CFG: dict[str, tuple[str, str, str, list]] = {
+    "colors": (
+        "🎨 Colours",
+        "Pick a colour — choosing a new one removes the previous.",
+        "single",
+        COLOUR_PALETTE,
+    ),
+    "pronouns": (
+        "🏳️‍🌈 Pronouns",
+        "Select your pronouns — you can pick more than one.",
+        "toggle",
+        PRONOUN_PALETTE,
+    ),
+    "age": (
+        "🎂 Age Range",
+        "Pick your age range — you can only select one.",
+        "single",
+        AGE_PALETTE,
+    ),
+    "region": (
+        "🌍 Region",
+        "Select your region(s) — you can pick more than one.",
+        "toggle",
+        REGION_PALETTE,
+    ),
+}
+
+# ── Per-guild autogen concurrency locks ────────────────────────────────────────
+# One asyncio.Lock per guild. If a lock is already held when a second autogen
+# fires on the same server, the second is rejected immediately — no queue.
+_autogen_locks: dict[int, asyncio.Lock] = {}
+
+
+def _get_autogen_lock(guild_id: int) -> asyncio.Lock:
+    if guild_id not in _autogen_locks:
+        _autogen_locks[guild_id] = asyncio.Lock()
+    return _autogen_locks[guild_id]
 
 
 # ── ID generator ───────────────────────────────────────────────────────────────
@@ -69,9 +142,7 @@ def _new_id(length: int = 6) -> str:
 
 
 # ── Button custom_id encoding ──────────────────────────────────────────────────
-# Format: "rp:{panel_id}:{role_id}"
-# Survives restarts — no state lives in the view object itself.
-
+# Format: "rp:{panel_id}:{role_id}"  — survives restarts, no state in view object.
 
 def _encode_cid(panel_id: str, role_id: int) -> str:
     return f"rp:{panel_id}:{role_id}"
@@ -93,25 +164,23 @@ class RoleButton(discord.ui.Button):
         label = entry.get("label") or "Role"
         emoji = entry.get("emoji") or None
         style_map = {
-            "primary": discord.ButtonStyle.primary,
-            "success": discord.ButtonStyle.success,
-            "danger": discord.ButtonStyle.danger,
+            "primary":   discord.ButtonStyle.primary,
+            "success":   discord.ButtonStyle.success,
+            "danger":    discord.ButtonStyle.danger,
             "secondary": discord.ButtonStyle.secondary,
         }
-        style = style_map.get(
-            entry.get("style", "secondary"), discord.ButtonStyle.secondary
-        )
+        style = style_map.get(entry.get("style", "secondary"), discord.ButtonStyle.secondary)
         super().__init__(
             label=label,
             emoji=emoji,
             style=style,
             custom_id=_encode_cid(panel_id, entry["role_id"]),
         )
-        self._role_id = entry["role_id"]
+        self._role_id  = entry["role_id"]
         self._panel_id = panel_id
 
     async def callback(self, interaction: discord.Interaction):
-        # Re-fetch panel from DB (always fresh — no stale cache risk)
+        # Always re-fetch from DB — no stale cache risk
         panel = await db.get_role_panel(self._panel_id)
         if panel is None:
             await interaction.response.send_message(
@@ -120,8 +189,8 @@ class RoleButton(discord.ui.Button):
             return
 
         member = interaction.user
-        guild = interaction.guild
-        role = guild.get_role(self._role_id)
+        guild  = interaction.guild
+        role   = guild.get_role(self._role_id)
 
         if role is None:
             await interaction.response.send_message(
@@ -130,7 +199,6 @@ class RoleButton(discord.ui.Button):
             )
             return
 
-        # Hierarchy check — bot must be above the role
         if role >= guild.me.top_role:
             await interaction.response.send_message(
                 f"I can't assign **{role.name}** — it's above my highest role. "
@@ -142,7 +210,6 @@ class RoleButton(discord.ui.Button):
         has_role = role in member.roles
 
         if has_role:
-            # Toggle off
             try:
                 await member.remove_roles(role, reason="Role panel self-remove")
             except discord.Forbidden:
@@ -151,30 +218,22 @@ class RoleButton(discord.ui.Button):
                 )
                 return
             await interaction.response.send_message(
-                embed=h.ok(
-                    f"Removed **{role.name}** from your roles.", "✅ Role Removed"
-                ),
+                embed=h.ok(f"Removed **{role.name}** from your roles.", "✅ Role Removed"),
                 ephemeral=True,
             )
-            log.debug(
-                f"Role panel: removed {role} from {member} ({member.id}) in {guild}"
-            )
+            log.debug(f"Role panel: removed {role} from {member} ({member.id}) in {guild}")
             return
 
-        # Adding the role
-        # In single mode — remove all other roles from this panel first
+        # Single mode — remove all other panel roles before assigning
         if panel["mode"] == "single":
-            panel_role_ids = {e["role_id"] for e in panel["entries"]}
+            panel_role_ids  = {e["role_id"] for e in panel["entries"]}
             roles_to_remove = [
-                r
-                for r in member.roles
+                r for r in member.roles
                 if r.id in panel_role_ids and r.id != self._role_id
             ]
             if roles_to_remove:
                 try:
-                    await member.remove_roles(
-                        *roles_to_remove, reason="Role panel single-mode swap"
-                    )
+                    await member.remove_roles(*roles_to_remove, reason="Role panel single-mode swap")
                 except discord.Forbidden:
                     pass
 
@@ -193,16 +252,14 @@ class RoleButton(discord.ui.Button):
         log.debug(f"Role panel: added {role} to {member} ({member.id}) in {guild}")
 
 
-# ── Panel view factory ─────────────────────────────────────────────────────────
+# ── Panel view / embed factories ───────────────────────────────────────────────
 def _build_view(panel: dict) -> discord.ui.View:
-    """Build a persistent View from a panel dict."""
     view = discord.ui.View(timeout=None)
     for entry in panel["entries"]:
         view.add_item(RoleButton(panel["id"], entry))
     return view
 
 
-# ── Panel embed factory ────────────────────────────────────────────────────────
 def _build_embed(panel: dict) -> discord.Embed:
     mode_note = (
         "_Pick one — choosing a new option removes the previous one._"
@@ -211,9 +268,9 @@ def _build_embed(panel: dict) -> discord.Embed:
     )
     desc = (panel.get("description") or "") + f"\n\n{mode_note}"
     e = discord.Embed(
-        title=panel["title"],
-        description=desc.strip(),
-        color=h.BLUE,
+        title       = panel["title"],
+        description = desc.strip(),
+        color       = h.BLUE,
     )
     e.set_footer(text="NanoBot Role Panel")
     return e
@@ -232,6 +289,208 @@ async def _panel_autocomplete(
     ][:25]
 
 
+# ── Shared autogen engine ──────────────────────────────────────────────────────
+# All four autogen commands funnel through here. Handles concurrency locking,
+# role creation with retry, positioning, panel creation, and summary.
+
+async def _run_autogen(
+    cog:         "Roles",
+    interaction: discord.Interaction,
+    channel:     discord.TextChannel,
+    palette:     list[tuple[str, int | None]],
+    panel_title: str,
+    panel_desc:  str,
+    mode:        str,
+    prefix:      str | None,
+    extra_roles: list[discord.Role],
+    kind:        str,
+) -> None:
+    """
+    Core autogen logic shared by all four /roles autogen commands.
+    Must be called after interaction.response.defer().
+    """
+    lock = _get_autogen_lock(interaction.guild_id)
+
+    if lock.locked():
+        await interaction.followup.send(
+            embed=h.err(
+                "An autogen is already running on this server.\n"
+                "Wait for it to finish before starting another.",
+                "⏳ Already Running",
+            ),
+            ephemeral=True,
+        )
+        return
+
+    async with lock:
+        guild          = interaction.guild
+        existing_names = {r.name.lower() for r in guild.roles}
+
+        # ── Rate-limit constants ───────────────────────────────────────────────
+        # Target ~120s total per full 18-role run (well within 15-min followup).
+        # Smaller palettes (pronouns=5, age=5, region=7) finish proportionally faster.
+        _CREATE_DELAY     = 3.0   # seconds between each role create
+        _POS_DELAY        = 3.5   # seconds between each role.edit(position)
+        _PAUSE_BEFORE_POS = 3.0   # pause after all creates before touching positions
+        _RETRY_BACKOFF    = 5.0   # wait before retrying a failed create
+        _MAX_RETRIES      = 2
+
+        # ── 1. Create roles ────────────────────────────────────────────────────
+        created: list[discord.Role] = []
+        skipped: list[str]          = []
+
+        for name, colour in palette:
+            full_name = f"{prefix} {name}" if prefix else name
+            if full_name.lower() in existing_names:
+                skipped.append(full_name)
+                continue
+
+            role = None
+            for attempt in range(1, _MAX_RETRIES + 1):
+                try:
+                    kwargs: dict = dict(
+                        name   = full_name,
+                        reason = f"NanoBot autogen ({kind}) by {interaction.user}",
+                    )
+                    if colour is not None:
+                        kwargs["colour"] = discord.Colour(colour)
+                    role = await guild.create_role(**kwargs)
+                    break
+                except discord.Forbidden:
+                    await interaction.followup.send(
+                        embed=h.err("I don't have Manage Roles permission."),
+                        ephemeral=True,
+                    )
+                    return
+                except discord.HTTPException as exc:
+                    if attempt < _MAX_RETRIES:
+                        log.warning(
+                            f"autogen({kind}): role '{full_name}' attempt {attempt} "
+                            f"failed ({exc}) — retrying in {_RETRY_BACKOFF}s"
+                        )
+                        await asyncio.sleep(_RETRY_BACKOFF)
+                    else:
+                        log.warning(
+                            f"autogen({kind}): failed to create '{full_name}' "
+                            f"after {_MAX_RETRIES} attempts: {exc}"
+                        )
+
+            if role:
+                created.append(role)
+            await asyncio.sleep(_CREATE_DELAY)
+
+        if not created and not extra_roles:
+            await interaction.followup.send(
+                embed=h.warn(
+                    "All roles for this autogen already exist on this server.\n"
+                    "No new roles were created.",
+                    "⚠️ Nothing to do",
+                ),
+                ephemeral=True,
+            )
+            return
+
+        # ── 2. Auto-position created roles below bot's top role ────────────────
+        await asyncio.sleep(_PAUSE_BEFORE_POS)
+
+        bot_pos    = guild.me.top_role.position
+        positioned = 0
+        pos_failed = False
+
+        for i, role in enumerate(created):
+            target_pos = max(1, bot_pos - 1 - i)
+            try:
+                await role.edit(
+                    position = target_pos,
+                    reason   = f"NanoBot autogen ({kind}): auto-positioning",
+                )
+                positioned += 1
+            except (discord.Forbidden, discord.HTTPException) as exc:
+                log.warning(f"autogen({kind}): could not position '{role.name}': {exc}")
+                pos_failed = True
+                break   # if one fails the rest will too — stop trying
+            await asyncio.sleep(_POS_DELAY)
+
+        # ── 3. Create panel ────────────────────────────────────────────────────
+        panel_id = _new_id()
+        await db.create_role_panel(
+            panel_id    = panel_id,
+            guild_id    = guild.id,
+            title       = panel_title,
+            description = panel_desc,
+            mode        = mode,
+        )
+
+        # Generated roles first, extra roles appended after
+        for role in created:
+            label = role.name.replace(f"{prefix} ", "", 1) if prefix else role.name
+            await db.add_role_to_panel(panel_id, {
+                "role_id": role.id,
+                "label":   label,
+                "emoji":   None,
+                "style":   "secondary",
+            })
+
+        for role in extra_roles:
+            await db.add_role_to_panel(panel_id, {
+                "role_id": role.id,
+                "label":   role.name,
+                "emoji":   None,
+                "style":   "secondary",
+            })
+
+        # ── 4. Post the panel ──────────────────────────────────────────────────
+        panel = await db.get_role_panel(panel_id)
+        view  = _build_view(panel)
+        try:
+            msg = await channel.send(embed=_build_embed(panel), view=view)
+            cog.bot.add_view(view, message_id=msg.id)
+            await db.update_role_panel_message(panel_id, channel.id, msg.id)
+        except discord.Forbidden:
+            await interaction.followup.send(
+                embed=h.err(
+                    f"Roles created but I can't post in {channel.mention}.\n"
+                    f"Panel ID `{panel_id}` was saved — use `/roles panel post` manually."
+                ),
+                ephemeral=True,
+            )
+            return
+
+        # ── 5. Summary ─────────────────────────────────────────────────────────
+        lines = [
+            f"Created **{len(created)}** role(s) and posted **{panel_title}** in {channel.mention}.",
+        ]
+        if created:
+            preview = ", ".join(r.mention for r in created[:8])
+            if len(created) > 8:
+                preview += f" … and {len(created) - 8} more"
+            lines.append(preview)
+        if extra_roles:
+            lines.append(
+                f"➕ Added {len(extra_roles)} extra role(s): "
+                + ", ".join(r.mention for r in extra_roles)
+            )
+        if not pos_failed and created:
+            lines.append(f"📐 Auto-positioned below **{guild.me.top_role.name}**.")
+        elif pos_failed:
+            lines.append(
+                f"⚠️ Positioned {positioned}/{len(created)} role(s) — "
+                "move any remaining ones above your member roles manually."
+            )
+        if skipped:
+            lines.append(f"⏭️ Skipped {len(skipped)} already-existing role(s).")
+
+        await interaction.followup.send(
+            embed=h.ok("\n".join(lines), f"✅ {panel_title} Generated"),
+            ephemeral=True,
+        )
+        log.info(
+            f"autogen({kind}): created {len(created)} roles in {guild} ({guild.id}) "
+            f"by {interaction.user} — positioned {positioned}/{len(created)}, "
+            f"extras: {len(extra_roles)}"
+        )
+
+
 # ══════════════════════════════════════════════════════════════════════════════
 class Roles(commands.Cog):
     """Button-based self-assignable role panels."""
@@ -241,7 +500,7 @@ class Roles(commands.Cog):
 
     async def cog_load(self):
         """Re-register all persistent views on startup."""
-        panels = await db.get_all_role_panels()
+        panels     = await db.get_all_role_panels()
         registered = 0
         for panel in panels:
             if not panel.get("message_id"):
@@ -269,37 +528,31 @@ class Roles(commands.Cog):
         parent=roles_group,
     )
 
-    @panel_group.command(
-        name="create", description="Create a new role panel (not posted yet)."
-    )
+    @panel_group.command(name="create", description="Create a new role panel (not posted yet).")
     @app_commands.describe(
-        title="Panel title shown to members",
-        description="Optional subtitle / instructions",
-        mode="toggle = add/remove freely | single = only one role at a time",
+        title       = "Panel title shown to members",
+        description = "Optional subtitle / instructions",
+        mode        = "toggle = add/remove freely | single = only one role at a time",
     )
-    @app_commands.choices(
-        mode=[
-            app_commands.Choice(name="Toggle (add or remove freely)", value="toggle"),
-            app_commands.Choice(
-                name="Single (radio — one role at a time)", value="single"
-            ),
-        ]
-    )
+    @app_commands.choices(mode=[
+        app_commands.Choice(name="Toggle (add or remove freely)", value="toggle"),
+        app_commands.Choice(name="Single (radio — one role at a time)", value="single"),
+    ])
     @has_role_perms()
     async def panel_create(
         self,
         interaction: discord.Interaction,
-        title: str,
+        title:       str,
         description: Optional[str] = None,
-        mode: str = "toggle",
+        mode:        str            = "toggle",
     ):
         panel_id = _new_id()
         await db.create_role_panel(
-            panel_id=panel_id,
-            guild_id=interaction.guild_id,
-            title=title,
-            description=description,
-            mode=mode,
+            panel_id    = panel_id,
+            guild_id    = interaction.guild_id,
+            title       = title,
+            description = description,
+            mode        = mode,
         )
         await interaction.response.send_message(
             embed=h.ok(
@@ -311,20 +564,18 @@ class Roles(commands.Cog):
             ephemeral=True,
         )
 
-    @panel_group.command(
-        name="post", description="Post (or re-post) a panel to a channel."
-    )
+    @panel_group.command(name="post", description="Post (or re-post) a panel to a channel.")
     @app_commands.describe(
-        panel_id="Panel to post",
-        channel="Channel to post in (default: current channel)",
+        panel_id = "Panel to post",
+        channel  = "Channel to post in (default: current channel)",
     )
     @app_commands.autocomplete(panel_id=_panel_autocomplete)
     @has_role_perms()
     async def panel_post(
         self,
         interaction: discord.Interaction,
-        panel_id: str,
-        channel: Optional[discord.TextChannel] = None,
+        panel_id:    str,
+        channel:     Optional[discord.TextChannel] = None,
     ):
         panel = await db.get_role_panel(panel_id)
         if not panel or panel["guild_id"] != str(interaction.guild_id):
@@ -342,7 +593,6 @@ class Roles(commands.Cog):
 
         target_ch = channel or interaction.channel
 
-        # Delete old message if it still exists
         if panel.get("message_id") and panel.get("channel_id"):
             old_ch = interaction.guild.get_channel(int(panel["channel_id"]))
             if old_ch:
@@ -372,32 +622,26 @@ class Roles(commands.Cog):
             ephemeral=True,
         )
 
-    @panel_group.command(
-        name="edit", description="Edit a panel's title, description, or mode."
-    )
+    @panel_group.command(name="edit", description="Edit a panel's title, description, or mode.")
     @app_commands.describe(
-        panel_id="Panel to edit",
-        title="New title",
-        description="New description",
-        mode="toggle or single",
+        panel_id    = "Panel to edit",
+        title       = "New title",
+        description = "New description",
+        mode        = "toggle or single",
     )
     @app_commands.autocomplete(panel_id=_panel_autocomplete)
-    @app_commands.choices(
-        mode=[
-            app_commands.Choice(name="Toggle (add or remove freely)", value="toggle"),
-            app_commands.Choice(
-                name="Single (radio — one role at a time)", value="single"
-            ),
-        ]
-    )
+    @app_commands.choices(mode=[
+        app_commands.Choice(name="Toggle (add or remove freely)", value="toggle"),
+        app_commands.Choice(name="Single (radio — one role at a time)", value="single"),
+    ])
     @has_role_perms()
     async def panel_edit(
         self,
         interaction: discord.Interaction,
-        panel_id: str,
-        title: Optional[str] = None,
+        panel_id:    str,
+        title:       Optional[str] = None,
         description: Optional[str] = None,
-        mode: Optional[str] = None,
+        mode:        Optional[str] = None,
     ):
         panel = await db.get_role_panel(panel_id)
         if not panel or panel["guild_id"] != str(interaction.guild_id):
@@ -407,14 +651,10 @@ class Roles(commands.Cog):
 
         await db.edit_role_panel(
             panel_id,
-            title=title or panel["title"],
-            description=(
-                description if description is not None else panel.get("description")
-            ),
-            mode=mode or panel["mode"],
+            title       = title       or panel["title"],
+            description = description if description is not None else panel.get("description"),
+            mode        = mode        or panel["mode"],
         )
-
-        # Refresh the live message if it exists
         updated_panel = await db.get_role_panel(panel_id)
         await self._refresh_panel_message(interaction.guild, updated_panel)
 
@@ -423,9 +663,7 @@ class Roles(commands.Cog):
             ephemeral=True,
         )
 
-    @panel_group.command(
-        name="delete", description="Delete a panel and remove its message."
-    )
+    @panel_group.command(name="delete", description="Delete a panel and remove its message.")
     @app_commands.describe(panel_id="Panel to delete")
     @app_commands.autocomplete(panel_id=_panel_autocomplete)
     @has_role_perms()
@@ -436,7 +674,6 @@ class Roles(commands.Cog):
                 embed=h.err(f"No panel with ID `{panel_id}` found."), ephemeral=True
             )
 
-        # Delete the posted message
         if panel.get("message_id") and panel.get("channel_id"):
             ch = interaction.guild.get_channel(int(panel["channel_id"]))
             if ch:
@@ -448,16 +685,11 @@ class Roles(commands.Cog):
 
         await db.delete_role_panel(panel_id)
         await interaction.response.send_message(
-            embed=h.ok(
-                f"Panel **{panel['title']}** (`{panel_id}`) deleted.",
-                "🗑️ Panel Deleted",
-            ),
+            embed=h.ok(f"Panel **{panel['title']}** (`{panel_id}`) deleted.", "🗑️ Panel Deleted"),
             ephemeral=True,
         )
 
-    @panel_group.command(
-        name="list", description="List all role panels in this server."
-    )
+    @panel_group.command(name="list", description="List all role panels in this server.")
     @has_role_perms()
     async def panel_list(self, interaction: discord.Interaction):
         panels = await db.get_role_panels_for_guild(interaction.guild_id)
@@ -472,45 +704,42 @@ class Roles(commands.Cog):
 
         lines = []
         for p in panels:
-            role_count = len(p["entries"])
-            ch_mention = (
-                f"<#{p['channel_id']}>" if p.get("channel_id") else "_not posted_"
-            )
+            ch_mention = f"<#{p['channel_id']}>" if p.get("channel_id") else "_not posted_"
             lines.append(
-                f"**{p['title']}** · `{p['id']}` · {role_count} role(s) · "
+                f"**{p['title']}** · `{p['id']}` · {len(p['entries'])} role(s) · "
                 f"mode: {p['mode']} · {ch_mention}"
             )
 
-        e = h.embed("📋 Role Panels", "\n".join(lines), h.BLUE)
-        await interaction.response.send_message(embed=e, ephemeral=True)
+        await interaction.response.send_message(
+            embed=h.embed("📋 Role Panels", "\n".join(lines), h.BLUE),
+            ephemeral=True,
+        )
 
     # ── /roles add ─────────────────────────────────────────────────────────────
     @roles_group.command(name="add", description="Add a role to a panel.")
     @app_commands.describe(
-        panel_id="Panel to add the role to",
-        role="The role to add",
-        label="Button label (defaults to role name)",
-        emoji="Button emoji e.g. 🔴 (optional)",
-        style="Button colour",
+        panel_id = "Panel to add the role to",
+        role     = "The role to add",
+        label    = "Button label (defaults to role name)",
+        emoji    = "Button emoji e.g. 🔴 (optional)",
+        style    = "Button colour",
     )
     @app_commands.autocomplete(panel_id=_panel_autocomplete)
-    @app_commands.choices(
-        style=[
-            app_commands.Choice(name="Grey (default)", value="secondary"),
-            app_commands.Choice(name="Blue (blurple)", value="primary"),
-            app_commands.Choice(name="Green", value="success"),
-            app_commands.Choice(name="Red", value="danger"),
-        ]
-    )
+    @app_commands.choices(style=[
+        app_commands.Choice(name="Grey (default)", value="secondary"),
+        app_commands.Choice(name="Blue (blurple)", value="primary"),
+        app_commands.Choice(name="Green",          value="success"),
+        app_commands.Choice(name="Red",            value="danger"),
+    ])
     @has_role_perms()
     async def roles_add(
         self,
         interaction: discord.Interaction,
-        panel_id: str,
-        role: discord.Role,
-        label: Optional[str] = None,
-        emoji: Optional[str] = None,
-        style: str = "secondary",
+        panel_id:    str,
+        role:        discord.Role,
+        label:       Optional[str] = None,
+        emoji:       Optional[str] = None,
+        style:       str           = "secondary",
     ):
         panel = await db.get_role_panel(panel_id)
         if not panel or panel["guild_id"] != str(interaction.guild_id):
@@ -523,8 +752,7 @@ class Roles(commands.Cog):
             )
         if any(e["role_id"] == role.id for e in panel["entries"]):
             return await interaction.response.send_message(
-                embed=h.warn(f"**{role.name}** is already on this panel."),
-                ephemeral=True,
+                embed=h.warn(f"**{role.name}** is already on this panel."), ephemeral=True
             )
         if role >= interaction.guild.me.top_role:
             return await interaction.response.send_message(
@@ -535,15 +763,12 @@ class Roles(commands.Cog):
                 ephemeral=True,
             )
 
-        entry = {
+        await db.add_role_to_panel(panel_id, {
             "role_id": role.id,
-            "label": label or role.name,
-            "emoji": emoji,
-            "style": style,
-        }
-        await db.add_role_to_panel(panel_id, entry)
-
-        # Refresh live message
+            "label":   label or role.name,
+            "emoji":   emoji,
+            "style":   style,
+        })
         updated_panel = await db.get_role_panel(panel_id)
         await self._refresh_panel_message(interaction.guild, updated_panel)
 
@@ -558,16 +783,16 @@ class Roles(commands.Cog):
     # ── /roles remove ──────────────────────────────────────────────────────────
     @roles_group.command(name="remove", description="Remove a role from a panel.")
     @app_commands.describe(
-        panel_id="Panel to remove the role from",
-        role="The role to remove",
+        panel_id = "Panel to remove the role from",
+        role     = "The role to remove",
     )
     @app_commands.autocomplete(panel_id=_panel_autocomplete)
     @has_role_perms()
     async def roles_remove(
         self,
         interaction: discord.Interaction,
-        panel_id: str,
-        role: discord.Role,
+        panel_id:    str,
+        role:        discord.Role,
     ):
         panel = await db.get_role_panel(panel_id)
         if not panel or panel["guild_id"] != str(interaction.guild_id):
@@ -580,7 +805,6 @@ class Roles(commands.Cog):
             )
 
         await db.remove_role_from_panel(panel_id, role.id)
-
         updated_panel = await db.get_role_panel(panel_id)
         await self._refresh_panel_message(interaction.guild, updated_panel)
 
@@ -592,194 +816,139 @@ class Roles(commands.Cog):
             ephemeral=True,
         )
 
-    # ── /roles colorgen ────────────────────────────────────────────────────────
-    @roles_group.command(
-        name="colorgen",
-        description="Auto-generate cosmetic colour roles, position them, and create a panel.",
+    # ── /roles autogen subgroup ────────────────────────────────────────────────
+    autogen_group = app_commands.Group(
+        name="autogen",
+        description="Auto-generate common role sets and panels.",
+        parent=roles_group,
+    )
+
+    @autogen_group.command(
+        name="colors",
+        description="Generate 18 cosmetic colour roles and a single-choice colour panel.",
     )
     @app_commands.describe(
-        channel="Channel to post the colour panel in",
-        prefix="Optional prefix for role names e.g. '🎨' → '🎨 Red'",
+        channel      = "Channel to post the panel in",
+        prefix       = "Optional prefix for role names e.g. '🎨' → '🎨 Red'",
+        extra_role_1 = "Extra existing role to append to the panel",
+        extra_role_2 = "Extra existing role to append to the panel",
+        extra_role_3 = "Extra existing role to append to the panel",
+        extra_role_4 = "Extra existing role to append to the panel",
+        extra_role_5 = "Extra existing role to append to the panel",
     )
     @has_admin_perms()
-    async def colorgen(
+    async def autogen_colors(
         self,
-        interaction: discord.Interaction,
-        channel: discord.TextChannel,
-        prefix: Optional[str] = None,
+        interaction:  discord.Interaction,
+        channel:      discord.TextChannel,
+        prefix:       Optional[str]          = None,
+        extra_role_1: Optional[discord.Role] = None,
+        extra_role_2: Optional[discord.Role] = None,
+        extra_role_3: Optional[discord.Role] = None,
+        extra_role_4: Optional[discord.Role] = None,
+        extra_role_5: Optional[discord.Role] = None,
     ):
         await interaction.response.defer(ephemeral=True, thinking=True)
+        title, desc, mode, palette = _AUTOGEN_CFG["colors"]
+        extras = [r for r in [extra_role_1, extra_role_2, extra_role_3, extra_role_4, extra_role_5] if r]
+        await _run_autogen(self, interaction, channel, palette, title, desc, mode, prefix, extras, "colors")
 
-        guild = interaction.guild
-        existing_names = {r.name.lower() for r in guild.roles}
+    @autogen_group.command(
+        name="pronouns",
+        description="Generate She/Her, He/Him, They/Them, It/Its, Any/All roles and a panel.",
+    )
+    @app_commands.describe(
+        channel      = "Channel to post the panel in",
+        extra_role_1 = "Extra existing role to append to the panel",
+        extra_role_2 = "Extra existing role to append to the panel",
+        extra_role_3 = "Extra existing role to append to the panel",
+        extra_role_4 = "Extra existing role to append to the panel",
+        extra_role_5 = "Extra existing role to append to the panel",
+    )
+    @has_admin_perms()
+    async def autogen_pronouns(
+        self,
+        interaction:  discord.Interaction,
+        channel:      discord.TextChannel,
+        extra_role_1: Optional[discord.Role] = None,
+        extra_role_2: Optional[discord.Role] = None,
+        extra_role_3: Optional[discord.Role] = None,
+        extra_role_4: Optional[discord.Role] = None,
+        extra_role_5: Optional[discord.Role] = None,
+    ):
+        await interaction.response.defer(ephemeral=True, thinking=True)
+        title, desc, mode, palette = _AUTOGEN_CFG["pronouns"]
+        extras = [r for r in [extra_role_1, extra_role_2, extra_role_3, extra_role_4, extra_role_5] if r]
+        await _run_autogen(self, interaction, channel, palette, title, desc, mode, None, extras, "pronouns")
 
-        # ── 1. Create roles ───────────────────────────────────────────────────
-        # Target ~120s total (well within the 15-minute followup window).
-        # 18 creates × 3.0s = ~54s, 3s pause, 18 positions × 3.5s = ~63s → ~120s.
-        # Conservative enough that multiple servers running simultaneously won't
-        # saturate Discord's upstream proxy.
-        _CREATE_DELAY = 3.0
-        _RETRY_BACKOFF = 5.0
-        _MAX_RETRIES = 2
+    @autogen_group.command(
+        name="age",
+        description="Generate age-range roles (13-17, 18-20, 21-25, 26-30, 31+) and a panel.",
+    )
+    @app_commands.describe(
+        channel      = "Channel to post the panel in",
+        extra_role_1 = "Extra existing role to append to the panel",
+        extra_role_2 = "Extra existing role to append to the panel",
+        extra_role_3 = "Extra existing role to append to the panel",
+        extra_role_4 = "Extra existing role to append to the panel",
+        extra_role_5 = "Extra existing role to append to the panel",
+    )
+    @has_admin_perms()
+    async def autogen_age(
+        self,
+        interaction:  discord.Interaction,
+        channel:      discord.TextChannel,
+        extra_role_1: Optional[discord.Role] = None,
+        extra_role_2: Optional[discord.Role] = None,
+        extra_role_3: Optional[discord.Role] = None,
+        extra_role_4: Optional[discord.Role] = None,
+        extra_role_5: Optional[discord.Role] = None,
+    ):
+        await interaction.response.defer(ephemeral=True, thinking=True)
+        title, desc, mode, palette = _AUTOGEN_CFG["age"]
+        extras = [r for r in [extra_role_1, extra_role_2, extra_role_3, extra_role_4, extra_role_5] if r]
+        await _run_autogen(self, interaction, channel, palette, title, desc, mode, None, extras, "age")
 
-        created: list[discord.Role] = []
-        skipped: list[str] = []
-
-        for name, colour in COLOUR_PALETTE:
-            full_name = f"{prefix} {name}" if prefix else name
-            if full_name.lower() in existing_names:
-                skipped.append(full_name)
-                continue
-
-            role = None
-            for attempt in range(1, _MAX_RETRIES + 1):
-                try:
-                    role = await guild.create_role(
-                        name=full_name,
-                        colour=discord.Colour(colour),
-                        reason=f"NanoBot colorgen by {interaction.user}",
-                    )
-                    break
-                except discord.Forbidden:
-                    await interaction.followup.send(
-                        embed=h.err("I don't have Manage Roles permission."),
-                        ephemeral=True,
-                    )
-                    return
-                except discord.HTTPException as exc:
-                    if attempt < _MAX_RETRIES:
-                        log.warning(
-                            f"colorgen: role '{full_name}' attempt {attempt} failed "
-                            f"({exc}) — retrying in {_RETRY_BACKOFF}s"
-                        )
-                        await asyncio.sleep(_RETRY_BACKOFF)
-                    else:
-                        log.warning(
-                            f"colorgen: failed to create '{full_name}' "
-                            f"after {_MAX_RETRIES} attempts: {exc}"
-                        )
-
-            if role:
-                created.append(role)
-            await asyncio.sleep(_CREATE_DELAY)
-
-        if not created:
-            await interaction.followup.send(
-                embed=h.warn(
-                    "All colour roles already exist on this server. "
-                    "No new roles were created.",
-                    "⚠️ Nothing to do",
-                ),
-                ephemeral=True,
-            )
-            return
-
-        # ── 2. Auto-position roles below the bot's top role ───────────────────
-        # Longer pause after bulk creation before touching positions.
-        # 3.5s between each edit — see timing breakdown above.
-        await asyncio.sleep(3.0)
-
-        bot_pos = guild.me.top_role.position
-        positioned = 0
-        pos_failed = False
-
-        for i, role in enumerate(created):
-            target_pos = max(1, bot_pos - 1 - i)
-            try:
-                await role.edit(
-                    position=target_pos,
-                    reason="NanoBot colorgen: auto-positioning colour roles",
-                )
-                positioned += 1
-            except (discord.Forbidden, discord.HTTPException) as exc:
-                log.warning(f"colorgen: could not position '{role.name}': {exc}")
-                pos_failed = True
-                break  # if one fails the rest will too — stop trying
-            await asyncio.sleep(3.5)
-
-        # ── 3. Create panel ───────────────────────────────────────────────────
-        panel_id = _new_id()
-        await db.create_role_panel(
-            panel_id=panel_id,
-            guild_id=guild.id,
-            title="🎨 Pick a Colour",
-            description="Choose a colour role — you can only have one at a time.",
-            mode="single",
-        )
-
-        for role in created:
-            # Strip the prefix from the button label for a cleaner look
-            label = role.name.replace(f"{prefix} ", "", 1) if prefix else role.name
-            await db.add_role_to_panel(
-                panel_id,
-                {
-                    "role_id": role.id,
-                    "label": label,
-                    "emoji": None,
-                    "style": "secondary",
-                },
-            )
-
-        # ── 4. Post the panel ─────────────────────────────────────────────────
-        panel = await db.get_role_panel(panel_id)
-        view = _build_view(panel)
-        try:
-            msg = await channel.send(embed=_build_embed(panel), view=view)
-            self.bot.add_view(view, message_id=msg.id)
-            await db.update_role_panel_message(panel_id, channel.id, msg.id)
-        except discord.Forbidden:
-            await interaction.followup.send(
-                embed=h.err(f"Roles created but I can't post in {channel.mention}."),
-                ephemeral=True,
-            )
-            return
-
-        # ── 5. Summary ────────────────────────────────────────────────────────
-        lines = [
-            f"Created **{len(created)}** colour role(s) and posted a panel in {channel.mention}.",
-            "",
-            f"🎨 Roles: {', '.join(r.mention for r in created[:10])}"
-            + (f" … and {len(created) - 10} more" if len(created) > 10 else ""),
-        ]
-        if not pos_failed:
-            lines.append(
-                f"📐 Roles auto-positioned just below **{guild.me.top_role.name}**."
-            )
-        else:
-            lines.append(
-                f"⚠️ Positioned {positioned}/{len(created)} role(s) before hitting a permission "
-                "error — move any remaining roles above your member roles manually so colours "
-                "show in the member list."
-            )
-        if skipped:
-            lines.append(f"⏭️ Skipped {len(skipped)} already-existing role(s).")
-
-        await interaction.followup.send(
-            embed=h.ok("\n".join(lines), "🎨 Colour Roles Generated"),
-            ephemeral=True,
-        )
-        log.info(
-            f"colorgen: created {len(created)} roles in {guild} ({guild.id}) "
-            f"by {interaction.user} — positioned {positioned}/{len(created)}"
-        )
+    @autogen_group.command(
+        name="region",
+        description="Generate 7 world-region roles (N. America, Europe, Asia…) and a panel.",
+    )
+    @app_commands.describe(
+        channel      = "Channel to post the panel in",
+        extra_role_1 = "Extra existing role to append to the panel",
+        extra_role_2 = "Extra existing role to append to the panel",
+        extra_role_3 = "Extra existing role to append to the panel",
+        extra_role_4 = "Extra existing role to append to the panel",
+        extra_role_5 = "Extra existing role to append to the panel",
+    )
+    @has_admin_perms()
+    async def autogen_region(
+        self,
+        interaction:  discord.Interaction,
+        channel:      discord.TextChannel,
+        extra_role_1: Optional[discord.Role] = None,
+        extra_role_2: Optional[discord.Role] = None,
+        extra_role_3: Optional[discord.Role] = None,
+        extra_role_4: Optional[discord.Role] = None,
+        extra_role_5: Optional[discord.Role] = None,
+    ):
+        await interaction.response.defer(ephemeral=True, thinking=True)
+        title, desc, mode, palette = _AUTOGEN_CFG["region"]
+        extras = [r for r in [extra_role_1, extra_role_2, extra_role_3, extra_role_4, extra_role_5] if r]
+        await _run_autogen(self, interaction, channel, palette, title, desc, mode, None, extras, "region")
 
     # ── Internal: refresh a live panel message ─────────────────────────────────
-    async def _refresh_panel_message(
-        self,
-        guild: discord.Guild,
-        panel: dict,
-    ) -> None:
-        """Edit the posted panel message to reflect current entries/title."""
+    async def _refresh_panel_message(self, guild: discord.Guild, panel: dict) -> None:
+        """Edit the posted panel message to reflect current entries / title."""
         if not panel.get("message_id") or not panel.get("channel_id"):
             return
         ch = guild.get_channel(int(panel["channel_id"]))
         if not ch:
             return
         try:
-            msg = await ch.fetch_message(int(panel["message_id"]))
+            msg  = await ch.fetch_message(int(panel["message_id"]))
             view = _build_view(panel)
             await msg.edit(embed=_build_embed(panel), view=view)
-            # Re-register the updated view
             self.bot.add_view(view, message_id=msg.id)
         except (discord.NotFound, discord.HTTPException) as exc:
             log.debug(f"Could not refresh panel message {panel['id']}: {exc}")
