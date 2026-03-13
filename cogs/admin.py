@@ -7,7 +7,8 @@ All commands here require the invoker to be the bot owner
 
 Commands:
   reload  [cog|all]  — hot-reload one cog or every cog
-  update             — git pull + reload all cogs
+  update             — git pull + reload all cogs (no slash command sync)
+  sync   [guild_id]  — push slash commands to Discord (global or one guild)
   shutdown           — graceful shutdown (flushes logs, closes connection)
   restart            — graceful shutdown then re-exec the process
   setloglevel <lvl>  — change log level live and persist to config.json
@@ -39,6 +40,9 @@ _ALL_COGS = (
     "cogs.welcome",
     "cogs.admin",
     "cogs.votes",
+    "cogs.auditlog",
+    "cogs.automod",
+    "cogs.roles",
 )
 
 _VALID_LEVELS = ("DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL")
@@ -117,16 +121,12 @@ class Admin(commands.Cog):
                 log.error(f"Failed to reload {ext}: {exc}", exc_info=exc)
 
         had_errors = any(r.startswith("❌") for r in results)
-        title = (
-            "🔄 Reload Complete" if not had_errors else "🔄 Reload — Partial Failure"
-        )
+        title  = "🔄 Reload Complete" if not had_errors else "🔄 Reload — Partial Failure"
         colour = h.GREEN if not had_errors else h.YELLOW
 
         e = h.embed(title=title, description="\n".join(results), color=colour)
         if not had_errors and len(targets) > 1:
-            e.set_footer(
-                text=f"All {len(targets)} cogs reloaded successfully  ·  NanoBot"
-            )
+            e.set_footer(text=f"All {len(targets)} cogs reloaded successfully  ·  NanoBot")
         else:
             e.set_footer(text="NanoBot Admin")
 
@@ -197,17 +197,23 @@ class Admin(commands.Cog):
     @commands.command(
         name="update",
         aliases=["pull"],
-        help="Pull the latest code from git and reload all cogs.\n\nRuns: git pull\nThen reloads every cog in _ALL_COGS.\nDoes NOT restart the process — use !restart for that.",
+        help=(
+            "Pull the latest code from git and reload all cogs.\n\n"
+            "Runs: git pull → reloads every cog.\n"
+            "Does NOT sync slash commands — use !sync for that.\n"
+            "Does NOT restart the process — use !restart for that."
+        ),
     )
     async def update(self, ctx: commands.Context):
         """
-        !update
+        !update  /  !pull
 
         1. Runs `git pull` and reports the output.
         2. If the pull succeeds, reloads all cogs.
         3. Reports per-cog reload results.
 
-        Does not restart the process — use !restart if you need main.py changes to take effect.
+        Slash commands are NOT synced here — run !sync separately if you
+        added or removed any slash commands.
         """
         await ctx.defer()
 
@@ -242,10 +248,7 @@ class Admin(commands.Cog):
             git_output = git_output[:900] + "\n…(truncated)"
 
         if not git_ok:
-            e = h.embed(
-                title="📥 Update — Git Pull Failed",
-                color=h.RED if hasattr(h, "RED") else 0xED4245,
-            )
+            e = h.embed(title="📥 Update — Git Pull Failed", color=h.RED)
             e.description = f"```\n{git_output}\n```"
             e.set_footer(text="Cogs were NOT reloaded  ·  NanoBot Admin")
             log.error(f"git pull failed (rc={result.returncode}): {git_output}")
@@ -274,34 +277,100 @@ class Admin(commands.Cog):
         had_errors = any(r.startswith("❌") for r in reload_results)
 
         e = h.embed(
-            title=(
-                "📥 Update Complete" if not had_errors else "📥 Update — Reload Errors"
-            ),
-            color=h.GREEN if not had_errors else h.YELLOW,
+            title = "📥 Update Complete" if not had_errors else "📥 Update — Reload Errors",
+            color = h.GREEN if not had_errors else h.YELLOW,
         )
         e.add_field(name="📦 Git Pull", value=f"```\n{git_output}\n```", inline=False)
-        e.add_field(
-            name="🔄 Cog Reloads", value="\n".join(reload_results), inline=False
-        )
+        e.add_field(name="🔄 Cog Reloads", value="\n".join(reload_results), inline=False)
 
         already_latest = "already up to date" in stdout.lower()
         if already_latest:
-            e.set_footer(
-                text="Already up to date — cogs reloaded anyway  ·  NanoBot Admin"
-            )
+            e.set_footer(text="Already up to date — cogs reloaded anyway  ·  NanoBot Admin")
         elif not had_errors:
-            e.set_footer(
-                text=f"Pulled + reloaded {len(_ALL_COGS)} cog(s)  ·  NanoBot Admin"
-            )
+            e.set_footer(text=f"Pulled + reloaded {len(_ALL_COGS)} cog(s) · Run !sync if slash commands changed  ·  NanoBot Admin")
         else:
-            e.set_footer(
-                text="Some cogs failed to reload — check logs  ·  NanoBot Admin"
+            e.set_footer(text="Some cogs failed to reload — check logs  ·  NanoBot Admin")
+
+        log.info(f"update complete: git_ok={git_ok}, reload_errors={had_errors}, by {ctx.author}")
+        await ctx.reply(embed=e)
+
+    # ══════════════════════════════════════════════════════════════════════════
+    #  sync
+    # ══════════════════════════════════════════════════════════════════════════
+    @commands.command(
+        name="sync",
+        help=(
+            "Sync slash commands with Discord.\n\n"
+            "Usage:\n"
+            "  !sync           → global sync (up to 1 hr to propagate)\n"
+            "  !sync <guild>   → instant sync to one guild by ID\n\n"
+            "Run this after adding or removing any slash commands.\n"
+            "You do NOT need to run this after a normal !update."
+        ),
+    )
+    async def sync(self, ctx: commands.Context, guild_id: Optional[int] = None):
+        """
+        !sync [guild_id]
+
+        Global sync:  !sync
+          Pushes all app commands to Discord globally.  Changes can take up to
+          an hour to appear for all users — use guild sync during development.
+
+        Guild sync:   !sync 123456789012345678
+          Instantly pushes commands to a single guild.  Useful when iterating
+          on new slash commands without waiting for global propagation.
+        """
+        await ctx.defer()
+
+        if guild_id is not None:
+            guild = discord.Object(id=guild_id)
+            try:
+                # Copy global command tree to the guild, then sync
+                self.bot.tree.copy_global_to(guild=guild)
+                synced = await self.bot.tree.sync(guild=guild)
+            except discord.Forbidden:
+                return await ctx.reply(
+                    embed=h.err(
+                        f"Missing `applications.commands` scope in guild `{guild_id}`.\n"
+                        "Re-invite the bot with that scope enabled."
+                    ),
+                    ephemeral=True,
+                )
+            except discord.HTTPException as exc:
+                log.error(f"Guild sync failed for {guild_id}: {exc}", exc_info=exc)
+                return await ctx.reply(
+                    embed=h.err(f"Discord returned an error: {exc}"),
+                    ephemeral=True,
+                )
+
+            log.info(f"Guild sync to {guild_id}: {len(synced)} command(s) by {ctx.author}")
+            await ctx.reply(
+                embed=h.ok(
+                    f"Synced **{len(synced)}** slash command(s) to guild `{guild_id}`.\n"
+                    "Changes are live immediately.",
+                    "⚡ Guild Sync Complete",
+                )
             )
 
-        log.info(
-            f"update complete: git_ok={git_ok}, reload_errors={had_errors}, by {ctx.author}"
-        )
-        await ctx.reply(embed=e)
+        else:
+            try:
+                synced = await self.bot.tree.sync()
+            except discord.HTTPException as exc:
+                log.error(f"Global sync failed: {exc}", exc_info=exc)
+                return await ctx.reply(
+                    embed=h.err(f"Discord returned an error during global sync: {exc}"),
+                    ephemeral=True,
+                )
+
+            log.info(f"Global sync: {len(synced)} command(s) by {ctx.author}")
+            await ctx.reply(
+                embed=h.ok(
+                    f"Synced **{len(synced)}** slash command(s) globally.\n"
+                    "⏱️ Global changes can take **up to 1 hour** to propagate.\n"
+                    "_Tip: use `!sync <guild_id>` for instant updates while developing._",
+                    "🌐 Global Sync Complete",
+                )
+            )
 
     # ══════════════════════════════════════════════════════════════════════════
     #  setloglevel
@@ -350,10 +419,10 @@ class Admin(commands.Cog):
             json.dump(cfg, f, indent=2)
 
         level_descriptions = {
-            "DEBUG": "verbose — every gateway event, HTTP call, and internal step",
-            "INFO": "normal — startup, commands, mod actions",
-            "WARNING": "quiet — only problems and warnings",
-            "ERROR": "minimal — errors only",
+            "DEBUG":    "verbose — every gateway event, HTTP call, and internal step",
+            "INFO":     "normal — startup, commands, mod actions",
+            "WARNING":  "quiet — only problems and warnings",
+            "ERROR":    "minimal — errors only",
             "CRITICAL": "silent — only fatal errors",
         }
 
@@ -402,9 +471,9 @@ class Admin(commands.Cog):
                 ephemeral=True,
             )
 
-        tail = all_lines[-lines:]
+        tail        = all_lines[-lines:]
         total_lines = len(all_lines)
-        content = "".join(tail).strip()
+        content     = "".join(tail).strip()
 
         if not content:
             return await ctx.reply(
@@ -418,13 +487,11 @@ class Admin(commands.Cog):
             content = "…(truncated)\n" + content[-max_chars:]
 
         e = h.embed(
-            title=f"📋 Last {lines} log line(s)",
-            description=f"```\n{content}\n```",
-            color=h.GREY,
+            title       = f"📋 Last {lines} log line(s)",
+            description = f"```\n{content}\n```",
+            color       = h.GREY,
         )
-        e.set_footer(
-            text=f"logs/nanobot.log  ·  {total_lines} total line(s)  ·  NanoBot"
-        )
+        e.set_footer(text=f"logs/nanobot.log  ·  {total_lines} total line(s)  ·  NanoBot")
         await ctx.reply(embed=e, ephemeral=True)
 
 

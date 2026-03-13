@@ -44,17 +44,15 @@ log = logging.getLogger("NanoBot.votes")
 
 # ── Constants ──────────────────────────────────────────────────────────────────
 _TOPGG_API_V1 = "https://top.gg/api/v1"
-_DBL_API = "https://discordbotlist.com/api/v1"
+_DBL_API      = "https://discordbotlist.com/api/v1"
 
-_TOPGG_VOTE = "https://top.gg/bot/{bot_id}/vote"
-_DBL_VOTE = "https://discordbotlist.com/bots/{bot_id}/upvote"
+_TOPGG_VOTE  = "https://top.gg/bot/{bot_id}/vote"
+_DBL_VOTE    = "https://discordbotlist.com/bots/{bot_id}/upvote"
 
 # Cooldowns in seconds
-# top.gg:             https://docs.top.gg/resources/voting/         — 12 hours
-# discordbotlist.com: https://docs.discordbotlist.com/implementing-voting — 12 hours
 _COOLDOWNS = {
-    "topgg": 12 * 3600,  # 12 hours
-    "dbl": 12 * 3600,  # 12 hours
+    "topgg": 12 * 3600,   # 12 hours
+    "dbl":   24 * 3600,   # 24 hours
 }
 
 # Extra reminders granted to voters
@@ -63,7 +61,7 @@ DEFAULT_REMINDER_MAX = 25
 
 _SITE_NAMES = {
     "topgg": "top.gg",
-    "dbl": "discordbotlist.com",
+    "dbl":   "discordbotlist.com",
 }
 
 
@@ -93,12 +91,10 @@ class Votes(commands.Cog):
     """Bot list integrations — stat posting, vote webhooks, rewards."""
 
     def __init__(self, bot: commands.Bot, cfg: dict):
-        self.bot = bot
-        self.topgg_v1_token: str | None = cfg.get(
-            "topgg_v1_token"
-        )  # v1 — commands sync + future stats
-        self.dbl_token: str | None = cfg.get("dbl_token")
-        self.webhook_port: int = int(cfg.get("vote_webhook_port", 5000))
+        self.bot             = bot
+        self.topgg_v1_token: str | None = cfg.get("topgg_v1_token")    # v1 — commands sync + future stats
+        self.dbl_token:      str | None = cfg.get("dbl_token")
+        self.webhook_port: int          = int(cfg.get("vote_webhook_port", 5000))
         self.webhook_secret: str | None = cfg.get("vote_webhook_secret")
         self._http_runner: aiohttp.web.AppRunner | None = None
         self._session: aiohttp.ClientSession | None = None
@@ -109,9 +105,6 @@ class Votes(commands.Cog):
         await self._start_webhook_server()
         self.post_stats.start()
         self.notify_loop.start()
-        # Sync commands to both sites once the bot is ready — fire-and-forget
-        self.bot.loop.create_task(self._sync_dbl_commands())
-        self.bot.loop.create_task(self._sync_topgg_commands())
         log.info("Votes cog loaded — webhook server started, stat loop running")
 
     async def _fetch_discord_commands(self) -> list | None:
@@ -147,9 +140,7 @@ class Votes(commands.Cog):
                     log.info(f"DBL commands synced: {len(cmds)} command(s) posted")
                 else:
                     body = await r.text()
-                    log.warning(
-                        f"DBL commands sync failed: HTTP {r.status} — {body[:200]}"
-                    )
+                    log.warning(f"DBL commands sync failed: HTTP {r.status} — {body[:200]}")
         except Exception as exc:
             log.warning(f"DBL commands sync error: {exc}")
 
@@ -174,9 +165,7 @@ class Votes(commands.Cog):
                     log.info(f"top.gg commands synced: {len(cmds)} command(s) posted")
                 else:
                     body = await r.text()
-                    log.warning(
-                        f"top.gg commands sync failed: HTTP {r.status} — {body[:200]}"
-                    )
+                    log.warning(f"top.gg commands sync failed: HTTP {r.status} — {body[:200]}")
         except Exception as exc:
             log.warning(f"top.gg commands sync error: {exc}")
 
@@ -193,7 +182,7 @@ class Votes(commands.Cog):
     async def _start_webhook_server(self):
         app = aiohttp.web.Application()
         app.router.add_post("/webhook/topgg", self._handle_topgg)
-        app.router.add_post("/webhook/dbl", self._handle_dbl)
+        app.router.add_post("/webhook/dbl",   self._handle_dbl)
 
         runner = aiohttp.web.AppRunner(app)
         await runner.setup()
@@ -221,11 +210,11 @@ class Votes(commands.Cog):
         try:
             parts = dict(part.split("=", 1) for part in sig_header.split(","))
             timestamp = parts["t"]
-            expected = parts["v1"]
+            expected  = parts["v1"]
         except (KeyError, ValueError):
             return False
 
-        message = f"{timestamp}.".encode() + raw_body
+        message  = f"{timestamp}.".encode() + raw_body
         computed = hmac.new(
             self.webhook_secret.encode(),
             message,
@@ -256,7 +245,7 @@ class Votes(commands.Cog):
 
         if event_type == "vote.create":
             try:
-                user_id = int(data["data"]["user"]["platform_id"])
+                user_id    = int(data["data"]["user"]["platform_id"])
                 expires_at = data["data"].get("expires_at")  # ISO8601 — for future use
             except (KeyError, ValueError, TypeError):
                 log.warning("top.gg vote.create: malformed payload")
@@ -358,6 +347,10 @@ class Votes(commands.Cog):
             except Exception as exc:
                 log.warning(f"DBL stats post error: {exc}")
 
+        # Sync slash command listings to bot list sites alongside stats
+        await self._sync_dbl_commands()
+        await self._sync_topgg_commands()
+
     @post_stats.before_loop
     async def before_post_stats(self):
         await self.bot.wait_until_ready()
@@ -371,7 +364,7 @@ class Votes(commands.Cog):
         records = await db.get_all_votes_for_notify()
 
         for record in records:
-            site = record["site"]
+            site     = record["site"]
             cooldown = _COOLDOWNS[site]
             voted_at = record["voted_at"]
 
@@ -387,7 +380,7 @@ class Votes(commands.Cog):
                         continue
 
                 site_name = _SITE_NAMES[site]
-                vote_url = (
+                vote_url  = (
                     _TOPGG_VOTE.format(bot_id=self.bot.user.id)
                     if site == "topgg"
                     else _DBL_VOTE.format(bot_id=self.bot.user.id)
@@ -421,7 +414,9 @@ class Votes(commands.Cog):
         name="vote",
         description="Vote for NanoBot on bot lists and see your voting status.",
     )
-    @app_commands.describe(action="Optional: 'notify' to toggle cooldown pings")
+    @app_commands.describe(
+        action="Optional: 'notify' to toggle cooldown pings"
+    )
     @commands.cooldown(1, 10, commands.BucketType.user)
     async def vote(self, ctx: commands.Context, action: Optional[str] = None):
         """
@@ -431,7 +426,7 @@ class Votes(commands.Cog):
         /vote notify off — disable cooldown pings
         """
         bot_id = self.bot.user.id
-        user = ctx.author
+        user   = ctx.author
 
         # ── notify subcommand ──────────────────────────────────────────────────
         if action and action.lower().startswith("notify"):
@@ -439,9 +434,9 @@ class Votes(commands.Cog):
             # "notify" alone → show current state
             if len(parts) == 1:
                 topgg_row = await db.get_vote(user.id, "topgg")
-                dbl_row = await db.get_vote(user.id, "dbl")
-                topgg_on = topgg_row["notify"] if topgg_row else True
-                dbl_on = dbl_row["notify"] if dbl_row else True
+                dbl_row   = await db.get_vote(user.id, "dbl")
+                topgg_on  = topgg_row["notify"] if topgg_row else True
+                dbl_on    = dbl_row["notify"]   if dbl_row   else True
                 await ctx.reply(
                     embed=h.info(
                         f"**top.gg cooldown pings:** {'on ✅' if topgg_on else 'off ❌'}\n"
@@ -463,7 +458,7 @@ class Votes(commands.Cog):
 
             enabled = setting_str == "on"
             await db.set_vote_notify(user.id, "topgg", enabled)
-            await db.set_vote_notify(user.id, "dbl", enabled)
+            await db.set_vote_notify(user.id, "dbl",   enabled)
             status = "on ✅" if enabled else "off ❌"
             await ctx.reply(
                 embed=h.ok(
@@ -476,19 +471,17 @@ class Votes(commands.Cog):
 
         if action:
             await ctx.reply(
-                embed=h.err(
-                    f"Unknown option `{action}`. Try `/vote` or `/vote notify`."
-                ),
+                embed=h.err(f"Unknown option `{action}`. Try `/vote` or `/vote notify`."),
                 ephemeral=True,
             )
             return
 
         # ── main /vote embed ───────────────────────────────────────────────────
-        topgg_url = _TOPGG_VOTE.format(bot_id=bot_id)
-        dbl_url = _DBL_VOTE.format(bot_id=bot_id)
+        topgg_url  = _TOPGG_VOTE.format(bot_id=bot_id)
+        dbl_url    = _DBL_VOTE.format(bot_id=bot_id)
 
-        topgg_row = await db.get_vote(user.id, "topgg")
-        dbl_row = await db.get_vote(user.id, "dbl")
+        topgg_row  = await db.get_vote(user.id, "topgg")
+        dbl_row    = await db.get_vote(user.id, "dbl")
 
         def _status_line(row: dict | None, site: str) -> str:
             if not row or row["voted_at"] == 0:
@@ -499,15 +492,14 @@ class Votes(commands.Cog):
             return f"⏳ Cooldown: **{_fmt_cooldown(remaining)}** left"
 
         topgg_status = _status_line(topgg_row, "topgg")
-        dbl_status = _status_line(dbl_row, "dbl")
+        dbl_status   = _status_line(dbl_row,   "dbl")
 
         topgg_streak = topgg_row["streak"] if topgg_row and topgg_row["voted_at"] else 0
-        dbl_streak = dbl_row["streak"] if dbl_row and dbl_row["voted_at"] else 0
+        dbl_streak   = dbl_row["streak"]   if dbl_row   and dbl_row["voted_at"]   else 0
 
         # Voter status — active on either site
-        is_voter = await db.has_voted_recently(
-            user.id, "topgg"
-        ) or await db.has_voted_recently(user.id, "dbl")
+        is_voter = await db.has_voted_recently(user.id, "topgg") or \
+                   await db.has_voted_recently(user.id, "dbl")
 
         e = h.embed(title="🗳️ Vote for NanoBot", color=h.BLUE)
         e.description = (
@@ -529,7 +521,7 @@ class Votes(commands.Cog):
             value=(
                 f"[**Vote →**]({dbl_url})\n"
                 f"{dbl_status}\n"
-                f"Streak: **{dbl_streak}** vote(s)  ·  Resets every 12h"
+                f"Streak: **{dbl_streak}** vote(s)  ·  Resets every 24h"
             ),
             inline=True,
         )
@@ -552,14 +544,13 @@ async def get_reminder_limit(user_id: int) -> int:
     Voters (on either site) get VOTER_REMINDER_MAX. Everyone else gets DEFAULT_REMINDER_MAX.
     """
     topgg_active = await db.has_voted_recently(user_id, "topgg")
-    dbl_active = await db.has_voted_recently(user_id, "dbl")
+    dbl_active   = await db.has_voted_recently(user_id, "dbl")
     return VOTER_REMINDER_MAX if (topgg_active or dbl_active) else DEFAULT_REMINDER_MAX
 
 
 # ── Registration ───────────────────────────────────────────────────────────────
 async def setup(bot: commands.Bot):
     import json, os
-
     cfg = {}
     if os.path.exists("config.json"):
         with open("config.json", encoding="utf-8") as f:
