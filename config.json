@@ -5,9 +5,9 @@
   "log_level": "INFO",
   "log_http": false,
 
-  "topgg_token": null,
   "topgg_v1_token": null,
   "dbl_token": null,
+  "discordbotsgg_token": null,
   "vote_webhook_port": 5000,
   "vote_webhook_secret": null
 }
