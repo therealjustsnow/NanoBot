@@ -569,6 +569,47 @@ _HELP = {
             "perms": "None",
             "example": "!reminders cancel abc123",
         },
+        {
+            "name": "every",
+            "aliases": [],
+            "usage": "every <interval> <message> [label] [dm]",
+            "short": "Set a recurring reminder — fires repeatedly on a schedule",
+            "desc": (
+                "Like a repeating calendar event. Set it once and NanoBot will remind you on that interval forever "
+                "(until you pause or cancel it). Survives bot restarts. If the bot was offline when a fire was due, "
+                "it fires once on restore — no catch-up spam.\n\n"
+                "**Interval presets** (autocomplete on `/every`):\n"
+                "`hourly` · `daily` · `weekly` · `biweekly` · `monthly`\n\n"
+                "**Custom intervals:** `2w` · `3d` · `6h` · `every 2 weeks`\n\n"
+                "**Label tip:** Add a short label (e.g. `Payday`) so your `/recurring` list "
+                "stays readable on mobile instead of showing a truncated message."
+            ),
+            "args": [
+                ("interval", "How often to remind you — pick a preset or type your own (min 1 hour)"),
+                ("message", "What to remind you about (up to 500 characters)"),
+                ("label", "Short display name shown in your list, e.g. 'Payday' (optional, max 50 chars)"),
+                ("dm", "DM you the reminder (default: yes, falls back to channel ping if DMs are closed)"),
+            ],
+            "perms": "None",
+            "example": "!every 2w Payday!\n!every daily Stand up meeting\n!every weekly Review my goals",
+        },
+        {
+            "name": "recurring",
+            "aliases": ["repeating", "repeat"],
+            "usage": "recurring [pause|resume|cancel <id>]",
+            "short": "List, pause, resume, or cancel your recurring reminders",
+            "desc": (
+                "No args: shows all your recurring reminders with their interval, next fire time, and status.\n\n"
+                "**Subcommands:**\n"
+                "`pause <id>` — stop a reminder from firing until you resume it\n"
+                "`resume <id>` — re-enable a paused reminder (next fire = now + interval)\n"
+                "`cancel <id>` — permanently delete the recurring reminder\n\n"
+                "IDs are 6 characters, shown when you set the reminder and in the list."
+            ),
+            "args": [("id", "6-character recurring reminder ID (from `/recurring` list or when set)")],
+            "perms": "None",
+            "example": "!recurring\n!recurring pause abc123\n!recurring resume abc123\n!recurring cancel abc123",
+        },
     ],
     "📋 Audit Log": [
         {
@@ -1090,6 +1131,10 @@ _CATEGORY_ALIASES: dict[str, str] = {
     "reminder": "⏰ Reminders",
     "reminders": "⏰ Reminders",
     "remind": "⏰ Reminders",
+    "recurring": "⏰ Reminders",
+    "repeating": "⏰ Reminders",
+    "repeat": "⏰ Reminders",
+    "every": "⏰ Reminders",
     # 📋 Audit Log
     "auditlog": "📋 Audit Log",
     "audit": "📋 Audit Log",
