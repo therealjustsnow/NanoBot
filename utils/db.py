@@ -105,6 +105,8 @@ async def init() -> None:
     await _ensure_votes_table()
     await _ensure_recurring_table()
     await _ensure_role_panels_tables()
+    await _ensure_auditlog_tables()
+    await _ensure_automod_tables()
     log.info(f"Database ready: {_DB_PATH}")
 
 
@@ -1164,3 +1166,240 @@ async def remove_role_from_panel(panel_id: str, role_id: int) -> None:
         (panel_id, role_id),
     )
     await _conn().commit()
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+#  Audit Log
+# ══════════════════════════════════════════════════════════════════════════════
+# Config is stored as a single row per guild.
+# `events` is a JSON-encoded list of enabled event keys.
+# An absent row means "not configured".
+
+
+async def _ensure_auditlog_tables() -> None:
+    await _conn().execute("""
+        CREATE TABLE IF NOT EXISTS auditlog_config (
+            guild_id    TEXT PRIMARY KEY,
+            enabled     INTEGER NOT NULL DEFAULT 0,
+            channel_id  TEXT,
+            events      TEXT NOT NULL DEFAULT '[]'
+        )
+    """)
+    await _conn().commit()
+
+
+async def get_auditlog_config(guild_id: int) -> dict | None:
+    """Return the audit log config for a guild, or None if not yet set up."""
+    async with _conn().execute(
+        "SELECT enabled, channel_id, events FROM auditlog_config WHERE guild_id=? LIMIT 1",
+        (str(guild_id),),
+    ) as cur:
+        row = await cur.fetchone()
+    if not row:
+        return None
+    return {
+        "enabled": bool(row["enabled"]),
+        "channel_id": row["channel_id"],
+        "events": json.loads(row["events"]),
+    }
+
+
+async def set_auditlog_channel(guild_id: int, channel_id: int) -> None:
+    """Set (or update) the log channel for a guild. Creates the row if absent."""
+    await _conn().execute(
+        """INSERT INTO auditlog_config (guild_id, channel_id)
+           VALUES (?, ?)
+           ON CONFLICT(guild_id) DO UPDATE SET channel_id=excluded.channel_id""",
+        (str(guild_id), str(channel_id)),
+    )
+    await _conn().commit()
+
+
+async def set_auditlog_enabled(guild_id: int, enabled: bool) -> None:
+    """Enable or disable audit logging for a guild. Creates the row if absent."""
+    await _conn().execute(
+        """INSERT INTO auditlog_config (guild_id, enabled)
+           VALUES (?, ?)
+           ON CONFLICT(guild_id) DO UPDATE SET enabled=excluded.enabled""",
+        (str(guild_id), 1 if enabled else 0),
+    )
+    await _conn().commit()
+
+
+async def set_auditlog_events(guild_id: int, events: set[str]) -> None:
+    """Replace the full set of enabled events for a guild. Creates row if absent."""
+    await _conn().execute(
+        """INSERT INTO auditlog_config (guild_id, events)
+           VALUES (?, ?)
+           ON CONFLICT(guild_id) DO UPDATE SET events=excluded.events""",
+        (str(guild_id), json.dumps(sorted(events))),
+    )
+    await _conn().commit()
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+#  AutoMod
+# ══════════════════════════════════════════════════════════════════════════════
+# `rules` is a JSON object:  {rule_key: {enabled, action, ...rule-specific fields}}
+# `ignore_channels` and `ignore_roles` are JSON arrays of ID strings.
+# Bad words live in a separate table for clean add / remove / list ops.
+
+
+async def _ensure_automod_tables() -> None:
+    await _conn().executescript("""
+        CREATE TABLE IF NOT EXISTS automod_config (
+            guild_id         TEXT PRIMARY KEY,
+            enabled          INTEGER NOT NULL DEFAULT 0,
+            rules            TEXT NOT NULL DEFAULT '{}',
+            ignore_channels  TEXT NOT NULL DEFAULT '[]',
+            ignore_roles     TEXT NOT NULL DEFAULT '[]'
+        );
+
+        CREATE TABLE IF NOT EXISTS automod_badwords (
+            guild_id  TEXT NOT NULL,
+            word      TEXT NOT NULL,
+            PRIMARY KEY (guild_id, word)
+        );
+        CREATE INDEX IF NOT EXISTS abw_guild ON automod_badwords (guild_id);
+    """)
+    await _conn().commit()
+
+
+def _automod_row(row: aiosqlite.Row) -> dict:
+    return {
+        "enabled": bool(row["enabled"]),
+        "rules": json.loads(row["rules"]),
+        "ignore_channels": json.loads(row["ignore_channels"]),
+        "ignore_roles": json.loads(row["ignore_roles"]),
+    }
+
+
+async def _ensure_automod_guild(guild_id: int) -> None:
+    """Insert a default automod row for a guild if one doesn't exist yet."""
+    await _conn().execute(
+        "INSERT OR IGNORE INTO automod_config (guild_id) VALUES (?)",
+        (str(guild_id),),
+    )
+    await _conn().commit()
+
+
+async def get_automod_config(guild_id: int) -> dict | None:
+    """Return the full automod config for a guild, or None if not yet set up."""
+    async with _conn().execute(
+        "SELECT enabled, rules, ignore_channels, ignore_roles "
+        "FROM automod_config WHERE guild_id=? LIMIT 1",
+        (str(guild_id),),
+    ) as cur:
+        row = await cur.fetchone()
+    return _automod_row(row) if row else None
+
+
+async def set_automod_enabled(guild_id: int, enabled: bool) -> None:
+    """Enable or disable automod for a guild. Creates the row if absent."""
+    await _conn().execute(
+        """INSERT INTO automod_config (guild_id, enabled)
+           VALUES (?, ?)
+           ON CONFLICT(guild_id) DO UPDATE SET enabled=excluded.enabled""",
+        (str(guild_id), 1 if enabled else 0),
+    )
+    await _conn().commit()
+
+
+async def set_automod_rule(guild_id: int, rule: str, **kwargs: Any) -> None:
+    """
+    Merge kwargs into the rule dict for `rule`.  Existing keys not in kwargs
+    are preserved.  Creates the guild row if absent.
+
+    Examples
+    --------
+    set_automod_rule(gid, "spam", enabled=True, action="warn", count=5, seconds=5)
+    set_automod_rule(gid, "caps", percent=70, min_length=10)
+    set_automod_rule(gid, "mentions", limit=5)
+    """
+    await _ensure_automod_guild(guild_id)
+
+    async with _conn().execute(
+        "SELECT rules FROM automod_config WHERE guild_id=? LIMIT 1",
+        (str(guild_id),),
+    ) as cur:
+        row = await cur.fetchone()
+
+    rules: dict = json.loads(row["rules"]) if row else {}
+    existing = rules.get(rule, {})
+    existing.update(kwargs)
+    rules[rule] = existing
+
+    await _conn().execute(
+        "UPDATE automod_config SET rules=? WHERE guild_id=?",
+        (json.dumps(rules), str(guild_id)),
+    )
+    await _conn().commit()
+
+
+async def add_automod_badword(guild_id: int, word: str) -> bool:
+    """Add a word to the filter. Returns True if added, False if already present."""
+    try:
+        await _conn().execute(
+            "INSERT INTO automod_badwords (guild_id, word) VALUES (?, ?)",
+            (str(guild_id), word.lower().strip()),
+        )
+        await _conn().commit()
+        return True
+    except aiosqlite.IntegrityError:
+        return False
+
+
+async def remove_automod_badword(guild_id: int, word: str) -> bool:
+    """Remove a word from the filter. Returns True if removed, False if not found."""
+    cur = await _conn().execute(
+        "DELETE FROM automod_badwords WHERE guild_id=? AND word=?",
+        (str(guild_id), word.lower().strip()),
+    )
+    await _conn().commit()
+    return cur.rowcount > 0
+
+
+async def get_automod_badwords(guild_id: int) -> list[str]:
+    """Return all bad words for a guild, sorted alphabetically."""
+    async with _conn().execute(
+        "SELECT word FROM automod_badwords WHERE guild_id=? ORDER BY word ASC",
+        (str(guild_id),),
+    ) as cur:
+        rows = await cur.fetchall()
+    return [r["word"] for r in rows]
+
+
+async def toggle_automod_ignore(
+    guild_id: int, kind: str, target_id: int
+) -> str:
+    """
+    Toggle a channel or role exemption.
+    kind = "channel" | "role"
+    Returns "added" or "removed".
+    """
+    await _ensure_automod_guild(guild_id)
+
+    col = "ignore_channels" if kind == "channel" else "ignore_roles"
+    tid = str(target_id)
+
+    async with _conn().execute(
+        f"SELECT {col} FROM automod_config WHERE guild_id=? LIMIT 1",
+        (str(guild_id),),
+    ) as cur:
+        row = await cur.fetchone()
+
+    ids: list[str] = json.loads(row[col]) if row else []
+
+    if tid in ids:
+        ids.remove(tid)
+        result = "removed"
+    else:
+        ids.append(tid)
+        result = "added"
+
+    await _conn().execute(
+        f"UPDATE automod_config SET {col}=? WHERE guild_id=?",
+        (json.dumps(ids), str(guild_id)),
+    )
+    await _conn().commit()
+    return result
