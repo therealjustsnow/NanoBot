@@ -1369,9 +1369,7 @@ async def get_automod_badwords(guild_id: int) -> list[str]:
     return [r["word"] for r in rows]
 
 
-async def toggle_automod_ignore(
-    guild_id: int, kind: str, target_id: int
-) -> str:
+async def toggle_automod_ignore(guild_id: int, kind: str, target_id: int) -> str:
     """
     Toggle a channel or role exemption.
     kind = "channel" | "role"
