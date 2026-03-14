@@ -78,6 +78,16 @@ def can_target(actor, target):
     return actor.top_role > target.top_role
 
 
+def can_bot_target(bot_member, target):
+    """Check whether the bot's role is high enough to act on target.
+
+    This is separate from can_target (which checks the human moderator).
+    Discord will 403 if the bot's top role is not strictly above the target's
+    top role, even when the bot has the relevant permission node.
+    """
+    return bot_member.top_role > target.top_role
+
+
 async def action_log(ctx, emoji, action, *, target=None, detail=""):
     desc = f"{emoji} **{ctx.author.display_name}** used **{action}**"
     if target:
@@ -288,6 +298,14 @@ class Moderation(commands.Cog):
             return await ctx.reply(
                 embed=h.err(f"**{target.display_name}** outranks you."), ephemeral=True
             )
+        if not can_bot_target(ctx.guild.me, target):
+            return await ctx.reply(
+                embed=h.err(
+                    f"I can't ban **{target.display_name}** — their role is at or above mine.\n"
+                    "Go to **Server Settings → Roles** and drag my role above theirs."
+                ),
+                ephemeral=True,
+            )
 
         days = max(1, min(7, days or 7))
         wait_secs = h.parse_duration(wait)
@@ -309,7 +327,10 @@ class Moderation(commands.Cog):
             )
         except discord.Forbidden:
             return await ctx.reply(
-                embed=h.err("I don't have permission to ban. Check my role."),
+                embed=h.err(
+                    "I don't have permission to ban — check my role is above the target's "
+                    "and that I have the **Ban Members** permission."
+                ),
                 ephemeral=True,
             )
 
@@ -373,6 +394,14 @@ class Moderation(commands.Cog):
             return await ctx.reply(
                 embed=h.err(f"**{target.display_name}** outranks you."), ephemeral=True
             )
+        if not can_bot_target(ctx.guild.me, target):
+            return await ctx.reply(
+                embed=h.err(
+                    f"I can't ban **{target.display_name}** — their role is at or above mine.\n"
+                    "Go to **Server Settings → Roles** and drag my role above theirs."
+                ),
+                ephemeral=True,
+            )
 
         dm_sent = await try_dm(
             target, message or f"You've been banned from **{ctx.guild.name}**."
@@ -385,7 +414,10 @@ class Moderation(commands.Cog):
             )
         except discord.Forbidden:
             return await ctx.reply(
-                embed=h.err("I don't have permission to ban. Check my role."),
+                embed=h.err(
+                    "I don't have permission to ban — check my role is above the target's "
+                    "and that I have the **Ban Members** permission."
+                ),
                 ephemeral=True,
             )
 
@@ -524,6 +556,14 @@ class Moderation(commands.Cog):
             return await ctx.reply(
                 embed=h.err(f"**{target.display_name}** outranks you."), ephemeral=True
             )
+        if not can_bot_target(ctx.guild.me, target):
+            return await ctx.reply(
+                embed=h.err(
+                    f"I can't kick **{target.display_name}** — their role is at or above mine.\n"
+                    "Go to **Server Settings → Roles** and drag my role above theirs."
+                ),
+                ephemeral=True,
+            )
 
         dm_sent = await try_dm(
             target,
@@ -536,7 +576,11 @@ class Moderation(commands.Cog):
             )
         except discord.Forbidden:
             return await ctx.reply(
-                embed=h.err("I don't have permission to kick."), ephemeral=True
+                embed=h.err(
+                    "I don't have permission to kick — check my role is above the target's "
+                    "and that I have the **Kick Members** permission."
+                ),
+                ephemeral=True,
             )
 
         log.info(f"kick: {target} ({target.id}) by {ctx.author} in {ctx.guild}")
@@ -911,6 +955,14 @@ class Moderation(commands.Cog):
             return await ctx.reply(
                 embed=h.err(f"**{target.display_name}** outranks you."), ephemeral=True
             )
+        if not can_bot_target(ctx.guild.me, target):
+            return await ctx.reply(
+                embed=h.err(
+                    f"I can't freeze **{target.display_name}** — their role is at or above mine.\n"
+                    "Go to **Server Settings → Roles** and drag my role above theirs."
+                ),
+                ephemeral=True,
+            )
 
         secs = h.parse_duration(duration or "10m")
         if not secs or secs < 1:
@@ -929,7 +981,10 @@ class Moderation(commands.Cog):
             )
         except discord.Forbidden:
             return await ctx.reply(
-                embed=h.err("I can't timeout that user. Check my role position."),
+                embed=h.err(
+                    "I can't timeout that user — check my role is above theirs "
+                    "and that I have the **Timeout Members** permission."
+                ),
                 ephemeral=True,
             )
 
@@ -1236,6 +1291,14 @@ class Moderation(commands.Cog):
             return await ctx.reply(
                 embed=h.err(f"**{target.display_name}** outranks you."), ephemeral=True
             )
+        if not can_bot_target(ctx.guild.me, target):
+            return await ctx.reply(
+                embed=h.err(
+                    f"I can't ban **{target.display_name}** — their role is at or above mine.\n"
+                    "Go to **Server Settings → Roles** and drag my role above theirs."
+                ),
+                ephemeral=True,
+            )
 
         wait_secs = h.parse_duration(duration)
         if not wait_secs or wait_secs < 60:
@@ -1262,7 +1325,11 @@ class Moderation(commands.Cog):
             )
         except discord.Forbidden:
             return await ctx.reply(
-                embed=h.err("I don't have permission to ban."), ephemeral=True
+                embed=h.err(
+                    "I don't have permission to ban — check my role is above the target's "
+                    "and that I have the **Ban Members** permission."
+                ),
+                ephemeral=True,
             )
 
         await self._schedule_unban(ctx.guild.id, target.id, wait_secs)
