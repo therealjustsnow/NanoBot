@@ -1590,22 +1590,22 @@ class Utility(commands.Cog):
             # Moderation
             ban_members=True,
             kick_members=True,
-            moderate_members=True,       # Timeout (freeze/unfreeze)
-            manage_channels=True,        # Slowmode, lock, hide, nuke
-            manage_messages=True,        # Purge, snailpurge, clean
-            manage_roles=True,           # addrole / removerole
-            view_audit_log=True,         # Audit log cog
+            moderate_members=True,  # Timeout (freeze/unfreeze)
+            manage_channels=True,  # Slowmode, lock, hide, nuke
+            manage_messages=True,  # Purge, snailpurge, clean
+            manage_roles=True,  # addrole / removerole
+            view_audit_log=True,  # Audit log cog
             # Communication
             send_messages=True,
             send_messages_in_threads=True,
             embed_links=True,
             read_messages=True,
             read_message_history=True,
-            attach_files=True,           # Tag image uploads
+            attach_files=True,  # Tag image uploads
             add_reactions=True,
             # Voice
-            move_members=True,           # moveall command
-            connect=True,                # Required alongside move_members
+            move_members=True,  # moveall command
+            connect=True,  # Required alongside move_members
         )
 
         url = discord.utils.oauth_url(
