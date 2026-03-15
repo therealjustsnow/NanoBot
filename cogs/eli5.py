@@ -27,7 +27,11 @@ import os
 
 import discord
 import google.generativeai as genai
-from google.api_core.exceptions import GoogleAPIError, ResourceExhausted, Unauthenticated
+from google.api_core.exceptions import (
+    GoogleAPIError,
+    ResourceExhausted,
+    Unauthenticated,
+)
 from discord import app_commands
 from discord.ext import commands
 
@@ -75,7 +79,9 @@ class ELI5(commands.Cog):
         topic = topic.strip()
         if not topic:
             return await ctx.reply(
-                embed=h.err("Give me something to explain!\nExample: `!eli5 black holes`"),
+                embed=h.err(
+                    "Give me something to explain!\nExample: `!eli5 black holes`"
+                ),
                 ephemeral=True,
             )
         if len(topic) > 300:
