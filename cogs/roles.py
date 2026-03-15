@@ -401,15 +401,50 @@ async def _run_autogen(
             )
             return
 
-        # ── 2. Auto-position created roles below bot's top role ────────────────
+        # ── 2. Auto-position created roles below bot's highest role ───────────
+        # Uses existing panel roles as the anchor so each autogen batch stacks
+        # below the previous one (e.g. region after colors lands below colors,
+        # not above). Member/base roles that sit below the autogen zone stay
+        # there — they may be nudged down slightly if space is tight, but they
+        # will always remain below all autogen roles, which is what you want
+        # for the colour-role fallback behaviour.
         await asyncio.sleep(_PAUSE_BEFORE_POS)
 
+        # Refresh role cache — positions may have shifted during creation.
+        await guild.fetch_roles()
+
         bot_pos = guild.me.top_role.position
+        created_ids = {r.id for r in created}
+
+        # Pull every role_id that already lives in a panel for this guild.
+        # These are the previously-autogenned roles. Exclude the ones we just
+        # created — they're still sitting at position ~1 and haven't been
+        # placed yet, so their positions are meaningless as an anchor.
+        guild_panels = await db.get_role_panels_for_guild(guild.id)
+        existing_panel_role_ids = {
+            entry["role_id"]
+            for panel in guild_panels
+            for entry in panel.get("entries", [])
+        } - created_ids
+
+        existing_panel_roles = [
+            r
+            for r in guild.roles
+            if r.id in existing_panel_role_ids and 0 < r.position < bot_pos
+        ]
+
+        if existing_panel_roles:
+            # Start the new batch just below the lowest existing panel role.
+            insert_floor = min(r.position for r in existing_panel_roles)
+        else:
+            # No previous autogen roles — start just below the bot's highest role.
+            insert_floor = bot_pos
+
         positioned = 0
         pos_failed = False
 
         for i, role in enumerate(created):
-            target_pos = max(1, bot_pos - 1 - i)
+            target_pos = max(1, insert_floor - 1 - i)
             try:
                 await role.edit(
                     position=target_pos,
@@ -488,7 +523,10 @@ async def _run_autogen(
                 + ", ".join(r.mention for r in extra_roles)
             )
         if not pos_failed and created:
-            lines.append(f"📐 Auto-positioned below **{guild.me.top_role.name}**.")
+            lines.append(
+                f"📐 Auto-positioned below existing roles "
+                f"(stacked under **{guild.me.top_role.name}**)."
+            )
         elif pos_failed:
             lines.append(
                 f"⚠️ Positioned {positioned}/{len(created)} role(s) — "
