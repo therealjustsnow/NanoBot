@@ -74,7 +74,9 @@ class ELI5(commands.Cog):
         topic = topic.strip()
         if not topic:
             return await ctx.reply(
-                embed=h.err("Give me something to explain!\nExample: `!eli5 black holes`"),
+                embed=h.err(
+                    "Give me something to explain!\nExample: `!eli5 black holes`"
+                ),
                 ephemeral=True,
             )
         if len(topic) > 300:
