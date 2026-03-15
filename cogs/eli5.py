@@ -2,7 +2,7 @@
 cogs/eli5.py
 ELI5 — Explain It Like I'm 5.
 
-Sends a topic to the Anthropic API and returns a plain-English
+Sends a topic to Google Gemini Flash and returns a plain-English
 explanation short enough to read comfortably on mobile.
 
 ──────────────────────────────────────────────────────
@@ -13,20 +13,21 @@ Commands
 
 Config
 ──────────────────────────────────────────────────────
-  Requires ANTHROPIC_API_KEY env var  OR  "anthropic_api_key" in config.json.
-  If the key is absent the command fails gracefully with a clear error.
+  Requires GEMINI_API_KEY env var  OR  "gemini_api_key" in config.json.
+  Get a free key at: https://aistudio.google.com/apikey
+  Free tier: 1,500 requests/day, 15 RPM — plenty for a bot command.
 
 Rate limiting
 ──────────────────────────────────────────────────────
   Per-user cooldown: 1 use per 15 seconds.
-  Per-guild bucket:  shared across all users, 5 uses per 10 seconds.
 """
 
 import logging
 import os
 
-import anthropic
 import discord
+import google.generativeai as genai
+from google.api_core.exceptions import GoogleAPIError, ResourceExhausted, Unauthenticated
 from discord import app_commands
 from discord.ext import commands
 
@@ -34,24 +35,24 @@ from utils import helpers as h
 
 log = logging.getLogger("NanoBot.eli5")
 
-_MODEL = "claude-haiku-4-5-20251001"  # fast + cheap — ideal for one-shot explanations
-_MAX_TOKENS = 300  # ~200 words; plenty for an ELI5, keeps mobile output tight
+_MODEL = "gemini-2.0-flash"
+_MAX_TOKENS = 300  # ~200 words; tight enough for mobile, enough for a clear explanation
 
 _SYSTEM_PROMPT = (
     "You explain things like the person asking is 5 years old. "
     "Use short sentences. Avoid jargon. Use a simple analogy if it helps. "
-    "Never exceed 200 words. Do not add headers or bullet points — just talk naturally."
+    "Never exceed 200 words. Do not use headers or bullet points — just talk naturally."
 )
 
 
 def _get_api_key(bot: commands.Bot) -> str | None:
     """Env var takes priority; fall back to config.json value stored on the bot."""
-    return os.getenv("ANTHROPIC_API_KEY") or getattr(bot, "anthropic_api_key", None)
+    return os.getenv("GEMINI_API_KEY") or getattr(bot, "gemini_api_key", None)
 
 
 # ══════════════════════════════════════════════════════════════════════════════
 class ELI5(commands.Cog):
-    """Explain anything in plain language using Claude."""
+    """Explain anything in plain language using Google Gemini Flash."""
 
     def __init__(self, bot: commands.Bot):
         self.bot = bot
@@ -74,9 +75,7 @@ class ELI5(commands.Cog):
         topic = topic.strip()
         if not topic:
             return await ctx.reply(
-                embed=h.err(
-                    "Give me something to explain!\nExample: `!eli5 black holes`"
-                ),
+                embed=h.err("Give me something to explain!\nExample: `!eli5 black holes`"),
                 ephemeral=True,
             )
         if len(topic) > 300:
@@ -89,8 +88,9 @@ class ELI5(commands.Cog):
         if not api_key:
             return await ctx.reply(
                 embed=h.err(
-                    "No Anthropic API key configured.\n"
-                    "Add `ANTHROPIC_API_KEY` to your environment or `config.json`.",
+                    "No Gemini API key configured.\n"
+                    "Add `GEMINI_API_KEY` to your environment or `config.json`.\n"
+                    "Get a free key at: https://aistudio.google.com/apikey",
                     "⚙️ Not Configured",
                 ),
                 ephemeral=True,
@@ -100,35 +100,35 @@ class ELI5(commands.Cog):
         await ctx.defer()
 
         try:
-            client = anthropic.AsyncAnthropic(api_key=api_key)
-            message = await client.messages.create(
-                model=_MODEL,
-                max_tokens=_MAX_TOKENS,
-                system=_SYSTEM_PROMPT,
-                messages=[{"role": "user", "content": f"Explain: {topic}"}],
+            genai.configure(api_key=api_key)
+            model = genai.GenerativeModel(
+                model_name=_MODEL,
+                system_instruction=_SYSTEM_PROMPT,
+                generation_config=genai.GenerationConfig(max_output_tokens=_MAX_TOKENS),
             )
-            explanation = message.content[0].text.strip()
-        except anthropic.AuthenticationError:
-            log.error("ELI5: Invalid Anthropic API key")
+            response = await model.generate_content_async(f"Explain: {topic}")
+            explanation = response.text.strip()
+        except Unauthenticated:
+            log.error("ELI5: Invalid Gemini API key")
             return await ctx.reply(
                 embed=h.err(
-                    "The Anthropic API key is invalid. Check your config.",
+                    "The Gemini API key is invalid. Check your config.",
                     "🔑 Auth Error",
                 )
             )
-        except anthropic.RateLimitError:
-            log.warning("ELI5: Anthropic rate limit hit")
+        except ResourceExhausted:
+            log.warning("ELI5: Gemini rate limit hit")
             return await ctx.reply(
                 embed=h.warn(
-                    "Claude is a bit overwhelmed right now. Try again in a moment.",
+                    "The free tier rate limit was hit. Try again in a minute.",
                     "⏱️ Rate Limited",
                 )
             )
-        except anthropic.APIError as exc:
-            log.error(f"ELI5: Anthropic API error: {exc}")
+        except GoogleAPIError as exc:
+            log.error(f"ELI5: Gemini API error: {exc}")
             return await ctx.reply(
                 embed=h.err(
-                    "Something went wrong talking to Claude. Try again shortly.",
+                    "Something went wrong talking to Gemini. Try again shortly.",
                     "💥 API Error",
                 )
             )
