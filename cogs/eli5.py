@@ -2,7 +2,7 @@
 cogs/eli5.py
 ELI5 — Explain It Like I'm 5.
 
-Sends a topic to Google Gemini Flash and returns a plain-English
+Sends a topic to Groq (Llama 3.1 8B) and returns a plain-English
 explanation short enough to read comfortably on mobile.
 
 ──────────────────────────────────────────────────────
@@ -13,9 +13,9 @@ Commands
 
 Config
 ──────────────────────────────────────────────────────
-  Requires GEMINI_API_KEY env var  OR  "gemini_api_key" in config.json.
-  Get a free key at: https://aistudio.google.com/apikey
-  Free tier: 1,500 requests/day, 15 RPM — plenty for a bot command.
+  Requires GROQ_API_KEY env var  OR  "groq_api_key" in config.json.
+  Get a free key at: https://console.groq.com
+  Free tier: 14,400 requests/day, 30 RPM — very generous.
 
 Rate limiting
 ──────────────────────────────────────────────────────
@@ -25,13 +25,8 @@ Rate limiting
 import logging
 import os
 
+import aiohttp
 import discord
-import google.generativeai as genai
-from google.api_core.exceptions import (
-    GoogleAPIError,
-    ResourceExhausted,
-    Unauthenticated,
-)
 from discord import app_commands
 from discord.ext import commands
 
@@ -39,7 +34,8 @@ from utils import helpers as h
 
 log = logging.getLogger("NanoBot.eli5")
 
-_MODEL = "gemini-2.0-flash"
+_GROQ_URL = "https://api.groq.com/openai/v1/chat/completions"
+_MODEL = "llama-3.1-8b-instant"
 _MAX_TOKENS = 300  # ~200 words; tight enough for mobile, enough for a clear explanation
 
 _SYSTEM_PROMPT = (
@@ -51,12 +47,12 @@ _SYSTEM_PROMPT = (
 
 def _get_api_key(bot: commands.Bot) -> str | None:
     """Env var takes priority; fall back to config.json value stored on the bot."""
-    return os.getenv("GEMINI_API_KEY") or getattr(bot, "gemini_api_key", None)
+    return os.getenv("GROQ_API_KEY") or getattr(bot, "groq_api_key", None)
 
 
 # ══════════════════════════════════════════════════════════════════════════════
 class ELI5(commands.Cog):
-    """Explain anything in plain language using Google Gemini Flash."""
+    """Explain anything in plain language using Groq / Llama 3."""
 
     def __init__(self, bot: commands.Bot):
         self.bot = bot
@@ -79,9 +75,7 @@ class ELI5(commands.Cog):
         topic = topic.strip()
         if not topic:
             return await ctx.reply(
-                embed=h.err(
-                    "Give me something to explain!\nExample: `!eli5 black holes`"
-                ),
+                embed=h.err("Give me something to explain!\nExample: `!eli5 black holes`"),
                 ephemeral=True,
             )
         if len(topic) > 300:
@@ -94,49 +88,59 @@ class ELI5(commands.Cog):
         if not api_key:
             return await ctx.reply(
                 embed=h.err(
-                    "No Gemini API key configured.\n"
-                    "Add `GEMINI_API_KEY` to your environment or `config.json`.\n"
-                    "Get a free key at: https://aistudio.google.com/apikey",
+                    "No Groq API key configured.\n"
+                    "Add `GROQ_API_KEY` to your environment or `config.json`.\n"
+                    "Get a free key at: https://console.groq.com",
                     "⚙️ Not Configured",
                 ),
                 ephemeral=True,
             )
 
-        # Defer early — API calls can take 2–5 s; Discord times out at 3 s
+        # Defer early — API calls can take 1–3 s; Discord times out at 3 s
         await ctx.defer()
 
+        payload = {
+            "model": _MODEL,
+            "max_tokens": _MAX_TOKENS,
+            "messages": [
+                {"role": "system", "content": _SYSTEM_PROMPT},
+                {"role": "user", "content": f"Explain: {topic}"},
+            ],
+        }
+        headers = {
+            "Authorization": f"Bearer {api_key}",
+            "Content-Type": "application/json",
+        }
+
         try:
-            genai.configure(api_key=api_key)
-            model = genai.GenerativeModel(
-                model_name=_MODEL,
-                system_instruction=_SYSTEM_PROMPT,
-                generation_config=genai.GenerationConfig(max_output_tokens=_MAX_TOKENS),
-            )
-            response = await model.generate_content_async(f"Explain: {topic}")
-            explanation = response.text.strip()
-        except Unauthenticated:
-            log.error("ELI5: Invalid Gemini API key")
+            async with aiohttp.ClientSession() as session:
+                async with session.post(
+                    _GROQ_URL, json=payload, headers=headers, timeout=aiohttp.ClientTimeout(total=15)
+                ) as resp:
+                    data = await resp.json()
+
+                    if resp.status == 401:
+                        log.error("ELI5: Invalid Groq API key")
+                        return await ctx.reply(
+                            embed=h.err("The Groq API key is invalid. Check your config.", "🔑 Auth Error")
+                        )
+                    if resp.status == 429:
+                        log.warning("ELI5: Groq rate limit hit")
+                        return await ctx.reply(
+                            embed=h.warn("Rate limit hit. Try again in a moment.", "⏱️ Rate Limited")
+                        )
+                    if resp.status != 200:
+                        log.error(f"ELI5: Groq returned {resp.status}: {data}")
+                        return await ctx.reply(
+                            embed=h.err("Something went wrong. Try again shortly.", "💥 API Error")
+                        )
+
+                    explanation = data["choices"][0]["message"]["content"].strip()
+
+        except aiohttp.ClientError as exc:
+            log.error(f"ELI5: Network error: {exc}")
             return await ctx.reply(
-                embed=h.err(
-                    "The Gemini API key is invalid. Check your config.",
-                    "🔑 Auth Error",
-                )
-            )
-        except ResourceExhausted:
-            log.warning("ELI5: Gemini rate limit hit")
-            return await ctx.reply(
-                embed=h.warn(
-                    "The free tier rate limit was hit. Try again in a minute.",
-                    "⏱️ Rate Limited",
-                )
-            )
-        except GoogleAPIError as exc:
-            log.error(f"ELI5: Gemini API error: {exc}")
-            return await ctx.reply(
-                embed=h.err(
-                    "Something went wrong talking to Gemini. Try again shortly.",
-                    "💥 API Error",
-                )
+                embed=h.err("Couldn't reach Groq. Check your connection and try again.", "🌐 Network Error")
             )
 
         e = discord.Embed(
