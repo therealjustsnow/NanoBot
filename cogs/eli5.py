@@ -75,7 +75,9 @@ class ELI5(commands.Cog):
         topic = topic.strip()
         if not topic:
             return await ctx.reply(
-                embed=h.err("Give me something to explain!\nExample: `!eli5 black holes`"),
+                embed=h.err(
+                    "Give me something to explain!\nExample: `!eli5 black holes`"
+                ),
                 ephemeral=True,
             )
         if len(topic) > 300:
@@ -115,24 +117,36 @@ class ELI5(commands.Cog):
         try:
             async with aiohttp.ClientSession() as session:
                 async with session.post(
-                    _GROQ_URL, json=payload, headers=headers, timeout=aiohttp.ClientTimeout(total=15)
+                    _GROQ_URL,
+                    json=payload,
+                    headers=headers,
+                    timeout=aiohttp.ClientTimeout(total=15),
                 ) as resp:
                     data = await resp.json()
 
                     if resp.status == 401:
                         log.error("ELI5: Invalid Groq API key")
                         return await ctx.reply(
-                            embed=h.err("The Groq API key is invalid. Check your config.", "🔑 Auth Error")
+                            embed=h.err(
+                                "The Groq API key is invalid. Check your config.",
+                                "🔑 Auth Error",
+                            )
                         )
                     if resp.status == 429:
                         log.warning("ELI5: Groq rate limit hit")
                         return await ctx.reply(
-                            embed=h.warn("Rate limit hit. Try again in a moment.", "⏱️ Rate Limited")
+                            embed=h.warn(
+                                "Rate limit hit. Try again in a moment.",
+                                "⏱️ Rate Limited",
+                            )
                         )
                     if resp.status != 200:
                         log.error(f"ELI5: Groq returned {resp.status}: {data}")
                         return await ctx.reply(
-                            embed=h.err("Something went wrong. Try again shortly.", "💥 API Error")
+                            embed=h.err(
+                                "Something went wrong. Try again shortly.",
+                                "💥 API Error",
+                            )
                         )
 
                     explanation = data["choices"][0]["message"]["content"].strip()
@@ -140,7 +154,10 @@ class ELI5(commands.Cog):
         except aiohttp.ClientError as exc:
             log.error(f"ELI5: Network error: {exc}")
             return await ctx.reply(
-                embed=h.err("Couldn't reach Groq. Check your connection and try again.", "🌐 Network Error")
+                embed=h.err(
+                    "Couldn't reach Groq. Check your connection and try again.",
+                    "🌐 Network Error",
+                )
             )
 
         e = discord.Embed(
