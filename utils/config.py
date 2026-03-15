@@ -34,10 +34,10 @@ _SCHEMA = {
         False,
         "the secret used by bot list sites to verify webhooks",
     ),
-    "anthropic_api_key": (
+    "gemini_api_key": (
         str,
         False,
-        "Anthropic API key for the ELI5 command (or set ANTHROPIC_API_KEY env var)",
+        "Google Gemini API key for the ELI5 command (or set GEMINI_API_KEY env var)",
     ),
 }
 
