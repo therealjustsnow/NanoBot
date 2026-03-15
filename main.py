@@ -112,7 +112,7 @@ class NanoBot(commands.Bot):
         self.start_time = discord.utils.utcnow()
 
         # Optional API keys — cogs read these via bot attributes
-        self.anthropic_api_key: str | None = cfg.get("anthropic_api_key")
+        self.gemini_api_key: str | None = cfg.get("gemini_api_key")
 
         # Owner ID: config override takes priority over the application owner
         raw_owner = cfg.get("owner_id")
