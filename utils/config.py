@@ -34,10 +34,10 @@ _SCHEMA = {
         False,
         "the secret used by bot list sites to verify webhooks",
     ),
-    "gemini_api_key": (
+    "groq_api_key": (
         str,
         False,
-        "Google Gemini API key for the ELI5 command (or set GEMINI_API_KEY env var)",
+        "Groq API key for the ELI5 command (or set GROQ_API_KEY env var). Free at console.groq.com",
     ),
 }
 
