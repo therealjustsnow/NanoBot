@@ -111,6 +111,9 @@ class NanoBot(commands.Bot):
         self.last_senders: dict[int, discord.Member] = {}
         self.start_time = discord.utils.utcnow()
 
+        # Optional API keys — cogs read these via bot attributes
+        self.anthropic_api_key: str | None = cfg.get("anthropic_api_key")
+
         # Owner ID: config override takes priority over the application owner
         raw_owner = cfg.get("owner_id")
         self.config_owner_id: int | None = int(raw_owner) if raw_owner else None
@@ -131,9 +134,7 @@ class NanoBot(commands.Bot):
             "cogs.welcome",  # per-server welcome / leave messages
             "cogs.admin",  # owner-only: reload / shutdown / restart
             "cogs.votes",
-            "cogs.auditlog",  # per-server audit log feed
-            "cogs.automod",  # passive auto-moderation rules
-            "cogs.roles",  # button-based self-assignable role panels
+            "cogs.eli5",
         )
         for cog in cogs:
             await self.load_extension(cog)
