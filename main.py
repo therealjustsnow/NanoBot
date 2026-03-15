@@ -130,14 +130,14 @@ class NanoBot(commands.Bot):
             "cogs.utility",
             "cogs.reminders",
             "cogs.recurring",
-            "cogs.warnings",   # per-server warning system
-            "cogs.welcome",    # per-server welcome / leave messages
-            "cogs.admin",      # owner-only: reload / shutdown / restart
+            "cogs.warnings",  # per-server warning system
+            "cogs.welcome",  # per-server welcome / leave messages
+            "cogs.admin",  # owner-only: reload / shutdown / restart
             "cogs.votes",
-            "cogs.auditlog",   # audit log with toggleable event types
-            "cogs.automod",    # passive rule-based auto-moderation
-            "cogs.roles",      # button-based self-assignable role panels
-            "cogs.eli5",       # explain it like I'm 5 (Groq / Llama)
+            "cogs.auditlog",  # audit log with toggleable event types
+            "cogs.automod",  # passive rule-based auto-moderation
+            "cogs.roles",  # button-based self-assignable role panels
+            "cogs.eli5",  # explain it like I'm 5 (Groq / Llama)
         )
         for cog in cogs:
             await self.load_extension(cog)
