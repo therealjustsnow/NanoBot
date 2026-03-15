@@ -112,7 +112,7 @@ class NanoBot(commands.Bot):
         self.start_time = discord.utils.utcnow()
 
         # Optional API keys — cogs read these via bot attributes
-        self.gemini_api_key: str | None = cfg.get("gemini_api_key")
+        self.groq_api_key: str | None = cfg.get("groq_api_key")
 
         # Owner ID: config override takes priority over the application owner
         raw_owner = cfg.get("owner_id")
@@ -130,11 +130,14 @@ class NanoBot(commands.Bot):
             "cogs.utility",
             "cogs.reminders",
             "cogs.recurring",
-            "cogs.warnings",  # per-server warning system
-            "cogs.welcome",  # per-server welcome / leave messages
-            "cogs.admin",  # owner-only: reload / shutdown / restart
+            "cogs.warnings",   # per-server warning system
+            "cogs.welcome",    # per-server welcome / leave messages
+            "cogs.admin",      # owner-only: reload / shutdown / restart
             "cogs.votes",
-            "cogs.eli5",
+            "cogs.auditlog",   # audit log with toggleable event types
+            "cogs.automod",    # passive rule-based auto-moderation
+            "cogs.roles",      # button-based self-assignable role panels
+            "cogs.eli5",       # explain it like I'm 5 (Groq / Llama)
         )
         for cog in cogs:
             await self.load_extension(cog)
