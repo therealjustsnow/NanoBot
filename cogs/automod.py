@@ -1,5 +1,5 @@
 """
-cogs/automod.py — v1.0.0
+cogs/automod.py — v1.1.0
 Passive auto-moderation — watches every message and enforces configurable rules.
 
 Rules (all individually togglable, each with its own action):
@@ -9,6 +9,7 @@ Rules (all individually togglable, each with its own action):
   caps      — Messages above a configurable % uppercase (min length guard)
   mentions  — Too many @mentions in a single message
   badwords  — Configurable per-server word list
+  regex     — Configurable per-server regex pattern list
 
 Actions (per rule):
   delete    — Silently delete the message
@@ -28,6 +29,10 @@ Commands (all /automod, require Manage Server):
   /automod badword add       — Add a word to the filter
   /automod badword remove    — Remove a word from the filter
   /automod badword list      — List all filtered words (ephemeral)
+  /automod regex add         — Add a regex pattern to the filter
+  /automod regex remove      — Remove a regex pattern (autocomplete by label)
+  /automod regex list        — List all patterns with IDs and labels (ephemeral)
+  /automod regex test        — Test a string against all active patterns (ephemeral)
   /automod ignore            — Add / remove exempt channels or roles
 """
 
@@ -59,6 +64,7 @@ RULE_LABELS: dict[str, str] = {
     "caps": "🔠 Caps Abuse",
     "mentions": "📣 Mass Mentions",
     "badwords": "🤬 Bad Words",
+    "regex": "🔍 Regex Filter",
 }
 
 ACTION_LABELS: dict[str, str] = {
@@ -131,6 +137,22 @@ def _has_badword(content: str, words: list[str]) -> str | None:
     for word in words:
         if word in lower:
             return word
+    return None
+
+
+def _matches_regex(content: str, patterns: list[dict]) -> str | None:
+    """
+    Test content against each stored regex pattern (case-insensitive).
+    Returns the label or pattern string of the first match, or None.
+    Silently skips any pattern that fails to compile (shouldn't happen since
+    we validate on add, but safe to guard here too).
+    """
+    for p in patterns:
+        try:
+            if re.search(p["pattern"], content, re.IGNORECASE):
+                return p["label"] or p["pattern"]
+        except re.error:
+            pass
     return None
 
 
@@ -257,6 +279,22 @@ async def _action_autocomplete(
     ]
 
 
+async def _regex_pattern_autocomplete(
+    interaction: discord.Interaction,
+    current: str,
+) -> list[app_commands.Choice[str]]:
+    """Autocomplete for regex remove — display label (or pattern) as name, pattern as value."""
+    patterns = await db.get_automod_regex_patterns(interaction.guild_id)
+    choices = []
+    for p in patterns:
+        display = p["label"] or p["pattern"]
+        if current.lower() in display.lower() or current.lower() in p["pattern"].lower():
+            choices.append(
+                app_commands.Choice(name=display[:100], value=p["pattern"][:100])
+            )
+    return choices[:25]
+
+
 # ══════════════════════════════════════════════════════════════════════════════
 class AutoMod(commands.Cog):
     """Passive auto-moderation rules."""
@@ -321,6 +359,12 @@ class AutoMod(commands.Cog):
                     extra = f" · {r.get('percent', 70)}% caps, min {r.get('min_length', 10)} chars"
                 elif key == "mentions":
                     extra = f" · limit {r.get('limit', 5)}"
+                elif key == "badwords":
+                    words = await db.get_automod_badwords(interaction.guild_id)
+                    extra = f" · {len(words)} word(s)"
+                elif key == "regex":
+                    patterns = await db.get_automod_regex_patterns(interaction.guild_id)
+                    extra = f" · {len(patterns)} pattern(s)"
                 lines.append(f"✅ **{label}** — {action}{extra}")
             else:
                 lines.append(f"❌ ~~{label}~~")
@@ -566,6 +610,137 @@ class AutoMod(commands.Cog):
         )
         await interaction.response.send_message(embed=e, ephemeral=True)
 
+    # ── /automod regex subgroup ────────────────────────────────────────────────
+    regex_group = app_commands.Group(
+        name="regex",
+        description="Manage the regex pattern filter.",
+        parent=automod_group,
+    )
+
+    @regex_group.command(name="add", description="Add a regex pattern to the filter.")
+    @app_commands.describe(
+        pattern="Regex pattern to match against messages (case-insensitive)",
+        label="Friendly name shown in logs and /automod status (optional but recommended)",
+    )
+    @has_admin_perms()
+    async def rx_add(
+        self,
+        interaction: discord.Interaction,
+        pattern: str,
+        label: Optional[str] = None,
+    ):
+        # Validate before storing — a bad regex would silently skip in the listener
+        try:
+            re.compile(pattern)
+        except re.error as exc:
+            await interaction.response.send_message(
+                embed=h.err(f"Invalid regex pattern:\n```\n{exc}\n```"),
+                ephemeral=True,
+            )
+            return
+
+        added = await db.add_automod_regex(interaction.guild_id, pattern, label)
+        if added:
+            display = f"`{pattern}`" + (f"\nLabel: **{label}**" if label else "")
+            await interaction.response.send_message(
+                embed=h.ok(f"Pattern added:\n{display}", "🔍 Regex Added"),
+                ephemeral=True,
+            )
+        else:
+            await interaction.response.send_message(
+                embed=h.warn("That pattern is already in the filter.", "Already Exists"),
+                ephemeral=True,
+            )
+
+    @regex_group.command(
+        name="remove", description="Remove a regex pattern from the filter."
+    )
+    @app_commands.describe(pattern="Pattern to remove (use autocomplete to pick by label)")
+    @app_commands.autocomplete(pattern=_regex_pattern_autocomplete)
+    @has_admin_perms()
+    async def rx_remove(self, interaction: discord.Interaction, pattern: str):
+        removed = await db.remove_automod_regex(interaction.guild_id, pattern)
+        if removed:
+            await interaction.response.send_message(
+                embed=h.ok(
+                    f"Removed pattern `{pattern}` from the filter.", "🔍 Regex Removed"
+                ),
+                ephemeral=True,
+            )
+        else:
+            await interaction.response.send_message(
+                embed=h.err(f"Pattern `{pattern}` was not in the filter."),
+                ephemeral=True,
+            )
+
+    @regex_group.command(
+        name="list",
+        description="List all regex patterns in the filter (shown only to you).",
+    )
+    @has_admin_perms()
+    async def rx_list(self, interaction: discord.Interaction):
+        patterns = await db.get_automod_regex_patterns(interaction.guild_id)
+        if not patterns:
+            await interaction.response.send_message(
+                embed=h.info("The regex filter is empty.", "🔍 Regex Patterns"),
+                ephemeral=True,
+            )
+            return
+
+        lines = []
+        for p in patterns:
+            label_part = f" — {p['label']}" if p["label"] else ""
+            lines.append(f"`#{p['id']}`  `{p['pattern']}`{label_part}")
+
+        e = h.embed(
+            "🔍 Regex Filter",
+            f"**{len(patterns)} pattern(s):**\n\n" + "\n".join(lines),
+            h.BLUE,
+        )
+        await interaction.response.send_message(embed=e, ephemeral=True)
+
+    @regex_group.command(
+        name="test",
+        description="Test a string against all active regex patterns (shown only to you).",
+    )
+    @app_commands.describe(text="The text to test — paste a message here to see what matches")
+    @has_admin_perms()
+    async def rx_test(self, interaction: discord.Interaction, text: str):
+        patterns = await db.get_automod_regex_patterns(interaction.guild_id)
+        if not patterns:
+            await interaction.response.send_message(
+                embed=h.info(
+                    "No patterns configured yet. Add some with `/automod regex add`.",
+                    "🔍 Regex Test",
+                ),
+                ephemeral=True,
+            )
+            return
+
+        matched = []
+        for p in patterns:
+            try:
+                if re.search(p["pattern"], text, re.IGNORECASE):
+                    label_part = f" ({p['label']})" if p["label"] else ""
+                    matched.append(f"`{p['pattern']}`{label_part}")
+            except re.error:
+                pass
+
+        preview = text[:200] + ("…" if len(text) > 200 else "")
+
+        if matched:
+            body = (
+                f"**Input:**\n```\n{preview}\n```\n"
+                f"**Matched {len(matched)} pattern(s):**\n"
+                + "\n".join(f"• {m}" for m in matched)
+            )
+            e = h.embed("🔍 Regex Test — Match ✅", body, h.RED)
+        else:
+            body = f"**Input:**\n```\n{preview}\n```\nNo patterns matched."
+            e = h.embed("🔍 Regex Test — No Match", body, h.GREEN)
+
+        await interaction.response.send_message(embed=e, ephemeral=True)
+
     # ── /automod ignore ────────────────────────────────────────────────────────
     ignore_group = app_commands.Group(
         name="ignore",
@@ -728,7 +903,21 @@ class AutoMod(commands.Cog):
                     message,
                     r.get("action", "delete"),
                     "badwords",
-                    f"Filtered word",
+                    "Filtered word",
+                )
+                return
+
+        # ── Regex filter ──────────────────────────────────────────────────────
+        r = rules.get("regex", {})
+        if r.get("enabled"):
+            patterns = await db.get_automod_regex_patterns(message.guild.id)
+            match = _matches_regex(content, patterns)
+            if match:
+                await _execute_action(
+                    message,
+                    r.get("action", "delete"),
+                    "regex",
+                    f"Matched: {match}",
                 )
                 return
 
