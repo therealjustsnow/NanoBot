@@ -288,7 +288,10 @@ async def _regex_pattern_autocomplete(
     choices = []
     for p in patterns:
         display = p["label"] or p["pattern"]
-        if current.lower() in display.lower() or current.lower() in p["pattern"].lower():
+        if (
+            current.lower() in display.lower()
+            or current.lower() in p["pattern"].lower()
+        ):
             choices.append(
                 app_commands.Choice(name=display[:100], value=p["pattern"][:100])
             )
@@ -648,14 +651,18 @@ class AutoMod(commands.Cog):
             )
         else:
             await interaction.response.send_message(
-                embed=h.warn("That pattern is already in the filter.", "Already Exists"),
+                embed=h.warn(
+                    "That pattern is already in the filter.", "Already Exists"
+                ),
                 ephemeral=True,
             )
 
     @regex_group.command(
         name="remove", description="Remove a regex pattern from the filter."
     )
-    @app_commands.describe(pattern="Pattern to remove (use autocomplete to pick by label)")
+    @app_commands.describe(
+        pattern="Pattern to remove (use autocomplete to pick by label)"
+    )
     @app_commands.autocomplete(pattern=_regex_pattern_autocomplete)
     @has_admin_perms()
     async def rx_remove(self, interaction: discord.Interaction, pattern: str):
@@ -703,7 +710,9 @@ class AutoMod(commands.Cog):
         name="test",
         description="Test a string against all active regex patterns (shown only to you).",
     )
-    @app_commands.describe(text="The text to test — paste a message here to see what matches")
+    @app_commands.describe(
+        text="The text to test — paste a message here to see what matches"
+    )
     @has_admin_perms()
     async def rx_test(self, interaction: discord.Interaction, text: str):
         patterns = await db.get_automod_regex_patterns(interaction.guild_id)
