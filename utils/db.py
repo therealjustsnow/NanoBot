@@ -16,6 +16,7 @@ Tables
   unban_schedules   (key) PK  e.g. "guild_id:user_id"
   slow_schedules    (channel_id) PK
   reminders         (id) PK  — 6-char alphanumeric
+  automod_regex_patterns  (id) PK  — per-guild regex patterns for automod
 """
 
 import json
@@ -1261,6 +1262,15 @@ async def _ensure_automod_tables() -> None:
             PRIMARY KEY (guild_id, word)
         );
         CREATE INDEX IF NOT EXISTS abw_guild ON automod_badwords (guild_id);
+
+        CREATE TABLE IF NOT EXISTS automod_regex_patterns (
+            id        INTEGER PRIMARY KEY AUTOINCREMENT,
+            guild_id  TEXT NOT NULL,
+            pattern   TEXT NOT NULL,
+            label     TEXT,
+            UNIQUE(guild_id, pattern)
+        );
+        CREATE INDEX IF NOT EXISTS automod_regex_guild ON automod_regex_patterns (guild_id);
     """)
     await _conn().commit()
 
@@ -1401,3 +1411,44 @@ async def toggle_automod_ignore(guild_id: int, kind: str, target_id: int) -> str
     )
     await _conn().commit()
     return result
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+#  AutoMod — Regex Patterns
+# ══════════════════════════════════════════════════════════════════════════════
+
+
+async def add_automod_regex(
+    guild_id: int, pattern: str, label: str | None = None
+) -> bool:
+    """Add a regex pattern to the filter. Returns True if added, False if already present."""
+    try:
+        await _conn().execute(
+            "INSERT INTO automod_regex_patterns (guild_id, pattern, label) VALUES (?,?,?)",
+            (str(guild_id), pattern, label),
+        )
+        await _conn().commit()
+        return True
+    except aiosqlite.IntegrityError:
+        return False
+
+
+async def remove_automod_regex(guild_id: int, pattern: str) -> bool:
+    """Remove a regex pattern by its exact pattern string. Returns True if removed."""
+    cur = await _conn().execute(
+        "DELETE FROM automod_regex_patterns WHERE guild_id=? AND pattern=?",
+        (str(guild_id), pattern),
+    )
+    await _conn().commit()
+    return cur.rowcount > 0
+
+
+async def get_automod_regex_patterns(guild_id: int) -> list[dict]:
+    """Return all patterns for a guild as list of {id, pattern, label}, ordered by id."""
+    async with _conn().execute(
+        "SELECT id, pattern, label FROM automod_regex_patterns "
+        "WHERE guild_id=? ORDER BY id ASC",
+        (str(guild_id),),
+    ) as cur:
+        rows = await cur.fetchall()
+    return [{"id": r["id"], "pattern": r["pattern"], "label": r["label"]} for r in rows]
