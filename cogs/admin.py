@@ -36,6 +36,7 @@ _ALL_COGS = (
     "cogs.tags",
     "cogs.utility",
     "cogs.reminders",
+    "cogs.recurring",
     "cogs.warnings",
     "cogs.welcome",
     "cogs.admin",
@@ -43,6 +44,7 @@ _ALL_COGS = (
     "cogs.auditlog",
     "cogs.automod",
     "cogs.roles",
+    "cogs.eli5",
 )
 
 _VALID_LEVELS = ("DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL")
@@ -69,6 +71,17 @@ class Admin(commands.Cog):
         name="reload",
         aliases=["rl"],
         help="Reload one cog by name, or all cogs at once.\n\nExamples:\n  !reload all\n  !reload cogs.moderation\n  !reload moderation",
+    extras={
+        'category': '🔧 Owner / Admin',
+        'short': 'Hot-reload a cog or all cogs (owner only)',
+        'usage': 'reload [cog|all]',
+        'desc': 'Reloads without restarting. Accepts all, the full dotted name, or just the short name.',
+        'args': [
+            ('cog', 'Cog to reload, or all (default: all)'),
+        ],
+        'perms': 'Bot Owner',
+        'example': '!reload all\n!reload moderation',
+    },
     )
     async def reload(self, ctx: commands.Context, cog: Optional[str] = "all"):
         """
@@ -143,6 +156,15 @@ class Admin(commands.Cog):
         name="shutdown",
         aliases=["die", "stop"],
         help="Gracefully shut NanoBot down.",
+    extras={
+        'category': '🔧 Owner / Admin',
+        'short': 'Gracefully shut down (owner only)',
+        'usage': 'shutdown',
+        'desc': 'Flushes all logs, sends a goodbye message, and closes the Discord connection.',
+        'args': [],
+        'perms': 'Bot Owner',
+        'example': '!shutdown',
+    },
     )
     async def shutdown(self, ctx: commands.Context):
         """Flush logs, send a goodbye embed, close the Discord connection cleanly."""
@@ -166,6 +188,15 @@ class Admin(commands.Cog):
         name="restart",
         aliases=["reboot", "rs"],
         help="Gracefully restart NanoBot by re-executing the current process.",
+    extras={
+        'category': '🔧 Owner / Admin',
+        'short': 'Gracefully restart the bot process (owner only)',
+        'usage': 'restart',
+        'desc': 'Closes cleanly, then re-executes the Python process with the same arguments.',
+        'args': [],
+        'perms': 'Bot Owner',
+        'example': '!restart',
+    },
     )
     async def restart(self, ctx: commands.Context):
         """
@@ -207,6 +238,15 @@ class Admin(commands.Cog):
             "Does NOT sync slash commands — use !sync for that.\n"
             "Does NOT restart the process — use !restart for that."
         ),
+    extras={
+        'category': '🔧 Owner / Admin',
+        'short': 'Git pull + reload all cogs (owner only)',
+        'usage': 'update',
+        'desc': 'Runs git pull and reports the output, then reloads all cogs. Does NOT sync slash commands — use !sync for that. Does NOT restart the process — use !restart for that.',
+        'args': [],
+        'perms': 'Bot Owner',
+        'example': '!update',
+    },
     )
     async def update(self, ctx: commands.Context):
         """
@@ -323,6 +363,17 @@ class Admin(commands.Cog):
             "Run this after adding or removing any slash commands.\n"
             "You do NOT need to run this after a normal !update."
         ),
+    extras={
+        'category': '🔧 Owner / Admin',
+        'short': 'Push slash commands to Discord (owner only)',
+        'usage': 'sync [guild_id]',
+        'desc': 'No guild_id: global sync (up to 1 hour to propagate). With guild_id: instant sync to that specific guild — use this during development.',
+        'args': [
+            ('guild_id', 'Guild ID for instant sync (omit for global sync)'),
+        ],
+        'perms': 'Bot Owner',
+        'example': '!sync\n!sync 123456789012345678',
+    },
     )
     async def sync(self, ctx: commands.Context, guild_id: Optional[int] = None):
         """
@@ -404,6 +455,17 @@ class Admin(commands.Cog):
             "  !setloglevel INFO     → normal\n"
             "  !setloglevel WARNING  → quiet (only problems)"
         ),
+    extras={
+        'category': '🔧 Owner / Admin',
+        'short': 'Change log verbosity live (owner only)',
+        'usage': 'setloglevel <level>',
+        'desc': 'Changes logging level immediately and saves to config.json.',
+        'args': [
+            ('level', 'DEBUG / INFO / WARNING / ERROR / CRITICAL'),
+        ],
+        'perms': 'Bot Owner',
+        'example': '!setloglevel DEBUG',
+    },
     )
     async def setloglevel(self, ctx: commands.Context, level: str):
         level = level.upper().strip()
@@ -464,6 +526,17 @@ class Admin(commands.Cog):
             "Default: last 20 lines. Max: 50.\n\n"
             "Great for diagnosing issues without SSH access on mobile."
         ),
+    extras={
+        'category': '🔧 Owner / Admin',
+        'short': 'Tail the log file in Discord (owner only)',
+        'usage': 'logs [lines]',
+        'desc': 'Fetches the last N lines of logs/nanobot.log as an ephemeral embed.',
+        'args': [
+            ('lines', 'How many lines to show (1–50, default 20)'),
+        ],
+        'perms': 'Bot Owner',
+        'example': '!logs 30',
+    },
     )
     async def logs(self, ctx: commands.Context, lines: int = 20):
         lines = max(1, min(50, lines))  # Clamp 1–50

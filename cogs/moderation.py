@@ -267,6 +267,20 @@ class Moderation(commands.Cog):
         name="cban",
         aliases=["cleanban"],
         description="Ban + delete message history. Optional timed unban & DM.",
+    extras={
+        'category': '🔨 Banning',
+        'short': 'Ban + wipe message history + optional timed unban',
+        'usage': 'cban [user] [days] [wait] [message]',
+        'desc': "The mobile mod's best friend. Always deletes message history (1–7 days), optionally DMs the user, and optionally auto-unbans after a set time. Defaults to the last message sender if no user is given.",
+        'args': [
+            ('user', 'Who to ban (blank = last sender)'),
+            ('days', 'Days of message history to delete (1–7, default 7)'),
+            ('wait', 'Auto-unban after e.g. 30m, 1h, 7d (omit for permanent)'),
+            ('message', 'DM to send the user (omit for default)'),
+        ],
+        'perms': 'Ban Members',
+        'example': '!cban @user 7 24h See you tomorrow.',
+    },
     )
     @app_commands.describe(
         user="Who to ban (blank=last sender)",
@@ -367,7 +381,19 @@ class Moderation(commands.Cog):
     #  ban
     # ══════════════════════════════════════════════════════════════════════════
     @commands.hybrid_command(
-        name="ban", description="Permanently ban a user with an optional DM."
+        name="ban", description="Permanently ban a user with an optional DM.",
+    extras={
+        'category': '🔨 Banning',
+        'short': 'Permanently ban a user with optional DM',
+        'usage': 'ban [user] [message]',
+        'desc': 'Permanent ban with no message history deletion. Targets last sender if no user is specified.',
+        'args': [
+            ('user', 'Who to ban (blank = last sender)'),
+            ('message', 'DM to send (omit for default)'),
+        ],
+        'perms': 'Ban Members',
+        'example': '!ban @user You have been permanently banned.',
+    },
     )
     @app_commands.describe(
         user="Who to ban (blank=last sender)", message="DM to send the user"
@@ -437,6 +463,18 @@ class Moderation(commands.Cog):
     @commands.hybrid_command(
         name="massban",
         description="Ban multiple users by ID. Paste IDs separated by spaces.",
+    extras={
+        'category': '🔨 Banning',
+        'short': 'Ban multiple users by ID at once',
+        'usage': 'massban <id1 id2 ...> [reason]',
+        'desc': 'Paste a space-separated list of user IDs. Maximum 50 per command. Useful after a raid.',
+        'args': [
+            ('user_ids', 'Space-separated list of user IDs to ban'),
+            ('reason', 'Reason applied to all bans'),
+        ],
+        'perms': 'Ban Members',
+        'example': '!massban 111 222 333 Raid cleanup',
+    },
     )
     @app_commands.describe(
         user_ids="Space-separated list of user IDs", reason="Reason applied to all bans"
@@ -486,7 +524,19 @@ class Moderation(commands.Cog):
 
     # ══════════════════════════════════════════════════════════════════════════
     #  unban
-    # ══════════════════════════════════════════════════════════════════════════
+    # ══════════════════════════════════════════════════════════════════════════,
+    extras={
+        'category': '🔨 Banning',
+        'short': 'Unban a user by their ID',
+        'usage': 'unban <user_id> [reason]',
+        'desc': 'Unbans by User ID. Enable Developer Mode → right-click any user → Copy ID.',
+        'args': [
+            ('user_id', "The user's Discord ID"),
+            ('reason', 'Optional reason (shown in audit log)'),
+        ],
+        'perms': 'Ban Members',
+        'example': '!unban 123456789012345678',
+    },
     @commands.hybrid_command(name="unban", description="Unban a user by their User ID.")
     @app_commands.describe(user_id="Discord User ID", reason="Optional reason")
     @has_ban_perms()
@@ -529,7 +579,19 @@ class Moderation(commands.Cog):
     #  kick
     # ══════════════════════════════════════════════════════════════════════════
     @commands.hybrid_command(
-        name="kick", description="Kick a user. Defaults to last message sender."
+        name="kick", description="Kick a user. Defaults to last message sender.",
+    extras={
+        'category': '👢 Kicking & Timeouts',
+        'short': 'Kick a user — they can rejoin',
+        'usage': 'kick [user] [message]',
+        'desc': 'Kicks with an optional DM. Targets last sender if no user specified.',
+        'args': [
+            ('user', 'Who to kick (blank = last sender)'),
+            ('message', 'DM to send (omit for default)'),
+        ],
+        'perms': 'Kick Members',
+        'example': '!kick @user Please review the rules.',
+    },
     )
     @app_commands.describe(
         user="Who to kick (blank=last sender)", message="DM to send the user"
@@ -599,6 +661,18 @@ class Moderation(commands.Cog):
     @commands.hybrid_command(
         name="slow",
         description="Toggle slowmode. No args = toggle. Add delay and optional timer.",
+    extras={
+        'category': '📢 Channel Controls',
+        'short': 'Toggle or set slowmode with optional auto-disable',
+        'usage': 'slow [delay] [length]',
+        'desc': 'No args = toggle. With delay = set slowmode. With length = auto-disable after that time (survives restarts).',
+        'args': [
+            ('delay', 'Slowmode delay: 30s, 2m, 5m (max 5 min). Omit to toggle.'),
+            ('length', 'Auto-disable after: 10m, 1h, 3d (max 7 days).'),
+        ],
+        'perms': 'Manage Channels',
+        'example': '!slow 2m 1h',
+    },
     )
     @app_commands.describe(
         delay="Slowmode delay e.g. 30s 2m 5m (max 5 min). Omit to toggle.",
@@ -674,7 +748,19 @@ class Moderation(commands.Cog):
     #  lock
     # ══════════════════════════════════════════════════════════════════════════
     @commands.hybrid_command(
-        name="lock", description="Toggle @everyone channel lock. Run again to unlock."
+        name="lock", description="Toggle @everyone channel lock. Run again to unlock.",
+    extras={
+        'category': '📢 Channel Controls',
+        'short': 'Toggle @everyone channel lock',
+        'usage': 'lock [channel] [reason]',
+        'desc': 'Prevents @everyone from sending messages. Run again to unlock.',
+        'args': [
+            ('channel', 'Channel to lock (default: current)'),
+            ('reason', 'Optional reason in audit log'),
+        ],
+        'perms': 'Manage Channels',
+        'example': '!lock #general Temporary lock during raid.',
+    },
     )
     @app_commands.describe(
         channel="Channel to lock (default: current)", reason="Optional reason"
@@ -722,7 +808,23 @@ class Moderation(commands.Cog):
     #  purge
     # ══════════════════════════════════════════════════════════════════════════
     @commands.hybrid_command(
-        name="purge", description="Bulk delete messages with optional filters."
+        name="purge", description="Bulk delete messages with optional filters.",
+    extras={
+        'category': '📢 Channel Controls',
+        'short': 'Bulk delete with optional filters (1–100)',
+        'usage': 'purge <amount> [bots] [user] [contains] [starts_with] [ends_with]',
+        'desc': 'Deletes up to 100 messages. Combine filters: bots only, by user, text matching.',
+        'args': [
+            ('amount', 'Number of messages to scan (1–100, required)'),
+            ('bots', 'Only delete bot messages'),
+            ('user', 'Only delete from this user (mention, ID, or nickname)'),
+            ('contains', 'Only messages containing this text'),
+            ('starts_with', 'Only messages starting with this text'),
+            ('ends_with', 'Only messages ending with this text'),
+        ],
+        'perms': 'Manage Messages',
+        'example': '!purge 50 user:@spammer',
+    },
     )
     @app_commands.describe(
         amount="Number of messages to scan (1–100)",
@@ -818,6 +920,17 @@ class Moderation(commands.Cog):
     @commands.hybrid_command(
         name="snailpurge",
         description="Slow delete of older messages (no 14-day limit). Requires confirmation.",
+    extras={
+        'category': '📢 Channel Controls',
+        'short': 'Slow delete up to 500 messages — no 14-day limit',
+        'usage': 'snailpurge <amount>',
+        'desc': 'Deletes messages one-by-one (~80/min) so it works on messages older than 14 days. Requires a confirmation code.',
+        'args': [
+            ('amount', 'Number of messages to delete (1–500)'),
+        ],
+        'perms': 'Manage Messages',
+        'example': '!snailpurge 200',
+    },
     )
     @app_commands.describe(amount="Number of messages to delete (1–500)")
     @has_mod_perms()
@@ -899,7 +1012,18 @@ class Moderation(commands.Cog):
     #  clean
     # ══════════════════════════════════════════════════════════════════════════
     @commands.hybrid_command(
-        name="clean", description="Delete recent NanoBot messages from this channel."
+        name="clean", description="Delete recent NanoBot messages from this channel.",
+    extras={
+        'category': '📢 Channel Controls',
+        'short': "Delete NanoBot's own recent messages",
+        'usage': 'clean [amount]',
+        'desc': "Removes NanoBot's own messages from the channel.",
+        'args': [
+            ('amount', 'Messages to scan (1–100, default 50)'),
+        ],
+        'perms': 'Manage Messages',
+        'example': '!clean 20',
+    },
     )
     @app_commands.describe(amount="How many messages to scan (1–100, default 50)")
     @has_mod_perms()
@@ -926,6 +1050,19 @@ class Moderation(commands.Cog):
     @commands.hybrid_command(
         name="freeze",
         description="Timeout a user (default 10m). They can't speak, react, or join VCs.",
+    extras={
+        'category': '👢 Kicking & Timeouts',
+        'short': 'Timeout a user (default 10m)',
+        'usage': 'freeze [user] [duration] [reason]',
+        'desc': "Discord Timeout — they can't speak, react, or join VCs. Max 28 days.",
+        'args': [
+            ('user', 'Who to freeze (blank = last sender)'),
+            ('duration', '5m, 1h, 1d (default 10m, max 28 days)'),
+            ('reason', 'Optional reason'),
+        ],
+        'perms': 'Moderate Members',
+        'example': '!freeze @user 30m Please cool down.',
+    },
     )
     @app_commands.describe(
         user="Who to freeze (blank=last sender)",
@@ -1008,7 +1145,18 @@ class Moderation(commands.Cog):
     #  unfreeze
     # ══════════════════════════════════════════════════════════════════════════
     @commands.hybrid_command(
-        name="unfreeze", description="Remove a timeout from a user early."
+        name="unfreeze", description="Remove a timeout from a user early.",
+    extras={
+        'category': '👢 Kicking & Timeouts',
+        'short': 'Remove a timeout early',
+        'usage': 'unfreeze <user>',
+        'desc': 'Removes an active Discord Timeout from a user before it expires.',
+        'args': [
+            ('user', 'User to unfreeze (required)'),
+        ],
+        'perms': 'Moderate Members',
+        'example': '!unfreeze @user',
+    },
     )
     @app_commands.describe(user="User to unfreeze")
     @has_timeout_perms()
@@ -1034,7 +1182,19 @@ class Moderation(commands.Cog):
     #  addrole / removerole
     # ══════════════════════════════════════════════════════════════════════════
     @commands.hybrid_command(
-        name="addrole", aliases=["ar", "giverole"], description="Give a role to a user."
+        name="addrole", aliases=["ar", "giverole"], description="Give a role to a user.",
+    extras={
+        'category': '🎭 Roles',
+        'short': 'Give a role to a user',
+        'usage': 'addrole <user> <role>',
+        'desc': "Assigns a role to a user. The role must be below NanoBot's top role.",
+        'args': [
+            ('user', 'User to give the role to'),
+            ('role', 'Role to assign (mention or name)'),
+        ],
+        'perms': 'Manage Roles',
+        'example': '!addrole @user Verified',
+    },
     )
     @app_commands.describe(user="User to give the role to", role="Role to assign")
     @has_role_perms()
@@ -1069,6 +1229,18 @@ class Moderation(commands.Cog):
         name="removerole",
         aliases=["rr", "takerole"],
         description="Remove a role from a user.",
+    extras={
+        'category': '🎭 Roles',
+        'short': 'Remove a role from a user',
+        'usage': 'removerole <user> <role>',
+        'desc': "Removes a role from a user. The role must be below NanoBot's top role.",
+        'args': [
+            ('user', 'User to remove the role from'),
+            ('role', 'Role to remove (mention or name)'),
+        ],
+        'perms': 'Manage Roles',
+        'example': '!removerole @user Muted',
+    },
     )
     @app_commands.describe(user="User to remove the role from", role="Role to remove")
     @has_role_perms()
@@ -1111,6 +1283,17 @@ class Moderation(commands.Cog):
         name="channelinfo",
         aliases=["ci", "channel"],
         description="Info card for a channel.",
+    extras={
+        'category': '🔎 Info & Notes',
+        'short': 'Info card for a channel',
+        'usage': 'channelinfo [channel]',
+        'desc': 'Shows channel type, ID, category, creation date, position, NSFW status, slowmode, and topic.',
+        'args': [
+            ('channel', 'Channel to inspect (default: current channel)'),
+        ],
+        'perms': 'None',
+        'example': '!channelinfo #general',
+    },
     )
     @app_commands.describe(channel="Channel to inspect (default: current channel)")
     @commands.cooldown(1, 5, commands.BucketType.user)
@@ -1154,6 +1337,18 @@ class Moderation(commands.Cog):
     @commands.hybrid_command(
         name="note",
         description="Add an internal mod note about a user (invisible to them).",
+    extras={
+        'category': '🔎 Info & Notes',
+        'short': 'Add a private mod note (invisible to the user)',
+        'usage': 'note <user> <content>',
+        'desc': 'Saves an internal note about a user. The user never sees these.',
+        'args': [
+            ('user', 'User to attach the note to'),
+            ('content', 'Note content (max 1000 chars)'),
+        ],
+        'perms': 'Manage Messages',
+        'example': '!note @user Warned about spam in #general.',
+    },
     )
     @app_commands.describe(user="User to attach note to", content="Note content")
     @has_mod_perms()
@@ -1179,8 +1374,19 @@ class Moderation(commands.Cog):
                 "📜 Note Saved",
             ),
             ephemeral=True,
-        )
+        ),
 
+    extras={
+        'category': '🔎 Info & Notes',
+        'short': 'View mod notes for a user',
+        'usage': 'notes <user>',
+        'desc': 'Shows up to 8 of the most recent mod notes. Only visible to you (ephemeral).',
+        'args': [
+            ('user', 'User to look up'),
+        ],
+        'perms': 'Manage Messages',
+        'example': '!notes @user',
+    },
     @commands.hybrid_command(name="notes", description="View mod notes for a user.")
     @app_commands.describe(user="User whose notes to view")
     @has_mod_perms()
@@ -1207,7 +1413,18 @@ class Moderation(commands.Cog):
         await ctx.reply(embed=e, ephemeral=True)
 
     @commands.hybrid_command(
-        name="clearnotes", description="Delete all mod notes for a user. Admin only."
+        name="clearnotes", description="Delete all mod notes for a user. Admin only.",
+    extras={
+        'category': '🔎 Info & Notes',
+        'short': 'Delete all mod notes for a user (admin only)',
+        'usage': 'clearnotes <user>',
+        'desc': 'Permanently wipes all mod notes for a user.',
+        'args': [
+            ('user', 'User whose notes to clear'),
+        ],
+        'perms': 'Administrator',
+        'example': '!clearnotes @user',
+    },
     )
     @app_commands.describe(user="User whose notes to clear")
     @has_admin_perms()
@@ -1236,7 +1453,16 @@ class Moderation(commands.Cog):
     #  last
     # ══════════════════════════════════════════════════════════════════════════
     @commands.hybrid_command(
-        name="last", description="Show who last sent a message here."
+        name="last", description="Show who last sent a message here.",
+    extras={
+        'category': '🔎 Info & Notes',
+        'short': 'Show who last sent a message here',
+        'usage': 'last',
+        'desc': 'Displays who last sent a message in this channel — the default target for kick, ban, freeze, etc.',
+        'args': [],
+        'perms': 'None',
+        'example': '!last',
+    },
     )
     async def last(self, ctx):
         target = self.bot.last_senders.get(ctx.channel.id)
@@ -1262,6 +1488,19 @@ class Moderation(commands.Cog):
     @commands.hybrid_command(
         name="tempban",
         description="Ban a user for a set duration. Auto-unbans when it expires.",
+    extras={
+        'category': '🔨 Banning',
+        'short': 'Timed ban — no message deletion, just a duration',
+        'usage': 'tempban [user] [duration] [reason]',
+        'desc': 'Simple timed ban with no history deletion. Auto-unban survives restarts. Defaults to last sender if no user given. vs cban: cban always deletes message history — use it when content needs to be wiped. tempban leaves messages intact.',
+        'args': [
+            ('user', 'Who to ban (blank = last sender)'),
+            ('duration', 'How long: 1h, 12h, 7d (default 24h, min 1 minute)'),
+            ('reason', 'Optional reason'),
+        ],
+        'perms': 'Ban Members',
+        'example': '!tempban @user 3d Repeated rule violations',
+    },
     )
     @app_commands.describe(
         user="Who to ban (blank = last sender)",
@@ -1361,6 +1600,17 @@ class Moderation(commands.Cog):
     @commands.hybrid_command(
         name="nuke",
         description="Clone this channel and delete the original — permanently wipes all messages.",
+    extras={
+        'category': '📢 Channel Controls',
+        'short': 'Wipe a channel — clones it then deletes the original',
+        'usage': 'nuke [reason]',
+        'desc': 'Recreates the channel with identical settings and permissions, deleting all message history. Requires button confirmation. Cannot be undone.',
+        'args': [
+            ('reason', 'Optional reason (shown in audit log)'),
+        ],
+        'perms': 'Manage Channels',
+        'example': '!nuke raid cleanup',
+    },
     )
     @app_commands.describe(reason="Optional reason (shown in audit log)")
     @has_channel_perms()
@@ -1409,7 +1659,18 @@ class Moderation(commands.Cog):
 
     # ══════════════════════════════════════════════════════════════════════════
     #  hide / unhide
-    # ══════════════════════════════════════════════════════════════════════════
+    # ══════════════════════════════════════════════════════════════════════════,
+    extras={
+        'category': '📢 Channel Controls',
+        'short': 'Hide a channel from @everyone',
+        'usage': 'hide [channel]',
+        'desc': 'Sets view_channel=False for @everyone on the target channel.',
+        'args': [
+            ('channel', 'Channel to hide (default: current channel)'),
+        ],
+        'perms': 'Manage Channels',
+        'example': '!hide #staff-only',
+    },
     @commands.hybrid_command(name="hide", description="Hide a channel from @everyone.")
     @app_commands.describe(channel="Channel to hide (default: current)")
     @has_channel_perms()
@@ -1441,7 +1702,18 @@ class Moderation(commands.Cog):
         await action_log(ctx, "🙈", "hide", detail=f"in #{target.name}")
 
     @commands.hybrid_command(
-        name="unhide", description="Restore @everyone visibility on a hidden channel."
+        name="unhide", description="Restore @everyone visibility on a hidden channel.",
+    extras={
+        'category': '📢 Channel Controls',
+        'short': 'Restore @everyone visibility on a hidden channel',
+        'usage': 'unhide [channel]',
+        'desc': 'Resets the view_channel override for @everyone.',
+        'args': [
+            ('channel', 'Channel to unhide (default: current channel)'),
+        ],
+        'perms': 'Manage Channels',
+        'example': '!unhide #announcements',
+    },
     )
     @app_commands.describe(channel="Channel to unhide (default: current)")
     @has_channel_perms()
@@ -1473,7 +1745,19 @@ class Moderation(commands.Cog):
 
     # ══════════════════════════════════════════════════════════════════════════
     #  echo
-    # ══════════════════════════════════════════════════════════════════════════
+    # ══════════════════════════════════════════════════════════════════════════,
+    extras={
+        'category': '📢 Channel Controls',
+        'short': 'Send a message as NanoBot',
+        'usage': 'echo [channel] <message>',
+        'desc': 'Posts a message in the current or specified channel. Prefix mode deletes your trigger message for a cleaner look.',
+        'args': [
+            ('channel', 'Where to send it (default: current channel)'),
+            ('message', 'The text to send'),
+        ],
+        'perms': 'Manage Messages',
+        'example': '!echo #announcements Server maintenance in 10 minutes!',
+    },
     @commands.hybrid_command(name="echo", description="Send a message as NanoBot.")
     @app_commands.describe(
         message="The message to send",
@@ -1515,6 +1799,18 @@ class Moderation(commands.Cog):
     @commands.hybrid_command(
         name="moveall",
         description="Move all members from one voice channel to another.",
+    extras={
+        'category': '📢 Channel Controls',
+        'short': 'Move all VC members from one channel to another',
+        'usage': 'moveall <to_channel> [from_channel]',
+        'desc': 'Moves every member from the source VC to the destination. If no source is given, uses your current voice channel.',
+        'args': [
+            ('to_channel', 'Destination voice channel'),
+            ('from_channel', 'Source voice channel (blank = your current VC)'),
+        ],
+        'perms': 'Move Members',
+        'example': '!moveall #General',
+    },
     )
     @app_commands.describe(
         to_channel="Destination voice channel",

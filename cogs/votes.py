@@ -465,6 +465,17 @@ class Votes(commands.Cog):
     @commands.hybrid_command(
         name="vote",
         description="Vote for NanoBot on bot lists and see your voting status.",
+    extras={
+        'category': '🗳️ Voting',
+        'short': 'Vote for NanoBot and see your voting status',
+        'usage': 'vote [notify [on|off]]',
+        'desc': 'Shows vote links for top.gg (12h cooldown) and discordbotlist.com (24h cooldown), your current cooldown countdown on each site, and your vote streak.\nVoter perk: active voters get 50 reminder slots instead of 25.\nNanoBot will DM you when your cooldown resets. Turn pings off with /vote notify off.',
+        'args': [
+            ('notify on/off', 'Enable or disable cooldown DM pings (omit to view links and status)'),
+        ],
+        'perms': 'None',
+        'example': '!vote\n!vote notify off',
+    },
     )
     @app_commands.describe(action="Optional: 'notify' to toggle cooldown pings")
     @commands.cooldown(1, 10, commands.BucketType.user)

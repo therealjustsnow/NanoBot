@@ -293,6 +293,17 @@ class Reminders(commands.Cog):
         name="remindme",
         aliases=["rm"],
         description="Set a reminder for yourself. Duration can be part of the message.",
+    extras={
+        'category': '⏰ Reminders',
+        'short': 'Set a reminder for yourself',
+        'usage': 'remindme <message with duration>',
+        'desc': 'Remind yourself about something. Put the duration at the end of your message. Delivered by DM, falls back to channel ping.',
+        'args': [
+            ('message', 'What to remind you about — put the duration at the end (e.g. stand up 1h)'),
+        ],
+        'perms': 'None',
+        'example': '!remindme stand up in 1 hour',
+    },
     )
     @app_commands.describe(
         message="What to remind you about — include the time at the end: 'do this 8h' or 'do this in 8 hours'",
@@ -332,6 +343,18 @@ class Reminders(commands.Cog):
     @commands.hybrid_command(
         name="remind",
         description="Set a reminder for another user.",
+    extras={
+        'category': '⏰ Reminders',
+        'short': 'Set a reminder for another user',
+        'usage': 'remind <@user> <message with duration>',
+        'desc': 'Remind someone else. Posts a channel ping by default.',
+        'args': [
+            ('user', 'Who to remind'),
+            ('message', 'What to remind them about — duration at the end'),
+        ],
+        'perms': 'None',
+        'example': '!remind @user check that PR 2h',
+    },
     )
     @app_commands.describe(
         user="Who to remind",
@@ -379,6 +402,17 @@ class Reminders(commands.Cog):
         aliases=["reminder"],
         description="List your active reminders, or cancel one.",
         invoke_without_command=True,
+    extras={
+        'category': '⏰ Reminders',
+        'short': 'List or cancel your active reminders',
+        'usage': 'reminders [cancel <id>]',
+        'desc': 'No args: lists all your active reminders. cancel <id>: cancels that reminder.',
+        'args': [
+            ('id', '6-character reminder ID shown when the reminder was set'),
+        ],
+        'perms': 'None',
+        'example': '!reminders cancel abc123',
+    },
     )
     @commands.cooldown(1, 5, commands.BucketType.user)
     async def reminders(self, ctx: commands.Context):

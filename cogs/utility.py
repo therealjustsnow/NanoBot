@@ -24,1078 +24,231 @@ from utils import helpers as h
 log = logging.getLogger("NanoBot.utility")
 
 
-# ── Help data ──────────────────────────────────────────────────────────────────
-# Structured so both the overview and per-command detail views share one source.
-# Fields: name, aliases, usage, short, desc, args (list of (name, desc)), perms, example
+# ── Help engine ───────────────────────────────────────────────────────────────
+# Commands register their own help metadata via extras={...} on their decorator.
+# The engine walks bot.commands at call-time so it never goes stale.
+#
+# extras keys (all required except aliases):
+#   category  str   — e.g. "🔨 Banning"
+#   short     str   — one-line summary shown in category listings
+#   usage     str   — e.g. "cban [user] [days] [wait] [message]"
+#   desc      str   — full description shown in detail view
+#   args      list  — list of (name, desc) tuples
+#   perms     str   — e.g. "Ban Members" or "None" or "Bot Owner"
+#   example   str   — example invocation(s), newline-separated
+#
+# Pure app_commands.Group commands (auditlog, automod, roles panels) cannot
+# carry extras on their group definition, so they live in _SLASH_GROUPS below.
 # ──────────────────────────────────────────────────────────────────────────────
 
-_HELP = {
-    "🔨 Banning": [
-        {
-            "name": "cban",
-            "aliases": ["cleanban"],
-            "usage": "cban [user] [days] [wait] [message]",
-            "short": "Ban + wipe message history + optional timed unban",
-            "desc": (
-                "The mobile mod's best friend. Always deletes message history (1–7 days), "
-                "optionally DMs the user, and optionally auto-unbans after a set time. "
-                "Use this when someone spammed or posted bad content and you need the evidence gone too. "
-                "Defaults to the last message sender if no user is given."
-            ),
-            "args": [
-                ("user", "Who to ban (blank = last sender)"),
-                ("days", "Days of message history to delete (1–7, default 7)"),
-                (
-                    "wait",
-                    "Auto-unban after e.g. `30m`, `1h`, `7d` (omit for permanent)",
-                ),
-                ("message", "DM to send the user (omit for default)"),
-            ],
-            "perms": "Ban Members",
-            "example": "!cban @user 7 24h See you tomorrow.",
-        },
-        {
-            "name": "ban",
-            "aliases": [],
-            "usage": "ban [user] [message]",
-            "short": "Permanently ban a user with optional DM",
-            "desc": "Permanent ban with no message history deletion. Targets last sender if no user is specified.",
-            "args": [
-                ("user", "Who to ban (blank = last sender)"),
-                ("message", "DM to send (omit for default)"),
-            ],
-            "perms": "Ban Members",
-            "example": "!ban @user You have been permanently banned.",
-        },
-        {
-            "name": "massban",
-            "aliases": [],
-            "usage": "massban <id1 id2 ...> [reason]",
-            "short": "Ban multiple users by ID at once",
-            "desc": "Paste a space-separated list of user IDs. Maximum 50 per command. Useful after a raid.",
-            "args": [
-                ("user_ids", "Space-separated list of user IDs to ban"),
-                ("reason", "Reason applied to all bans"),
-            ],
-            "perms": "Ban Members",
-            "example": "!massban 111 222 333 Raid cleanup",
-        },
-        {
-            "name": "unban",
-            "aliases": [],
-            "usage": "unban <user_id> [reason]",
-            "short": "Unban a user by their ID",
-            "desc": "Unbans by User ID. Enable Developer Mode → right-click any user → Copy ID.",
-            "args": [
-                ("user_id", "The user's Discord ID"),
-                ("reason", "Optional reason (shown in audit log)"),
-            ],
-            "perms": "Ban Members",
-            "example": "!unban 123456789012345678",
-        },
-        {
-            "name": "tempban",
-            "aliases": [],
-            "usage": "tempban [user] [duration] [reason]",
-            "short": "Timed ban — no message deletion, just a duration",
-            "desc": (
-                "Simple timed ban with no history deletion. Use this when you want to cool someone off "
-                "for a set time without touching their messages. "
-                "Auto-unban survives restarts. Defaults to last sender if no user given.\n\n"
-                "**vs /cban:** cban always deletes message history — use it when content needs to be wiped. "
-                "tempban leaves messages intact."
-            ),
-            "args": [
-                ("user", "Who to ban (blank = last sender)"),
-                ("duration", "How long: `1h`, `12h`, `7d` (default 24h, min 1 minute)"),
-                ("reason", "Optional reason"),
-            ],
-            "perms": "Ban Members",
-            "example": "!tempban @user 3d Repeated rule violations",
-        },
-    ],
-    "👢 Kicking & Timeouts": [
-        {
-            "name": "kick",
-            "aliases": [],
-            "usage": "kick [user] [message]",
-            "short": "Kick a user — they can rejoin",
-            "desc": "Kicks with an optional DM. Targets last sender if no user specified.",
-            "args": [
-                ("user", "Who to kick (blank = last sender)"),
-                ("message", "DM to send (omit for default)"),
-            ],
-            "perms": "Kick Members",
-            "example": "!kick @user Please review the rules.",
-        },
-        {
-            "name": "freeze",
-            "aliases": [],
-            "usage": "freeze [user] [duration] [reason]",
-            "short": "Timeout a user (default 10m)",
-            "desc": "Discord Timeout — they can't speak, react, or join VCs. Max 28 days.",
-            "args": [
-                ("user", "Who to freeze (blank = last sender)"),
-                ("duration", "`5m`, `1h`, `1d` (default 10m, max 28 days)"),
-                ("reason", "Optional reason"),
-            ],
-            "perms": "Moderate Members",
-            "example": "!freeze @user 30m Please cool down.",
-        },
-        {
-            "name": "unfreeze",
-            "aliases": [],
-            "usage": "unfreeze <user>",
-            "short": "Remove a timeout early",
-            "desc": "Removes an active Discord Timeout from a user before it expires.",
-            "args": [("user", "User to unfreeze (required)")],
-            "perms": "Moderate Members",
-            "example": "!unfreeze @user",
-        },
-    ],
-    "📢 Channel Controls": [
-        {
-            "name": "slow",
-            "aliases": [],
-            "usage": "slow [delay] [length]",
-            "short": "Toggle or set slowmode with optional auto-disable",
-            "desc": "No args = toggle. With delay = set slowmode. With length = auto-disable after that time (survives restarts).",
-            "args": [
-                (
-                    "delay",
-                    "Slowmode delay: `30s`, `2m`, `5m` (max 5 min). Omit to toggle.",
-                ),
-                ("length", "Auto-disable after: `10m`, `1h`, `3d` (max 7 days)."),
-            ],
-            "perms": "Manage Channels",
-            "example": "!slow 2m 1h",
-        },
-        {
-            "name": "lock",
-            "aliases": [],
-            "usage": "lock [channel] [reason]",
-            "short": "Toggle @everyone channel lock",
-            "desc": "Prevents @everyone from sending messages. Run again to unlock.",
-            "args": [
-                ("channel", "Channel to lock (default: current)"),
-                ("reason", "Optional reason in audit log"),
-            ],
-            "perms": "Manage Channels",
-            "example": "!lock #general Temporary lock during raid.",
-        },
-        {
-            "name": "purge",
-            "aliases": [],
-            "usage": "purge <amount> [bots] [user] [contains] [starts_with] [ends_with]",
-            "short": "Bulk delete with optional filters (1–100)",
-            "desc": "Deletes up to 100 messages. Combine filters: bots only, by user (ID/mention/nickname), text matching.",
-            "args": [
-                ("amount", "Number of messages to scan (1–100, required)"),
-                ("bots", "Only delete bot messages"),
-                ("user", "Only delete from this user (mention, ID, or nickname)"),
-                ("contains", "Only messages containing this text"),
-                ("starts_with", "Only messages starting with this text"),
-                ("ends_with", "Only messages ending with this text"),
-            ],
-            "perms": "Manage Messages",
-            "example": "!purge 50 user:@spammer",
-        },
-        {
-            "name": "snailpurge",
-            "aliases": [],
-            "usage": "snailpurge <amount>",
-            "short": "Slow delete up to 500 messages — no 14-day limit",
-            "desc": "Deletes messages one-by-one (~80/min) so it works on messages older than 14 days. Requires a confirmation code. Sends a private warning before starting.",
-            "args": [("amount", "Number of messages to delete (1–500)")],
-            "perms": "Manage Messages",
-            "example": "!snailpurge 200",
-        },
-        {
-            "name": "clean",
-            "aliases": [],
-            "usage": "clean [amount]",
-            "short": "Delete NanoBot's own recent messages",
-            "desc": "Removes NanoBot's own messages from the channel. Good for tidying up after a command spam session.",
-            "args": [("amount", "Messages to scan (1–100, default 50)")],
-            "perms": "Manage Messages",
-            "example": "!clean 20",
-        },
-        {
-            "name": "nuke",
-            "aliases": [],
-            "usage": "nuke [reason]",
-            "short": "Wipe a channel — clones it then deletes the original",
-            "desc": "Recreates the channel with identical settings and permissions, deleting all message history. Requires button confirmation. Cannot be undone.",
-            "args": [("reason", "Optional reason (shown in audit log)")],
-            "perms": "Manage Channels",
-            "example": "!nuke raid cleanup",
-        },
-        {
-            "name": "hide",
-            "aliases": [],
-            "usage": "hide [channel]",
-            "short": "Hide a channel from @everyone",
-            "desc": "Sets view_channel=False for @everyone on the target channel. Use /unhide to reverse.",
-            "args": [("channel", "Channel to hide (default: current channel)")],
-            "perms": "Manage Channels",
-            "example": "!hide #staff-only",
-        },
-        {
-            "name": "unhide",
-            "aliases": [],
-            "usage": "unhide [channel]",
-            "short": "Restore @everyone visibility on a hidden channel",
-            "desc": "Resets the view_channel override for @everyone. Use /hide to hide again.",
-            "args": [("channel", "Channel to unhide (default: current channel)")],
-            "perms": "Manage Channels",
-            "example": "!unhide #announcements",
-        },
-        {
-            "name": "echo",
-            "aliases": [],
-            "usage": "echo [channel] <message>",
-            "short": "Send a message as NanoBot",
-            "desc": "Posts a message in the current or specified channel. Prefix mode deletes your trigger message for a cleaner look.",
-            "args": [
-                ("channel", "Where to send it (default: current channel)"),
-                ("message", "The text to send"),
-            ],
-            "perms": "Manage Messages",
-            "example": "!echo #announcements Server maintenance in 10 minutes!",
-        },
-        {
-            "name": "moveall",
-            "aliases": [],
-            "usage": "moveall <to_channel> [from_channel]",
-            "short": "Move all VC members from one channel to another",
-            "desc": "Moves every member from the source VC to the destination. If no source is given, uses your current voice channel.",
-            "args": [
-                ("to_channel", "Destination voice channel"),
-                ("from_channel", "Source voice channel (blank = your current VC)"),
-            ],
-            "perms": "Move Members",
-            "example": "!moveall #General",
-        },
-    ],
-    "🎭 Roles": [
-        {
-            "name": "addrole",
-            "aliases": ["ar", "giverole"],
-            "usage": "addrole <user> <role>",
-            "short": "Give a role to a user",
-            "desc": "Assigns a role to a user. The role must be below NanoBot's top role.",
-            "args": [
-                ("user", "User to give the role to"),
-                ("role", "Role to assign (mention or name)"),
-            ],
-            "perms": "Manage Roles",
-            "example": "!addrole @user Verified",
-        },
-        {
-            "name": "removerole",
-            "aliases": ["rr", "takerole"],
-            "usage": "removerole <user> <role>",
-            "short": "Remove a role from a user",
-            "desc": "Removes a role from a user. The role must be below NanoBot's top role.",
-            "args": [
-                ("user", "User to remove the role from"),
-                ("role", "Role to remove (mention or name)"),
-            ],
-            "perms": "Manage Roles",
-            "example": "!removerole @user Muted",
-        },
-    ],
-    "⚠️ Warnings": [
-        {
-            "name": "warn",
-            "aliases": [],
-            "usage": "warn <user> [reason]",
-            "short": "Warn a user — configurable auto-kick/ban thresholds",
-            "desc": "Issues a warning. Auto-actions (kick/ban) trigger at configurable thresholds set via /warnconfig.",
-            "args": [("user", "User to warn"), ("reason", "Reason for the warning")],
-            "perms": "Manage Messages",
-            "example": "!warn @user Spamming in #general",
-        },
-        {
-            "name": "warnings",
-            "aliases": [],
-            "usage": "warnings <user>",
-            "short": "View all warnings for a user",
-            "desc": "Shows the last 8 warnings for a user with date and moderator.",
-            "args": [("user", "User to look up")],
-            "perms": "Manage Messages",
-            "example": "!warnings @user",
-        },
-        {
-            "name": "clearwarnings",
-            "aliases": [],
-            "usage": "clearwarnings <user>",
-            "short": "Clear all warnings for a user (admin only)",
-            "desc": "Permanently wipes all warnings for a user from this server.",
-            "args": [("user", "User whose warnings to clear")],
-            "perms": "Administrator",
-            "example": "!clearwarnings @user",
-        },
-        {
-            "name": "warnconfig",
-            "aliases": [],
-            "usage": "warnconfig [kick_at] [ban_at] [dm_user]",
-            "short": "Configure auto-actions for warnings",
-            "desc": "No args: shows current config. Set kick_at/ban_at to 0 to disable. Auto-kick must be lower than auto-ban.",
-            "args": [
-                ("kick_at", "Auto-kick after this many warnings (0 = disabled)"),
-                ("ban_at", "Auto-ban after this many warnings (0 = disabled)"),
-                ("dm_user", "DM users when they are warned (yes/no)"),
-            ],
-            "perms": "Administrator",
-            "example": "!warnconfig kick_at:3 ban_at:5",
-        },
-    ],
-    "🔎 Info & Notes": [
-        {
-            "name": "last",
-            "aliases": [],
-            "usage": "last",
-            "short": "Show who last sent a message here",
-            "desc": "Displays who last sent a message in this channel — the default target for /kick, /ban, /freeze, etc.",
-            "args": [],
-            "perms": "None",
-            "example": "!last",
-        },
-        {
-            "name": "note",
-            "aliases": [],
-            "usage": "note <user> <content>",
-            "short": "Add a private mod note (invisible to the user)",
-            "desc": "Saves an internal note about a user. The user never sees these.",
-            "args": [
-                ("user", "User to attach the note to"),
-                ("content", "Note content (max 1000 chars)"),
-            ],
-            "perms": "Manage Messages",
-            "example": "!note @user Warned about spam in #general.",
-        },
-        {
-            "name": "notes",
-            "aliases": [],
-            "usage": "notes <user>",
-            "short": "View mod notes for a user",
-            "desc": "Shows up to 8 of the most recent mod notes. Only visible to you (ephemeral).",
-            "args": [("user", "User to look up")],
-            "perms": "Manage Messages",
-            "example": "!notes @user",
-        },
-        {
-            "name": "clearnotes",
-            "aliases": [],
-            "usage": "clearnotes <user>",
-            "short": "Delete all notes for a user (admin only)",
-            "desc": "Permanently wipes all mod notes for a user.",
-            "args": [("user", "User whose notes to clear")],
-            "perms": "Administrator",
-            "example": "!clearnotes @user",
-        },
-        {
-            "name": "channelinfo",
-            "aliases": ["ci", "channel"],
-            "usage": "channelinfo [channel]",
-            "short": "Info card for a channel",
-            "desc": "Shows channel type, ID, category, creation date, position, NSFW status, slowmode, and topic.",
-            "args": [("channel", "Channel to inspect (default: current channel)")],
-            "perms": "None",
-            "example": "!channelinfo #general",
-        },
-    ],
-    "🏷️ Tags": [
-        {
-            "name": "tag",
-            "aliases": [],
-            "usage": "tag [shorthand or subcommand]",
-            "short": "Post text snippets in channel, or DM — personal or server-wide",
-            "desc": (
-                "Tags let you save text (and images) and fire them instantly.\n\n"
-                "**Shorthand:**\n"
-                "`n!tag <n>` — post tag\n"
-                "`n!<n>` — same, even shorter\n"
-                "`n!tag + <n> | <content>` — create personal tag\n"
-                "`n!tag - <n>` — delete tag\n"
-                "`n!tag g+ <n> | <content>` — create global tag (mods)\n\n"
-                "**Subcommands:**\n"
-                "`/tag create`, `/tag global`, `/tag use`, `/tag preview`,\n"
-                "`/tag edit`, `/tag delete`, `/tag list`, `/tag export`"
-            ),
-            "args": [],
-            "perms": "None (global creation requires Manage Messages)",
-            "example": "!tag + rules | Read #rules before posting!\n!rules",
-        },
-    ],
-    "👋 Welcome & Leave": [
-        {
-            "name": "welcome",
-            "aliases": [],
-            "usage": "welcome set [enabled] [channel] [title] [content] [image_url] [dm]",
-            "short": "Configure welcome messages for new members",
-            "desc": "Posts an embed when a user joins. Supports custom title, content, image, and DM mode. Variables: {user}, {mention}, {server}, {count}.",
-            "args": [
-                ("enabled", "Enable or disable welcome messages"),
-                ("channel", "Channel to post in (blank = system channel)"),
-                ("title", "Embed title — supports {user}, {server}"),
-                (
-                    "content",
-                    "Message body — supports {user}, {mention}, {server}, {count}",
-                ),
-                ("image_url", "Image URL to show in the embed"),
-                ("dm", "DM the joining user instead of posting in channel"),
-            ],
-            "perms": "Administrator",
-            "example": "!welcome set enabled:True channel:#welcome content:Welcome {mention}!",
-        },
-        {
-            "name": "leave",
-            "aliases": [],
-            "usage": "leave set [enabled] [channel] [title] [content] [image_url] [dm]",
-            "short": "Configure leave messages when members depart",
-            "desc": "Posts an embed when a user leaves. Same options as /welcome.",
-            "args": [
-                ("enabled", "Enable or disable leave messages"),
-                ("channel", "Channel to post in (blank = system channel)"),
-                ("title", "Embed title"),
-                ("content", "Message body"),
-                ("image_url", "Image URL"),
-                ("dm", "DM the leaving user instead"),
-            ],
-            "perms": "Administrator",
-            "example": "!leave set enabled:True content:Goodbye {user}!",
-        },
-    ],
-    "🔍 Server & User Info": [
-        {
-            "name": "server",
-            "aliases": ["serverinfo", "si", "guild"],
-            "usage": "server",
-            "short": "Full server info card",
-            "desc": "Member counts, boost level, channel breakdown, features, creation date and more.",
-            "args": [],
-            "perms": "None",
-            "example": "!server",
-        },
-        {
-            "name": "user",
-            "aliases": ["userinfo", "ui", "member"],
-            "usage": "user [user]",
-            "short": "Public user info — status, roles, badges",
-            "desc": "Shows a clean user card with status, activity, join date, account age, roles and badges. Mods also see note count.",
-            "args": [("user", "User to look up (blank = yourself)")],
-            "perms": "None",
-            "example": "!user @someone",
-        },
-        {
-            "name": "avatar",
-            "aliases": ["av", "pfp", "icon"],
-            "usage": "avatar [user]",
-            "short": "Show a user's avatar full-size",
-            "desc": "Fetches the avatar at 1024px with PNG/JPG/WEBP/GIF download links.",
-            "args": [("user", "Whose avatar to show (blank = yourself)")],
-            "perms": "None",
-            "example": "!avatar @someone",
-        },
-        {
-            "name": "banner",
-            "aliases": ["userbanner"],
-            "usage": "banner [user]",
-            "short": "Show a user's profile banner",
-            "desc": "Fetches and displays the user's profile banner with download links.",
-            "args": [("user", "Whose banner to show (blank = yourself)")],
-            "perms": "None",
-            "example": "!banner @someone",
-        },
-        {
-            "name": "roleinfo",
-            "aliases": ["role", "ri"],
-            "usage": "roleinfo <role>",
-            "short": "Details about a server role",
-            "desc": "Color, position, member count, creation date, hoist/mentionable status, and notable permissions.",
-            "args": [("role", "Mention it or type the name")],
-            "perms": "None",
-            "example": "!roleinfo @Moderator",
-        },
-        {
-            "name": "uptime",
-            "aliases": [],
-            "usage": "uptime",
-            "short": "How long the bot has been running",
-            "desc": "Shows how long NanoBot has been online since its last start or restart.",
-            "args": [],
-            "perms": "None",
-            "example": "!uptime",
-        },
-    ],
-    "⏰ Reminders": [
-        {
-            "name": "remindme",
-            "aliases": ["rm"],
-            "usage": "remindme <message with duration>",
-            "short": "Set a reminder for yourself",
-            "desc": "Remind yourself about something. Put the duration at the end of your message. Delivered by DM, falls back to channel ping.",
-            "args": [
-                (
-                    "message",
-                    "What to remind you about — put the duration at the end (e.g. stand up 1h)",
-                )
-            ],
-            "perms": "None",
-            "example": "!remindme stand up in 1 hour",
-        },
-        {
-            "name": "remind",
-            "aliases": [],
-            "usage": "remind <@user> <message with duration>",
-            "short": "Set a reminder for another user",
-            "desc": "Remind someone else. Posts a channel ping by default; use dm=yes to DM them.",
-            "args": [
-                ("user", "Who to remind"),
-                ("message", "What to remind them about — duration at the end"),
-            ],
-            "perms": "None",
-            "example": "!remind @user check that PR 2h",
-        },
-        {
-            "name": "reminders",
-            "aliases": ["reminder"],
-            "usage": "reminders [cancel <id>]",
-            "short": "List or cancel your active reminders",
-            "desc": "No args: lists all your active reminders. `cancel <id>`: cancels that reminder.",
-            "args": [("id", "6-character reminder ID shown when the reminder was set")],
-            "perms": "None",
-            "example": "!reminders cancel abc123",
-        },
-        {
-            "name": "every",
-            "aliases": [],
-            "usage": "every <interval> <message> [label] [dm]",
-            "short": "Set a recurring reminder — fires repeatedly on a schedule",
-            "desc": (
-                "Like a repeating calendar event. Set it once and NanoBot will remind you on that interval forever "
-                "(until you pause or cancel it). Survives bot restarts. If the bot was offline when a fire was due, "
-                "it fires once on restore — no catch-up spam.\n\n"
-                "**Interval presets** (autocomplete on `/every`):\n"
-                "`hourly` · `daily` · `weekly` · `biweekly` · `monthly`\n\n"
-                "**Custom intervals:** `2w` · `3d` · `6h` · `every 2 weeks`\n\n"
-                "**Label tip:** Add a short label (e.g. `Payday`) so your `/recurring` list "
-                "stays readable on mobile instead of showing a truncated message."
-            ),
-            "args": [
-                (
-                    "interval",
-                    "How often to remind you — pick a preset or type your own (min 1 hour)",
-                ),
-                ("message", "What to remind you about (up to 500 characters)"),
-                (
-                    "label",
-                    "Short display name shown in your list, e.g. 'Payday' (optional, max 50 chars)",
-                ),
-                (
-                    "dm",
-                    "DM you the reminder (default: yes, falls back to channel ping if DMs are closed)",
-                ),
-            ],
-            "perms": "None",
-            "example": "!every 2w Payday!\n!every daily Stand up meeting\n!every weekly Review my goals",
-        },
-        {
-            "name": "recurring",
-            "aliases": ["repeating", "repeat"],
-            "usage": "recurring [pause|resume|cancel <id>]",
-            "short": "List, pause, resume, or cancel your recurring reminders",
-            "desc": (
-                "No args: shows all your recurring reminders with their interval, next fire time, and status.\n\n"
-                "**Subcommands:**\n"
-                "`pause <id>` — stop a reminder from firing until you resume it\n"
-                "`resume <id>` — re-enable a paused reminder (next fire = now + interval)\n"
-                "`cancel <id>` — permanently delete the recurring reminder\n\n"
-                "IDs are 6 characters, shown when you set the reminder and in the list."
-            ),
-            "args": [
-                (
-                    "id",
-                    "6-character recurring reminder ID (from `/recurring` list or when set)",
-                )
-            ],
-            "perms": "None",
-            "example": "!recurring\n!recurring pause abc123\n!recurring resume abc123\n!recurring cancel abc123",
-        },
-    ],
-    "📋 Audit Log": [
-        {
-            "name": "auditlog channel",
-            "aliases": [],
-            "usage": "/auditlog channel <#channel>",
-            "short": "Set the channel for audit log entries",
-            "desc": "Designates a text channel to receive audit log events. Run this first before enabling logging.",
-            "args": [("channel", "The text channel to post audit events in")],
-            "perms": "Manage Server",
-            "example": "/auditlog channel #audit-log",
-        },
-        {
-            "name": "auditlog enable",
-            "aliases": [],
-            "usage": "/auditlog enable",
-            "short": "Turn audit logging on",
-            "desc": "Enables the audit log feed. A channel must be set first with `/auditlog channel`.",
-            "args": [],
-            "perms": "Manage Server",
-            "example": "/auditlog enable",
-        },
-        {
-            "name": "auditlog disable",
-            "aliases": [],
-            "usage": "/auditlog disable",
-            "short": "Turn audit logging off",
-            "desc": "Stops all audit log entries from being posted. Config is preserved — re-enable with `/auditlog enable`.",
-            "args": [],
-            "perms": "Manage Server",
-            "example": "/auditlog disable",
-        },
-        {
-            "name": "auditlog events",
-            "aliases": [],
-            "usage": "/auditlog events",
-            "short": "Toggle individual event types via a dropdown",
-            "desc": (
-                "Opens a multi-select dropdown to choose exactly which events get logged.\n\n"
-                "**Available events:** Message Delete, Message Edit, Member Join, Member Leave, "
-                "Member Ban, Member Unban, Nickname Change, Roles Updated, "
-                "Channel Created, Channel Deleted, Role Created, Role Deleted."
-            ),
-            "args": [],
-            "perms": "Manage Server",
-            "example": "/auditlog events",
-        },
-        {
-            "name": "auditlog status",
-            "aliases": [],
-            "usage": "/auditlog status",
-            "short": "Show current audit log configuration",
-            "desc": "Displays the log channel, enabled/disabled state, and the full list of active event types.",
-            "args": [],
-            "perms": "Manage Server",
-            "example": "/auditlog status",
-        },
-    ],
-    "🛡️ Auto Mod": [
-        {
-            "name": "automod enable",
-            "aliases": [],
-            "usage": "/automod enable",
-            "short": "Turn auto-moderation on",
-            "desc": "Master switch — enables all configured auto-mod rules. Individual rules can still be toggled independently with `/automod rule`.",
-            "args": [],
-            "perms": "Manage Server",
-            "example": "/automod enable",
-        },
-        {
-            "name": "automod disable",
-            "aliases": [],
-            "usage": "/automod disable",
-            "short": "Turn auto-moderation off",
-            "desc": "Master switch — disables all auto-mod rules without deleting configuration.",
-            "args": [],
-            "perms": "Manage Server",
-            "example": "/automod disable",
-        },
-        {
-            "name": "automod rule",
-            "aliases": [],
-            "usage": "/automod rule <rule> <enabled> [action]",
-            "short": "Toggle a rule on/off and set its action",
-            "desc": (
-                "Enables or disables a specific rule and optionally sets what happens when it triggers.\n\n"
-                "**Rules:** `spam`, `invites`, `links`, `caps`, `mentions`, `badwords`\n"
-                "**Actions:** `delete` (silent), `warn` (delete + formal warning), `timeout` (delete + 10-min timeout)"
-            ),
-            "args": [
-                ("rule", "Which rule to configure"),
-                ("enabled", "True to enable, False to disable"),
-                ("action", "What to do when triggered (delete / warn / timeout)"),
-            ],
-            "perms": "Manage Server",
-            "example": "/automod rule invites True warn",
-        },
-        {
-            "name": "automod spam",
-            "aliases": [],
-            "usage": "/automod spam <count> <seconds>",
-            "short": "Set the spam detection threshold",
-            "desc": "Triggers when a user sends `count` or more messages within `seconds`. Default: 5 messages in 5 seconds.",
-            "args": [
-                ("count", "Number of messages that trigger detection"),
-                ("seconds", "Time window in seconds"),
-            ],
-            "perms": "Manage Server",
-            "example": "/automod spam 5 5",
-        },
-        {
-            "name": "automod caps",
-            "aliases": [],
-            "usage": "/automod caps <percent> <min_length>",
-            "short": "Set the caps-abuse threshold",
-            "desc": "Triggers when a message exceeds `percent`% uppercase characters. `min_length` sets the shortest message to check (avoids false positives on short replies).",
-            "args": [
-                ("percent", "Uppercase % threshold (e.g. 70)"),
-                ("min_length", "Minimum message length to check (default 10)"),
-            ],
-            "perms": "Manage Server",
-            "example": "/automod caps 70 10",
-        },
-        {
-            "name": "automod mentions",
-            "aliases": [],
-            "usage": "/automod mentions <limit>",
-            "short": "Set the per-message mention limit",
-            "desc": "Triggers when a single message contains more than `limit` @mentions (including @everyone and @here).",
-            "args": [("limit", "Max mentions allowed per message before action")],
-            "perms": "Manage Server",
-            "example": "/automod mentions 5",
-        },
-        {
-            "name": "automod badword",
-            "aliases": [],
-            "usage": "/automod badword <add|remove|list> [word]",
-            "short": "Manage the per-server word filter",
-            "desc": (
-                "Maintain a custom list of words that trigger the `badwords` rule.\n\n"
-                "`add <word>` — add a word to the filter\n"
-                "`remove <word>` — remove a word from the filter\n"
-                "`list` — view all filtered words (ephemeral)"
-            ),
-            "args": [("word", "The word to add or remove")],
-            "perms": "Manage Server",
-            "example": "/automod badword add slur",
-        },
-        {
-            "name": "automod ignore",
-            "aliases": [],
-            "usage": "/automod ignore <add|remove> <channel or role>",
-            "short": "Exempt a channel or role from all auto-mod rules",
-            "desc": "Messages in exempt channels or sent by users with exempt roles are completely ignored by all auto-mod rules.",
-            "args": [
-                ("action", "`add` or `remove`"),
-                ("target", "The channel or role to exempt / un-exempt"),
-            ],
-            "perms": "Manage Server",
-            "example": "/automod ignore add #staff-chat",
-        },
-        {
-            "name": "automod status",
-            "aliases": [],
-            "usage": "/automod status",
-            "short": "Full auto-mod configuration overview",
-            "desc": "Shows whether auto-mod is enabled, every rule's state and action, spam/caps/mention thresholds, bad word count, and exempt channels/roles.",
-            "args": [],
-            "perms": "Manage Server",
-            "example": "/automod status",
-        },
-    ],
-    "🎛️ Role Panels": [
-        {
-            "name": "roles panel create",
-            "aliases": [],
-            "usage": "/roles panel create <name> [description] [mode]",
-            "short": "Create a new self-role panel (not yet posted)",
-            "desc": (
-                "Creates a panel definition without posting it. Add roles with `/roles add`, then post it with `/roles panel post`.\n\n"
-                "**Modes:** `toggle` (click to add/remove — default) · `single` (radio-style, picking one removes the others)"
-            ),
-            "args": [
-                ("name", "Panel name shown in the embed title"),
-                ("description", "Optional subtitle text"),
-                ("mode", "`toggle` or `single` (default: toggle)"),
-            ],
-            "perms": "Manage Roles",
-            "example": "/roles panel create Colours Pick your colour role!",
-        },
-        {
-            "name": "roles panel post",
-            "aliases": [],
-            "usage": "/roles panel post <panel_name> [channel]",
-            "short": "Post (or re-post) a panel to a channel",
-            "desc": "Posts the panel as a persistent button embed. If the panel was already posted, the old message is deleted and a fresh one is sent. Buttons survive bot restarts.",
-            "args": [
-                ("panel_name", "Name of the panel to post"),
-                ("channel", "Where to post it (default: current channel)"),
-            ],
-            "perms": "Manage Roles",
-            "example": "/roles panel post Colours #roles",
-        },
-        {
-            "name": "roles panel edit",
-            "aliases": [],
-            "usage": "/roles panel edit <panel_name> [title] [description] [mode]",
-            "short": "Edit a panel's title, description, or mode",
-            "desc": "Updates the panel definition and refreshes the live message if it has been posted.",
-            "args": [
-                ("panel_name", "Panel to edit"),
-                ("title", "New title"),
-                ("description", "New description"),
-                ("mode", "`toggle` or `single`"),
-            ],
-            "perms": "Manage Roles",
-            "example": "/roles panel edit Colours mode:single",
-        },
-        {
-            "name": "roles panel delete",
-            "aliases": [],
-            "usage": "/roles panel delete <panel_name>",
-            "short": "Delete a panel and remove its message",
-            "desc": "Permanently deletes the panel config and attempts to delete the posted message. Cannot be undone.",
-            "args": [("panel_name", "Panel to delete")],
-            "perms": "Manage Roles",
-            "example": "/roles panel delete Colours",
-        },
-        {
-            "name": "roles panel list",
-            "aliases": [],
-            "usage": "/roles panel list",
-            "short": "List all role panels in this server",
-            "desc": "Shows every panel with its mode, role count, and whether it's currently posted.",
-            "args": [],
-            "perms": "Manage Roles",
-            "example": "/roles panel list",
-        },
-        {
-            "name": "roles add",
-            "aliases": [],
-            "usage": "/roles add <panel_name> <role> [label] [emoji]",
-            "short": "Add a role button to a panel",
-            "desc": "Appends a role to an existing panel. If the panel is posted, the live message updates automatically. Up to 25 roles per panel.",
-            "args": [
-                ("panel_name", "Panel to add the role to"),
-                ("role", "The role to assign when clicked"),
-                ("label", "Button label (default: role name)"),
-                ("emoji", "Optional button emoji"),
-            ],
-            "perms": "Manage Roles",
-            "example": "/roles add Colours @Red 🔴",
-        },
-        {
-            "name": "roles remove",
-            "aliases": [],
-            "usage": "/roles remove <panel_name> <role>",
-            "short": "Remove a role button from a panel",
-            "desc": "Removes a role from the panel and refreshes the live message.",
-            "args": [
-                ("panel_name", "Panel to remove from"),
-                ("role", "Role to remove"),
-            ],
-            "perms": "Manage Roles",
-            "example": "/roles remove Colours @Red",
-        },
-        {
-            "name": "roles autogen",
-            "aliases": [],
-            "usage": "/roles autogen <colors|pronouns|age|region> [extra roles]",
-            "short": "Auto-generate a preset role set + panel",
-            "desc": (
-                "Creates roles and a ready-to-post panel in one command.\n\n"
-                "**Presets:**\n"
-                "`colors` — 18 cosmetic colour roles\n"
-                "`pronouns` — She/Her · He/Him · They/Them\n"
-                "`age` — age-range roles\n"
-                "`region` — 7 world-region roles\n\n"
-                "Up to 5 existing roles can be appended to any preset panel. "
-                "Only one autogen can run at a time per server."
-            ),
-            "args": [
-                ("preset", "`colors`, `pronouns`, `age`, or `region`"),
-                ("extra roles", "Up to 5 existing roles to append (optional)"),
-            ],
-            "perms": "Manage Roles",
-            "example": "/roles autogen colors",
-        },
-    ],
-    "🗳️ Voting": [
-        {
-            "name": "vote",
-            "aliases": [],
-            "usage": "vote",
-            "short": "Vote for NanoBot and see your voting status",
-            "desc": (
-                "Shows vote links for top.gg (12h cooldown) and discordbotlist.com (24h cooldown), "
-                "your current cooldown countdown on each site, and your vote streak.\n\n"
-                "**Voter perk:** active voters get **50 reminder slots** instead of 25.\n\n"
-                "NanoBot will DM you when your cooldown resets so you never miss a vote. "
-                "Turn pings off with `/vote notify off`."
-            ),
-            "args": [],
-            "perms": "None",
-            "example": "!vote",
-        },
-        {
-            "name": "vote notify",
-            "aliases": [],
-            "usage": "vote notify [on|off]",
-            "short": "Toggle vote cooldown DM reminders",
-            "desc": (
-                "Controls whether NanoBot DMs you when your vote cooldown resets on each site.\n\n"
-                "`/vote notify` — show current setting\n"
-                "`/vote notify on` — enable DM pings (default)\n"
-                "`/vote notify off` — silence DM pings"
-            ),
-            "args": [
-                (
-                    "on/off",
-                    "Enable or disable cooldown pings (omit to view current setting)",
-                )
-            ],
-            "perms": "None",
-            "example": "!vote notify off",
-        },
-    ],
-    "⚙️ Config & Info": [
-        {
-            "name": "prefix",
-            "aliases": [],
-            "usage": "prefix [new_prefix]",
-            "short": "View or change the bot prefix for this server",
-            "desc": "Shows the current prefix with no args. With a new prefix (max 5 chars, no spaces), updates it server-wide.",
-            "args": [
-                ("new_prefix", "New prefix (1–5 chars, no spaces). Omit to view.")
-            ],
-            "perms": "Administrator (to change)",
-            "example": "!prefix ?",
-        },
-        {
-            "name": "ping",
-            "aliases": [],
-            "usage": "ping",
-            "short": "Check NanoBot's response time",
-            "desc": "Returns the current WebSocket latency between NanoBot and Discord's servers.",
-            "args": [],
-            "perms": "None",
-            "example": "!ping",
-        },
-        {
-            "name": "info",
-            "aliases": [],
-            "usage": "info",
-            "short": "Bot stats and runtime info",
-            "desc": "Shows latency, server count, prefix, discord.py version, Python version, and storage type.",
-            "args": [],
-            "perms": "None",
-            "example": "!info",
-        },
-        {
-            "name": "invite",
-            "aliases": [],
-            "usage": "invite",
-            "short": "Get the bot invite link",
-            "desc": "Generates an invite link with exactly the permissions NanoBot needs — no unnecessary extras.",
-            "args": [],
-            "perms": "None",
-            "example": "!invite",
-        },
-        {
-            "name": "support",
-            "aliases": ["helpserver"],
-            "usage": "support",
-            "short": "Link to the NanoBot support server",
-            "desc": "Posts an invite link to the official NanoBot support server.",
-            "args": [],
-            "perms": "None",
-            "example": "!support",
-        },
-        {
-            "name": "about",
-            "aliases": [],
-            "usage": "about",
-            "short": "What NanoBot is and why it exists",
-            "desc": "The NanoBot story — why it was built, what it avoids, and what makes it different.",
-            "args": [],
-            "perms": "None",
-            "example": "!about",
-        },
-    ],
-    "🔧 Owner / Admin": [
-        {
-            "name": "reload",
-            "aliases": ["rl"],
-            "usage": "reload [cog|all]",
-            "short": "Hot-reload a cog or all cogs (owner only)",
-            "desc": "Reloads without restarting. Accepts `all`, the full dotted name, or just the short name.",
-            "args": [("cog", "Cog to reload, or `all` (default: all)")],
-            "perms": "Bot Owner",
-            "example": "!reload all\n!reload moderation",
-        },
-        {
-            "name": "update",
-            "aliases": ["pull"],
-            "usage": "update",
-            "short": "Git pull + reload all cogs (owner only)",
-            "desc": (
-                "Runs `git pull` and reports the output, then reloads all cogs. "
-                "Does NOT restart the process — main.py changes won't take effect until `!restart`. "
-                "Cog changes (moderation, tags, etc.) take effect immediately."
-            ),
-            "args": [],
-            "perms": "Bot Owner",
-            "example": "!update",
-        },
-        {
-            "name": "setloglevel",
-            "aliases": ["loglevel", "loglvl"],
-            "usage": "setloglevel <level>",
-            "short": "Change log verbosity live (owner only)",
-            "desc": "Changes logging level immediately and saves to config.json.",
-            "args": [("level", "DEBUG / INFO / WARNING / ERROR / CRITICAL")],
-            "perms": "Bot Owner",
-            "example": "!setloglevel DEBUG",
-        },
-        {
-            "name": "logs",
-            "aliases": ["log"],
-            "usage": "logs [lines]",
-            "short": "Tail the log file in Discord (owner only)",
-            "desc": "Fetches the last N lines of `logs/nanobot.log` as an ephemeral embed.",
-            "args": [("lines", "How many lines to show (1–50, default 20)")],
-            "perms": "Bot Owner",
-            "example": "!logs 30",
-        },
-        {
-            "name": "restart",
-            "aliases": ["reboot", "rs"],
-            "usage": "restart",
-            "short": "Gracefully restart the bot process (owner only)",
-            "desc": "Closes cleanly, then re-executes the Python process with the same arguments.",
-            "args": [],
-            "perms": "Bot Owner",
-            "example": "!restart",
-        },
-        {
-            "name": "shutdown",
-            "aliases": ["die", "stop"],
-            "usage": "shutdown",
-            "short": "Gracefully shut down (owner only)",
-            "desc": "Flushes all logs, sends a goodbye message, and closes the Discord connection.",
-            "args": [],
-            "perms": "Bot Owner",
-            "example": "!shutdown",
-        },
-    ],
+# Display order for the paginated overview. Categories not in this list are
+# appended at the end (before Owner / Admin) so new cogs appear automatically.
+_CATEGORY_ORDER: list[str] = [
+    "🔨 Banning",
+    "👢 Kicking & Timeouts",
+    "📢 Channel Controls",
+    "🎭 Roles",
+    "⚠️ Warnings",
+    "🔎 Info & Notes",
+    "🏷️ Tags",
+    "👋 Welcome & Leave",
+    "🔍 Server & User Info",
+    "⏰ Reminders",
+    "📋 Audit Log",
+    "🛡️ Auto Mod",
+    "🎛️ Role Panels",
+    "🗳️ Voting",
+    "⚙️ Config & Info",
+    "🔧 Owner / Admin",
+]
+
+_OWNER_CATEGORIES: set[str] = {"🔧 Owner / Admin"}
+
+# Static entries for pure-slash app_commands.Group trees that cannot carry
+# extras on their decorator. Each entry will appear in the category listing
+# and support !help <name> detail lookups.
+_SLASH_GROUPS: list[dict] = [
+    {
+        "name": "auditlog",
+        "aliases": [],
+        "category": "📋 Audit Log",
+        "short": "Configure the server audit log feed",
+        "usage": "/auditlog <channel|enable|disable|events|status>",
+        "desc": (
+            "Posts a live feed of server events to a dedicated channel. "
+            "12 toggleable event types: message deletes/edits, member join/leave/ban/unban, "
+            "nickname changes, role updates, channel and role creation/deletion.\n\n"
+            "**Setup:** /auditlog channel #channel → /auditlog enable → /auditlog events"
+        ),
+        "args": [
+            ("channel #channel", "Set the channel that receives log entries"),
+            ("enable / disable", "Master on/off switch (config is preserved when disabled)"),
+            ("events", "Opens a dropdown to toggle individual event types"),
+            ("status", "Show current channel, enabled state, and active events"),
+        ],
+        "perms": "Manage Server",
+        "example": "/auditlog channel #audit-log\n/auditlog enable\n/auditlog events",
+    },
+    {
+        "name": "automod",
+        "aliases": [],
+        "category": "🛡️ Auto Mod",
+        "short": "Passive rule-based message moderation",
+        "usage": "/automod <enable|disable|rule|spam|caps|mentions|badword|regex|ignore|status>",
+        "desc": (
+            "Watches every message and enforces configurable rules automatically.\n\n"
+            "**Rules:** spam, invites, links, caps, mentions, badwords, regex\n"
+            "**Actions per rule:** delete (silent) · warn (delete + warning) · timeout (delete + 10-min timeout)\n\n"
+            "Exempt channels and roles are ignored for all rules."
+        ),
+        "args": [
+            ("enable / disable", "Master on/off switch"),
+            ("rule <rule> <enabled> [action]", "Toggle a rule and set its action"),
+            ("spam <count> <seconds>", "Set spam detection threshold"),
+            ("caps <percent> <min_length>", "Set caps-abuse threshold"),
+            ("mentions <limit>", "Set per-message mention limit"),
+            ("badword add|remove|list [word]", "Manage the custom word filter"),
+            ("regex add|remove|list|test", "Manage regex patterns"),
+            ("ignore add|remove <channel or role>", "Exempt a channel or role from all rules"),
+            ("status", "Full configuration overview"),
+        ],
+        "perms": "Manage Server",
+        "example": "/automod enable\n/automod rule invites True warn\n/automod badword add slur",
+    },
+    {
+        "name": "roles",
+        "aliases": [],
+        "category": "🎛️ Role Panels",
+        "short": "Button-based self-assignable role panels",
+        "usage": "/roles panel <create|post|edit|delete|list> | /roles <add|remove|autogen>",
+        "desc": (
+            "Create persistent button panels that let members assign their own roles. "
+            "Panels survive bot restarts.\n\n"
+            "**Modes:** toggle (click to add/remove — default) · single (radio-style, one role at a time)\n\n"
+            "**autogen presets:** colors (18 roles), pronouns, age ranges, world regions"
+        ),
+        "args": [
+            ("panel create <name> [desc] [mode]", "Create a panel definition (not yet posted)"),
+            ("panel post <name> [channel]", "Post or re-post a panel as a button embed"),
+            ("panel edit <name> [title] [desc] [mode]", "Edit a posted panel"),
+            ("panel delete <name>", "Delete the panel and its message"),
+            ("panel list", "List all panels in this server"),
+            ("add <panel> <role> [label] [emoji]", "Add a role button to a panel"),
+            ("remove <panel> <role>", "Remove a role button from a panel"),
+            ("autogen <colors|pronouns|age|region>", "Generate a preset role set + panel"),
+        ],
+        "perms": "Manage Roles",
+        "example": "/roles panel create Colours Pick your colour!\n/roles add Colours @Red 🔴\n/roles panel post Colours #roles",
+    },
+]
+
+# Build a flat name→entry lookup for slash groups (used by !help <cmd>)
+_SLASH_GROUP_LOOKUP: dict[str, dict] = {
+    entry["name"]: entry for entry in _SLASH_GROUPS
 }
+for _entry in _SLASH_GROUPS:
+    for _alias in _entry.get("aliases", []):
+        _SLASH_GROUP_LOOKUP[_alias] = _entry
 
 
-def _flat_commands() -> dict[str, dict]:
-    """Flat {name: cmd_dict} lookup for !help <cmd>."""
-    out = {}
-    for cmds in _HELP.values():
-        for cmd in cmds:
-            out[cmd["name"]] = cmd
-            for alias in cmd.get("aliases", []):
-                out[alias] = cmd
+def _collect_categories(
+    bot: commands.Bot, *, is_owner: bool = False
+) -> dict[str, list[dict]]:
+    """
+    Walk bot.commands and group commands by their extras['category'].
+
+    Returns an ordered dict: {category_name: [cmd_entry, ...]}
+      name, aliases, category, short, usage, desc, args, perms, example
+    Commands without extras land in '📦 Uncategorized'.
+    Owner categories are hidden from non-owners.
+    Order follows _CATEGORY_ORDER; unknown categories append before Owner/Admin.
+    """
+    by_cat: dict[str, list[dict]] = {}
+
+    # Collect hybrid / prefix commands
+    seen: set[str] = set()
+    for cmd in bot.commands:
+        if cmd.name in seen:
+            continue
+        seen.add(cmd.name)
+
+        extras = getattr(cmd, "extras", None) or {}
+        cat = extras.get("category", "📦 Uncategorized")
+
+        if cat in _OWNER_CATEGORIES and not is_owner:
+            continue
+
+        entry = {
+            "name": cmd.name,
+            "aliases": list(cmd.aliases) if hasattr(cmd, "aliases") else [],
+            "category": cat,
+            "short": extras.get("short", cmd.description or "—"),
+            "usage": extras.get("usage", cmd.name),
+            "desc": extras.get("desc", cmd.description or "No description available."),
+            "args": extras.get("args", []),
+            "perms": extras.get("perms", "None"),
+            "example": extras.get("example", f"!{cmd.name}"),
+        }
+        by_cat.setdefault(cat, []).append(entry)
+
+    # Inject slash-only groups into their categories
+    for sg in _SLASH_GROUPS:
+        cat = sg["category"]
+        if cat in _OWNER_CATEGORIES and not is_owner:
+            continue
+        by_cat.setdefault(cat, []).append(sg)
+
+    # Sort each category's commands: entries with extras first (has 'usage' key
+    # from extras), slash-groups second, then alphabetically within each group.
+    # Actually just sort alphabetically — natural enough.
+    for cat in by_cat:
+        by_cat[cat].sort(key=lambda e: e["name"])
+
+    # Build ordered result following _CATEGORY_ORDER
+    ordered: dict[str, list[dict]] = {}
+    for cat in _CATEGORY_ORDER:
+        if cat in by_cat:
+            ordered[cat] = by_cat[cat]
+
+    # Append any unknown categories (new cogs) before returning
+    for cat, cmds in by_cat.items():
+        if cat not in ordered:
+            ordered[cat] = cmds
+
+    return ordered
+
+
+def _flat_lookup(bot: commands.Bot) -> dict[str, dict]:
+    """
+    Return {name: entry, alias: entry} for all commands that have extras.
+    Used by !help <cmd> for detail lookups.
+    Includes slash group entries from _SLASH_GROUP_LOOKUP.
+    """
+    out: dict[str, dict] = {}
+
+    for cmd in bot.commands:
+        extras = getattr(cmd, "extras", None) or {}
+        if not extras.get("category"):
+            continue  # skip commands without extras
+        entry = {
+            "name": cmd.name,
+            "aliases": list(cmd.aliases) if hasattr(cmd, "aliases") else [],
+            "category": extras.get("category", ""),
+            "short": extras.get("short", ""),
+            "usage": extras.get("usage", cmd.name),
+            "desc": extras.get("desc", ""),
+            "args": extras.get("args", []),
+            "perms": extras.get("perms", "None"),
+            "example": extras.get("example", f"!{cmd.name}"),
+        }
+        out[cmd.name] = entry
+        for alias in (cmd.aliases or []):
+            out[alias] = entry
+
+    # Merge slash group entries
+    out.update(_SLASH_GROUP_LOOKUP)
+
     return out
-
-
-_FLAT = _flat_commands()
 
 
 # ── Category keyword → full category name ─────────────────────────────────────
@@ -1192,7 +345,9 @@ def _build_category_embed(cat_name: str, cmds: list, prefix: str) -> discord.Emb
     """Single-embed view of all commands in one help category."""
     lines = []
     for cmd in cmds:
-        entry = f"`/{cmd['name']}`"
+        is_slash_only = cmd["name"] in _SLASH_GROUP_LOOKUP
+        name_str = f"`/{cmd['name']}`" if is_slash_only else f"`{prefix}{cmd['name']}`"
+        entry = name_str
         if cmd.get("aliases"):
             shown = cmd["aliases"][:2]
             entry += " _(also: " + ", ".join(f"`{a}`" for a in shown) + ")_"
@@ -1209,63 +364,36 @@ def _build_category_embed(cat_name: str, cmds: list, prefix: str) -> discord.Emb
     return e
 
 
-_OWNER_CATEGORIES = {"🔧 Owner / Admin"}
-
-
 def _build_help_pages(
-    prefix: str, bot_name: str, *, is_owner: bool = False
+    bot: commands.Bot, prefix: str, bot_name: str, *, is_owner: bool = False
 ) -> list[discord.Embed]:
     """
     Build one embed per help category, plus a cover page.
+    Reads command extras at call-time — always current, never stale.
     Owner-only categories are hidden from non-owners.
-    Returns a list of discord.Embed objects ready to display.
     """
-    categories = [
-        (cat, cmds)
-        for cat, cmds in _HELP.items()
-        if is_owner or cat not in _OWNER_CATEGORIES
-    ]
+    categories = list(_collect_categories(bot, is_owner=is_owner).items())
     total = len(categories) + 1  # +1 for cover
 
-    def footer(page_num):
-        return "Page " + str(page_num) + " / " + str(total) + "  ·  NanoBot"
+    def footer(page_num: int) -> str:
+        return f"Page {page_num} / {total}  ·  NanoBot"
 
     pages = []
 
     # Cover page
+    cover_lines = []
+    for cat, cmds in categories:
+        n = len(cmds)
+        cover_lines.append(f"**{cat}** — {n} command{'s' if n != 1 else ''}")
+
     cover = h.embed(
-        title=chr(9889) + " NanoBot " + chr(8212) + " Command Reference",
+        title="⚡ NanoBot — Command Reference",
         description=(
-            "Prefix: `"
-            + prefix
-            + "` · Slash `/` · @"
-            + bot_name
-            + chr(10)
-            + "Most mod commands default to the **last message sender** if no user is given."
-            + chr(10)
-            + chr(10)
-            + "`"
-            + prefix
-            + "help <command>` — full detail on any command"
-            + chr(10)
-            + "`"
-            + prefix
-            + "help <category>` — browse a category (e.g. `"
-            + prefix
-            + "help banning`)"
-            + chr(10)
-            + chr(10)
-            + chr(10).join(
-                "**"
-                + cat
-                + "** "
-                + chr(8212)
-                + " "
-                + str(len(cmds))
-                + " command"
-                + ("s" if len(cmds) != 1 else "")
-                for cat, cmds in categories
-            )
+            f"Prefix: `{prefix}` · Slash `/` · @{bot_name}\n"
+            "Most mod commands default to the **last message sender** if no user is given.\n\n"
+            f"`{prefix}help <command>` — full detail on any command\n"
+            f"`{prefix}help <category>` — browse a category (e.g. `{prefix}help banning`)\n\n"
+            + "\n".join(cover_lines)
         ),
         color=h.BLUE,
     )
@@ -1276,30 +404,23 @@ def _build_help_pages(
     for i, (category, cmds) in enumerate(categories, start=2):
         lines = []
         for cmd in cmds:
-            line = "`" + prefix + cmd["name"] + "`"
+            is_slash_only = cmd["name"] in _SLASH_GROUP_LOOKUP
+            pfx = "/" if is_slash_only else prefix
+            line = f"`{pfx}{cmd['name']}`"
             if cmd.get("aliases"):
-                line += (
-                    " _(also: "
-                    + ", ".join("`" + a + "`" for a in cmd["aliases"])
-                    + ")_"
-                )
-            line += " — " + cmd["short"]
+                line += " _(also: " + ", ".join(f"`{a}`" for a in cmd["aliases"]) + ")_"
+            line += f" — {cmd['short']}"
             lines.append(line)
 
         e = h.embed(title=category, color=h.BLUE)
         e.description = (
-            chr(10).join(lines)
-            + chr(10)
-            + chr(10)
-            + "Use `"
-            + prefix
-            + "help <name>` for details on any command."
+            "\n".join(lines)
+            + f"\n\nUse `{prefix}help <command>` for details on any command."
         )
         e.set_footer(text=footer(i))
         pages.append(e)
 
     return pages
-
 
 class HelpView(discord.ui.View):
     """
@@ -1389,9 +510,6 @@ class Utility(commands.Cog):
     # ══════════════════════════════════════════════════════════════════════
     #  help
     # ══════════════════════════════════════════════════════════════════════
-    # ══════════════════════════════════════════════════════════════════════
-    #  help
-    # ══════════════════════════════════════════════════════════════════════
     @commands.hybrid_command(
         name="help",
         description="Command reference. Use /help <command> for detail, or /help <category> to browse.",
@@ -1408,27 +526,33 @@ class Utility(commands.Cog):
             key = command.lower().strip()
 
             # ── 1. Exact command / alias lookup ───────────────────────────────
-            cmd = _FLAT.get(key)
+            flat = _flat_lookup(self.bot)
+            cmd = flat.get(key)
             if cmd and cmd.get("perms") == "Bot Owner" and not is_owner:
                 cmd = None  # hide owner commands from non-owners
 
             if cmd:
-                e = h.embed(title=" " + prefix + cmd["usage"], color=h.BLUE)
+                is_slash_only = cmd["name"] in _SLASH_GROUP_LOOKUP
+                title_prefix = "/" if is_slash_only else prefix
+                e = h.embed(title=f"`{title_prefix}{cmd['usage']}`", color=h.BLUE)
                 e.description = cmd["desc"] + "\n\u200b"
                 if cmd["args"]:
                     e.add_field(
                         name="Arguments",
-                        value="\n".join("`" + a + "` — " + d for a, d in cmd["args"]),
+                        value="\n".join(f"`{a}` — {d}" for a, d in cmd["args"]),
                         inline=False,
                     )
                 e.add_field(name="Required Permission", value=cmd["perms"], inline=True)
-                e.add_field(
-                    name="Example", value="`" + cmd["example"] + "`", inline=False
-                )
+                if cmd.get("example"):
+                    e.add_field(
+                        name="Example",
+                        value="\n".join(f"`{ex}`" for ex in cmd["example"].split("\n")),
+                        inline=False,
+                    )
                 if cmd.get("aliases"):
                     e.add_field(
                         name="Aliases",
-                        value=", ".join("`" + a + "`" for a in cmd["aliases"]),
+                        value=", ".join(f"`{a}`" for a in cmd["aliases"]),
                         inline=False,
                     )
                 e.set_footer(text="[ ] = optional  ·  < > = required  ·  NanoBot")
@@ -1436,34 +560,26 @@ class Utility(commands.Cog):
 
             # ── 2. Category keyword lookup ──────────────────────────────────
             cat_name = _CATEGORY_ALIASES.get(key)
-            if (
-                cat_name
-                and (cat_name not in _OWNER_CATEGORIES or is_owner)
-                and cat_name in _HELP
-            ):
-                return await ctx.reply(
-                    embed=_build_category_embed(cat_name, _HELP[cat_name], prefix),
-                    ephemeral=True,
-                )
+            if cat_name and (cat_name not in _OWNER_CATEGORIES or is_owner):
+                cats = _collect_categories(self.bot, is_owner=is_owner)
+                if cat_name in cats:
+                    return await ctx.reply(
+                        embed=_build_category_embed(cat_name, cats[cat_name], prefix),
+                        ephemeral=True,
+                    )
 
             # ── 3. Nothing found ────────────────────────────────────────────
             return await ctx.reply(
                 embed=h.err(
-                    "No command or category named `" + command + "`.\n"
-                    "Use `" + prefix + "help` to browse all categories, or try:\n"
-                    "`"
-                    + prefix
-                    + "help banning`  ·  `"
-                    + prefix
-                    + "help tags`  ·  `"
-                    + prefix
-                    + "help channel`"
+                    f"No command or category named `{command}`.\n"
+                    f"Use `{prefix}help` to browse all categories, or try:\n"
+                    f"`{prefix}help banning`  ·  `{prefix}help tags`  ·  `{prefix}help channel`"
                 ),
                 ephemeral=True,
             )
 
         # Paginated category overview
-        pages = _build_help_pages(prefix, self.bot.user.display_name, is_owner=is_owner)
+        pages = _build_help_pages(self.bot, prefix, self.bot.user.display_name, is_owner=is_owner)
         view = HelpView(pages=pages, author=ctx.author)
         msg = await ctx.reply(embed=pages[0], view=view, ephemeral=True)
         view.message = msg
@@ -1474,6 +590,17 @@ class Utility(commands.Cog):
     @commands.hybrid_command(
         name="prefix",
         description="View or change NanoBot's prefix for this server.",
+    extras={
+        'category': '⚙️ Config & Info',
+        'short': 'View or change the bot prefix for this server',
+        'usage': 'prefix [new_prefix]',
+        'desc': 'Shows the current prefix with no args. With a new prefix (max 5 chars, no spaces), updates it server-wide.',
+        'args': [
+            ('new_prefix', 'New prefix (1–5 chars, no spaces). Omit to view.'),
+        ],
+        'perms': 'Administrator (to change)',
+        'example': '!prefix ?',
+    },
     )
     @app_commands.describe(new_prefix="New prefix (leave blank to view current)")
     async def prefix(self, ctx: commands.Context, new_prefix: Optional[str] = None):
@@ -1528,6 +655,15 @@ class Utility(commands.Cog):
         name="support",
         aliases=["helpserver"],
         description="Get a link to the NanoBot support server.",
+    extras={
+        'category': '⚙️ Config & Info',
+        'short': 'Link to the NanoBot support server',
+        'usage': 'support',
+        'desc': 'Posts an invite link to the official NanoBot support server.',
+        'args': [],
+        'perms': 'None',
+        'example': '!support',
+    },
     )
     @commands.cooldown(1, 10, commands.BucketType.user)
     async def support(self, ctx: commands.Context):
@@ -1543,7 +679,16 @@ class Utility(commands.Cog):
 
     # ══════════════════════════════════════════════════════════════════════════
     #  ping
-    # ══════════════════════════════════════════════════════════════════════════
+    # ══════════════════════════════════════════════════════════════════════════,
+    extras={
+        'category': '⚙️ Config & Info',
+        'short': "Check NanoBot's response time",
+        'usage': 'ping',
+        'desc': "Returns the current WebSocket latency between NanoBot and Discord's servers.",
+        'args': [],
+        'perms': 'None',
+        'example': '!ping',
+    },
     @commands.hybrid_command(name="ping", description="Check NanoBot's latency.")
     @commands.cooldown(1, 10, commands.BucketType.user)
     async def ping(self, ctx: commands.Context):
@@ -1553,7 +698,16 @@ class Utility(commands.Cog):
 
     # ══════════════════════════════════════════════════════════════════════════
     #  info
-    # ══════════════════════════════════════════════════════════════════════════
+    # ══════════════════════════════════════════════════════════════════════════,
+    extras={
+        'category': '⚙️ Config & Info',
+        'short': 'Bot stats and runtime info',
+        'usage': 'info',
+        'desc': 'Shows latency, server count, prefix, discord.py version, Python version, and storage type.',
+        'args': [],
+        'perms': 'None',
+        'example': '!info',
+    },
     @commands.hybrid_command(name="info", description="NanoBot stats and runtime info.")
     @commands.cooldown(1, 10, commands.BucketType.user)
     async def info(self, ctx: commands.Context):
@@ -1582,6 +736,15 @@ class Utility(commands.Cog):
     @commands.hybrid_command(
         name="invite",
         description="Get NanoBot's invite link with the correct permissions.",
+    extras={
+        'category': '⚙️ Config & Info',
+        'short': 'Get the bot invite link',
+        'usage': 'invite',
+        'desc': 'Generates an invite link with exactly the permissions NanoBot needs — no unnecessary extras.',
+        'args': [],
+        'perms': 'None',
+        'example': '!invite',
+    },
     )
     @commands.cooldown(1, 10, commands.BucketType.user)
     async def invite(self, ctx: commands.Context):
@@ -1647,6 +810,15 @@ class Utility(commands.Cog):
     @commands.hybrid_command(
         name="about",
         description="What NanoBot is and why it exists.",
+    extras={
+        'category': '⚙️ Config & Info',
+        'short': 'What NanoBot is and why it exists',
+        'usage': 'about',
+        'desc': 'The NanoBot story — why it was built, what it avoids, and what makes it different.',
+        'args': [],
+        'perms': 'None',
+        'example': '!about',
+    },
     )
     @commands.cooldown(1, 10, commands.BucketType.user)
     async def about(self, ctx: commands.Context):
@@ -1724,6 +896,15 @@ class Utility(commands.Cog):
         name="server",
         aliases=["serverinfo", "si", "guild"],
         description="Info card for this server.",
+    extras={
+        'category': '🔍 Server & User Info',
+        'short': 'Full server info card',
+        'usage': 'server',
+        'desc': 'Member counts, boost level, channel breakdown, features, creation date and more.',
+        'args': [],
+        'perms': 'None',
+        'example': '!server',
+    },
     )
     @commands.cooldown(1, 5, commands.BucketType.user)
     async def server(self, ctx: commands.Context):
@@ -1829,6 +1010,17 @@ class Utility(commands.Cog):
         name="user",
         aliases=["userinfo", "ui", "member"],
         description="Public info card for a user.",
+    extras={
+        'category': '🔍 Server & User Info',
+        'short': 'Public user info — status, roles, badges',
+        'usage': 'user [user]',
+        'desc': 'Shows a clean user card with status, activity, join date, account age, roles and badges. Mods also see note count.',
+        'args': [
+            ('user', 'User to look up (blank = yourself)'),
+        ],
+        'perms': 'None',
+        'example': '!user @someone',
+    },
     )
     @app_commands.describe(user="User to look up (leave blank for yourself)")
     @commands.cooldown(1, 5, commands.BucketType.user)
@@ -1957,6 +1149,17 @@ class Utility(commands.Cog):
         name="avatar",
         aliases=["av", "pfp", "icon"],
         description="Show a user's avatar in full size.",
+    extras={
+        'category': '🔍 Server & User Info',
+        'short': "Show a user's avatar full-size",
+        'usage': 'avatar [user]',
+        'desc': 'Fetches the avatar at 1024px with PNG/JPG/WEBP/GIF download links.',
+        'args': [
+            ('user', 'Whose avatar to show (blank = yourself)'),
+        ],
+        'perms': 'None',
+        'example': '!avatar @someone',
+    },
     )
     @app_commands.describe(user="User whose avatar to show (leave blank for yourself)")
     @commands.cooldown(1, 5, commands.BucketType.user)
@@ -2003,6 +1206,17 @@ class Utility(commands.Cog):
         name="banner",
         aliases=["userbanner"],
         description="Show a user's profile banner.",
+    extras={
+        'category': '🔍 Server & User Info',
+        'short': "Show a user's profile banner",
+        'usage': 'banner [user]',
+        'desc': "Fetches and displays the user's profile banner with download links.",
+        'args': [
+            ('user', 'Whose banner to show (blank = yourself)'),
+        ],
+        'perms': 'None',
+        'example': '!banner @someone',
+    },
     )
     @app_commands.describe(user="User whose banner to show (leave blank for yourself)")
     @commands.cooldown(1, 5, commands.BucketType.user)
@@ -2057,6 +1271,17 @@ class Utility(commands.Cog):
         name="roleinfo",
         aliases=["role", "ri"],
         description="Info card for a server role.",
+    extras={
+        'category': '🔍 Server & User Info',
+        'short': 'Details about a server role',
+        'usage': 'roleinfo <role>',
+        'desc': 'Color, position, member count, creation date, hoist/mentionable status, and notable permissions.',
+        'args': [
+            ('role', 'Mention it or type the name'),
+        ],
+        'perms': 'None',
+        'example': '!roleinfo @Moderator',
+    },
     )
     @app_commands.describe(role="The role to inspect")
     @commands.cooldown(1, 5, commands.BucketType.user)
@@ -2125,6 +1350,15 @@ class Utility(commands.Cog):
     @commands.hybrid_command(
         name="uptime",
         description="How long NanoBot has been running since last (re)start.",
+    extras={
+        'category': '🔍 Server & User Info',
+        'short': 'How long the bot has been running',
+        'usage': 'uptime',
+        'desc': 'Shows how long NanoBot has been online since its last start or restart.',
+        'args': [],
+        'perms': 'None',
+        'example': '!uptime',
+    },
     )
     @commands.cooldown(1, 5, commands.BucketType.user)
     async def uptime(self, ctx: commands.Context):
