@@ -82,10 +82,7 @@ _SLASH_GROUPS: list[dict] = [
         ),
         "args": [
             ("channel #channel", "Set the channel that receives log entries"),
-            (
-                "enable / disable",
-                "Master on/off switch (config is preserved when disabled)",
-            ),
+            ("enable / disable", "Master on/off switch (config is preserved when disabled)"),
             ("events", "Opens a dropdown to toggle individual event types"),
             ("status", "Show current channel, enabled state, and active events"),
         ],
@@ -112,10 +109,7 @@ _SLASH_GROUPS: list[dict] = [
             ("mentions <limit>", "Set per-message mention limit"),
             ("badword add|remove|list [word]", "Manage the custom word filter"),
             ("regex add|remove|list|test", "Manage regex patterns"),
-            (
-                "ignore add|remove <channel or role>",
-                "Exempt a channel or role from all rules",
-            ),
+            ("ignore add|remove <channel or role>", "Exempt a channel or role from all rules"),
             ("status", "Full configuration overview"),
         ],
         "perms": "Manage Server",
@@ -134,23 +128,14 @@ _SLASH_GROUPS: list[dict] = [
             "**autogen presets:** colors (18 roles), pronouns, age ranges, world regions"
         ),
         "args": [
-            (
-                "panel create <name> [desc] [mode]",
-                "Create a panel definition (not yet posted)",
-            ),
-            (
-                "panel post <name> [channel]",
-                "Post or re-post a panel as a button embed",
-            ),
+            ("panel create <name> [desc] [mode]", "Create a panel definition (not yet posted)"),
+            ("panel post <name> [channel]", "Post or re-post a panel as a button embed"),
             ("panel edit <name> [title] [desc] [mode]", "Edit a posted panel"),
             ("panel delete <name>", "Delete the panel and its message"),
             ("panel list", "List all panels in this server"),
             ("add <panel> <role> [label] [emoji]", "Add a role button to a panel"),
             ("remove <panel> <role>", "Remove a role button from a panel"),
-            (
-                "autogen <colors|pronouns|age|region>",
-                "Generate a preset role set + panel",
-            ),
+            ("autogen <colors|pronouns|age|region>", "Generate a preset role set + panel"),
         ],
         "perms": "Manage Roles",
         "example": "/roles panel create Colours Pick your colour!\n/roles add Colours @Red 🔴\n/roles panel post Colours #roles",
@@ -158,7 +143,9 @@ _SLASH_GROUPS: list[dict] = [
 ]
 
 # Build a flat name→entry lookup for slash groups (used by !help <cmd>)
-_SLASH_GROUP_LOOKUP: dict[str, dict] = {entry["name"]: entry for entry in _SLASH_GROUPS}
+_SLASH_GROUP_LOOKUP: dict[str, dict] = {
+    entry["name"]: entry for entry in _SLASH_GROUPS
+}
 for _entry in _SLASH_GROUPS:
     for _alias in _entry.get("aliases", []):
         _SLASH_GROUP_LOOKUP[_alias] = _entry
@@ -255,7 +242,7 @@ def _flat_lookup(bot: commands.Bot) -> dict[str, dict]:
             "example": extras.get("example", f"!{cmd.name}"),
         }
         out[cmd.name] = entry
-        for alias in cmd.aliases or []:
+        for alias in (cmd.aliases or []):
             out[alias] = entry
 
     # Merge slash group entries
@@ -435,7 +422,6 @@ def _build_help_pages(
 
     return pages
 
-
 class HelpView(discord.ui.View):
     """
     Paginated help menu — sent as an ephemeral message so only the invoker
@@ -593,9 +579,7 @@ class Utility(commands.Cog):
             )
 
         # Paginated category overview
-        pages = _build_help_pages(
-            self.bot, prefix, self.bot.user.display_name, is_owner=is_owner
-        )
+        pages = _build_help_pages(self.bot, prefix, self.bot.user.display_name, is_owner=is_owner)
         view = HelpView(pages=pages, author=ctx.author)
         msg = await ctx.reply(embed=pages[0], view=view, ephemeral=True)
         view.message = msg
@@ -606,17 +590,17 @@ class Utility(commands.Cog):
     @commands.hybrid_command(
         name="prefix",
         description="View or change NanoBot's prefix for this server.",
-        extras={
-            "category": "⚙️ Config & Info",
-            "short": "View or change the bot prefix for this server",
-            "usage": "prefix [new_prefix]",
-            "desc": "Shows the current prefix with no args. With a new prefix (max 5 chars, no spaces), updates it server-wide.",
-            "args": [
-                ("new_prefix", "New prefix (1–5 chars, no spaces). Omit to view."),
-            ],
-            "perms": "Administrator (to change)",
-            "example": "!prefix ?",
-        },
+    extras={
+        'category': '⚙️ Config & Info',
+        'short': 'View or change the bot prefix for this server',
+        'usage': 'prefix [new_prefix]',
+        'desc': 'Shows the current prefix with no args. With a new prefix (max 5 chars, no spaces), updates it server-wide.',
+        'args': [
+            ('new_prefix', 'New prefix (1–5 chars, no spaces). Omit to view.'),
+        ],
+        'perms': 'Administrator (to change)',
+        'example': '!prefix ?',
+    },
     )
     @app_commands.describe(new_prefix="New prefix (leave blank to view current)")
     async def prefix(self, ctx: commands.Context, new_prefix: Optional[str] = None):
@@ -671,15 +655,15 @@ class Utility(commands.Cog):
         name="support",
         aliases=["helpserver"],
         description="Get a link to the NanoBot support server.",
-        extras={
-            "category": "⚙️ Config & Info",
-            "short": "Link to the NanoBot support server",
-            "usage": "support",
-            "desc": "Posts an invite link to the official NanoBot support server.",
-            "args": [],
-            "perms": "None",
-            "example": "!support",
-        },
+    extras={
+        'category': '⚙️ Config & Info',
+        'short': 'Link to the NanoBot support server',
+        'usage': 'support',
+        'desc': 'Posts an invite link to the official NanoBot support server.',
+        'args': [],
+        'perms': 'None',
+        'example': '!support',
+    },
     )
     @commands.cooldown(1, 10, commands.BucketType.user)
     async def support(self, ctx: commands.Context):
@@ -696,19 +680,19 @@ class Utility(commands.Cog):
     # ══════════════════════════════════════════════════════════════════════════
     #  ping
     # ══════════════════════════════════════════════════════════════════════════,
-    extras = (
-        {
-            "category": "⚙️ Config & Info",
-            "short": "Check NanoBot's response time",
-            "usage": "ping",
-            "desc": "Returns the current WebSocket latency between NanoBot and Discord's servers.",
-            "args": [],
-            "perms": "None",
-            "example": "!ping",
+    @commands.hybrid_command(
+        name="ping",
+        description="Check NanoBot's latency.",
+        extras={
+            'category': '⚙️ Config & Info',
+            'short': "Check NanoBot's response time",
+            'usage': 'ping',
+            'desc': "Returns the current WebSocket latency between NanoBot and Discord's servers.",
+            'args': [],
+            'perms': 'None',
+            'example': '!ping',
         },
     )
-
-    @commands.hybrid_command(name="ping", description="Check NanoBot's latency.")
     @commands.cooldown(1, 10, commands.BucketType.user)
     async def ping(self, ctx: commands.Context):
         ms = round(self.bot.latency * 1000)
@@ -718,19 +702,19 @@ class Utility(commands.Cog):
     # ══════════════════════════════════════════════════════════════════════════
     #  info
     # ══════════════════════════════════════════════════════════════════════════,
-    extras = (
-        {
-            "category": "⚙️ Config & Info",
-            "short": "Bot stats and runtime info",
-            "usage": "info",
-            "desc": "Shows latency, server count, prefix, discord.py version, Python version, and storage type.",
-            "args": [],
-            "perms": "None",
-            "example": "!info",
+    @commands.hybrid_command(
+        name="info",
+        description="NanoBot stats and runtime info.",
+        extras={
+            'category': '⚙️ Config & Info',
+            'short': 'Bot stats and runtime info',
+            'usage': 'info',
+            'desc': 'Shows latency, server count, prefix, discord.py version, Python version, and storage type.',
+            'args': [],
+            'perms': 'None',
+            'example': '!info',
         },
     )
-
-    @commands.hybrid_command(name="info", description="NanoBot stats and runtime info.")
     @commands.cooldown(1, 10, commands.BucketType.user)
     async def info(self, ctx: commands.Context):
         prefix = self.bot.prefixes.get(str(ctx.guild.id), self.bot.default_prefix)
@@ -758,15 +742,15 @@ class Utility(commands.Cog):
     @commands.hybrid_command(
         name="invite",
         description="Get NanoBot's invite link with the correct permissions.",
-        extras={
-            "category": "⚙️ Config & Info",
-            "short": "Get the bot invite link",
-            "usage": "invite",
-            "desc": "Generates an invite link with exactly the permissions NanoBot needs — no unnecessary extras.",
-            "args": [],
-            "perms": "None",
-            "example": "!invite",
-        },
+    extras={
+        'category': '⚙️ Config & Info',
+        'short': 'Get the bot invite link',
+        'usage': 'invite',
+        'desc': 'Generates an invite link with exactly the permissions NanoBot needs — no unnecessary extras.',
+        'args': [],
+        'perms': 'None',
+        'example': '!invite',
+    },
     )
     @commands.cooldown(1, 10, commands.BucketType.user)
     async def invite(self, ctx: commands.Context):
@@ -832,15 +816,15 @@ class Utility(commands.Cog):
     @commands.hybrid_command(
         name="about",
         description="What NanoBot is and why it exists.",
-        extras={
-            "category": "⚙️ Config & Info",
-            "short": "What NanoBot is and why it exists",
-            "usage": "about",
-            "desc": "The NanoBot story — why it was built, what it avoids, and what makes it different.",
-            "args": [],
-            "perms": "None",
-            "example": "!about",
-        },
+    extras={
+        'category': '⚙️ Config & Info',
+        'short': 'What NanoBot is and why it exists',
+        'usage': 'about',
+        'desc': 'The NanoBot story — why it was built, what it avoids, and what makes it different.',
+        'args': [],
+        'perms': 'None',
+        'example': '!about',
+    },
     )
     @commands.cooldown(1, 10, commands.BucketType.user)
     async def about(self, ctx: commands.Context):
@@ -918,15 +902,15 @@ class Utility(commands.Cog):
         name="server",
         aliases=["serverinfo", "si", "guild"],
         description="Info card for this server.",
-        extras={
-            "category": "🔍 Server & User Info",
-            "short": "Full server info card",
-            "usage": "server",
-            "desc": "Member counts, boost level, channel breakdown, features, creation date and more.",
-            "args": [],
-            "perms": "None",
-            "example": "!server",
-        },
+    extras={
+        'category': '🔍 Server & User Info',
+        'short': 'Full server info card',
+        'usage': 'server',
+        'desc': 'Member counts, boost level, channel breakdown, features, creation date and more.',
+        'args': [],
+        'perms': 'None',
+        'example': '!server',
+    },
     )
     @commands.cooldown(1, 5, commands.BucketType.user)
     async def server(self, ctx: commands.Context):
@@ -1032,17 +1016,17 @@ class Utility(commands.Cog):
         name="user",
         aliases=["userinfo", "ui", "member"],
         description="Public info card for a user.",
-        extras={
-            "category": "🔍 Server & User Info",
-            "short": "Public user info — status, roles, badges",
-            "usage": "user [user]",
-            "desc": "Shows a clean user card with status, activity, join date, account age, roles and badges. Mods also see note count.",
-            "args": [
-                ("user", "User to look up (blank = yourself)"),
-            ],
-            "perms": "None",
-            "example": "!user @someone",
-        },
+    extras={
+        'category': '🔍 Server & User Info',
+        'short': 'Public user info — status, roles, badges',
+        'usage': 'user [user]',
+        'desc': 'Shows a clean user card with status, activity, join date, account age, roles and badges. Mods also see note count.',
+        'args': [
+            ('user', 'User to look up (blank = yourself)'),
+        ],
+        'perms': 'None',
+        'example': '!user @someone',
+    },
     )
     @app_commands.describe(user="User to look up (leave blank for yourself)")
     @commands.cooldown(1, 5, commands.BucketType.user)
@@ -1171,17 +1155,17 @@ class Utility(commands.Cog):
         name="avatar",
         aliases=["av", "pfp", "icon"],
         description="Show a user's avatar in full size.",
-        extras={
-            "category": "🔍 Server & User Info",
-            "short": "Show a user's avatar full-size",
-            "usage": "avatar [user]",
-            "desc": "Fetches the avatar at 1024px with PNG/JPG/WEBP/GIF download links.",
-            "args": [
-                ("user", "Whose avatar to show (blank = yourself)"),
-            ],
-            "perms": "None",
-            "example": "!avatar @someone",
-        },
+    extras={
+        'category': '🔍 Server & User Info',
+        'short': "Show a user's avatar full-size",
+        'usage': 'avatar [user]',
+        'desc': 'Fetches the avatar at 1024px with PNG/JPG/WEBP/GIF download links.',
+        'args': [
+            ('user', 'Whose avatar to show (blank = yourself)'),
+        ],
+        'perms': 'None',
+        'example': '!avatar @someone',
+    },
     )
     @app_commands.describe(user="User whose avatar to show (leave blank for yourself)")
     @commands.cooldown(1, 5, commands.BucketType.user)
@@ -1228,17 +1212,17 @@ class Utility(commands.Cog):
         name="banner",
         aliases=["userbanner"],
         description="Show a user's profile banner.",
-        extras={
-            "category": "🔍 Server & User Info",
-            "short": "Show a user's profile banner",
-            "usage": "banner [user]",
-            "desc": "Fetches and displays the user's profile banner with download links.",
-            "args": [
-                ("user", "Whose banner to show (blank = yourself)"),
-            ],
-            "perms": "None",
-            "example": "!banner @someone",
-        },
+    extras={
+        'category': '🔍 Server & User Info',
+        'short': "Show a user's profile banner",
+        'usage': 'banner [user]',
+        'desc': "Fetches and displays the user's profile banner with download links.",
+        'args': [
+            ('user', 'Whose banner to show (blank = yourself)'),
+        ],
+        'perms': 'None',
+        'example': '!banner @someone',
+    },
     )
     @app_commands.describe(user="User whose banner to show (leave blank for yourself)")
     @commands.cooldown(1, 5, commands.BucketType.user)
@@ -1293,17 +1277,17 @@ class Utility(commands.Cog):
         name="roleinfo",
         aliases=["role", "ri"],
         description="Info card for a server role.",
-        extras={
-            "category": "🔍 Server & User Info",
-            "short": "Details about a server role",
-            "usage": "roleinfo <role>",
-            "desc": "Color, position, member count, creation date, hoist/mentionable status, and notable permissions.",
-            "args": [
-                ("role", "Mention it or type the name"),
-            ],
-            "perms": "None",
-            "example": "!roleinfo @Moderator",
-        },
+    extras={
+        'category': '🔍 Server & User Info',
+        'short': 'Details about a server role',
+        'usage': 'roleinfo <role>',
+        'desc': 'Color, position, member count, creation date, hoist/mentionable status, and notable permissions.',
+        'args': [
+            ('role', 'Mention it or type the name'),
+        ],
+        'perms': 'None',
+        'example': '!roleinfo @Moderator',
+    },
     )
     @app_commands.describe(role="The role to inspect")
     @commands.cooldown(1, 5, commands.BucketType.user)
@@ -1372,15 +1356,15 @@ class Utility(commands.Cog):
     @commands.hybrid_command(
         name="uptime",
         description="How long NanoBot has been running since last (re)start.",
-        extras={
-            "category": "🔍 Server & User Info",
-            "short": "How long the bot has been running",
-            "usage": "uptime",
-            "desc": "Shows how long NanoBot has been online since its last start or restart.",
-            "args": [],
-            "perms": "None",
-            "example": "!uptime",
-        },
+    extras={
+        'category': '🔍 Server & User Info',
+        'short': 'How long the bot has been running',
+        'usage': 'uptime',
+        'desc': 'Shows how long NanoBot has been online since its last start or restart.',
+        'args': [],
+        'perms': 'None',
+        'example': '!uptime',
+    },
     )
     @commands.cooldown(1, 5, commands.BucketType.user)
     async def uptime(self, ctx: commands.Context):
