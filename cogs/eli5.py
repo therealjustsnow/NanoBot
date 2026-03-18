@@ -61,17 +61,17 @@ class ELI5(commands.Cog):
     @commands.hybrid_command(
         name="eli5",
         description="Explain a topic like I'm 5 years old.",
-    extras={
-        'category': '⚙️ Config & Info',
-        'short': 'Explain any topic in plain, simple language',
-        'usage': 'eli5 <topic>',
-        'desc': 'Sends your topic to an AI and returns a plain-English explanation short enough to read on mobile. Powered by Groq / Llama 3. Requires GROQ_API_KEY in config.',
-        'args': [
-            ('topic', 'What you want explained simply (max 300 chars)'),
-        ],
-        'perms': 'None',
-        'example': '!eli5 black holes\n!eli5 why the sky is blue',
-    },
+        extras={
+            "category": "⚙️ Config & Info",
+            "short": "Explain any topic in plain, simple language",
+            "usage": "eli5 <topic>",
+            "desc": "Sends your topic to an AI and returns a plain-English explanation short enough to read on mobile. Powered by Groq / Llama 3. Requires GROQ_API_KEY in config.",
+            "args": [
+                ("topic", "What you want explained simply (max 300 chars)"),
+            ],
+            "perms": "None",
+            "example": "!eli5 black holes\n!eli5 why the sky is blue",
+        },
     )
     @app_commands.describe(topic="The thing you want explained simply.")
     @commands.cooldown(rate=1, per=15, type=commands.BucketType.user)

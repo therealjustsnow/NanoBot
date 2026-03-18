@@ -37,18 +37,18 @@ class Warnings(commands.Cog):
     @commands.hybrid_command(
         name="warn",
         description="Issue a warning to a user. Configurable auto-actions apply.",
-    extras={
-        'category': '⚠️ Warnings',
-        'short': 'Warn a user — configurable auto-kick/ban thresholds',
-        'usage': 'warn <user> [reason]',
-        'desc': 'Issues a warning. Auto-actions (kick/ban) trigger at configurable thresholds set via /warnconfig.',
-        'args': [
-            ('user', 'User to warn'),
-            ('reason', 'Reason for the warning'),
-        ],
-        'perms': 'Manage Messages',
-        'example': '!warn @user Spamming in #general',
-    },
+        extras={
+            "category": "⚠️ Warnings",
+            "short": "Warn a user — configurable auto-kick/ban thresholds",
+            "usage": "warn <user> [reason]",
+            "desc": "Issues a warning. Auto-actions (kick/ban) trigger at configurable thresholds set via /warnconfig.",
+            "args": [
+                ("user", "User to warn"),
+                ("reason", "Reason for the warning"),
+            ],
+            "perms": "Manage Messages",
+            "example": "!warn @user Spamming in #general",
+        },
     )
     @app_commands.describe(
         user="User to warn",
@@ -171,17 +171,17 @@ class Warnings(commands.Cog):
     @commands.hybrid_command(
         name="warnings",
         description="View all warnings for a user.",
-    extras={
-        'category': '⚠️ Warnings',
-        'short': 'View all warnings for a user',
-        'usage': 'warnings <user>',
-        'desc': 'Shows the last 8 warnings for a user with date and moderator.',
-        'args': [
-            ('user', 'User to look up'),
-        ],
-        'perms': 'Manage Messages',
-        'example': '!warnings @user',
-    },
+        extras={
+            "category": "⚠️ Warnings",
+            "short": "View all warnings for a user",
+            "usage": "warnings <user>",
+            "desc": "Shows the last 8 warnings for a user with date and moderator.",
+            "args": [
+                ("user", "User to look up"),
+            ],
+            "perms": "Manage Messages",
+            "example": "!warnings @user",
+        },
     )
     @app_commands.describe(user="User to look up")
     @has_mod_perms()
@@ -234,17 +234,17 @@ class Warnings(commands.Cog):
     @commands.hybrid_command(
         name="clearwarnings",
         description="Clear all warnings for a user. Admin only.",
-    extras={
-        'category': '⚠️ Warnings',
-        'short': 'Clear all warnings for a user (admin only)',
-        'usage': 'clearwarnings <user>',
-        'desc': 'Permanently wipes all warnings for a user from this server.',
-        'args': [
-            ('user', 'User whose warnings to clear'),
-        ],
-        'perms': 'Administrator',
-        'example': '!clearwarnings @user',
-    },
+        extras={
+            "category": "⚠️ Warnings",
+            "short": "Clear all warnings for a user (admin only)",
+            "usage": "clearwarnings <user>",
+            "desc": "Permanently wipes all warnings for a user from this server.",
+            "args": [
+                ("user", "User whose warnings to clear"),
+            ],
+            "perms": "Administrator",
+            "example": "!clearwarnings @user",
+        },
     )
     @app_commands.describe(user="User whose warnings to clear")
     @has_admin_perms()
@@ -275,19 +275,19 @@ class Warnings(commands.Cog):
     @commands.hybrid_command(
         name="warnconfig",
         description="Configure auto-actions for warnings (admin only).",
-    extras={
-        'category': '⚠️ Warnings',
-        'short': 'Configure auto-actions for warnings',
-        'usage': 'warnconfig [kick_at] [ban_at] [dm_user]',
-        'desc': 'No args: shows current config. Set kick_at/ban_at to 0 to disable. Auto-kick must be lower than auto-ban.',
-        'args': [
-            ('kick_at', 'Auto-kick after this many warnings (0 = disabled)'),
-            ('ban_at', 'Auto-ban after this many warnings (0 = disabled)'),
-            ('dm_user', 'DM users when they are warned (yes/no)'),
-        ],
-        'perms': 'Administrator',
-        'example': '!warnconfig kick_at:3 ban_at:5',
-    },
+        extras={
+            "category": "⚠️ Warnings",
+            "short": "Configure auto-actions for warnings",
+            "usage": "warnconfig [kick_at] [ban_at] [dm_user]",
+            "desc": "No args: shows current config. Set kick_at/ban_at to 0 to disable. Auto-kick must be lower than auto-ban.",
+            "args": [
+                ("kick_at", "Auto-kick after this many warnings (0 = disabled)"),
+                ("ban_at", "Auto-ban after this many warnings (0 = disabled)"),
+                ("dm_user", "DM users when they are warned (yes/no)"),
+            ],
+            "perms": "Administrator",
+            "example": "!warnconfig kick_at:3 ban_at:5",
+        },
     )
     @app_commands.describe(
         kick_at="Auto-kick after this many warnings (0 = disabled)",

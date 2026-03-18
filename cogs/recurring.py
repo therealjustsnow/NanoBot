@@ -254,20 +254,29 @@ class Recurring(commands.Cog):
     @commands.hybrid_command(
         name="every",
         description="Set a recurring reminder — like a repeating calendar event.",
-    extras={
-        'category': '⏰ Reminders',
-        'short': 'Set a recurring reminder — fires repeatedly on a schedule',
-        'usage': 'every <interval> <message> [label] [dm]',
-        'desc': 'Like a repeating calendar event. Set it once and NanoBot will remind you on that interval forever. Survives bot restarts. If the bot was offline when a fire was due, it fires once on restore — no catch-up spam.\nInterval presets (autocomplete): hourly, daily, weekly, biweekly, monthly\nCustom intervals: 2w, 3d, 6h, every 2 weeks\nLabel tip: Add a short label (e.g. Payday) so your /recurring list stays readable on mobile.',
-        'args': [
-            ('interval', 'How often to remind you — pick a preset or type your own (min 1 hour)'),
-            ('message', 'What to remind you about (up to 500 characters)'),
-            ('label', 'Short display name shown in your list, e.g. Payday (optional, max 50 chars)'),
-            ('dm', 'DM you the reminder (default: yes, falls back to channel ping if DMs are closed)'),
-        ],
-        'perms': 'None',
-        'example': '!every 2w Payday!\n!every daily Stand up meeting',
-    },
+        extras={
+            "category": "⏰ Reminders",
+            "short": "Set a recurring reminder — fires repeatedly on a schedule",
+            "usage": "every <interval> <message> [label] [dm]",
+            "desc": "Like a repeating calendar event. Set it once and NanoBot will remind you on that interval forever. Survives bot restarts. If the bot was offline when a fire was due, it fires once on restore — no catch-up spam.\nInterval presets (autocomplete): hourly, daily, weekly, biweekly, monthly\nCustom intervals: 2w, 3d, 6h, every 2 weeks\nLabel tip: Add a short label (e.g. Payday) so your /recurring list stays readable on mobile.",
+            "args": [
+                (
+                    "interval",
+                    "How often to remind you — pick a preset or type your own (min 1 hour)",
+                ),
+                ("message", "What to remind you about (up to 500 characters)"),
+                (
+                    "label",
+                    "Short display name shown in your list, e.g. Payday (optional, max 50 chars)",
+                ),
+                (
+                    "dm",
+                    "DM you the reminder (default: yes, falls back to channel ping if DMs are closed)",
+                ),
+            ],
+            "perms": "None",
+            "example": "!every 2w Payday!\n!every daily Stand up meeting",
+        },
     )
     @app_commands.describe(
         interval=(
@@ -399,17 +408,20 @@ class Recurring(commands.Cog):
         aliases=["repeating", "repeat"],
         description="Manage your recurring reminders — list, pause, resume, or cancel.",
         invoke_without_command=True,
-    extras={
-        'category': '⏰ Reminders',
-        'short': 'List, pause, resume, or cancel your recurring reminders',
-        'usage': 'recurring [pause|resume|cancel <id>]',
-        'desc': 'No args: shows all your recurring reminders with their interval, next fire time, and status.\nSubcommands: pause <id>, resume <id>, cancel <id>\nIDs are 6 characters, shown when you set the reminder and in the list.',
-        'args': [
-            ('id', '6-character recurring reminder ID (from /recurring list or when set)'),
-        ],
-        'perms': 'None',
-        'example': '!recurring\n!recurring pause abc123\n!recurring cancel abc123',
-    },
+        extras={
+            "category": "⏰ Reminders",
+            "short": "List, pause, resume, or cancel your recurring reminders",
+            "usage": "recurring [pause|resume|cancel <id>]",
+            "desc": "No args: shows all your recurring reminders with their interval, next fire time, and status.\nSubcommands: pause <id>, resume <id>, cancel <id>\nIDs are 6 characters, shown when you set the reminder and in the list.",
+            "args": [
+                (
+                    "id",
+                    "6-character recurring reminder ID (from /recurring list or when set)",
+                ),
+            ],
+            "perms": "None",
+            "example": "!recurring\n!recurring pause abc123\n!recurring cancel abc123",
+        },
     )
     @commands.cooldown(1, 5, commands.BucketType.user)
     async def recurring(self, ctx: commands.Context):

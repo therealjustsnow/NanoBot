@@ -147,15 +147,15 @@ class Tags(commands.Cog):
         name="tag",
         description="Manage and use tags. /tag list, /tag create, /tag use, etc.",
         invoke_without_command=True,
-    extras={
-        'category': '🏷️ Tags',
-        'short': 'Post text snippets in channel or DM — personal or server-wide',
-        'usage': 'tag [shorthand or subcommand]',
-        'desc': 'Tags let you save text (and images) and fire them instantly.\nShorthand: !tag <n> — post tag, !<n> — same shorter, !tag + <n> | <content> — create, !tag - <n> — delete\nSubcommands: /tag create, /tag global, /tag use, /tag preview, /tag edit, /tag delete, /tag list, /tag export, /tag import',
-        'args': [],
-        'perms': 'None (global creation requires Manage Messages)',
-        'example': '!tag + rules | Read #rules before posting!\n!rules',
-    },
+        extras={
+            "category": "🏷️ Tags",
+            "short": "Post text snippets in channel or DM — personal or server-wide",
+            "usage": "tag [shorthand or subcommand]",
+            "desc": "Tags let you save text (and images) and fire them instantly.\nShorthand: !tag <n> — post tag, !<n> — same shorter, !tag + <n> | <content> — create, !tag - <n> — delete\nSubcommands: /tag create, /tag global, /tag use, /tag preview, /tag edit, /tag delete, /tag list, /tag export, /tag import",
+            "args": [],
+            "perms": "None (global creation requires Manage Messages)",
+            "example": "!tag + rules | Read #rules before posting!\n!rules",
+        },
     )
     async def tag(self, ctx: commands.Context, *, args: str = ""):
         """
