@@ -108,6 +108,7 @@ async def init() -> None:
     await _ensure_role_panels_tables()
     await _migrate_role_panel_entries()
     await _ensure_auditlog_tables()
+    await _migrate_auditlog_null_events()
     await _ensure_automod_tables()
     log.info(f"Database ready: {_DB_PATH}")
 
@@ -1264,6 +1265,25 @@ async def remove_role_from_panel(panel_id: str, role_id: int) -> None:
 # `events` is a JSON-encoded list of enabled event keys.
 # An absent row means "not configured".
 
+# Full list of supported audit event keys — kept here so the migration and
+# get function can default to "all events" without importing from auditlog.py.
+_AUDIT_ALL_EVENTS: list[str] = [
+    "msg_delete",
+    "msg_edit",
+    "member_join",
+    "member_leave",
+    "member_ban",
+    "member_unban",
+    "nick_change",
+    "role_update",
+    "channel_create",
+    "channel_delete",
+    "role_create",
+    "role_delete",
+]
+
+_AUDIT_ALL_EVENTS_JSON: str = json.dumps(_AUDIT_ALL_EVENTS)
+
 
 async def _ensure_auditlog_tables() -> None:
     await _conn().execute("""
@@ -1277,6 +1297,35 @@ async def _ensure_auditlog_tables() -> None:
     await _conn().commit()
 
 
+async def _migrate_auditlog_null_events() -> None:
+    """
+    One-time migration: rows created via partial INSERTs (set_auditlog_channel /
+    set_auditlog_enabled) before the DEFAULT was in place may have events=NULL.
+    Backfill them to all-events so logging isn't silently broken.
+
+    Safe to run on every startup — the WHERE clause makes it a no-op when there
+    is nothing to fix.
+    """
+    async with _conn().execute(
+        "SELECT COUNT(*) FROM auditlog_config WHERE events IS NULL"
+    ) as cur:
+        row = await cur.fetchone()
+    null_count = row[0]
+
+    if null_count == 0:
+        return
+
+    await _conn().execute(
+        "UPDATE auditlog_config SET events=? WHERE events IS NULL",
+        (_AUDIT_ALL_EVENTS_JSON,),
+    )
+    await _conn().commit()
+    log.info(
+        f"DB migration: backfilled auditlog events for {null_count} guild(s) "
+        f"(was NULL, now all-events)"
+    )
+
+
 async def get_auditlog_config(guild_id: int) -> dict | None:
     """Return the audit log config for a guild, or None if not yet set up."""
     async with _conn().execute(
@@ -1286,20 +1335,24 @@ async def get_auditlog_config(guild_id: int) -> dict | None:
         row = await cur.fetchone()
     if not row:
         return None
+    # events may still be NULL on very old rows that slipped past the migration;
+    # default to all events so logging isn't silently disabled.
+    raw_events = row["events"]
+    events = json.loads(raw_events) if raw_events is not None else _AUDIT_ALL_EVENTS
     return {
         "enabled": bool(row["enabled"]),
         "channel_id": row["channel_id"],
-        "events": json.loads(row["events"]),
+        "events": events,
     }
 
 
 async def set_auditlog_channel(guild_id: int, channel_id: int) -> None:
     """Set (or update) the log channel for a guild. Creates the row if absent."""
     await _conn().execute(
-        """INSERT INTO auditlog_config (guild_id, channel_id)
-           VALUES (?, ?)
+        """INSERT INTO auditlog_config (guild_id, channel_id, events)
+           VALUES (?, ?, ?)
            ON CONFLICT(guild_id) DO UPDATE SET channel_id=excluded.channel_id""",
-        (str(guild_id), str(channel_id)),
+        (str(guild_id), str(channel_id), _AUDIT_ALL_EVENTS_JSON),
     )
     await _conn().commit()
 
@@ -1307,10 +1360,10 @@ async def set_auditlog_channel(guild_id: int, channel_id: int) -> None:
 async def set_auditlog_enabled(guild_id: int, enabled: bool) -> None:
     """Enable or disable audit logging for a guild. Creates the row if absent."""
     await _conn().execute(
-        """INSERT INTO auditlog_config (guild_id, enabled)
-           VALUES (?, ?)
+        """INSERT INTO auditlog_config (guild_id, enabled, events)
+           VALUES (?, ?, ?)
            ON CONFLICT(guild_id) DO UPDATE SET enabled=excluded.enabled""",
-        (str(guild_id), 1 if enabled else 0),
+        (str(guild_id), 1 if enabled else 0, _AUDIT_ALL_EVENTS_JSON),
     )
     await _conn().commit()
 
