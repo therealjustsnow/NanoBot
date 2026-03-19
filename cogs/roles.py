@@ -934,8 +934,29 @@ class Roles(commands.Cog):
     ):
         await interaction.response.defer(ephemeral=True, thinking=True)
         title, desc, mode, palette = _AUTOGEN_CFG["colors"]
-        extras = [r for r in [extra_role_1, extra_role_2, extra_role_3, extra_role_4, extra_role_5] if r]
-        await _run_autogen(self, interaction, channel, palette, title, desc, mode, prefix, extras, "colors")
+        extras = [
+            r
+            for r in [
+                extra_role_1,
+                extra_role_2,
+                extra_role_3,
+                extra_role_4,
+                extra_role_5,
+            ]
+            if r
+        ]
+        await _run_autogen(
+            self,
+            interaction,
+            channel,
+            palette,
+            title,
+            desc,
+            mode,
+            prefix,
+            extras,
+            "colors",
+        )
 
     @autogen_group.command(
         name="pronouns",
@@ -962,8 +983,29 @@ class Roles(commands.Cog):
     ):
         await interaction.response.defer(ephemeral=True, thinking=True)
         title, desc, mode, palette = _AUTOGEN_CFG["pronouns"]
-        extras = [r for r in [extra_role_1, extra_role_2, extra_role_3, extra_role_4, extra_role_5] if r]
-        await _run_autogen(self, interaction, channel, palette, title, desc, mode, None, extras, "pronouns")
+        extras = [
+            r
+            for r in [
+                extra_role_1,
+                extra_role_2,
+                extra_role_3,
+                extra_role_4,
+                extra_role_5,
+            ]
+            if r
+        ]
+        await _run_autogen(
+            self,
+            interaction,
+            channel,
+            palette,
+            title,
+            desc,
+            mode,
+            None,
+            extras,
+            "pronouns",
+        )
 
     @autogen_group.command(
         name="age",
@@ -990,8 +1032,20 @@ class Roles(commands.Cog):
     ):
         await interaction.response.defer(ephemeral=True, thinking=True)
         title, desc, mode, palette = _AUTOGEN_CFG["age"]
-        extras = [r for r in [extra_role_1, extra_role_2, extra_role_3, extra_role_4, extra_role_5] if r]
-        await _run_autogen(self, interaction, channel, palette, title, desc, mode, None, extras, "age")
+        extras = [
+            r
+            for r in [
+                extra_role_1,
+                extra_role_2,
+                extra_role_3,
+                extra_role_4,
+                extra_role_5,
+            ]
+            if r
+        ]
+        await _run_autogen(
+            self, interaction, channel, palette, title, desc, mode, None, extras, "age"
+        )
 
     @autogen_group.command(
         name="region",
@@ -1018,8 +1072,29 @@ class Roles(commands.Cog):
     ):
         await interaction.response.defer(ephemeral=True, thinking=True)
         title, desc, mode, palette = _AUTOGEN_CFG["region"]
-        extras = [r for r in [extra_role_1, extra_role_2, extra_role_3, extra_role_4, extra_role_5] if r]
-        await _run_autogen(self, interaction, channel, palette, title, desc, mode, None, extras, "region")
+        extras = [
+            r
+            for r in [
+                extra_role_1,
+                extra_role_2,
+                extra_role_3,
+                extra_role_4,
+                extra_role_5,
+            ]
+            if r
+        ]
+        await _run_autogen(
+            self,
+            interaction,
+            channel,
+            palette,
+            title,
+            desc,
+            mode,
+            None,
+            extras,
+            "region",
+        )
 
     # ── Internal: refresh a live panel message ─────────────────────────────────
     async def _refresh_panel_message(self, guild: discord.Guild, panel: dict) -> None:
