@@ -1466,11 +1466,11 @@ class Utility(commands.Cog):
          valie=f**{discord.__version__},
          inline=True
        )
-e.add_field(
-  name="🐍 Python Version",
-  value=f**{python.__version__),
-inline=True
-)
+      e.add_field(
+        name="🐍 Python Version",
+        value=f"{sys.version_info.major}.{sys.version_info.minor}.{sys.version_info.micro}",
+        inline=True,
+       )
 
         e.set_footer(text="NanoBot — stats reset on restart")
         await ctx.reply(embed=e, ephemeral=True)
