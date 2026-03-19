@@ -1463,7 +1463,7 @@ class Utility(commands.Cog):
             inline=True,
         )
         e.add_field(
-            name="<:discordpy:> discord.py Version",
+            name="📦 discord.py Version",
             value=f"**{discord.__version__}**",
             inline=True,
         )
