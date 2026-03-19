@@ -842,24 +842,38 @@ class Roles(commands.Cog):
                 msg = await target_ch.send(embed=_build_embed(panel), view=view)
                 self.bot.add_view(view)
                 await db.update_role_panel_message(panel["id"], target_ch.id, msg.id)
-                posted.append(f"`{panel['id']}` **{panel['title']}** → {target_ch.mention}")
-                log.info(f"panel reload: posted {panel['id']} to #{target_ch} in {interaction.guild}")
+                posted.append(
+                    f"`{panel['id']}` **{panel['title']}** → {target_ch.mention}"
+                )
+                log.info(
+                    f"panel reload: posted {panel['id']} to #{target_ch} in {interaction.guild}"
+                )
             except discord.Forbidden:
-                failed.append(f"`{panel['id']}` **{panel['title']}** — no permission in {target_ch.mention}")
+                failed.append(
+                    f"`{panel['id']}` **{panel['title']}** — no permission in {target_ch.mention}"
+                )
             except Exception as exc:
                 failed.append(f"`{panel['id']}` **{panel['title']}** — error: {exc}")
-                log.error(f"panel reload: failed to post {panel['id']}: {exc}", exc_info=exc)
+                log.error(
+                    f"panel reload: failed to post {panel['id']}: {exc}", exc_info=exc
+                )
 
         lines = []
         if posted:
             lines.append(f"✅ **Posted {len(posted)}:**\n" + "\n".join(posted))
         if skipped:
-            lines.append(f"⏭️ **Skipped {len(skipped)} (no roles yet):**\n" + "\n".join(skipped))
+            lines.append(
+                f"⏭️ **Skipped {len(skipped)} (no roles yet):**\n" + "\n".join(skipped)
+            )
         if failed:
             lines.append(f"❌ **Failed {len(failed)}:**\n" + "\n".join(failed))
 
         await interaction.followup.send(
-            embed=h.ok("\n\n".join(lines), "📋 Panels Reloaded") if not failed else h.warn("\n\n".join(lines), "📋 Panels Reloaded"),
+            embed=(
+                h.ok("\n\n".join(lines), "📋 Panels Reloaded")
+                if not failed
+                else h.warn("\n\n".join(lines), "📋 Panels Reloaded")
+            ),
             ephemeral=True,
         )
 
@@ -1004,8 +1018,29 @@ class Roles(commands.Cog):
     ):
         await interaction.response.defer(ephemeral=True, thinking=True)
         title, desc, mode, palette = _AUTOGEN_CFG["colors"]
-        extras = [r for r in [extra_role_1, extra_role_2, extra_role_3, extra_role_4, extra_role_5] if r]
-        await _run_autogen(self, interaction, channel, palette, title, desc, mode, prefix, extras, "colors")
+        extras = [
+            r
+            for r in [
+                extra_role_1,
+                extra_role_2,
+                extra_role_3,
+                extra_role_4,
+                extra_role_5,
+            ]
+            if r
+        ]
+        await _run_autogen(
+            self,
+            interaction,
+            channel,
+            palette,
+            title,
+            desc,
+            mode,
+            prefix,
+            extras,
+            "colors",
+        )
 
     @autogen_group.command(
         name="pronouns",
@@ -1032,8 +1067,29 @@ class Roles(commands.Cog):
     ):
         await interaction.response.defer(ephemeral=True, thinking=True)
         title, desc, mode, palette = _AUTOGEN_CFG["pronouns"]
-        extras = [r for r in [extra_role_1, extra_role_2, extra_role_3, extra_role_4, extra_role_5] if r]
-        await _run_autogen(self, interaction, channel, palette, title, desc, mode, None, extras, "pronouns")
+        extras = [
+            r
+            for r in [
+                extra_role_1,
+                extra_role_2,
+                extra_role_3,
+                extra_role_4,
+                extra_role_5,
+            ]
+            if r
+        ]
+        await _run_autogen(
+            self,
+            interaction,
+            channel,
+            palette,
+            title,
+            desc,
+            mode,
+            None,
+            extras,
+            "pronouns",
+        )
 
     @autogen_group.command(
         name="age",
@@ -1060,8 +1116,20 @@ class Roles(commands.Cog):
     ):
         await interaction.response.defer(ephemeral=True, thinking=True)
         title, desc, mode, palette = _AUTOGEN_CFG["age"]
-        extras = [r for r in [extra_role_1, extra_role_2, extra_role_3, extra_role_4, extra_role_5] if r]
-        await _run_autogen(self, interaction, channel, palette, title, desc, mode, None, extras, "age")
+        extras = [
+            r
+            for r in [
+                extra_role_1,
+                extra_role_2,
+                extra_role_3,
+                extra_role_4,
+                extra_role_5,
+            ]
+            if r
+        ]
+        await _run_autogen(
+            self, interaction, channel, palette, title, desc, mode, None, extras, "age"
+        )
 
     @autogen_group.command(
         name="region",
@@ -1088,8 +1156,29 @@ class Roles(commands.Cog):
     ):
         await interaction.response.defer(ephemeral=True, thinking=True)
         title, desc, mode, palette = _AUTOGEN_CFG["region"]
-        extras = [r for r in [extra_role_1, extra_role_2, extra_role_3, extra_role_4, extra_role_5] if r]
-        await _run_autogen(self, interaction, channel, palette, title, desc, mode, None, extras, "region")
+        extras = [
+            r
+            for r in [
+                extra_role_1,
+                extra_role_2,
+                extra_role_3,
+                extra_role_4,
+                extra_role_5,
+            ]
+            if r
+        ]
+        await _run_autogen(
+            self,
+            interaction,
+            channel,
+            palette,
+            title,
+            desc,
+            mode,
+            None,
+            extras,
+            "region",
+        )
 
     # ── Internal: refresh a live panel message ─────────────────────────────────
     async def _refresh_panel_message(self, guild: discord.Guild, panel: dict) -> None:
