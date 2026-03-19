@@ -494,7 +494,7 @@ async def _run_autogen(
         view = _build_view(panel)
         try:
             msg = await channel.send(embed=_build_embed(panel), view=view)
-            cog.bot.add_view(view, message_id=msg.id)
+            cog.bot.add_view(view)
             await db.update_role_panel_message(panel_id, channel.id, msg.id)
         except discord.Forbidden:
             await interaction.followup.send(
@@ -552,15 +552,19 @@ class Roles(commands.Cog):
         self.bot = bot
 
     async def cog_load(self):
-        """Re-register all persistent views on startup."""
+        """Re-register all persistent views on startup.
+
+        We register without message_id so discord.py routes by custom_id rather
+        than message_id. Our custom_ids are globally unique (rp:{panel_id}:{role_id})
+        so there's no ambiguity, and this avoids silent misses caused by stale
+        message_ids in the database.
+        """
         panels = await db.get_all_role_panels()
         registered = 0
         for panel in panels:
-            if not panel.get("message_id"):
-                continue
             view = _build_view(panel)
             try:
-                self.bot.add_view(view, message_id=int(panel["message_id"]))
+                self.bot.add_view(view)
                 registered += 1
             except Exception as exc:
                 log.warning(f"Could not register role panel view {panel['id']}: {exc}")
@@ -672,7 +676,7 @@ class Roles(commands.Cog):
                 ephemeral=True,
             )
 
-        self.bot.add_view(view, message_id=msg.id)
+        self.bot.add_view(view)
         await db.update_role_panel_message(panel_id, target_ch.id, msg.id)
 
         await interaction.response.send_message(
@@ -934,29 +938,8 @@ class Roles(commands.Cog):
     ):
         await interaction.response.defer(ephemeral=True, thinking=True)
         title, desc, mode, palette = _AUTOGEN_CFG["colors"]
-        extras = [
-            r
-            for r in [
-                extra_role_1,
-                extra_role_2,
-                extra_role_3,
-                extra_role_4,
-                extra_role_5,
-            ]
-            if r
-        ]
-        await _run_autogen(
-            self,
-            interaction,
-            channel,
-            palette,
-            title,
-            desc,
-            mode,
-            prefix,
-            extras,
-            "colors",
-        )
+        extras = [r for r in [extra_role_1, extra_role_2, extra_role_3, extra_role_4, extra_role_5] if r]
+        await _run_autogen(self, interaction, channel, palette, title, desc, mode, prefix, extras, "colors")
 
     @autogen_group.command(
         name="pronouns",
@@ -983,29 +966,8 @@ class Roles(commands.Cog):
     ):
         await interaction.response.defer(ephemeral=True, thinking=True)
         title, desc, mode, palette = _AUTOGEN_CFG["pronouns"]
-        extras = [
-            r
-            for r in [
-                extra_role_1,
-                extra_role_2,
-                extra_role_3,
-                extra_role_4,
-                extra_role_5,
-            ]
-            if r
-        ]
-        await _run_autogen(
-            self,
-            interaction,
-            channel,
-            palette,
-            title,
-            desc,
-            mode,
-            None,
-            extras,
-            "pronouns",
-        )
+        extras = [r for r in [extra_role_1, extra_role_2, extra_role_3, extra_role_4, extra_role_5] if r]
+        await _run_autogen(self, interaction, channel, palette, title, desc, mode, None, extras, "pronouns")
 
     @autogen_group.command(
         name="age",
@@ -1032,20 +994,8 @@ class Roles(commands.Cog):
     ):
         await interaction.response.defer(ephemeral=True, thinking=True)
         title, desc, mode, palette = _AUTOGEN_CFG["age"]
-        extras = [
-            r
-            for r in [
-                extra_role_1,
-                extra_role_2,
-                extra_role_3,
-                extra_role_4,
-                extra_role_5,
-            ]
-            if r
-        ]
-        await _run_autogen(
-            self, interaction, channel, palette, title, desc, mode, None, extras, "age"
-        )
+        extras = [r for r in [extra_role_1, extra_role_2, extra_role_3, extra_role_4, extra_role_5] if r]
+        await _run_autogen(self, interaction, channel, palette, title, desc, mode, None, extras, "age")
 
     @autogen_group.command(
         name="region",
@@ -1072,29 +1022,8 @@ class Roles(commands.Cog):
     ):
         await interaction.response.defer(ephemeral=True, thinking=True)
         title, desc, mode, palette = _AUTOGEN_CFG["region"]
-        extras = [
-            r
-            for r in [
-                extra_role_1,
-                extra_role_2,
-                extra_role_3,
-                extra_role_4,
-                extra_role_5,
-            ]
-            if r
-        ]
-        await _run_autogen(
-            self,
-            interaction,
-            channel,
-            palette,
-            title,
-            desc,
-            mode,
-            None,
-            extras,
-            "region",
-        )
+        extras = [r for r in [extra_role_1, extra_role_2, extra_role_3, extra_role_4, extra_role_5] if r]
+        await _run_autogen(self, interaction, channel, palette, title, desc, mode, None, extras, "region")
 
     # ── Internal: refresh a live panel message ─────────────────────────────────
     async def _refresh_panel_message(self, guild: discord.Guild, panel: dict) -> None:
@@ -1108,7 +1037,7 @@ class Roles(commands.Cog):
             msg = await ch.fetch_message(int(panel["message_id"]))
             view = _build_view(panel)
             await msg.edit(embed=_build_embed(panel), view=view)
-            self.bot.add_view(view, message_id=msg.id)
+            self.bot.add_view(view)
         except (discord.NotFound, discord.HTTPException) as exc:
             log.debug(f"Could not refresh panel message {panel['id']}: {exc}")
 
