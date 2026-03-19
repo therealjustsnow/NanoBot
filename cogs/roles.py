@@ -1,5 +1,5 @@
 """
-cogs/roles.py — v1.1.0
+cogs/roles.py — v1.1.1
 Button-based self-assignable role panels — designed for mobile.
 
 Panels are persistent (survive bot restarts) and posted to any channel.
@@ -45,9 +45,6 @@ from utils.checks import has_role_perms, has_admin_perms
 log = logging.getLogger("NanoBot.roles")
 
 # ── Autogen palettes ───────────────────────────────────────────────────────────
-# Each entry is (display_name, discord_colour_int | None).
-# None = no colour assigned (role appears default white — right for functional roles).
-
 COLOUR_PALETTE: list[tuple[str, int | None]] = [
     ("🔴 Red", 0xE74C3C),
     ("🟠 Orange", 0xE67E22),
@@ -95,8 +92,6 @@ REGION_PALETTE: list[tuple[str, int | None]] = [
     ("🌏 Oceania", None),
 ]
 
-# ── Autogen config per kind ────────────────────────────────────────────────────
-# (panel_title, panel_description, mode, palette)
 _AUTOGEN_CFG: dict[str, tuple[str, str, str, list]] = {
     "colors": (
         "🎨 Colours",
@@ -125,8 +120,6 @@ _AUTOGEN_CFG: dict[str, tuple[str, str, str, list]] = {
 }
 
 # ── Per-guild autogen concurrency locks ────────────────────────────────────────
-# One asyncio.Lock per guild. If a lock is already held when a second autogen
-# fires on the same server, the second is rejected immediately — no queue.
 _autogen_locks: dict[int, asyncio.Lock] = {}
 
 
@@ -183,83 +176,109 @@ class RoleButton(discord.ui.Button):
         self._panel_id = panel_id
 
     async def callback(self, interaction: discord.Interaction):
-        # Always re-fetch from DB — no stale cache risk
-        panel = await db.get_role_panel(self._panel_id)
-        if panel is None:
-            await interaction.response.send_message(
-                "This panel no longer exists.", ephemeral=True
-            )
-            return
-
-        member = interaction.user
-        guild = interaction.guild
-        role = guild.get_role(self._role_id)
-
-        if role is None:
-            await interaction.response.send_message(
-                "That role no longer exists — ask a mod to update this panel.",
-                ephemeral=True,
-            )
-            return
-
-        if role >= guild.me.top_role:
-            await interaction.response.send_message(
-                f"I can't assign **{role.name}** — it's above my highest role. "
-                "Ask an admin to move my role up.",
-                ephemeral=True,
-            )
-            return
-
-        has_role = role in member.roles
-
-        if has_role:
-            try:
-                await member.remove_roles(role, reason="Role panel self-remove")
-            except discord.Forbidden:
-                await interaction.response.send_message(
-                    "I don't have permission to remove that role.", ephemeral=True
-                )
-                return
-            await interaction.response.send_message(
-                embed=h.ok(
-                    f"Removed **{role.name}** from your roles.", "✅ Role Removed"
-                ),
-                ephemeral=True,
-            )
-            log.debug(
-                f"Role panel: removed {role} from {member} ({member.id}) in {guild}"
-            )
-            return
-
-        # Single mode — remove all other panel roles before assigning
-        if panel["mode"] == "single":
-            panel_role_ids = {e["role_id"] for e in panel["entries"]}
-            roles_to_remove = [
-                r
-                for r in member.roles
-                if r.id in panel_role_ids and r.id != self._role_id
-            ]
-            if roles_to_remove:
-                try:
-                    await member.remove_roles(
-                        *roles_to_remove, reason="Role panel single-mode swap"
-                    )
-                except discord.Forbidden:
-                    pass
+        # Defer immediately — this acknowledges the interaction within Discord's
+        # 3-second window regardless of how long the DB/role ops take. Any
+        # exception after this point still results in a visible error message
+        # instead of a silent "interaction failed".
+        await interaction.response.defer(ephemeral=True)
 
         try:
-            await member.add_roles(role, reason="Role panel self-assign")
-        except discord.Forbidden:
-            await interaction.response.send_message(
-                "I don't have permission to assign that role.", ephemeral=True
-            )
-            return
+            panel = await db.get_role_panel(self._panel_id)
+            if panel is None:
+                await interaction.followup.send(
+                    "This panel no longer exists.", ephemeral=True
+                )
+                return
 
-        await interaction.response.send_message(
-            embed=h.ok(f"You now have **{role.name}**.", "✅ Role Assigned"),
-            ephemeral=True,
-        )
-        log.debug(f"Role panel: added {role} to {member} ({member.id}) in {guild}")
+            member = interaction.user
+            guild = interaction.guild
+            role = guild.get_role(self._role_id)
+
+            if role is None:
+                await interaction.followup.send(
+                    "That role no longer exists — ask a mod to update this panel.",
+                    ephemeral=True,
+                )
+                return
+
+            if guild.me is None:
+                await interaction.followup.send(
+                    "Something went wrong — couldn't resolve bot member. Try again.",
+                    ephemeral=True,
+                )
+                return
+
+            if role >= guild.me.top_role:
+                await interaction.followup.send(
+                    f"I can't assign **{role.name}** — it's above my highest role. "
+                    "Ask an admin to move my role up.",
+                    ephemeral=True,
+                )
+                return
+
+            has_role = role in member.roles
+
+            if has_role:
+                try:
+                    await member.remove_roles(role, reason="Role panel self-remove")
+                except discord.Forbidden:
+                    await interaction.followup.send(
+                        "I don't have permission to remove that role.", ephemeral=True
+                    )
+                    return
+                await interaction.followup.send(
+                    embed=h.ok(
+                        f"Removed **{role.name}** from your roles.", "✅ Role Removed"
+                    ),
+                    ephemeral=True,
+                )
+                log.debug(
+                    f"Role panel: removed {role} from {member} ({member.id}) in {guild}"
+                )
+                return
+
+            # Single mode — remove all other panel roles before assigning
+            if panel["mode"] == "single":
+                panel_role_ids = {e["role_id"] for e in panel["entries"]}
+                roles_to_remove = [
+                    r
+                    for r in member.roles
+                    if r.id in panel_role_ids and r.id != self._role_id
+                ]
+                if roles_to_remove:
+                    try:
+                        await member.remove_roles(
+                            *roles_to_remove, reason="Role panel single-mode swap"
+                        )
+                    except discord.Forbidden:
+                        pass
+
+            try:
+                await member.add_roles(role, reason="Role panel self-assign")
+            except discord.Forbidden:
+                await interaction.followup.send(
+                    "I don't have permission to assign that role.", ephemeral=True
+                )
+                return
+
+            await interaction.followup.send(
+                embed=h.ok(f"You now have **{role.name}**.", "✅ Role Assigned"),
+                ephemeral=True,
+            )
+            log.debug(f"Role panel: added {role} to {member} ({member.id}) in {guild}")
+
+        except Exception as exc:
+            log.error(
+                f"Role panel button error: panel={self._panel_id} role={self._role_id} "
+                f"user={interaction.user} ({interaction.user.id}): {exc}",
+                exc_info=exc,
+            )
+            try:
+                await interaction.followup.send(
+                    "Something went wrong. Check the bot logs.", ephemeral=True
+                )
+            except Exception:
+                pass
 
 
 # ── Panel view / embed factories ───────────────────────────────────────────────
@@ -300,10 +319,6 @@ async def _panel_autocomplete(
 
 
 # ── Shared autogen engine ──────────────────────────────────────────────────────
-# All four autogen commands funnel through here. Handles concurrency locking,
-# role creation with retry, positioning, panel creation, and summary.
-
-
 async def _run_autogen(
     cog: "Roles",
     interaction: discord.Interaction,
@@ -337,13 +352,10 @@ async def _run_autogen(
         guild = interaction.guild
         existing_names = {r.name.lower() for r in guild.roles}
 
-        # ── Rate-limit constants ───────────────────────────────────────────────
-        # Target ~120s total per full 18-role run (well within 15-min followup).
-        # Smaller palettes (pronouns=5, age=5, region=7) finish proportionally faster.
-        _CREATE_DELAY = 3.0  # seconds between each role create
-        _POS_DELAY = 3.5  # seconds between each role.edit(position)
-        _PAUSE_BEFORE_POS = 3.0  # pause after all creates before touching positions
-        _RETRY_BACKOFF = 5.0  # wait before retrying a failed create
+        _CREATE_DELAY = 3.0
+        _POS_DELAY = 3.5
+        _PAUSE_BEFORE_POS = 3.0
+        _RETRY_BACKOFF = 5.0
         _MAX_RETRIES = 2
 
         # ── 1. Create roles ────────────────────────────────────────────────────
@@ -401,25 +413,14 @@ async def _run_autogen(
             )
             return
 
-        # ── 2. Auto-position created roles below bot's highest role ───────────
-        # Uses existing panel roles as the anchor so each autogen batch stacks
-        # below the previous one (e.g. region after colors lands below colors,
-        # not above). Member/base roles that sit below the autogen zone stay
-        # there — they may be nudged down slightly if space is tight, but they
-        # will always remain below all autogen roles, which is what you want
-        # for the colour-role fallback behaviour.
+        # ── 2. Auto-position created roles below existing panel roles ──────────
         await asyncio.sleep(_PAUSE_BEFORE_POS)
 
-        # Refresh role cache — positions may have shifted during creation.
         await guild.fetch_roles()
 
         bot_pos = guild.me.top_role.position
         created_ids = {r.id for r in created}
 
-        # Pull every role_id that already lives in a panel for this guild.
-        # These are the previously-autogenned roles. Exclude the ones we just
-        # created — they're still sitting at position ~1 and haven't been
-        # placed yet, so their positions are meaningless as an anchor.
         guild_panels = await db.get_role_panels_for_guild(guild.id)
         existing_panel_role_ids = {
             entry["role_id"]
@@ -434,10 +435,8 @@ async def _run_autogen(
         ]
 
         if existing_panel_roles:
-            # Start the new batch just below the lowest existing panel role.
             insert_floor = min(r.position for r in existing_panel_roles)
         else:
-            # No previous autogen roles — start just below the bot's highest role.
             insert_floor = bot_pos
 
         positioned = 0
@@ -454,7 +453,7 @@ async def _run_autogen(
             except (discord.Forbidden, discord.HTTPException) as exc:
                 log.warning(f"autogen({kind}): could not position '{role.name}': {exc}")
                 pos_failed = True
-                break  # if one fails the rest will too — stop trying
+                break
             await asyncio.sleep(_POS_DELAY)
 
         # ── 3. Create panel ────────────────────────────────────────────────────
@@ -467,7 +466,6 @@ async def _run_autogen(
             mode=mode,
         )
 
-        # Generated roles first, extra roles appended after
         for role in created:
             label = role.name.replace(f"{prefix} ", "", 1) if prefix else role.name
             await db.add_role_to_panel(
@@ -936,29 +934,8 @@ class Roles(commands.Cog):
     ):
         await interaction.response.defer(ephemeral=True, thinking=True)
         title, desc, mode, palette = _AUTOGEN_CFG["colors"]
-        extras = [
-            r
-            for r in [
-                extra_role_1,
-                extra_role_2,
-                extra_role_3,
-                extra_role_4,
-                extra_role_5,
-            ]
-            if r
-        ]
-        await _run_autogen(
-            self,
-            interaction,
-            channel,
-            palette,
-            title,
-            desc,
-            mode,
-            prefix,
-            extras,
-            "colors",
-        )
+        extras = [r for r in [extra_role_1, extra_role_2, extra_role_3, extra_role_4, extra_role_5] if r]
+        await _run_autogen(self, interaction, channel, palette, title, desc, mode, prefix, extras, "colors")
 
     @autogen_group.command(
         name="pronouns",
@@ -985,29 +962,8 @@ class Roles(commands.Cog):
     ):
         await interaction.response.defer(ephemeral=True, thinking=True)
         title, desc, mode, palette = _AUTOGEN_CFG["pronouns"]
-        extras = [
-            r
-            for r in [
-                extra_role_1,
-                extra_role_2,
-                extra_role_3,
-                extra_role_4,
-                extra_role_5,
-            ]
-            if r
-        ]
-        await _run_autogen(
-            self,
-            interaction,
-            channel,
-            palette,
-            title,
-            desc,
-            mode,
-            None,
-            extras,
-            "pronouns",
-        )
+        extras = [r for r in [extra_role_1, extra_role_2, extra_role_3, extra_role_4, extra_role_5] if r]
+        await _run_autogen(self, interaction, channel, palette, title, desc, mode, None, extras, "pronouns")
 
     @autogen_group.command(
         name="age",
@@ -1034,20 +990,8 @@ class Roles(commands.Cog):
     ):
         await interaction.response.defer(ephemeral=True, thinking=True)
         title, desc, mode, palette = _AUTOGEN_CFG["age"]
-        extras = [
-            r
-            for r in [
-                extra_role_1,
-                extra_role_2,
-                extra_role_3,
-                extra_role_4,
-                extra_role_5,
-            ]
-            if r
-        ]
-        await _run_autogen(
-            self, interaction, channel, palette, title, desc, mode, None, extras, "age"
-        )
+        extras = [r for r in [extra_role_1, extra_role_2, extra_role_3, extra_role_4, extra_role_5] if r]
+        await _run_autogen(self, interaction, channel, palette, title, desc, mode, None, extras, "age")
 
     @autogen_group.command(
         name="region",
@@ -1074,29 +1018,8 @@ class Roles(commands.Cog):
     ):
         await interaction.response.defer(ephemeral=True, thinking=True)
         title, desc, mode, palette = _AUTOGEN_CFG["region"]
-        extras = [
-            r
-            for r in [
-                extra_role_1,
-                extra_role_2,
-                extra_role_3,
-                extra_role_4,
-                extra_role_5,
-            ]
-            if r
-        ]
-        await _run_autogen(
-            self,
-            interaction,
-            channel,
-            palette,
-            title,
-            desc,
-            mode,
-            None,
-            extras,
-            "region",
-        )
+        extras = [r for r in [extra_role_1, extra_role_2, extra_role_3, extra_role_4, extra_role_5] if r]
+        await _run_autogen(self, interaction, channel, palette, title, desc, mode, None, extras, "region")
 
     # ── Internal: refresh a live panel message ─────────────────────────────────
     async def _refresh_panel_message(self, guild: discord.Guild, panel: dict) -> None:
