@@ -203,7 +203,7 @@ class NanoBot(commands.Bot):
             return
 
         if ctx.prefix is not None:
-            after = message.content[len(ctx.prefix):].strip()
+            after = message.content[len(ctx.prefix) :].strip()
             if after:
                 await _try_tag_shortcut(message, self, after.lower())
 
