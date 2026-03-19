@@ -797,6 +797,72 @@ class Roles(commands.Cog):
             ephemeral=True,
         )
 
+    @panel_group.command(
+        name="reload",
+        description="Re-post all panels in this server to refresh their messages.",
+    )
+    @has_role_perms()
+    async def panel_reload(self, interaction: discord.Interaction):
+        await interaction.response.defer(ephemeral=True)
+
+        panels = await db.get_role_panels_for_guild(interaction.guild_id)
+        if not panels:
+            return await interaction.followup.send(
+                embed=h.info("No panels found for this server.", "📋 No Panels"),
+                ephemeral=True,
+            )
+
+        posted, skipped, failed = [], [], []
+
+        for panel in panels:
+            if not panel.get("entries"):
+                skipped.append(f"`{panel['id']}` **{panel['title']}** — no roles")
+                continue
+
+            # Delete old message if we know where it is
+            if panel.get("message_id") and panel.get("channel_id"):
+                old_ch = interaction.guild.get_channel(int(panel["channel_id"]))
+                if old_ch:
+                    try:
+                        old_msg = await old_ch.fetch_message(int(panel["message_id"]))
+                        await old_msg.delete()
+                    except (discord.NotFound, discord.HTTPException):
+                        pass
+
+            # Figure out which channel to post in
+            target_ch = None
+            if panel.get("channel_id"):
+                target_ch = interaction.guild.get_channel(int(panel["channel_id"]))
+            if target_ch is None:
+                # Fall back to the channel this command was run in
+                target_ch = interaction.channel
+
+            view = _build_view(panel)
+            try:
+                msg = await target_ch.send(embed=_build_embed(panel), view=view)
+                self.bot.add_view(view)
+                await db.update_role_panel_message(panel["id"], target_ch.id, msg.id)
+                posted.append(f"`{panel['id']}` **{panel['title']}** → {target_ch.mention}")
+                log.info(f"panel reload: posted {panel['id']} to #{target_ch} in {interaction.guild}")
+            except discord.Forbidden:
+                failed.append(f"`{panel['id']}` **{panel['title']}** — no permission in {target_ch.mention}")
+            except Exception as exc:
+                failed.append(f"`{panel['id']}` **{panel['title']}** — error: {exc}")
+                log.error(f"panel reload: failed to post {panel['id']}: {exc}", exc_info=exc)
+
+        lines = []
+        if posted:
+            lines.append(f"✅ **Posted {len(posted)}:**\n" + "\n".join(posted))
+        if skipped:
+            lines.append(f"⏭️ **Skipped {len(skipped)} (no roles yet):**\n" + "\n".join(skipped))
+        if failed:
+            lines.append(f"❌ **Failed {len(failed)}:**\n" + "\n".join(failed))
+
+        await interaction.followup.send(
+            embed=h.ok("\n\n".join(lines), "📋 Panels Reloaded") if not failed else h.warn("\n\n".join(lines), "📋 Panels Reloaded"),
+            ephemeral=True,
+        )
+
     # ── /roles add ─────────────────────────────────────────────────────────────
     @roles_group.command(name="add", description="Add a role to a panel.")
     @app_commands.describe(
@@ -938,29 +1004,8 @@ class Roles(commands.Cog):
     ):
         await interaction.response.defer(ephemeral=True, thinking=True)
         title, desc, mode, palette = _AUTOGEN_CFG["colors"]
-        extras = [
-            r
-            for r in [
-                extra_role_1,
-                extra_role_2,
-                extra_role_3,
-                extra_role_4,
-                extra_role_5,
-            ]
-            if r
-        ]
-        await _run_autogen(
-            self,
-            interaction,
-            channel,
-            palette,
-            title,
-            desc,
-            mode,
-            prefix,
-            extras,
-            "colors",
-        )
+        extras = [r for r in [extra_role_1, extra_role_2, extra_role_3, extra_role_4, extra_role_5] if r]
+        await _run_autogen(self, interaction, channel, palette, title, desc, mode, prefix, extras, "colors")
 
     @autogen_group.command(
         name="pronouns",
@@ -987,29 +1032,8 @@ class Roles(commands.Cog):
     ):
         await interaction.response.defer(ephemeral=True, thinking=True)
         title, desc, mode, palette = _AUTOGEN_CFG["pronouns"]
-        extras = [
-            r
-            for r in [
-                extra_role_1,
-                extra_role_2,
-                extra_role_3,
-                extra_role_4,
-                extra_role_5,
-            ]
-            if r
-        ]
-        await _run_autogen(
-            self,
-            interaction,
-            channel,
-            palette,
-            title,
-            desc,
-            mode,
-            None,
-            extras,
-            "pronouns",
-        )
+        extras = [r for r in [extra_role_1, extra_role_2, extra_role_3, extra_role_4, extra_role_5] if r]
+        await _run_autogen(self, interaction, channel, palette, title, desc, mode, None, extras, "pronouns")
 
     @autogen_group.command(
         name="age",
@@ -1036,20 +1060,8 @@ class Roles(commands.Cog):
     ):
         await interaction.response.defer(ephemeral=True, thinking=True)
         title, desc, mode, palette = _AUTOGEN_CFG["age"]
-        extras = [
-            r
-            for r in [
-                extra_role_1,
-                extra_role_2,
-                extra_role_3,
-                extra_role_4,
-                extra_role_5,
-            ]
-            if r
-        ]
-        await _run_autogen(
-            self, interaction, channel, palette, title, desc, mode, None, extras, "age"
-        )
+        extras = [r for r in [extra_role_1, extra_role_2, extra_role_3, extra_role_4, extra_role_5] if r]
+        await _run_autogen(self, interaction, channel, palette, title, desc, mode, None, extras, "age")
 
     @autogen_group.command(
         name="region",
@@ -1076,29 +1088,8 @@ class Roles(commands.Cog):
     ):
         await interaction.response.defer(ephemeral=True, thinking=True)
         title, desc, mode, palette = _AUTOGEN_CFG["region"]
-        extras = [
-            r
-            for r in [
-                extra_role_1,
-                extra_role_2,
-                extra_role_3,
-                extra_role_4,
-                extra_role_5,
-            ]
-            if r
-        ]
-        await _run_autogen(
-            self,
-            interaction,
-            channel,
-            palette,
-            title,
-            desc,
-            mode,
-            None,
-            extras,
-            "region",
-        )
+        extras = [r for r in [extra_role_1, extra_role_2, extra_role_3, extra_role_4, extra_role_5] if r]
+        await _run_autogen(self, interaction, channel, palette, title, desc, mode, None, extras, "region")
 
     # ── Internal: refresh a live panel message ─────────────────────────────────
     async def _refresh_panel_message(self, guild: discord.Guild, panel: dict) -> None:
