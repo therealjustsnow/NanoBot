@@ -110,9 +110,7 @@ class NanoBot(commands.Bot):
         self.prefixes: dict[str, str] = {}
         self.last_senders: dict[int, discord.Member] = {}
         self.start_time = discord.utils.utcnow()
-
-        # Optional API keys — cogs read these via bot attributes
-        self.groq_api_key: str | None = cfg.get("groq_api_key")
+        self.commands_run: int = 0  # incremented on every successful command invocation
 
         # Owner ID: config override takes priority over the application owner
         raw_owner = cfg.get("owner_id")
@@ -134,10 +132,6 @@ class NanoBot(commands.Bot):
             "cogs.welcome",  # per-server welcome / leave messages
             "cogs.admin",  # owner-only: reload / shutdown / restart
             "cogs.votes",
-            "cogs.auditlog",  # audit log with toggleable event types
-            "cogs.automod",  # passive rule-based auto-moderation
-            "cogs.roles",  # button-based self-assignable role panels
-            "cogs.eli5",  # explain it like I'm 5 (Groq / Llama)
         )
         for cog in cogs:
             await self.load_extension(cog)
@@ -179,7 +173,8 @@ class NanoBot(commands.Bot):
         self.dispatch("restore_schedules")
 
     async def on_command(self, ctx: commands.Context):
-        """Log every successful command invocation."""
+        """Log every successful command invocation and increment the counter."""
+        self.commands_run += 1
         guild_info = f"{ctx.guild.name} ({ctx.guild.id})" if ctx.guild else "DM"
         log.info(
             f"CMD  {ctx.command}  |  "
