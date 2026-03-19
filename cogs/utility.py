@@ -9,6 +9,7 @@ Commands:
   info    — runtime stats
   invite  — bot invite link with correct permissions
   about   — what NanoBot is and why it exists
+  stats   — NanoBots stats since uptime
 """
 
 import logging
@@ -714,43 +715,6 @@ class Utility(commands.Cog):
         ms = round(self.bot.latency * 1000)
         status = "🟢 Great" if ms < 100 else ("🟡 Okay" if ms < 200 else "🔴 Slow")
         await ctx.reply(embed=h.ok(f"**{ms}ms** — {status}", "🏓 Pong!"))
-
-    # ══════════════════════════════════════════════════════════════════════════
-    #  info
-    # ══════════════════════════════════════════════════════════════════════════,
-    @commands.hybrid_command(
-        name="info",
-        description="NanoBot stats and runtime info.",
-        extras={
-            "category": "⚙️ Config & Info",
-            "short": "Bot stats and runtime info",
-            "usage": "info",
-            "desc": "Shows latency, server count, prefix, discord.py version, Python version, and storage type.",
-            "args": [],
-            "perms": "None",
-            "example": "!info",
-        },
-    )
-    @commands.cooldown(1, 10, commands.BucketType.user)
-    async def info(self, ctx: commands.Context):
-        prefix = self.bot.prefixes.get(str(ctx.guild.id), self.bot.default_prefix)
-        latency = round(self.bot.latency * 1000)
-
-        e = h.embed(title="⚡ NanoBot", color=h.BLUE)
-        e.set_thumbnail(url=self.bot.user.display_avatar.url)
-        e.description = "_Small. Fast. Built for Mobile Mods._\n\u200b"
-
-        e.add_field(name="📡 Latency", value=f"{latency}ms", inline=True)
-        e.add_field(name="🌐 Servers", value=str(len(self.bot.guilds)), inline=True)
-        e.add_field(name="⚙️ Prefix", value=f"`{prefix}`", inline=True)
-        e.add_field(
-            name="📚 Library", value=f"discord.py {discord.__version__}", inline=True
-        )
-        e.add_field(name="🐍 Python", value=platform.python_version(), inline=True)
-        e.add_field(name="🗄️ Storage", value="SQLite (aiosqlite)", inline=True)
-
-        e.set_footer(text="NanoBot — Open Source · github.com/therealjustsnow/NanoBot")
-        await ctx.reply(embed=e)
 
     # ══════════════════════════════════════════════════════════════════════════
     #  invite
@@ -1497,12 +1461,16 @@ class Utility(commands.Cog):
             value=f"**{text_channels:,}** text · **{voice_channels:,}** voice",
             inline=True,
         )
-
-        e.add_field(
-            name="🕐 Online Since",
-            value=discord.utils.format_dt(self.bot.start_time, style="R"),
-            inline=False,
-        )
+       e.add_field(
+         name="discord.py Version",
+         valie=f**{discord.__version__},
+         inline=True
+       )
+e.add_field(
+  name="🐍 Python Version",
+  value=f**{python.__version__),
+inline=True
+)
 
         e.set_footer(text="NanoBot — stats reset on restart")
         await ctx.reply(embed=e, ephemeral=True)
