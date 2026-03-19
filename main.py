@@ -38,28 +38,21 @@ _CFG = _load_config()
 
 
 # ── Logging ────────────────────────────────────────────────────────────────────
-# discord.utils.setup_logging() is the recommended setup in discord.py 2.x.
-# It wires all discord.* sub-loggers (gateway, client, http, shard…) with ANSI
-# colour on supported terminals. We bolt a RotatingFileHandler on top for
-# persistence.  Both level and HTTP verbosity are configurable via config.json.
-
 _VALID_LEVELS = {"DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"}
 
 
 def _setup_logging(cfg: dict) -> logging.Logger:
     os.makedirs("logs", exist_ok=True)
 
-    # ── Resolve log level from config ─────────────────────────────────────────
     level_str = str(cfg.get("log_level", "INFO")).upper()
     if level_str not in _VALID_LEVELS:
         level_str = "INFO"
     level = getattr(logging, level_str)
 
-    # ── Rotating file handler (plain text, no ANSI) ───────────────────────────
     file_handler = logging.handlers.RotatingFileHandler(
         filename="logs/nanobot.log",
-        maxBytes=5 * 1024 * 1024,  # 5 MB per file
-        backupCount=3,  # keep 3 backups → ≤ 15 MB total
+        maxBytes=5 * 1024 * 1024,
+        backupCount=3,
         encoding="utf-8",
     )
     file_handler.setFormatter(
@@ -69,11 +62,9 @@ def _setup_logging(cfg: dict) -> logging.Logger:
         )
     )
 
-    # ── discord.utils.setup_logging — console + discord.* tree ────────────────
     discord.utils.setup_logging(level=level, root=True)
     logging.getLogger().addHandler(file_handler)
 
-    # ── discord.http verbosity (very chatty at INFO — default to WARNING) ─────
     http_level = logging.DEBUG if cfg.get("log_http") else logging.WARNING
     logging.getLogger("discord.http").setLevel(http_level)
 
@@ -90,6 +81,25 @@ def get_prefix(bot: "NanoBot", message: discord.Message):
         return commands.when_mentioned_or(bot.default_prefix)(bot, message)
     prefix = bot.prefixes.get(str(message.guild.id), bot.default_prefix)
     return commands.when_mentioned_or(prefix)(bot, message)
+
+
+# ── All cogs — single source of truth shared with admin.py ────────────────────
+# Keep this in sync with _ALL_COGS in cogs/admin.py.
+_ALL_COGS = (
+    "cogs.moderation",
+    "cogs.tags",
+    "cogs.utility",
+    "cogs.reminders",
+    "cogs.recurring",
+    "cogs.warnings",
+    "cogs.welcome",
+    "cogs.admin",
+    "cogs.votes",
+    "cogs.auditlog",
+    "cogs.automod",
+    "cogs.roles",
+    "cogs.eli5",
+)
 
 
 # ── Bot ────────────────────────────────────────────────────────────────────────
@@ -110,9 +120,7 @@ class NanoBot(commands.Bot):
         self.prefixes: dict[str, str] = {}
         self.last_senders: dict[int, discord.Member] = {}
         self.start_time = discord.utils.utcnow()
-        self.commands_run: int = 0  # incremented on every successful command invocation
 
-        # Owner ID: config override takes priority over the application owner
         raw_owner = cfg.get("owner_id")
         self.config_owner_id: int | None = int(raw_owner) if raw_owner else None
 
@@ -122,24 +130,13 @@ class NanoBot(commands.Bot):
         await db.init()
         await self._load_prefixes()
 
-        cogs = (
-            "cogs.moderation",
-            "cogs.tags",
-            "cogs.utility",
-            "cogs.reminders",
-            "cogs.recurring",
-            "cogs.warnings",  # per-server warning system
-            "cogs.welcome",  # per-server welcome / leave messages
-            "cogs.admin",  # owner-only: reload / shutdown / restart
-            "cogs.votes",
-            "cogs.auditlog",
-            "cogs.automod",
-            "cogs.eli5",
-            "cogs.roles",
-        )
-        for cog in cogs:
-            await self.load_extension(cog)
-            log.info(f"✅ Loaded {cog}")
+        for cog in _ALL_COGS:
+            try:
+                await self.load_extension(cog)
+                log.info(f"✅ Loaded {cog}")
+            except Exception as exc:
+                # Log but don't abort — optional cogs (eli5) may be absent
+                log.warning(f"⚠️  Could not load {cog}: {exc}")
 
         synced = await self.tree.sync()
         log.info(f"⚡ Synced {len(synced)} slash command(s)")
@@ -153,11 +150,9 @@ class NanoBot(commands.Bot):
 
     # ── Prefix persistence ─────────────────────────────────────────────────────
     async def _load_prefixes(self):
-        """Load per-guild prefixes from SQLite into the in-memory dict."""
         self.prefixes = await db.get_all_prefixes()
 
     async def save_prefix(self, guild_id: int, prefix: str):
-        """Persist a single guild prefix to SQLite and update in-memory dict."""
         self.prefixes[str(guild_id)] = prefix
         await db.set_prefix(guild_id, prefix)
 
@@ -177,8 +172,6 @@ class NanoBot(commands.Bot):
         self.dispatch("restore_schedules")
 
     async def on_command(self, ctx: commands.Context):
-        """Log every successful command invocation and increment the counter."""
-        self.commands_run += 1
         guild_info = f"{ctx.guild.name} ({ctx.guild.id})" if ctx.guild else "DM"
         log.info(
             f"CMD  {ctx.command}  |  "
@@ -188,7 +181,6 @@ class NanoBot(commands.Bot):
         )
 
     async def on_guild_join(self, guild: discord.Guild):
-        """Log when the bot is added to a new server."""
         log.info(
             f"➕ Joined server: {guild.name} ({guild.id})  |  "
             f"{guild.member_count} members  |  "
@@ -196,7 +188,6 @@ class NanoBot(commands.Bot):
         )
 
     async def on_guild_remove(self, guild: discord.Guild):
-        """Log when the bot is removed from a server."""
         log.info(f"➖ Left server: {guild.name} ({guild.id})")
 
     async def on_message(self, message: discord.Message):
@@ -205,12 +196,6 @@ class NanoBot(commands.Bot):
 
         self.last_senders[message.channel.id] = message.author
 
-        # ── Tag shortcut: n!tagname ────────────────────────────────────────────
-        # Use get_context() so discord.py does ALL prefix resolution for us
-        # (text prefix, mention prefix, per-guild prefix — all handled correctly).
-        # ctx.valid = True  → real command found, invoke it normally.
-        # ctx.valid = False + ctx.prefix is not None → prefix matched but no
-        #   command → try the word as a tag name.
         ctx = await self.get_context(message)
 
         if ctx.valid:
@@ -218,12 +203,9 @@ class NanoBot(commands.Bot):
             return
 
         if ctx.prefix is not None:
-            # A prefix was matched but no command found — try the entire
-            # remaining text as a tag name (supports multi-word tag names).
-            after = message.content[len(ctx.prefix) :].strip()
+            after = message.content[len(ctx.prefix):].strip()
             if after:
                 await _try_tag_shortcut(message, self, after.lower())
-            # Whether tag found or not, we're done — no unknown-command noise
 
     # ── Error Handler ──────────────────────────────────────────────────────────
     async def on_command_error(self, ctx: commands.Context, error):
@@ -296,7 +278,7 @@ class NanoBot(commands.Bot):
             return await ctx.reply(embed=e, ephemeral=True)
 
         if isinstance(error, commands.CommandNotFound):
-            return  # tag shortcuts are handled in on_message, not here
+            return
 
         log.error(f"Unhandled error in {ctx.command}: {error}", exc_info=error)
 
@@ -307,11 +289,6 @@ async def _try_tag_shortcut(
     bot: commands.Bot,
     name: str,
 ) -> bool:
-    """
-    Look up a tag by name for the message author and send it to the channel.
-    Returns True if a tag was found and sent, False otherwise.
-    Called from on_message BEFORE process_commands so errors surface clearly.
-    """
     try:
         tag = await db.get_tag(message.guild.id, name, message.author.id)
         if tag is None:
@@ -346,7 +323,7 @@ async def _try_tag_shortcut(
 
 # ── Entry Point ────────────────────────────────────────────────────────────────
 async def main():
-    cfg = _CFG  # already loaded at module level
+    cfg = _CFG
 
     token = os.getenv("DISCORD_TOKEN") or cfg.get("token")
     if not token:
@@ -355,7 +332,6 @@ async def main():
         )
         return
 
-    # Validate config — log warnings for non-fatal issues, abort on fatal ones
     from utils.config import validate as _validate_cfg
 
     for issue in _validate_cfg(cfg):
