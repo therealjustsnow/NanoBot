@@ -1467,9 +1467,7 @@ class Utility(commands.Cog):
 
         # Member breakdown across all guilds
         total_members = sum(g.member_count or 0 for g in self.bot.guilds)
-        total_bots = sum(
-            sum(1 for m in g.members if m.bot) for g in self.bot.guilds
-        )
+        total_bots = sum(sum(1 for m in g.members if m.bot) for g in self.bot.guilds)
         total_humans = total_members - total_bots
 
         # Channel counts
@@ -1486,7 +1484,9 @@ class Utility(commands.Cog):
         e.add_field(name="⏱️ Uptime", value=f"**{uptime_str}**", inline=True)
         e.add_field(name="📡 Latency", value=f"**{latency}ms**", inline=True)
 
-        e.add_field(name="🌐 Servers", value=f"**{len(self.bot.guilds):,}**", inline=True)
+        e.add_field(
+            name="🌐 Servers", value=f"**{len(self.bot.guilds):,}**", inline=True
+        )
         e.add_field(
             name="👥 Members",
             value=f"**{total_humans:,}** humans · **{total_bots:,}** bots",
