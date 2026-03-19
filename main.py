@@ -135,7 +135,7 @@ class NanoBot(commands.Bot):
             "cogs.auditlog",
             "cogs.automod",
             "cogs.eli5",
-            "cogs.roles"            
+            "cogs.roles",
         )
         for cog in cogs:
             await self.load_extension(cog)
