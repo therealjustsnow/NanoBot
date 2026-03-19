@@ -132,6 +132,10 @@ class NanoBot(commands.Bot):
             "cogs.welcome",  # per-server welcome / leave messages
             "cogs.admin",  # owner-only: reload / shutdown / restart
             "cogs.votes",
+            "cogs.auditlog",
+            "cogs.automod",
+            "cogs.eli5",
+            "cogs.roles"            
         )
         for cog in cogs:
             await self.load_extension(cog)
