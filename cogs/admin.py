@@ -30,7 +30,8 @@ from utils import helpers as h
 
 log = logging.getLogger("NanoBot.admin")
 
-# All cogs that NanoBot manages (admin reloads itself too — safe with discord.py 2.x)
+# All cogs that NanoBot manages.
+# Keep this in sync with _ALL_COGS in main.py.
 _ALL_COGS = (
     "cogs.moderation",
     "cogs.tags",
@@ -71,17 +72,6 @@ class Admin(commands.Cog):
         name="reload",
         aliases=["rl"],
         help="Reload one cog by name, or all cogs at once.\n\nExamples:\n  !reload all\n  !reload cogs.moderation\n  !reload moderation",
-        extras={
-            "category": "🔧 Owner / Admin",
-            "short": "Hot-reload a cog or all cogs (owner only)",
-            "usage": "reload [cog|all]",
-            "desc": "Reloads without restarting. Accepts all, the full dotted name, or just the short name.",
-            "args": [
-                ("cog", "Cog to reload, or all (default: all)"),
-            ],
-            "perms": "Bot Owner",
-            "example": "!reload all\n!reload moderation",
-        },
     )
     async def reload(self, ctx: commands.Context, cog: Optional[str] = "all"):
         """
@@ -94,13 +84,11 @@ class Admin(commands.Cog):
         """
         await ctx.defer()
 
-        # ── Normalise name ─────────────────────────────────────────────────────
         target = cog.lower().strip() if cog else "all"
 
         if target == "all":
             targets = list(_ALL_COGS)
         else:
-            # Accept "moderation" as shorthand for "cogs.moderation"
             if "." not in target:
                 target = f"cogs.{target}"
             if target not in _ALL_COGS:
@@ -113,7 +101,6 @@ class Admin(commands.Cog):
                 )
             targets = [target]
 
-        # ── Reload each ────────────────────────────────────────────────────────
         results = []
         for ext in targets:
             try:
@@ -121,7 +108,6 @@ class Admin(commands.Cog):
                 results.append(f"✅ `{ext}`")
                 log.info(f"Reloaded: {ext}")
             except commands.ExtensionNotLoaded:
-                # Wasn't loaded yet — try loading fresh
                 try:
                     await self.bot.load_extension(ext)
                     results.append(f"✅ `{ext}` _(loaded fresh)_")
@@ -156,15 +142,6 @@ class Admin(commands.Cog):
         name="shutdown",
         aliases=["die", "stop"],
         help="Gracefully shut NanoBot down.",
-        extras={
-            "category": "🔧 Owner / Admin",
-            "short": "Gracefully shut down (owner only)",
-            "usage": "shutdown",
-            "desc": "Flushes all logs, sends a goodbye message, and closes the Discord connection.",
-            "args": [],
-            "perms": "Bot Owner",
-            "example": "!shutdown",
-        },
     )
     async def shutdown(self, ctx: commands.Context):
         """Flush logs, send a goodbye embed, close the Discord connection cleanly."""
@@ -177,7 +154,6 @@ class Admin(commands.Cog):
             )
         )
 
-        # Give Discord a moment to deliver the message before closing
         await asyncio.sleep(0.5)
         await self.bot.close()
 
@@ -188,24 +164,8 @@ class Admin(commands.Cog):
         name="restart",
         aliases=["reboot", "rs"],
         help="Gracefully restart NanoBot by re-executing the current process.",
-        extras={
-            "category": "🔧 Owner / Admin",
-            "short": "Gracefully restart the bot process (owner only)",
-            "usage": "restart",
-            "desc": "Closes cleanly, then re-executes the Python process with the same arguments.",
-            "args": [],
-            "perms": "Bot Owner",
-            "example": "!restart",
-        },
     )
     async def restart(self, ctx: commands.Context):
-        """
-        Closes the bot cleanly, then re-executes the Python process with the
-        same arguments (os.execv).  All cogs reload, schedules restore, and
-        slash commands re-sync.
-
-        Works with both `python main.py` and `python run.py`.
-        """
         log.warning(f"Restart initiated by {ctx.author} ({ctx.author.id})")
 
         await ctx.reply(
@@ -218,9 +178,6 @@ class Admin(commands.Cog):
 
         await asyncio.sleep(0.5)
 
-        # Spawn a fresh process BEFORE closing so it can start initialising
-        # while this one finishes its shutdown.  subprocess.Popen works
-        # correctly on all platforms (os.execv silently fails on Windows).
         subprocess.Popen([sys.executable] + sys.argv)
         log.info("Spawned new process — shutting down this one")
 
@@ -238,30 +195,10 @@ class Admin(commands.Cog):
             "Does NOT sync slash commands — use !sync for that.\n"
             "Does NOT restart the process — use !restart for that."
         ),
-        extras={
-            "category": "🔧 Owner / Admin",
-            "short": "Git pull + reload all cogs (owner only)",
-            "usage": "update",
-            "desc": "Runs git pull and reports the output, then reloads all cogs. Does NOT sync slash commands — use !sync for that. Does NOT restart the process — use !restart for that.",
-            "args": [],
-            "perms": "Bot Owner",
-            "example": "!update",
-        },
     )
     async def update(self, ctx: commands.Context):
-        """
-        !update  /  !pull
-
-        1. Runs `git pull` and reports the output.
-        2. If the pull succeeds, reloads all cogs.
-        3. Reports per-cog reload results.
-
-        Slash commands are NOT synced here — run !sync separately if you
-        added or removed any slash commands.
-        """
         await ctx.defer()
 
-        # ── Step 1: git pull ───────────────────────────────────────────────────
         try:
             result = subprocess.run(
                 ["git", "pull"],
@@ -287,7 +224,6 @@ class Admin(commands.Cog):
             )
 
         git_output = stdout or stderr or "_(no output)_"
-        # Trim for embed safety
         if len(git_output) > 900:
             git_output = git_output[:900] + "\n…(truncated)"
 
@@ -300,7 +236,6 @@ class Admin(commands.Cog):
 
         log.info(f"git pull OK by {ctx.author}: {stdout[:200]}")
 
-        # ── Step 2: reload all cogs ────────────────────────────────────────────
         reload_results = []
         for ext in _ALL_COGS:
             try:
@@ -363,36 +298,13 @@ class Admin(commands.Cog):
             "Run this after adding or removing any slash commands.\n"
             "You do NOT need to run this after a normal !update."
         ),
-        extras={
-            "category": "🔧 Owner / Admin",
-            "short": "Push slash commands to Discord (owner only)",
-            "usage": "sync [guild_id]",
-            "desc": "No guild_id: global sync (up to 1 hour to propagate). With guild_id: instant sync to that specific guild — use this during development.",
-            "args": [
-                ("guild_id", "Guild ID for instant sync (omit for global sync)"),
-            ],
-            "perms": "Bot Owner",
-            "example": "!sync\n!sync 123456789012345678",
-        },
     )
     async def sync(self, ctx: commands.Context, guild_id: Optional[int] = None):
-        """
-        !sync [guild_id]
-
-        Global sync:  !sync
-          Pushes all app commands to Discord globally.  Changes can take up to
-          an hour to appear for all users — use guild sync during development.
-
-        Guild sync:   !sync 123456789012345678
-          Instantly pushes commands to a single guild.  Useful when iterating
-          on new slash commands without waiting for global propagation.
-        """
         await ctx.defer()
 
         if guild_id is not None:
             guild = discord.Object(id=guild_id)
             try:
-                # Copy global command tree to the guild, then sync
                 self.bot.tree.copy_global_to(guild=guild)
                 synced = await self.bot.tree.sync(guild=guild)
             except discord.Forbidden:
@@ -449,23 +361,12 @@ class Admin(commands.Cog):
         aliases=["loglevel", "loglvl"],
         help=(
             "Change the log level live and save it to config.json.\n\n"
-            f"Valid levels: {', '.join(_VALID_LEVELS)}\n\n"
+            f"Valid levels: DEBUG, INFO, WARNING, ERROR, CRITICAL\n\n"
             "Examples:\n"
             "  !setloglevel DEBUG    → verbose (see every gateway event)\n"
             "  !setloglevel INFO     → normal\n"
             "  !setloglevel WARNING  → quiet (only problems)"
         ),
-        extras={
-            "category": "🔧 Owner / Admin",
-            "short": "Change log verbosity live (owner only)",
-            "usage": "setloglevel <level>",
-            "desc": "Changes logging level immediately and saves to config.json.",
-            "args": [
-                ("level", "DEBUG / INFO / WARNING / ERROR / CRITICAL"),
-            ],
-            "perms": "Bot Owner",
-            "example": "!setloglevel DEBUG",
-        },
     )
     async def setloglevel(self, ctx: commands.Context, level: str):
         level = level.upper().strip()
@@ -479,12 +380,10 @@ class Admin(commands.Cog):
                 ephemeral=True,
             )
 
-        # Apply to the root logger (affects all NanoBot.* and discord.* loggers)
         numeric = getattr(logging, level)
         logging.getLogger().setLevel(numeric)
         log.info(f"Log level changed to {level} by {ctx.author} ({ctx.author.id})")
 
-        # Persist to config.json
         cfg_path = "config.json"
         cfg = {}
         if os.path.exists(cfg_path):
@@ -526,20 +425,9 @@ class Admin(commands.Cog):
             "Default: last 20 lines. Max: 50.\n\n"
             "Great for diagnosing issues without SSH access on mobile."
         ),
-        extras={
-            "category": "🔧 Owner / Admin",
-            "short": "Tail the log file in Discord (owner only)",
-            "usage": "logs [lines]",
-            "desc": "Fetches the last N lines of logs/nanobot.log as an ephemeral embed.",
-            "args": [
-                ("lines", "How many lines to show (1–50, default 20)"),
-            ],
-            "perms": "Bot Owner",
-            "example": "!logs 30",
-        },
     )
     async def logs(self, ctx: commands.Context, lines: int = 20):
-        lines = max(1, min(50, lines))  # Clamp 1–50
+        lines = max(1, min(50, lines))
 
         log_path = "logs/nanobot.log"
         if not os.path.exists(log_path):
@@ -552,7 +440,6 @@ class Admin(commands.Cog):
                 ephemeral=True,
             )
 
-        # Read last N lines efficiently without loading the whole file
         try:
             with open(log_path, encoding="utf-8", errors="replace") as f:
                 all_lines = f.readlines()
@@ -572,7 +459,6 @@ class Admin(commands.Cog):
                 ephemeral=True,
             )
 
-        # Discord code block cap is 2000 chars including the backticks / header
         max_chars = 1900
         if len(content) > max_chars:
             content = "…(truncated)\n" + content[-max_chars:]
@@ -586,60 +472,6 @@ class Admin(commands.Cog):
             text=f"logs/nanobot.log  ·  {total_lines} total line(s)  ·  NanoBot"
         )
         await ctx.reply(embed=e, ephemeral=True)
-
-    # ══════════════════════════════════════════════════════════════════════════
-    #  servers
-    # ══════════════════════════════════════════════════════════════════════════
-    @commands.command(
-        name="servers",
-        aliases=["guilds", "serverlist"],
-        help=(
-            "List every server NanoBot is currently in.\n\n"
-            "Shows: name, ID, member count, owner.\n"
-            "Sorted by member count descending.\n"
-            "Paginates automatically at 10 servers per embed."
-        ),
-    )
-    async def servers(self, ctx: commands.Context):
-        guilds = sorted(
-            self.bot.guilds, key=lambda g: g.member_count or 0, reverse=True
-        )
-        total_guilds = len(guilds)
-        total_members = sum(g.member_count or 0 for g in guilds)
-
-        # Build lines — compact for mobile readability
-        lines = []
-        for i, g in enumerate(guilds, start=1):
-            owner_str = f"<@{g.owner_id}>" if g.owner_id else "Unknown"
-            lines.append(
-                f"`{i}.` **{g.name}**\n"
-                f"    🆔 `{g.id}` · 👥 {g.member_count:,} · 👑 {owner_str}"
-            )
-
-        # Pages of 10 guilds each
-        page_size = 10
-        pages = [lines[i : i + page_size] for i in range(0, len(lines), page_size)]
-        total_pages = len(pages)
-
-        embeds = []
-        for page_num, page_lines in enumerate(pages, start=1):
-            e = h.embed(
-                title=f"🌐 Servers ({total_guilds})",
-                description="\n".join(page_lines),
-                color=h.BLUE,
-            )
-            e.set_footer(
-                text=(
-                    f"Page {page_num}/{total_pages}  ·  "
-                    f"{total_guilds} server(s)  ·  {total_members:,} total members  ·  NanoBot"
-                )
-            )
-            embeds.append(e)
-
-        for embed in embeds:
-            await ctx.send(embed=embed)
-
-        log.info(f"servers: listed {total_guilds} guild(s) for {ctx.author}")
 
 
 # ── Registration ───────────────────────────────────────────────────────────────
