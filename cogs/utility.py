@@ -14,6 +14,7 @@ Commands:
 
 import logging
 import platform
+import sys
 from typing import Optional
 
 import discord
@@ -1461,16 +1462,16 @@ class Utility(commands.Cog):
             value=f"**{text_channels:,}** text · **{voice_channels:,}** voice",
             inline=True,
         )
-       e.add_field(
-         name="discord.py Version",
-         valie=f**{discord.__version__},
-         inline=True
-       )
-      e.add_field(
-        name="🐍 Python Version",
-        value=f"{sys.version_info.major}.{sys.version_info.minor}.{sys.version_info.micro}",
-        inline=True,
-       )
+        e.add_field(
+            name="<:discordpy:> discord.py Version",
+            value=f"**{discord.__version__}**",
+            inline=True,
+        )
+        e.add_field(
+            name="🐍 Python Version",
+            value=f"**{sys.version_info.major}.{sys.version_info.minor}.{sys.version_info.micro}**",
+            inline=True,
+        )
 
         e.set_footer(text="NanoBot — stats reset on restart")
         await ctx.reply(embed=e, ephemeral=True)
