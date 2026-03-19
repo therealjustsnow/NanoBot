@@ -106,6 +106,7 @@ async def init() -> None:
     await _ensure_votes_table()
     await _ensure_recurring_table()
     await _ensure_role_panels_tables()
+    await _migrate_role_panel_entries()
     await _ensure_auditlog_tables()
     await _ensure_automod_tables()
     log.info(f"Database ready: {_DB_PATH}")
@@ -1008,6 +1009,89 @@ async def _ensure_role_panels_tables() -> None:
         CREATE INDEX IF NOT EXISTS rpe_panel ON role_panel_entries (panel_id);
     """)
     await _conn().commit()
+
+
+async def _migrate_role_panel_entries() -> None:
+    """
+    One-time migration: older versions stored entries as a JSON blob in a
+    'entries' column on the role_panels table. This reads that column (if it
+    still exists) and populates role_panel_entries, then drops the old column
+    via a table rebuild.
+
+    Safe to run on every startup — exits immediately if no migration is needed.
+    """
+    # Check whether the old 'entries' column exists on role_panels
+    async with _conn().execute("PRAGMA table_info(role_panels)") as cur:
+        columns = {row["name"] for row in await cur.fetchall()}
+
+    if "entries" not in columns:
+        return  # Already migrated or fresh install — nothing to do
+
+    log.info("DB migration: migrating role_panel entries from JSON column to relational table")
+
+    async with _conn().execute(
+        "SELECT id, entries FROM role_panels WHERE entries IS NOT NULL AND entries != ''"
+    ) as cur:
+        rows = await cur.fetchall()
+
+    migrated_panels = 0
+    migrated_entries = 0
+
+    for row in rows:
+        panel_id = row["id"]
+        try:
+            entries = json.loads(row["entries"])
+        except (json.JSONDecodeError, TypeError):
+            log.warning(f"DB migration: could not parse entries for panel {panel_id!r} — skipping")
+            continue
+
+        for i, entry in enumerate(entries):
+            role_id = entry.get("role_id")
+            if not role_id:
+                continue
+            await _conn().execute(
+                "INSERT OR IGNORE INTO role_panel_entries "
+                "(panel_id, role_id, label, emoji, style, position) VALUES (?,?,?,?,?,?)",
+                (
+                    panel_id,
+                    int(role_id),
+                    entry.get("label") or "Role",
+                    entry.get("emoji"),
+                    entry.get("style", "secondary"),
+                    i,
+                ),
+            )
+            migrated_entries += 1
+        migrated_panels += 1
+
+    await _conn().commit()
+
+    # Rebuild role_panels without the 'entries' column.
+    # SQLite < 3.35 doesn't support DROP COLUMN, so we do a table swap.
+    await _conn().executescript("""
+        CREATE TABLE IF NOT EXISTS role_panels_new (
+            id          TEXT PRIMARY KEY,
+            guild_id    TEXT NOT NULL,
+            title       TEXT NOT NULL,
+            description TEXT,
+            mode        TEXT NOT NULL DEFAULT 'toggle',
+            channel_id  TEXT,
+            message_id  TEXT
+        );
+        INSERT OR IGNORE INTO role_panels_new
+            (id, guild_id, title, description, mode, channel_id, message_id)
+        SELECT id, guild_id, title, description, mode, channel_id, message_id
+        FROM role_panels;
+        DROP TABLE role_panels;
+        ALTER TABLE role_panels_new RENAME TO role_panels;
+        CREATE INDEX IF NOT EXISTS role_panels_guild ON role_panels (guild_id);
+    """)
+    await _conn().commit()
+
+    log.info(
+        f"DB migration complete: migrated {migrated_entries} entries across "
+        f"{migrated_panels} panel(s). Old 'entries' column removed."
+    )
 
 
 def _panel_row(panel: aiosqlite.Row, entries: list[aiosqlite.Row]) -> dict:
