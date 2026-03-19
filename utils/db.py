@@ -1027,7 +1027,9 @@ async def _migrate_role_panel_entries() -> None:
     if "entries" not in columns:
         return  # Already migrated or fresh install — nothing to do
 
-    log.info("DB migration: migrating role_panel entries from JSON column to relational table")
+    log.info(
+        "DB migration: migrating role_panel entries from JSON column to relational table"
+    )
 
     async with _conn().execute(
         "SELECT id, entries FROM role_panels WHERE entries IS NOT NULL AND entries != ''"
@@ -1042,7 +1044,9 @@ async def _migrate_role_panel_entries() -> None:
         try:
             entries = json.loads(row["entries"])
         except (json.JSONDecodeError, TypeError):
-            log.warning(f"DB migration: could not parse entries for panel {panel_id!r} — skipping")
+            log.warning(
+                f"DB migration: could not parse entries for panel {panel_id!r} — skipping"
+            )
             continue
 
         for i, entry in enumerate(entries):
