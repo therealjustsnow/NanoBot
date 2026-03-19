@@ -1424,6 +1424,89 @@ class Utility(commands.Cog):
         e.set_footer(text="NanoBot")
         await ctx.reply(embed=e)
 
+    # ══════════════════════════════════════════════════════════════════════════
+    #  stats
+    # ══════════════════════════════════════════════════════════════════════════
+    @commands.hybrid_command(
+        name="stats",
+        description="NanoBot runtime statistics since last start.",
+        extras={
+            "category": "⚙️ Config & Info",
+            "short": "Runtime stats — commands run, servers, members, uptime",
+            "usage": "stats",
+            "desc": (
+                "Shows a snapshot of NanoBot's activity since the last start: "
+                "commands run, uptime, server count, member breakdown, "
+                "channel counts, and current latency."
+            ),
+            "args": [],
+            "perms": "None",
+            "example": "!stats",
+        },
+    )
+    @commands.cooldown(1, 10, commands.BucketType.user)
+    async def stats(self, ctx: commands.Context):
+        now = discord.utils.utcnow()
+        delta = now - self.bot.start_time
+        seconds = int(delta.total_seconds())
+
+        days, rem = divmod(seconds, 86400)
+        hours, rem = divmod(rem, 3600)
+        minutes, secs = divmod(rem, 60)
+
+        parts = []
+        if days:
+            parts.append(f"{days}d")
+        if hours:
+            parts.append(f"{hours}h")
+        if minutes:
+            parts.append(f"{minutes}m")
+        if secs or not parts:
+            parts.append(f"{secs}s")
+        uptime_str = " ".join(parts)
+
+        # Member breakdown across all guilds
+        total_members = sum(g.member_count or 0 for g in self.bot.guilds)
+        total_bots = sum(
+            sum(1 for m in g.members if m.bot) for g in self.bot.guilds
+        )
+        total_humans = total_members - total_bots
+
+        # Channel counts
+        text_channels = sum(len(g.text_channels) for g in self.bot.guilds)
+        voice_channels = sum(len(g.voice_channels) for g in self.bot.guilds)
+
+        latency = round(self.bot.latency * 1000)
+        commands_run = getattr(self.bot, "commands_run", 0)
+
+        e = h.embed(title="📊 NanoBot Stats", color=h.BLUE)
+        e.set_thumbnail(url=self.bot.user.display_avatar.url)
+
+        e.add_field(name="⚡ Commands Run", value=f"**{commands_run:,}**", inline=True)
+        e.add_field(name="⏱️ Uptime", value=f"**{uptime_str}**", inline=True)
+        e.add_field(name="📡 Latency", value=f"**{latency}ms**", inline=True)
+
+        e.add_field(name="🌐 Servers", value=f"**{len(self.bot.guilds):,}**", inline=True)
+        e.add_field(
+            name="👥 Members",
+            value=f"**{total_humans:,}** humans · **{total_bots:,}** bots",
+            inline=True,
+        )
+        e.add_field(
+            name="💬 Channels",
+            value=f"**{text_channels:,}** text · **{voice_channels:,}** voice",
+            inline=True,
+        )
+
+        e.add_field(
+            name="🕐 Online Since",
+            value=discord.utils.format_dt(self.bot.start_time, style="R"),
+            inline=False,
+        )
+
+        e.set_footer(text="NanoBot — stats reset on restart")
+        await ctx.reply(embed=e, ephemeral=True)
+
 
 # ── Registration ───────────────────────────────────────────────────────────────
 async def setup(bot: commands.Bot):
