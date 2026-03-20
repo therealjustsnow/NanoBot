@@ -131,7 +131,7 @@ class Welcome(commands.Cog):
     @welcome.command(name="set", description="Configure the welcome message.")
     @app_commands.describe(
         enabled="Enable or disable welcome messages",
-        channel="Channel to post in (leave blank for DM or system channel)",
+        channel="Channel to post in — defaults to the current channel if not set",
         title="Embed title (supports {user}, {server})",
         content="Message body (supports {user}, {mention}, {server}, {count})",
         image_url="Image URL to show in the embed (https://...)",
@@ -184,7 +184,7 @@ class Welcome(commands.Cog):
     @leave.command(name="set", description="Configure the leave message.")
     @app_commands.describe(
         enabled="Enable or disable leave messages",
-        channel="Channel to post in (leave blank for system channel)",
+        channel="Channel to post in — defaults to the current channel if not set",
         title="Embed title (supports {user}, {server})",
         content="Message body (supports {user}, {mention}, {server}, {count})",
         image_url="Image URL to show in the embed (https://...)",
@@ -279,6 +279,12 @@ class Welcome(commands.Cog):
         setter = db.set_welcome_config if event == "welcome" else db.set_leave_config
 
         existing = await getter(ctx.guild.id) or {}
+
+        # If no channel was provided and there's no existing channel saved,
+        # default to the current channel — mobile users can just run the command
+        # from inside their welcome/leave channel without touching the argument.
+        if channel is None and not existing.get("channel_id"):
+            channel = ctx.channel  # type: ignore[assignment]
 
         new_cfg = {
             "enabled": (
