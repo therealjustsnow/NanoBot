@@ -222,7 +222,7 @@ class NanoBot(commands.Bot):
             return
 
         if ctx.prefix is not None:
-            after = message.content[len(ctx.prefix):].strip()
+            after = message.content[len(ctx.prefix) :].strip()
             if after:
                 await _try_tag_shortcut(message, self, after.lower())
 
@@ -310,7 +310,9 @@ class NanoBot(commands.Bot):
     async def on_command_error(self, ctx: commands.Context, error):
         # Unwrap both CommandInvokeError and HybridCommandError — both carry
         # the real exception in .original but are different classes.
-        if isinstance(error, (commands.CommandInvokeError, commands.HybridCommandError)):
+        if isinstance(
+            error, (commands.CommandInvokeError, commands.HybridCommandError)
+        ):
             error = error.original
 
         if isinstance(error, commands.MissingPermissions):
