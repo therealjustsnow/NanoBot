@@ -736,8 +736,8 @@ async def record_vote(user_id: int, site: str) -> dict:
     uid = str(user_id)
     now = __import__("time").time()
 
-    # Cooldowns: top.gg = 12h, DBL = 24h. Grace period = 2h extra.
-    cooldown = 14 * 3600 if site == "topgg" else 26 * 3600
+    # Cooldowns: 12h. Grace period = 6h extra.
+    cooldown = (12+6) * 3600
 
     async with _conn().execute(
         "SELECT voted_at, streak, notify FROM votes WHERE user_id=? AND site=?",
@@ -817,13 +817,13 @@ async def get_all_votes_for_notify() -> list[dict]:
 
 
 async def has_voted_recently(user_id: int, site: str) -> bool:
-    """True if the user has an active vote (within the site's cooldown window)."""
+    """True if the user has an active vote (within the site's cooldown window and our grace period)."""
     import time
 
     row = await get_vote(user_id, site)
     if not row:
         return False
-    cooldown = 12 * 3600 if site == "topgg" else 24 * 3600
+    cooldown = (12+6) * 3600
     return (time.time() - row["voted_at"]) < cooldown
 
 
