@@ -737,7 +737,7 @@ async def record_vote(user_id: int, site: str) -> dict:
     now = __import__("time").time()
 
     # Cooldowns: 12h. Grace period = 6h extra.
-    cooldown = (12+6) * 3600
+    cooldown = (12 + 6) * 3600
 
     async with _conn().execute(
         "SELECT voted_at, streak, notify FROM votes WHERE user_id=? AND site=?",
@@ -823,7 +823,7 @@ async def has_voted_recently(user_id: int, site: str) -> bool:
     row = await get_vote(user_id, site)
     if not row:
         return False
-    cooldown = (12+6) * 3600
+    cooldown = (12 + 6) * 3600
     return (time.time() - row["voted_at"]) < cooldown
 
 
