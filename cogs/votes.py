@@ -57,7 +57,7 @@ _BOTSGG_VOTE = "https://discord.bots.gg/bots/{bot_id}/vote"
 # Cooldowns in seconds
 _COOLDOWNS = {
     "topgg": 12 * 3600,  # 12 hours
-    "dbl": 24 * 3600,  # 24 hours
+    "dbl": 12 * 3600,  # 24 hours
     "botsgg": 12 * 3600,  # 12 hours
 }
 
@@ -469,7 +469,7 @@ class Votes(commands.Cog):
             "category": "🗳️ Voting",
             "short": "Vote for NanoBot and see your voting status",
             "usage": "vote [notify [on|off]]",
-            "desc": "Shows vote links for top.gg (12h cooldown) and discordbotlist.com (24h cooldown), your current cooldown countdown on each site, and your vote streak.\nVoter perk: active voters get 50 reminder slots instead of 25.\nNanoBot will DM you when your cooldown resets. Turn pings off with /vote notify off.",
+            "desc": "Shows vote links for top.gg (12h cooldown) and discordbotlist.com (12h cooldown), your current cooldown countdown on each site, and your vote streak.\nVoter perk: active voters get 50 reminder slots instead of 25.\nNanoBot will DM you when your cooldown resets. Turn pings off with /vote notify off.",
             "args": [
                 (
                     "notify on/off",
@@ -600,7 +600,7 @@ class Votes(commands.Cog):
             value=(
                 f"[**Vote →**]({dbl_url})\n"
                 f"{dbl_status}\n"
-                f"Streak: **{dbl_streak}** vote(s)  ·  Resets every 24h"
+                f"Streak: **{dbl_streak}** vote(s)  ·  Resets every 12h"
             ),
             inline=True,
         )
