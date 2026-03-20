@@ -215,7 +215,7 @@ class NanoBot(commands.Bot):
         if ctx.prefix is not None:
             # A prefix was matched but no command found — try the entire
             # remaining text as a tag name (supports multi-word tag names).
-            after = message.content[len(ctx.prefix):].strip()
+            after = message.content[len(ctx.prefix) :].strip()
             if after:
                 await _try_tag_shortcut(message, self, after.lower())
             # Whether tag found or not, we're done — no unknown-command noise
