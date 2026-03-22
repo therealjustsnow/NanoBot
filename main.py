@@ -140,6 +140,7 @@ class NanoBot(commands.Bot):
         self.last_senders: dict[int, discord.Member] = {}
         self.start_time = discord.utils.utcnow()
         self.groq_api_key: str | None = cfg.get("groq_api_key")
+        self.commands_ran: int = 0  # incremented in on_command; resets on restart
 
         raw_owner = cfg.get("owner_id")
         self.config_owner_id: int | None = int(raw_owner) if raw_owner else None
@@ -192,6 +193,7 @@ class NanoBot(commands.Bot):
         self.dispatch("restore_schedules")
 
     async def on_command(self, ctx: commands.Context):
+        self.commands_ran += 1
         guild_info = f"{ctx.guild.name} ({ctx.guild.id})" if ctx.guild else "DM"
         log.info(
             f"CMD  {ctx.command}  |  "
