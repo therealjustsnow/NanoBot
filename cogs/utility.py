@@ -1397,7 +1397,7 @@ class Utility(commands.Cog):
         description="NanoBot runtime statistics since last start.",
         extras={
             "category": "⚙️ Config & Info",
-            "short": "Runtime stats — commands run, servers, members, uptime",
+            "short": "Runtime stats — commands ran, servers, members, uptime",
             "usage": "stats",
             "desc": (
                 "Shows a snapshot of NanoBot's activity since the last start: "
@@ -1440,12 +1440,12 @@ class Utility(commands.Cog):
         voice_channels = sum(len(g.voice_channels) for g in self.bot.guilds)
 
         latency = round(self.bot.latency * 1000)
-        commands_run = getattr(self.bot, "commands_run", 0)
+        commands_ran = getattr(self.bot, "commands_ran", 0)
 
         e = h.embed(title="📊 NanoBot Stats", color=h.BLUE)
         e.set_thumbnail(url=self.bot.user.display_avatar.url)
 
-        e.add_field(name="⚡ Commands Run", value=f"**{commands_run:,}**", inline=True)
+        e.add_field(name="⚡ Commands Ran", value=f"**{commands_ran:,}**", inline=True)
         e.add_field(name="⏱️ Uptime", value=f"**{uptime_str}**", inline=True)
         e.add_field(name="📡 Latency", value=f"**{latency}ms**", inline=True)
 
