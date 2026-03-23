@@ -473,6 +473,62 @@ class Admin(commands.Cog):
         )
         await ctx.reply(embed=e, ephemeral=True)
 
+    # ══════════════════════════════════════════════════════════════════════════
+    #  servers
+    # ══════════════════════════════════════════════════════════════════════════
+    @commands.command(
+        name="servers",
+        aliases=["guilds", "serverlist"],
+        help=(
+            "List every server NanoBot is currently in.\n\n"
+            "Shows: name, ID, member count, owner.\n"
+            "Sorted by member count descending.\n"
+            "Paginates automatically at 10 servers per embed."
+        ),
+    )
+    async def servers(self, ctx: commands.Context):
+        guilds = sorted(
+            self.bot.guilds, key=lambda g: g.member_count or 0, reverse=True
+        )
+        total_guilds = len(guilds)
+        total_members = sum(g.member_count or 0 for g in guilds)
+
+        # Build lines — compact for mobile readability
+        lines = []
+        for i, g in enumerate(guilds, start=1):
+            owner_str = f"<@{g.owner_id}>" if g.owner_id else "Unknown"
+            lines.append(
+                f"`{i}.` **{g.name}**\n"
+                f"    🆔 `{g.id}` · 👥 {g.member_count:,} · 👑 {owner_str}"
+            )
+
+        # Pages of 10 guilds each
+        page_size = 10
+        pages = [lines[i : i + page_size] for i in range(0, len(lines), page_size)]
+        total_pages = len(pages)
+
+        embeds = []
+        for page_num, page_lines in enumerate(pages, start=1):
+            e = h.embed(
+                title=f"🌐 Servers ({total_guilds})",
+                description="\n".join(page_lines),
+                color=h.BLUE,
+            )
+            e.set_footer(
+                text=(
+                    f"Page {page_num}/{total_pages}  ·  "
+                    f"{total_guilds} server(s)  ·  {total_members:,} total members  ·  NanoBot"
+                )
+            )
+            embeds.append(e)
+
+        for embed in embeds:
+            await ctx.send(embed=embed)
+
+        log.info(f"servers: listed {total_guilds} guild(s) for {ctx.author}")
+
+
+
 
 # ── Registration ───────────────────────────────────────────────────────────────
 async def setup(bot: commands.Bot):
