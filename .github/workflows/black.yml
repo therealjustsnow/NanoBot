@@ -2,35 +2,25 @@ name: Black Formatter
 
 on:
   push:
-    branches: ["**"]          # every branch on push
-  pull_request:
-    types: [closed]           # fires when a PR is merged (or closed)
     branches: ["**"]
-  workflow_dispatch:          # manual "Run workflow" button in the Actions tab
+  workflow_dispatch:
+
+concurrency:
+  group: black-${{ github.ref }}
+  cancel-in-progress: true
 
 jobs:
   black:
-    # For pull_request events, only run if the PR was actually merged
-    if: >
-      github.event_name != 'pull_request' ||
-      github.event.pull_request.merged == true
-
     runs-on: ubuntu-latest
     permissions:
-      contents: write           # needed to push the formatted commit back
+      contents: write
 
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
         with:
-          # Use a token that can push back to the branch.
-          # Fine-grained PAT stored as BLACK_PAT secret, or fall back to
-          # the default GITHUB_TOKEN (works on normal branches; fails on
-          # PRs from forks — acceptable for a personal bot repo).
-          token: ${{ secrets.BLACK_PAT || secrets.GITHUB_TOKEN }}
-          # Check out the branch that was pushed / the PR's base branch,
-          # not a detached HEAD, so the commit lands in the right place.
-          ref: ${{ github.event_name == 'pull_request' && github.event.pull_request.base.ref || github.ref }}
+          token: ${{ secrets.GITHUB_TOKEN }}
+          ref: ${{ github.ref }}
 
       - name: Set up Python
         uses: actions/setup-python@v5
@@ -42,8 +32,6 @@ jobs:
 
       - name: Run Black
         id: black_run
-        # `black --check` exits 1 if any file would be changed.
-        # We capture that without failing the step, then reformat for real.
         run: |
           if black --check .; then
             echo "changed=false" >> "$GITHUB_OUTPUT"
