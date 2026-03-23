@@ -528,8 +528,6 @@ class Admin(commands.Cog):
         log.info(f"servers: listed {total_guilds} guild(s) for {ctx.author}")
 
 
-
-
 # ── Registration ───────────────────────────────────────────────────────────────
 async def setup(bot: commands.Bot):
     await bot.add_cog(Admin(bot))
