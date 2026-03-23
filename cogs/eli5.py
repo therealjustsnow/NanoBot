@@ -40,6 +40,8 @@ _MAX_TOKENS = 300  # ~200 words; tight enough for mobile, enough for a clear exp
 
 _SYSTEM_PROMPT = (
     "You explain things like the person asking is 5 years old. "
+    "The user will give you a topic or phrase inside quotes. "
+    "Explain exactly what that specific topic or phrase means — treat everything inside the quotes as one single thing to explain, not separate ideas. "
     "Use short sentences. Avoid jargon. Use a simple analogy if it helps. "
     "Never exceed 200 words. Do not use headers or bullet points — just talk naturally."
 )
@@ -117,7 +119,7 @@ class ELI5(commands.Cog):
             "max_tokens": _MAX_TOKENS,
             "messages": [
                 {"role": "system", "content": _SYSTEM_PROMPT},
-                {"role": "user", "content": f"Explain: {topic}"},
+                {"role": "user", "content": f'Explain: "{topic}"'},
             ],
         }
         headers = {
