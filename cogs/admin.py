@@ -30,8 +30,7 @@ from utils import helpers as h
 
 log = logging.getLogger("NanoBot.admin")
 
-# All cogs that NanoBot manages.
-# Keep this in sync with _ALL_COGS in main.py.
+# All cogs that NanoBot manages (admin reloads itself too — safe with discord.py 2.x)
 _ALL_COGS = (
     "cogs.moderation",
     "cogs.tags",
@@ -85,11 +84,13 @@ class Admin(commands.Cog):
         """
         await ctx.defer()
 
+        # ── Normalise name ─────────────────────────────────────────────────────
         target = cog.lower().strip() if cog else "all"
 
         if target == "all":
             targets = list(_ALL_COGS)
         else:
+            # Accept "moderation" as shorthand for "cogs.moderation"
             if "." not in target:
                 target = f"cogs.{target}"
             if target not in _ALL_COGS:
@@ -102,6 +103,7 @@ class Admin(commands.Cog):
                 )
             targets = [target]
 
+        # ── Reload each ────────────────────────────────────────────────────────
         results = []
         for ext in targets:
             try:
@@ -109,6 +111,7 @@ class Admin(commands.Cog):
                 results.append(f"✅ `{ext}`")
                 log.info(f"Reloaded: {ext}")
             except commands.ExtensionNotLoaded:
+                # Wasn't loaded yet — try loading fresh
                 try:
                     await self.bot.load_extension(ext)
                     results.append(f"✅ `{ext}` _(loaded fresh)_")
@@ -155,6 +158,7 @@ class Admin(commands.Cog):
             )
         )
 
+        # Give Discord a moment to deliver the message before closing
         await asyncio.sleep(0.5)
         await self.bot.close()
 
@@ -167,6 +171,13 @@ class Admin(commands.Cog):
         help="Gracefully restart NanoBot by re-executing the current process.",
     )
     async def restart(self, ctx: commands.Context):
+        """
+        Closes the bot cleanly, then re-executes the Python process with the
+        same arguments (os.execv).  All cogs reload, schedules restore, and
+        slash commands re-sync.
+
+        Works with both `python main.py` and `python run.py`.
+        """
         log.warning(f"Restart initiated by {ctx.author} ({ctx.author.id})")
 
         await ctx.reply(
@@ -179,6 +190,9 @@ class Admin(commands.Cog):
 
         await asyncio.sleep(0.5)
 
+        # Spawn a fresh process BEFORE closing so it can start initialising
+        # while this one finishes its shutdown.  subprocess.Popen works
+        # correctly on all platforms (os.execv silently fails on Windows).
         subprocess.Popen([sys.executable] + sys.argv)
         log.info("Spawned new process — shutting down this one")
 
@@ -198,8 +212,19 @@ class Admin(commands.Cog):
         ),
     )
     async def update(self, ctx: commands.Context):
+        """
+        !update  /  !pull
+
+        1. Runs `git pull` and reports the output.
+        2. If the pull succeeds, reloads all cogs.
+        3. Reports per-cog reload results.
+
+        Slash commands are NOT synced here — run !sync separately if you
+        added or removed any slash commands.
+        """
         await ctx.defer()
 
+        # ── Step 1: git pull ───────────────────────────────────────────────────
         try:
             result = subprocess.run(
                 ["git", "pull"],
@@ -225,6 +250,7 @@ class Admin(commands.Cog):
             )
 
         git_output = stdout or stderr or "_(no output)_"
+        # Trim for embed safety
         if len(git_output) > 900:
             git_output = git_output[:900] + "\n…(truncated)"
 
@@ -237,6 +263,7 @@ class Admin(commands.Cog):
 
         log.info(f"git pull OK by {ctx.author}: {stdout[:200]}")
 
+        # ── Step 2: reload all cogs ────────────────────────────────────────────
         reload_results = []
         for ext in _ALL_COGS:
             try:
@@ -294,20 +321,45 @@ class Admin(commands.Cog):
         help=(
             "Sync slash commands with Discord.\n\n"
             "Usage:\n"
-            "  !sync           → global sync (up to 1 hr to propagate)\n"
-            "  !sync <guild>   → instant sync to one guild by ID\n\n"
+            "  !sync              → global sync (up to 1 hr to propagate)\n"
+            "  !sync <guild>      → instant sync to one guild by ID\n"
+            "  !sync clear <guild> → remove guild-specific commands (fixes duplicates)\n\n"
             "Run this after adding or removing any slash commands.\n"
             "You do NOT need to run this after a normal !update."
         ),
     )
-    async def sync(self, ctx: commands.Context, guild_id: Optional[int] = None):
+    async def sync(self, ctx: commands.Context, target: Optional[str] = None, guild_id: Optional[int] = None):
+        """
+        !sync [guild_id | clear <guild_id>]
+
+        Global sync:  !sync
+          Pushes all app commands to Discord globally.  Changes can take up to
+          an hour to appear for all users.
+
+        Guild sync:   !sync 123456789012345678
+          Instantly syncs global commands to a single guild for testing.
+
+        Clear guild:  !sync clear 123456789012345678
+          Removes all guild-specific command overrides from a guild.
+          Use this to fix duplicate commands caused by prior copy_global_to usage.
+        """
         await ctx.defer()
 
-        if guild_id is not None:
+        # ── !sync clear <guild_id> — remove guild-specific overrides ─────────
+        if target is not None and target.lower() == "clear":
+            if guild_id is None:
+                return await ctx.reply(
+                    embed=h.err(
+                        "Usage: `!sync clear <guild_id>`\n"
+                        "This removes guild-specific command overrides to fix duplicates."
+                    ),
+                    ephemeral=True,
+                )
+
             guild = discord.Object(id=guild_id)
             try:
-                self.bot.tree.copy_global_to(guild=guild)
-                synced = await self.bot.tree.sync(guild=guild)
+                self.bot.tree.clear_commands(guild=guild)
+                await self.bot.tree.sync(guild=guild)
             except discord.Forbidden:
                 return await ctx.reply(
                     embed=h.err(
@@ -317,42 +369,92 @@ class Admin(commands.Cog):
                     ephemeral=True,
                 )
             except discord.HTTPException as exc:
-                log.error(f"Guild sync failed for {guild_id}: {exc}", exc_info=exc)
+                log.error(f"Guild clear failed for {guild_id}: {exc}", exc_info=exc)
                 return await ctx.reply(
                     embed=h.err(f"Discord returned an error: {exc}"),
                     ephemeral=True,
                 )
 
             log.info(
-                f"Guild sync to {guild_id}: {len(synced)} command(s) by {ctx.author}"
+                f"Cleared guild commands for {guild_id} by {ctx.author}"
             )
             await ctx.reply(
                 embed=h.ok(
-                    f"Synced **{len(synced)}** slash command(s) to guild `{guild_id}`.\n"
-                    "Changes are live immediately.",
-                    "⚡ Guild Sync Complete",
+                    f"Cleared guild-specific commands from `{guild_id}`.\n"
+                    "Only global commands will appear now (no more duplicates).",
+                    "🧹 Guild Commands Cleared",
                 )
             )
+            return
 
-        else:
+        # ── !sync <guild_id> — instant guild sync ───────────────────────────
+        # If target looks like a guild ID (all digits), treat it as guild sync
+        if target is not None:
             try:
-                synced = await self.bot.tree.sync()
-            except discord.HTTPException as exc:
-                log.error(f"Global sync failed: {exc}", exc_info=exc)
+                parsed_guild_id = int(target)
+            except ValueError:
                 return await ctx.reply(
-                    embed=h.err(f"Discord returned an error during global sync: {exc}"),
+                    embed=h.err(
+                        f"Unknown argument: `{target}`\n"
+                        "Usage: `!sync`, `!sync <guild_id>`, or `!sync clear <guild_id>`"
+                    ),
                     ephemeral=True,
                 )
 
-            log.info(f"Global sync: {len(synced)} command(s) by {ctx.author}")
+            guild = discord.Object(id=parsed_guild_id)
+            try:
+                # Clear any existing guild overrides first to avoid duplicates,
+                # then copy global commands and sync
+                self.bot.tree.clear_commands(guild=guild)
+                self.bot.tree.copy_global_to(guild=guild)
+                synced = await self.bot.tree.sync(guild=guild)
+            except discord.Forbidden:
+                return await ctx.reply(
+                    embed=h.err(
+                        f"Missing `applications.commands` scope in guild `{parsed_guild_id}`.\n"
+                        "Re-invite the bot with that scope enabled."
+                    ),
+                    ephemeral=True,
+                )
+            except discord.HTTPException as exc:
+                log.error(f"Guild sync failed for {parsed_guild_id}: {exc}", exc_info=exc)
+                return await ctx.reply(
+                    embed=h.err(f"Discord returned an error: {exc}"),
+                    ephemeral=True,
+                )
+
+            log.info(
+                f"Guild sync to {parsed_guild_id}: {len(synced)} command(s) by {ctx.author}"
+            )
             await ctx.reply(
                 embed=h.ok(
-                    f"Synced **{len(synced)}** slash command(s) globally.\n"
-                    "⏱️ Global changes can take **up to 1 hour** to propagate.\n"
-                    "_Tip: use `!sync <guild_id>` for instant updates while developing._",
-                    "🌐 Global Sync Complete",
+                    f"Synced **{len(synced)}** slash command(s) to guild `{parsed_guild_id}`.\n"
+                    "Changes are live immediately.\n\n"
+                    "_Run `!sync clear {0}` after you're done testing to remove guild overrides._".format(parsed_guild_id),
+                    "⚡ Guild Sync Complete",
                 )
             )
+            return
+
+        # ── !sync — global sync ─────────────────────────────────────────────
+        try:
+            synced = await self.bot.tree.sync()
+        except discord.HTTPException as exc:
+            log.error(f"Global sync failed: {exc}", exc_info=exc)
+            return await ctx.reply(
+                embed=h.err(f"Discord returned an error during global sync: {exc}"),
+                ephemeral=True,
+            )
+
+        log.info(f"Global sync: {len(synced)} command(s) by {ctx.author}")
+        await ctx.reply(
+            embed=h.ok(
+                f"Synced **{len(synced)}** slash command(s) globally.\n"
+                "⏱️ Global changes can take **up to 1 hour** to propagate.\n"
+                "_Tip: use `!sync <guild_id>` for instant updates while developing._",
+                "🌐 Global Sync Complete",
+            )
+        )
 
     # ══════════════════════════════════════════════════════════════════════════
     #  setloglevel
@@ -362,7 +464,7 @@ class Admin(commands.Cog):
         aliases=["loglevel", "loglvl"],
         help=(
             "Change the log level live and save it to config.json.\n\n"
-            f"Valid levels: DEBUG, INFO, WARNING, ERROR, CRITICAL\n\n"
+            f"Valid levels: {', '.join(_VALID_LEVELS)}\n\n"
             "Examples:\n"
             "  !setloglevel DEBUG    → verbose (see every gateway event)\n"
             "  !setloglevel INFO     → normal\n"
@@ -381,10 +483,12 @@ class Admin(commands.Cog):
                 ephemeral=True,
             )
 
+        # Apply to the root logger (affects all NanoBot.* and discord.* loggers)
         numeric = getattr(logging, level)
         logging.getLogger().setLevel(numeric)
         log.info(f"Log level changed to {level} by {ctx.author} ({ctx.author.id})")
 
+        # Persist to config.json
         cfg_path = "config.json"
         cfg = {}
         if os.path.exists(cfg_path):
@@ -428,7 +532,7 @@ class Admin(commands.Cog):
         ),
     )
     async def logs(self, ctx: commands.Context, lines: int = 20):
-        lines = max(1, min(50, lines))
+        lines = max(1, min(50, lines))  # Clamp 1–50
 
         log_path = "logs/nanobot.log"
         if not os.path.exists(log_path):
@@ -441,6 +545,7 @@ class Admin(commands.Cog):
                 ephemeral=True,
             )
 
+        # Read last N lines efficiently without loading the whole file
         try:
             with open(log_path, encoding="utf-8", errors="replace") as f:
                 all_lines = f.readlines()
@@ -460,6 +565,7 @@ class Admin(commands.Cog):
                 ephemeral=True,
             )
 
+        # Discord code block cap is 2000 chars including the backticks / header
         max_chars = 1900
         if len(content) > max_chars:
             content = "…(truncated)\n" + content[-max_chars:]
@@ -473,60 +579,6 @@ class Admin(commands.Cog):
             text=f"logs/nanobot.log  ·  {total_lines} total line(s)  ·  NanoBot"
         )
         await ctx.reply(embed=e, ephemeral=True)
-
-    # ══════════════════════════════════════════════════════════════════════════
-    #  servers
-    # ══════════════════════════════════════════════════════════════════════════
-    @commands.command(
-        name="servers",
-        aliases=["guilds", "serverlist"],
-        help=(
-            "List every server NanoBot is currently in.\n\n"
-            "Shows: name, ID, member count, owner.\n"
-            "Sorted by member count descending.\n"
-            "Paginates automatically at 10 servers per embed."
-        ),
-    )
-    async def servers(self, ctx: commands.Context):
-        guilds = sorted(
-            self.bot.guilds, key=lambda g: g.member_count or 0, reverse=True
-        )
-        total_guilds = len(guilds)
-        total_members = sum(g.member_count or 0 for g in guilds)
-
-        # Build lines — compact for mobile readability
-        lines = []
-        for i, g in enumerate(guilds, start=1):
-            owner_str = f"<@{g.owner_id}>" if g.owner_id else "Unknown"
-            lines.append(
-                f"`{i}.` **{g.name}**\n"
-                f"    🆔 `{g.id}` · 👥 {g.member_count:,} · 👑 {owner_str}"
-            )
-
-        # Pages of 10 guilds each
-        page_size = 10
-        pages = [lines[i : i + page_size] for i in range(0, len(lines), page_size)]
-        total_pages = len(pages)
-
-        embeds = []
-        for page_num, page_lines in enumerate(pages, start=1):
-            e = h.embed(
-                title=f"🌐 Servers ({total_guilds})",
-                description="\n".join(page_lines),
-                color=h.BLUE,
-            )
-            e.set_footer(
-                text=(
-                    f"Page {page_num}/{total_pages}  ·  "
-                    f"{total_guilds} server(s)  ·  {total_members:,} total members  ·  NanoBot"
-                )
-            )
-            embeds.append(e)
-
-        for embed in embeds:
-            await ctx.send(embed=embed)
-
-        log.info(f"servers: listed {total_guilds} guild(s) for {ctx.author}")
 
 
 # ── Registration ───────────────────────────────────────────────────────────────
