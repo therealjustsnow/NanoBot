@@ -99,6 +99,7 @@ _ALL_COGS = (
     "cogs.auditlog",
     "cogs.automod",
     "cogs.roles",
+    "cogs.fun",
     "cogs.eli5",
 )
 
