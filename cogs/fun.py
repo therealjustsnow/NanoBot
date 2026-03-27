@@ -33,10 +33,10 @@ _PINK = 0xFF6EB4
 _ENDPOINTS: dict[str, str] = {
     "hug": "hug",
     "kiss": "kiss",
-    "cheekskiss": "kiss",
+    "cheekskiss": "blowkiss",
     "pat": "pat",
     "poke": "poke",
-    "boop": "boop",
+    "boop": "poke",
     "wave": "wave",
     "highfive": "highfive",
     "cuddle": "cuddle",
