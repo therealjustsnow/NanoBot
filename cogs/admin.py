@@ -46,6 +46,7 @@ _ALL_COGS = (
     "cogs.automod",
     "cogs.roles",
     "cogs.eli5",
+    "cogs.fun",
 )
 
 _VALID_LEVELS = ("DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL")
