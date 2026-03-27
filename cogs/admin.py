@@ -587,7 +587,6 @@ class Admin(commands.Cog):
         )
         await ctx.reply(embed=e, ephemeral=True)
 
-
     # ══════════════════════════════════════════════════════════════════════════
     #  servers
     # ══════════════════════════════════════════════════════════════════════════
@@ -641,8 +640,6 @@ class Admin(commands.Cog):
             await ctx.send(embed=embed)
 
         log.info(f"servers: listed {total_guilds} guild(s) for {ctx.author}")
-
-
 
 
 # ── Registration ───────────────────────────────────────────────────────────────
