@@ -36,7 +36,7 @@ _ENDPOINTS: dict[str, str] = {
     "cheekskiss": "kiss",
     "pat": "pat",
     "poke": "poke",
-    "boop": "pat",
+    "boop": "boop",
     "wave": "wave",
     "highfive": "highfive",
     "cuddle": "cuddle",
