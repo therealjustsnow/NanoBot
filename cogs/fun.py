@@ -149,9 +149,9 @@ class Fun(commands.Cog):
         elif target == ctx.guild.me:
             desc = bot_msg
         else:
-            desc = action_msg.replace(
-                "{author}", f"**{author.display_name}**"
-            ).replace("{target}", target.mention)
+            desc = action_msg.replace("{author}", f"**{author.display_name}**").replace(
+                "{target}", target.mention
+            )
 
         e = discord.Embed(description=desc, color=color)
 
@@ -184,7 +184,9 @@ class Fun(commands.Cog):
     @commands.cooldown(1, 3, commands.BucketType.user)
     async def hug(self, ctx: commands.Context, user: Optional[discord.Member] = None):
         await self._do_action(
-            ctx, "hug", user,
+            ctx,
+            "hug",
+            user,
             bot_msg="I'm just a bot, but I'd never turn down a hug! Here, have one back! 🤗",
             self_msg="Awh, no one to hug? Don't worry, I've got you. 🤗",
             action_msg="{author} hugs {target}! 🤗",
@@ -211,7 +213,9 @@ class Fun(commands.Cog):
     @commands.cooldown(1, 3, commands.BucketType.user)
     async def kiss(self, ctx: commands.Context, user: Optional[discord.Member] = None):
         await self._do_action(
-            ctx, "kiss", user,
+            ctx,
+            "kiss",
+            user,
             bot_msg="I appreciate the affection, but I'm made of code! 💾💋",
             self_msg="Kissing yourself? Absolute power move. 💋",
             action_msg="{author} kisses {target}! 💋",
@@ -236,9 +240,13 @@ class Fun(commands.Cog):
     )
     @app_commands.describe(user="Who to give a cheek kiss")
     @commands.cooldown(1, 3, commands.BucketType.user)
-    async def cheekskiss(self, ctx: commands.Context, user: Optional[discord.Member] = None):
+    async def cheekskiss(
+        self, ctx: commands.Context, user: Optional[discord.Member] = None
+    ):
         await self._do_action(
-            ctx, "cheekskiss", user,
+            ctx,
+            "cheekskiss",
+            user,
             bot_msg="A cheek kiss for a bot? How adorable! 😊",
             self_msg="Mwah! Loving yourself is important. 😘",
             action_msg="{author} gives {target} a little cheek kiss! 😘",
@@ -265,7 +273,9 @@ class Fun(commands.Cog):
     @commands.cooldown(1, 3, commands.BucketType.user)
     async def pat(self, ctx: commands.Context, user: Optional[discord.Member] = None):
         await self._do_action(
-            ctx, "pat", user,
+            ctx,
+            "pat",
+            user,
             bot_msg="*enjoys the headpats* ✨ Thank you!",
             self_msg="Pat yourself on the back — you deserve it! 🥲",
             action_msg="{author} gives {target} a comforting pat! 🥰",
@@ -293,7 +303,9 @@ class Fun(commands.Cog):
     @commands.cooldown(1, 3, commands.BucketType.user)
     async def poke(self, ctx: commands.Context, user: Optional[discord.Member] = None):
         await self._do_action(
-            ctx, "poke", user,
+            ctx,
+            "poke",
+            user,
             bot_msg="Hey! No poking the bot! 🤖👈",
             self_msg="...why are you poking yourself? Are you ok? 👈",
             action_msg="{author} pokes {target}! 👉",
@@ -321,7 +333,9 @@ class Fun(commands.Cog):
     @commands.cooldown(1, 3, commands.BucketType.user)
     async def boop(self, ctx: commands.Context, user: Optional[discord.Member] = None):
         await self._do_action(
-            ctx, "boop", user,
+            ctx,
+            "boop",
+            user,
             bot_msg="Boop accepted. Boop logged. Thank you for your boop. 🤖",
             self_msg="Booping your own snoot? Certified legend. 👆",
             action_msg="{author} boops {target}'s snoot! 👆",
@@ -349,7 +363,9 @@ class Fun(commands.Cog):
     @commands.cooldown(1, 3, commands.BucketType.user)
     async def wave(self, ctx: commands.Context, user: Optional[discord.Member] = None):
         await self._do_action(
-            ctx, "wave", user,
+            ctx,
+            "wave",
+            user,
             bot_msg="👋 Hello there! Hope your day is going great!",
             self_msg="Waving at yourself? I see you, and I wave back! 👋",
             action_msg="{author} waves at {target}! 👋",
@@ -375,9 +391,13 @@ class Fun(commands.Cog):
     )
     @app_commands.describe(user="Who to high five")
     @commands.cooldown(1, 3, commands.BucketType.user)
-    async def highfive(self, ctx: commands.Context, user: Optional[discord.Member] = None):
+    async def highfive(
+        self, ctx: commands.Context, user: Optional[discord.Member] = None
+    ):
         await self._do_action(
-            ctx, "highfive", user,
+            ctx,
+            "highfive",
+            user,
             bot_msg="✋ Don't leave me hanging! *high fives back*",
             self_msg="A self-high-five? Respect the commitment. 🙌",
             action_msg="{author} high fives {target}! 🙌",
