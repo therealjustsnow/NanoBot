@@ -328,7 +328,12 @@ class Admin(commands.Cog):
             "You do NOT need to run this after a normal !update."
         ),
     )
-    async def sync(self, ctx: commands.Context, target: Optional[str] = None, guild_id: Optional[int] = None):
+    async def sync(
+        self,
+        ctx: commands.Context,
+        target: Optional[str] = None,
+        guild_id: Optional[int] = None,
+    ):
         """
         !sync [guild_id | clear <guild_id>]
 
@@ -375,9 +380,7 @@ class Admin(commands.Cog):
                     ephemeral=True,
                 )
 
-            log.info(
-                f"Cleared guild commands for {guild_id} by {ctx.author}"
-            )
+            log.info(f"Cleared guild commands for {guild_id} by {ctx.author}")
             await ctx.reply(
                 embed=h.ok(
                     f"Cleared guild-specific commands from `{guild_id}`.\n"
@@ -417,7 +420,9 @@ class Admin(commands.Cog):
                     ephemeral=True,
                 )
             except discord.HTTPException as exc:
-                log.error(f"Guild sync failed for {parsed_guild_id}: {exc}", exc_info=exc)
+                log.error(
+                    f"Guild sync failed for {parsed_guild_id}: {exc}", exc_info=exc
+                )
                 return await ctx.reply(
                     embed=h.err(f"Discord returned an error: {exc}"),
                     ephemeral=True,
@@ -430,7 +435,9 @@ class Admin(commands.Cog):
                 embed=h.ok(
                     f"Synced **{len(synced)}** slash command(s) to guild `{parsed_guild_id}`.\n"
                     "Changes are live immediately.\n\n"
-                    "_Run `!sync clear {0}` after you're done testing to remove guild overrides._".format(parsed_guild_id),
+                    "_Run `!sync clear {0}` after you're done testing to remove guild overrides._".format(
+                        parsed_guild_id
+                    ),
                     "⚡ Guild Sync Complete",
                 )
             )
