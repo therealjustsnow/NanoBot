@@ -234,11 +234,22 @@ class Fun(commands.Cog):
     #  /fun group -- 1 top-level slash command slot
     # ══════════════════════════════════════════════════════════════════════════
 
-    fun = commands.HybridGroup(
+    @commands.hybrid_group(
         name="fun",
         description="Fun social interaction commands.",
-        fallback="help",
+        invoke_without_command=True,
     )
+    async def fun(self, ctx: commands.Context):
+        """List available fun commands."""
+        cmds = sorted([c.name for c in self.fun.commands], key=str.lower)
+        e = discord.Embed(
+            title="🎉 Fun Commands",
+            description="Use `/fun <command>` or `!<command>` directly.\n\n"
+            + "  ".join(f"`{c}`" for c in cmds),
+            color=_PINK,
+        )
+        e.set_footer(text="NanoBot Fun")
+        await ctx.reply(embed=e)
 
     # ── interaction subcommands ───────────────────────────────────────────────
 

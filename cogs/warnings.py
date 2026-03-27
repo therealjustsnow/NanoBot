@@ -38,11 +38,31 @@ class Warnings(commands.Cog):
     #  /warn group -- 1 top-level slash slot
     # ══════════════════════════════════════════════════════════════════════════
 
-    warn_group = commands.HybridGroup(
+    @commands.hybrid_group(
         name="warn",
         description="Warning system commands.",
-        fallback="help",
+        invoke_without_command=True,
     )
+    async def warn_group(self, ctx: commands.Context):
+        """Show warning config for this server."""
+        cfg = await db.get_warn_config(ctx.guild.id)
+        e = h.embed(title="\u26a0\ufe0f Warning System", color=h.YELLOW)
+        e.description = (
+            "Use `/warn issue`, `/warn list`, `/warn clear`, `/warn config`\n"
+            "or prefix: `!warn`, `!warnings`, `!clearwarnings`, `!warnconfig`"
+        )
+        e.add_field(
+            name="\U0001f462 Auto-Kick",
+            value=str(cfg["kick_at"]) + " warnings" if cfg["kick_at"] else "Disabled",
+            inline=True,
+        )
+        e.add_field(
+            name="\U0001f528 Auto-Ban",
+            value=str(cfg["ban_at"]) + " warnings" if cfg["ban_at"] else "Disabled",
+            inline=True,
+        )
+        e.set_footer(text="NanoBot")
+        await ctx.reply(embed=e, ephemeral=True)
 
     # ── /warn issue ───────────────────────────────────────────────────────────
 
