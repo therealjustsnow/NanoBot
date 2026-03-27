@@ -2,11 +2,14 @@
 cogs/warnings.py
 Per-server warning system with configurable auto-actions.
 
-Commands:
-  warn          — warn a user with a reason
-  warnings      — view all warnings for a user
-  clearwarnings — wipe all warnings for a user (admin)
-  warnconfig    — configure auto-kick/ban thresholds (admin)
+Slash commands live under the /warn group (1 top-level slot).
+Prefix commands remain flat: !warn, !warnings, !clearwarnings, !warnconfig.
+
+Subcommands:
+  /warn issue   (prefix: !warn)           -- warn a user with a reason
+  /warn list    (prefix: !warnings)       -- view all warnings for a user
+  /warn clear   (prefix: !clearwarnings)  -- wipe all warnings for a user (admin)
+  /warn config  (prefix: !warnconfig)     -- configure auto-kick/ban thresholds (admin)
 """
 
 import logging
@@ -32,30 +35,24 @@ class Warnings(commands.Cog):
         self.bot = bot
 
     # ══════════════════════════════════════════════════════════════════════════
-    #  /warn
+    #  /warn group -- 1 top-level slash slot
     # ══════════════════════════════════════════════════════════════════════════
-    @commands.hybrid_command(
+
+    warn_group = commands.HybridGroup(
         name="warn",
+        description="Warning system commands.",
+        fallback="help",
+    )
+
+    # ── /warn issue ───────────────────────────────────────────────────────────
+
+    @warn_group.command(
+        name="issue",
         description="Issue a warning to a user. Configurable auto-actions apply.",
-        extras={
-            "category": "⚠️ Warnings",
-            "short": "Warn a user — configurable auto-kick/ban thresholds",
-            "usage": "warn <user> [reason]",
-            "desc": "Issues a warning. Auto-actions (kick/ban) trigger at configurable thresholds set via /warnconfig.",
-            "args": [
-                ("user", "User to warn"),
-                ("reason", "Reason for the warning"),
-            ],
-            "perms": "Manage Messages",
-            "example": "!warn @user Spamming in #general",
-        },
     )
-    @app_commands.describe(
-        user="User to warn",
-        reason="Reason for the warning",
-    )
+    @app_commands.describe(user="User to warn", reason="Reason for the warning")
     @has_mod_perms()
-    async def warn(
+    async def warn_issue(
         self,
         ctx: commands.Context,
         user: discord.Member,
@@ -81,12 +78,11 @@ class Warnings(commands.Cog):
 
         cfg = await db.get_warn_config(ctx.guild.id)
 
-        # DM the warned user if configured
         dm_sent = False
         if cfg["dm_user"]:
             try:
                 dm_e = discord.Embed(
-                    title=f"⚠️ Warning #{count} — {ctx.guild.name}",
+                    title=f"\u26a0\ufe0f Warning #{count} \u2014 {ctx.guild.name}",
                     description=f"**Reason:** {reason}",
                     color=h.YELLOW,
                 )
@@ -99,16 +95,15 @@ class Warnings(commands.Cog):
 
         log.info(
             f"Warned {user} ({user.id}) in {ctx.guild} ({ctx.guild.id}) "
-            f"by {ctx.author} — warning #{count}: {reason}"
+            f"by {ctx.author} \u2014 warning #{count}: {reason}"
         )
 
         lines = [
             f"**{user.display_name}** has been warned. That's warning **#{count}**.",
-            f"📝 {reason}",
-            f"📨 DM {'sent' if dm_sent else 'failed (closed DMs)'}.",
+            f"\U0001f4dd {reason}",
+            f"\U0001f4e8 DM {'sent' if dm_sent else 'failed (closed DMs)'}.",
         ]
 
-        # ── Auto-actions ───────────────────────────────────────────────────────
         action_taken = None
 
         if cfg["ban_at"] and count >= cfg["ban_at"]:
@@ -118,41 +113,37 @@ class Warnings(commands.Cog):
                     reason=f"NanoBot auto-ban: reached {count} warnings",
                     delete_message_days=0,
                 )
-                action_taken = f"🔨 Auto-banned (reached {count} warnings — threshold: {cfg['ban_at']})"
+                action_taken = f"\U0001f528 Auto-banned (reached {count} warnings \u2014 threshold: {cfg['ban_at']})"
                 log.warning(
-                    f"Auto-banned {user} ({user.id}) in {ctx.guild} — {count} warnings"
+                    f"Auto-banned {user} ({user.id}) in {ctx.guild} \u2014 {count} warnings"
                 )
             except discord.Forbidden:
-                action_taken = (
-                    "⚠️ Auto-ban threshold reached but I lack Ban Members permission."
-                )
+                action_taken = "\u26a0\ufe0f Auto-ban threshold reached but I lack Ban Members permission."
 
         elif cfg["kick_at"] and count >= cfg["kick_at"]:
             try:
                 await ctx.guild.kick(
                     user, reason=f"NanoBot auto-kick: reached {count} warnings"
                 )
-                action_taken = f"👢 Auto-kicked (reached {count} warnings — threshold: {cfg['kick_at']})"
+                action_taken = f"\U0001f462 Auto-kicked (reached {count} warnings \u2014 threshold: {cfg['kick_at']})"
                 log.warning(
-                    f"Auto-kicked {user} ({user.id}) in {ctx.guild} — {count} warnings"
+                    f"Auto-kicked {user} ({user.id}) in {ctx.guild} \u2014 {count} warnings"
                 )
             except discord.Forbidden:
-                action_taken = (
-                    "⚠️ Auto-kick threshold reached but I lack Kick Members permission."
-                )
+                action_taken = "\u26a0\ufe0f Auto-kick threshold reached but I lack Kick Members permission."
 
         if action_taken:
             lines.append(action_taken)
 
         await ctx.reply(
-            embed=h.warn("\n".join(lines), f"⚠️ Warning #{count}"), ephemeral=True
+            embed=h.warn("\n".join(lines), f"\u26a0\ufe0f Warning #{count}"),
+            ephemeral=True,
         )
 
-        # Public action log
         e = discord.Embed(
             description=(
-                f"⚠️ **{ctx.author.display_name}** warned **{user.display_name}** (`{user.id}`)\n"
-                f"📝 {reason}\n"
+                f"\u26a0\ufe0f **{ctx.author.display_name}** warned **{user.display_name}** (`{user.id}`)\n"
+                f"\U0001f4dd {reason}\n"
                 f"Total warnings: **{count}**"
                 + (f"\n{action_taken}" if action_taken else "")
             ),
@@ -165,90 +156,67 @@ class Warnings(commands.Cog):
         except discord.HTTPException:
             pass
 
-    # ══════════════════════════════════════════════════════════════════════════
-    #  /warnings
-    # ══════════════════════════════════════════════════════════════════════════
-    @commands.hybrid_command(
-        name="warnings",
+    # ── /warn list ────────────────────────────────────────────────────────────
+
+    @warn_group.command(
+        name="list",
         description="View all warnings for a user.",
-        extras={
-            "category": "⚠️ Warnings",
-            "short": "View all warnings for a user",
-            "usage": "warnings <user>",
-            "desc": "Shows the last 8 warnings for a user with date and moderator.",
-            "args": [
-                ("user", "User to look up"),
-            ],
-            "perms": "Manage Messages",
-            "example": "!warnings @user",
-        },
     )
     @app_commands.describe(user="User to look up")
     @has_mod_perms()
-    async def warnings(self, ctx: commands.Context, user: discord.Member):
+    async def warn_list(self, ctx: commands.Context, user: discord.Member):
         warns = await db.get_warnings(ctx.guild.id, user.id)
 
         if not warns:
             return await ctx.reply(
                 embed=h.info(
                     f"**{user.display_name}** has no warnings on this server.",
-                    "⚠️ Warnings",
+                    "\u26a0\ufe0f Warnings",
                 ),
                 ephemeral=True,
             )
 
         cfg = await db.get_warn_config(ctx.guild.id)
 
-        e = h.embed(title=f"⚠️ Warnings — {user.display_name}", color=h.YELLOW)
+        e = h.embed(
+            title=f"\u26a0\ufe0f Warnings \u2014 {user.display_name}", color=h.YELLOW
+        )
         e.set_thumbnail(url=user.display_avatar.url)
 
-        # Show up to last 8 warnings
         shown = warns[-8:]
         for w in shown:
             date = w["at"][:10]
             e.add_field(
-                name=f"#{w['id']}  ·  {w['by_name']}  ·  {date}",
+                name=f"#{w['id']}  \u00b7  {w['by_name']}  \u00b7  {date}",
                 value=w["reason"][:300],
                 inline=False,
             )
 
         lines = [f"**{len(warns)}** total warning(s)"]
         if cfg["kick_at"]:
-            lines.append(f"👢 Auto-kick at {cfg['kick_at']}")
+            lines.append(f"\U0001f462 Auto-kick at {cfg['kick_at']}")
         if cfg["ban_at"]:
-            lines.append(f"🔨 Auto-ban at {cfg['ban_at']}")
+            lines.append(f"\U0001f528 Auto-ban at {cfg['ban_at']}")
 
         e.set_footer(
             text=(
-                f"{'Showing last 8 of ' + str(len(warns)) if len(warns) > 8 else str(len(warns))} warning(s)  ·  "
-                + "  ·  ".join(lines[1:])
+                f"{'Showing last 8 of ' + str(len(warns)) if len(warns) > 8 else str(len(warns))} warning(s)  \u00b7  "
+                + "  \u00b7  ".join(lines[1:])
                 if len(lines) > 1
-                else f"{len(warns)} warning(s)  ·  NanoBot"
+                else f"{len(warns)} warning(s)  \u00b7  NanoBot"
             )
         )
         await ctx.reply(embed=e, ephemeral=True)
 
-    # ══════════════════════════════════════════════════════════════════════════
-    #  /clearwarnings
-    # ══════════════════════════════════════════════════════════════════════════
-    @commands.hybrid_command(
-        name="clearwarnings",
+    # ── /warn clear ───────────────────────────────────────────────────────────
+
+    @warn_group.command(
+        name="clear",
         description="Clear all warnings for a user. Admin only.",
-        extras={
-            "category": "⚠️ Warnings",
-            "short": "Clear all warnings for a user (admin only)",
-            "usage": "clearwarnings <user>",
-            "desc": "Permanently wipes all warnings for a user from this server.",
-            "args": [
-                ("user", "User whose warnings to clear"),
-            ],
-            "perms": "Administrator",
-            "example": "!clearwarnings @user",
-        },
     )
     @app_commands.describe(user="User whose warnings to clear")
     @has_admin_perms()
-    async def clearwarnings(self, ctx: commands.Context, user: discord.Member):
+    async def warn_clear(self, ctx: commands.Context, user: discord.Member):
         count = await db.clear_warnings(ctx.guild.id, user.id)
         if count:
             log.info(
@@ -257,37 +225,24 @@ class Warnings(commands.Cog):
             await ctx.reply(
                 embed=h.ok(
                     f"Cleared **{count}** warning(s) for **{user.display_name}**.",
-                    "✅ Warnings Cleared",
+                    "\u2705 Warnings Cleared",
                 ),
                 ephemeral=True,
             )
         else:
             await ctx.reply(
                 embed=h.info(
-                    f"**{user.display_name}** has no warnings to clear.", "⚠️ Warnings"
+                    f"**{user.display_name}** has no warnings to clear.",
+                    "\u26a0\ufe0f Warnings",
                 ),
                 ephemeral=True,
             )
 
-    # ══════════════════════════════════════════════════════════════════════════
-    #  /warnconfig
-    # ══════════════════════════════════════════════════════════════════════════
-    @commands.hybrid_command(
-        name="warnconfig",
+    # ── /warn config ──────────────────────────────────────────────────────────
+
+    @warn_group.command(
+        name="config",
         description="Configure auto-actions for warnings (admin only).",
-        extras={
-            "category": "⚠️ Warnings",
-            "short": "Configure auto-actions for warnings",
-            "usage": "warnconfig [kick_at] [ban_at] [dm_user]",
-            "desc": "No args: shows current config. Set kick_at/ban_at to 0 to disable. Auto-kick must be lower than auto-ban.",
-            "args": [
-                ("kick_at", "Auto-kick after this many warnings (0 = disabled)"),
-                ("ban_at", "Auto-ban after this many warnings (0 = disabled)"),
-                ("dm_user", "DM users when they are warned (yes/no)"),
-            ],
-            "perms": "Administrator",
-            "example": "!warnconfig kick_at:3 ban_at:5",
-        },
     )
     @app_commands.describe(
         kick_at="Auto-kick after this many warnings (0 = disabled)",
@@ -295,38 +250,38 @@ class Warnings(commands.Cog):
         dm_user="DM users when they are warned",
     )
     @has_admin_perms()
-    async def warnconfig(
+    async def warn_config(
         self,
         ctx: commands.Context,
         kick_at: Optional[int] = None,
         ban_at: Optional[int] = None,
         dm_user: Optional[bool] = None,
     ):
-        # If no args, show current config
         if kick_at is None and ban_at is None and dm_user is None:
             cfg = await db.get_warn_config(ctx.guild.id)
-            e = h.embed(title="⚙️ Warning Config", color=h.BLUE)
+            e = h.embed(title="\u2699\ufe0f Warning Config", color=h.BLUE)
             e.add_field(
-                name="👢 Auto-Kick",
+                name="\U0001f462 Auto-Kick",
                 value=(
                     str(cfg["kick_at"]) + " warnings" if cfg["kick_at"] else "Disabled"
                 ),
                 inline=True,
             )
             e.add_field(
-                name="🔨 Auto-Ban",
+                name="\U0001f528 Auto-Ban",
                 value=str(cfg["ban_at"]) + " warnings" if cfg["ban_at"] else "Disabled",
                 inline=True,
             )
             e.add_field(
-                name="📨 DM Users", value="Yes" if cfg["dm_user"] else "No", inline=True
+                name="\U0001f4e8 DM Users",
+                value="Yes" if cfg["dm_user"] else "No",
+                inline=True,
             )
             e.set_footer(
-                text="Use /warnconfig kick_at:3 ban_at:5 to configure  ·  NanoBot"
+                text="Use /warn config kick_at:3 ban_at:5 to configure  \u00b7  NanoBot"
             )
             return await ctx.reply(embed=e, ephemeral=True)
 
-        # Merge with existing config
         cfg = await db.get_warn_config(ctx.guild.id)
         new_kick = kick_at if kick_at is not None else cfg["kick_at"]
         new_ban = ban_at if ban_at is not None else cfg["ban_at"]
@@ -347,23 +302,107 @@ class Warnings(commands.Cog):
 
         lines = [
             (
-                f"👢 Auto-kick at **{new_kick}** warnings"
+                f"\U0001f462 Auto-kick at **{new_kick}** warnings"
                 if new_kick
-                else "👢 Auto-kick **disabled**"
+                else "\U0001f462 Auto-kick **disabled**"
             ),
             (
-                f"🔨 Auto-ban at **{new_ban}** warnings"
+                f"\U0001f528 Auto-ban at **{new_ban}** warnings"
                 if new_ban
-                else "🔨 Auto-ban **disabled**"
+                else "\U0001f528 Auto-ban **disabled**"
             ),
-            f"📨 DM on warn: **{'Yes' if new_dm else 'No'}**",
+            f"\U0001f4e8 DM on warn: **{'Yes' if new_dm else 'No'}**",
         ]
         await ctx.reply(
-            embed=h.ok("\n".join(lines), "⚙️ Warning Config Updated"),
+            embed=h.ok("\n".join(lines), "\u2699\ufe0f Warning Config Updated"),
             ephemeral=True,
         )
 
+    # ══════════════════════════════════════════════════════════════════════════
+    #  PREFIX-ONLY ALIASES
+    #  !warn, !warnings, !clearwarnings, !warnconfig
+    # ══════════════════════════════════════════════════════════════════════════
 
-# ── Registration ───────────────────────────────────────────────────────────────
+    @commands.command(
+        name="warn",
+        extras={
+            "category": "\U0001f6e1\ufe0f Moderation",
+            "short": "Warn a user",
+            "usage": "warn <user> [reason]",
+            "desc": "Issue a warning to a user. Configurable auto-kick/ban thresholds apply.",
+            "args": [
+                ("user", "User to warn"),
+                ("reason", "Reason for the warning (optional)"),
+            ],
+            "perms": "Manage Messages",
+            "example": "!warn @Troublemaker Spamming in general",
+        },
+    )
+    @has_mod_perms()
+    async def pfx_warn(
+        self, ctx, user: discord.Member, *, reason: str = "No reason provided."
+    ):
+        await self.warn_issue(ctx, user=user, reason=reason)
+
+    @commands.command(
+        name="warnings",
+        extras={
+            "category": "\U0001f6e1\ufe0f Moderation",
+            "short": "View warnings for a user",
+            "usage": "warnings <user>",
+            "desc": "View all warnings for a user on this server.",
+            "args": [("user", "User to look up")],
+            "perms": "Manage Messages",
+            "example": "!warnings @Troublemaker",
+        },
+    )
+    @has_mod_perms()
+    async def pfx_warnings(self, ctx, user: discord.Member):
+        await self.warn_list(ctx, user=user)
+
+    @commands.command(
+        name="clearwarnings",
+        extras={
+            "category": "\U0001f6e1\ufe0f Moderation",
+            "short": "Clear all warnings for a user",
+            "usage": "clearwarnings <user>",
+            "desc": "Wipe all warnings for a user. Admin only.",
+            "args": [("user", "User whose warnings to clear")],
+            "perms": "Administrator",
+            "example": "!clearwarnings @Reformed",
+        },
+    )
+    @has_admin_perms()
+    async def pfx_clearwarnings(self, ctx, user: discord.Member):
+        await self.warn_clear(ctx, user=user)
+
+    @commands.command(
+        name="warnconfig",
+        extras={
+            "category": "\U0001f6e1\ufe0f Moderation",
+            "short": "Configure warning auto-actions",
+            "usage": "warnconfig [kick_at] [ban_at] [dm_user]",
+            "desc": "Configure auto-kick/ban thresholds and DM behavior for warnings.",
+            "args": [
+                ("kick_at", "Auto-kick after N warnings (0=off)"),
+                ("ban_at", "Auto-ban after N warnings (0=off)"),
+                ("dm_user", "DM users on warn (true/false)"),
+            ],
+            "perms": "Administrator",
+            "example": "!warnconfig 3 5 true\n!warnconfig",
+        },
+    )
+    @has_admin_perms()
+    async def pfx_warnconfig(
+        self,
+        ctx,
+        kick_at: Optional[int] = None,
+        ban_at: Optional[int] = None,
+        dm_user: Optional[bool] = None,
+    ):
+        await self.warn_config(ctx, kick_at=kick_at, ban_at=ban_at, dm_user=dm_user)
+
+
+# ── Registration ──────────────────────────────────────────────────────────────
 async def setup(bot: commands.Bot):
     await bot.add_cog(Warnings(bot))

@@ -5,18 +5,20 @@ Fun social interaction commands -- mobile-first.
 GIFs sourced from nekos.best (no API key required).
 Falls back gracefully (text-only) if the API is unavailable.
 
-Commands (all hybrid -- prefix + slash):
-  ── Interactions (target a user) ──
+Slash commands live under the /fun group (counts as 1 top-level slash).
+Prefix commands remain flat: !hug, !slap, !8ball, etc.
+
+Interaction commands (target a user):
   hug, kiss, cheekskiss, pat, poke, boop, wave, highfive,
   cuddle, slap, tickle, bite, kick, punch, yeet, feed,
   handhold, handshake, peck, nom, shoot, stare
 
-  ── Solo reactions (no target) ──
+Solo reaction commands (no target):
   cry, dance, blush, smile, laugh, smug, think, shrug,
   pout, facepalm, happy, bored, sleep, thumbsup, nod,
   nope, wink, yawn, lurk, baka, angry, run
 
-  ── Other fun ──
+Other:
   ship  <user1> <user2>  -- compatibility rating
   8ball <question>        -- magic 8-ball
 """
@@ -39,8 +41,6 @@ log = logging.getLogger("NanoBot.fun")
 _NEKOS_BASE = "https://nekos.best/api/v2"
 _PINK = 0xFF6EB4
 
-# nekos.best endpoint mapping
-# Actions that don't have a 1:1 endpoint are mapped to the closest equivalent.
 _ENDPOINTS: dict[str, str] = {
     "hug": "hug",
     "kiss": "kiss",
@@ -64,7 +64,6 @@ _ENDPOINTS: dict[str, str] = {
     "nom": "nom",
     "shoot": "shoot",
     "stare": "stare",
-    # Solo reactions
     "cry": "cry",
     "dance": "dance",
     "blush": "blush",
@@ -88,8 +87,6 @@ _ENDPOINTS: dict[str, str] = {
     "angry": "angry",
     "run": "run",
 }
-
-# ── 8-Ball responses ─────────────────────────────────────────────────────────
 
 _8BALL_POSITIVE = [
     "It is certain.",
@@ -119,18 +116,13 @@ _8BALL_NEGATIVE = [
 ]
 
 
-# ── Ship helpers ──────────────────────────────────────────────────────────────
-
-
 def _ship_score(id1: int, id2: int) -> int:
-    """Deterministic 0-100 score for a user pair. Same pair always gets same score."""
     key = f"{min(id1, id2)}x{max(id1, id2)}"
     digest = hashlib.md5(key.encode()).digest()
     return int.from_bytes(digest[:2], "big") % 101
 
 
 def _ship_name(n1: str, n2: str) -> str:
-    """Combine two display names into a ship name."""
     clean1 = re.sub(r"[^\w]", "", n1) or n1
     clean2 = re.sub(r"[^\w]", "", n2) or n2
     half1 = clean1[: max(1, len(clean1) // 2)]
@@ -157,11 +149,7 @@ def _ship_verdict(pct: int) -> str:
     return "\U0001f494 Not meant to be."
 
 
-# ── GIF fetcher ───────────────────────────────────────────────────────────────
-
-
 async def _fetch_gif(session: aiohttp.ClientSession, action: str) -> str | None:
-    """Fetch one random GIF URL from nekos.best. Returns None on any failure."""
     endpoint = _ENDPOINTS.get(action, action)
     try:
         async with session.get(
@@ -193,7 +181,7 @@ class Fun(commands.Cog):
         if self._session and not self._session.closed:
             await self._session.close()
 
-    # ── Shared interaction handler (requires a target) ────────────────────────
+    # ── shared handlers ───────────────────────────────────────────────────────
 
     async def _do_action(
         self,
@@ -206,15 +194,7 @@ class Fun(commands.Cog):
         action_msg: str,
         color: int = _PINK,
     ) -> None:
-        """
-        Build and send an interaction embed.
-
-        action_msg supports {author} and {target} placeholders.
-        If target is None or the same as the author, self_msg is used.
-        If target is the bot, bot_msg is used.
-        """
         author = ctx.author
-
         if target is None or target == author:
             desc = self_msg
         elif target == ctx.guild.me:
@@ -223,18 +203,13 @@ class Fun(commands.Cog):
             desc = action_msg.replace("{author}", f"**{author.display_name}**").replace(
                 "{target}", target.mention
             )
-
         e = discord.Embed(description=desc, color=color)
-
         if self._session:
             gif = await _fetch_gif(self._session, action)
             if gif:
                 e.set_image(url=gif)
-
         e.set_footer(text="NanoBot Fun")
         await ctx.reply(embed=e)
-
-    # ── Shared solo reaction handler (no target) ──────────────────────────────
 
     async def _do_solo(
         self,
@@ -244,42 +219,35 @@ class Fun(commands.Cog):
         msg: str,
         color: int = _PINK,
     ) -> None:
-        """Build and send a solo reaction embed (no target needed)."""
         e = discord.Embed(
             description=msg.replace("{author}", f"**{ctx.author.display_name}**"),
             color=color,
         )
-
         if self._session:
             gif = await _fetch_gif(self._session, action)
             if gif:
                 e.set_image(url=gif)
-
         e.set_footer(text="NanoBot Fun")
         await ctx.reply(embed=e)
 
     # ══════════════════════════════════════════════════════════════════════════
-    #  INTERACTION COMMANDS (target a user)
+    #  /fun group -- 1 top-level slash command slot
     # ══════════════════════════════════════════════════════════════════════════
 
-    # ── hug ────────────────────────────────────────────────────────────────────
-
-    @commands.hybrid_command(
-        name="hug",
-        description="Give someone a warm hug.",
-        extras={
-            "category": "\U0001f389 Fun",
-            "short": "Give someone a hug",
-            "usage": "hug [user]",
-            "desc": "Hugs another user with a random anime GIF. Leave the user blank to receive a hug yourself.",
-            "args": [("user", "Who to hug (optional)")],
-            "perms": "None",
-            "example": "!hug @Snow\n!hug",
-        },
+    fun = commands.HybridGroup(
+        name="fun",
+        description="Fun social interaction commands.",
+        fallback="help",
     )
+
+    # ── interaction subcommands ───────────────────────────────────────────────
+
+    @fun.command(name="hug", description="Give someone a warm hug.")
     @app_commands.describe(user="Who to hug (leave blank for a hug yourself)")
     @commands.cooldown(1, 3, commands.BucketType.user)
-    async def hug(self, ctx: commands.Context, user: Optional[discord.Member] = None):
+    async def fun_hug(
+        self, ctx: commands.Context, user: Optional[discord.Member] = None
+    ):
         await self._do_action(
             ctx,
             "hug",
@@ -289,24 +257,12 @@ class Fun(commands.Cog):
             action_msg="{author} hugs {target}! \U0001f917",
         )
 
-    # ── kiss ───────────────────────────────────────────────────────────────────
-
-    @commands.hybrid_command(
-        name="kiss",
-        description="Kiss someone! \U0001f48b",
-        extras={
-            "category": "\U0001f389 Fun",
-            "short": "Kiss someone",
-            "usage": "kiss [user]",
-            "desc": "Kisses another user with a random anime GIF.",
-            "args": [("user", "Who to kiss (optional)")],
-            "perms": "None",
-            "example": "!kiss @Snow",
-        },
-    )
+    @fun.command(name="kiss", description="Kiss someone! \U0001f48b")
     @app_commands.describe(user="Who to kiss")
     @commands.cooldown(1, 3, commands.BucketType.user)
-    async def kiss(self, ctx: commands.Context, user: Optional[discord.Member] = None):
+    async def fun_kiss(
+        self, ctx: commands.Context, user: Optional[discord.Member] = None
+    ):
         await self._do_action(
             ctx,
             "kiss",
@@ -316,24 +272,12 @@ class Fun(commands.Cog):
             action_msg="{author} kisses {target}! \U0001f48b",
         )
 
-    # ── cheekskiss ─────────────────────────────────────────────────────────────
-
-    @commands.hybrid_command(
-        name="cheekskiss",
-        description="Give someone a sweet cheek kiss! \U0001f618",
-        extras={
-            "category": "\U0001f389 Fun",
-            "short": "Give a cheek kiss",
-            "usage": "cheekskiss [user]",
-            "desc": "Gives another user a cheek kiss with a random anime GIF.",
-            "args": [("user", "Who to cheek kiss (optional)")],
-            "perms": "None",
-            "example": "!cheekskiss @Snow",
-        },
+    @fun.command(
+        name="cheekskiss", description="Give someone a sweet cheek kiss! \U0001f618"
     )
     @app_commands.describe(user="Who to give a cheek kiss")
     @commands.cooldown(1, 3, commands.BucketType.user)
-    async def cheekskiss(
+    async def fun_cheekskiss(
         self, ctx: commands.Context, user: Optional[discord.Member] = None
     ):
         await self._do_action(
@@ -345,24 +289,12 @@ class Fun(commands.Cog):
             action_msg="{author} gives {target} a little cheek kiss! \U0001f618",
         )
 
-    # ── pat ─────────────────────────────────────────────────────────────────────
-
-    @commands.hybrid_command(
-        name="pat",
-        description="Give someone a comforting head pat.",
-        extras={
-            "category": "\U0001f389 Fun",
-            "short": "Head pat someone",
-            "usage": "pat [user]",
-            "desc": "Pats another user on the head with a random anime GIF.",
-            "args": [("user", "Who to pat (optional)")],
-            "perms": "None",
-            "example": "!pat @Snow",
-        },
-    )
+    @fun.command(name="pat", description="Give someone a comforting head pat.")
     @app_commands.describe(user="Who to pat")
     @commands.cooldown(1, 3, commands.BucketType.user)
-    async def pat(self, ctx: commands.Context, user: Optional[discord.Member] = None):
+    async def fun_pat(
+        self, ctx: commands.Context, user: Optional[discord.Member] = None
+    ):
         await self._do_action(
             ctx,
             "pat",
@@ -373,24 +305,12 @@ class Fun(commands.Cog):
             color=0xFFC0CB,
         )
 
-    # ── poke ────────────────────────────────────────────────────────────────────
-
-    @commands.hybrid_command(
-        name="poke",
-        description="Poke someone! \U0001f449",
-        extras={
-            "category": "\U0001f389 Fun",
-            "short": "Poke someone",
-            "usage": "poke [user]",
-            "desc": "Pokes another user with a random anime GIF.",
-            "args": [("user", "Who to poke (optional)")],
-            "perms": "None",
-            "example": "!poke @Snow",
-        },
-    )
+    @fun.command(name="poke", description="Poke someone! \U0001f449")
     @app_commands.describe(user="Who to poke")
     @commands.cooldown(1, 3, commands.BucketType.user)
-    async def poke(self, ctx: commands.Context, user: Optional[discord.Member] = None):
+    async def fun_poke(
+        self, ctx: commands.Context, user: Optional[discord.Member] = None
+    ):
         await self._do_action(
             ctx,
             "poke",
@@ -401,24 +321,12 @@ class Fun(commands.Cog):
             color=h.YELLOW,
         )
 
-    # ── boop ────────────────────────────────────────────────────────────────────
-
-    @commands.hybrid_command(
-        name="boop",
-        description="Boop someone's snoot! \U0001f446",
-        extras={
-            "category": "\U0001f389 Fun",
-            "short": "Boop the snoot",
-            "usage": "boop [user]",
-            "desc": "Boops another user's snoot with a random anime GIF.",
-            "args": [("user", "Who to boop (optional)")],
-            "perms": "None",
-            "example": "!boop @Snow",
-        },
-    )
+    @fun.command(name="boop", description="Boop someone's snoot! \U0001f446")
     @app_commands.describe(user="Who to boop")
     @commands.cooldown(1, 3, commands.BucketType.user)
-    async def boop(self, ctx: commands.Context, user: Optional[discord.Member] = None):
+    async def fun_boop(
+        self, ctx: commands.Context, user: Optional[discord.Member] = None
+    ):
         await self._do_action(
             ctx,
             "boop",
@@ -429,24 +337,12 @@ class Fun(commands.Cog):
             color=0xFFC0CB,
         )
 
-    # ── wave ────────────────────────────────────────────────────────────────────
-
-    @commands.hybrid_command(
-        name="wave",
-        description="Wave at someone! \U0001f44b",
-        extras={
-            "category": "\U0001f389 Fun",
-            "short": "Wave at someone",
-            "usage": "wave [user]",
-            "desc": "Waves at another user with a random anime GIF.",
-            "args": [("user", "Who to wave at (optional)")],
-            "perms": "None",
-            "example": "!wave @Snow",
-        },
-    )
+    @fun.command(name="wave", description="Wave at someone! \U0001f44b")
     @app_commands.describe(user="Who to wave at")
     @commands.cooldown(1, 3, commands.BucketType.user)
-    async def wave(self, ctx: commands.Context, user: Optional[discord.Member] = None):
+    async def fun_wave(
+        self, ctx: commands.Context, user: Optional[discord.Member] = None
+    ):
         await self._do_action(
             ctx,
             "wave",
@@ -457,24 +353,10 @@ class Fun(commands.Cog):
             color=h.BLUE,
         )
 
-    # ── highfive ───────────────────────────────────────────────────────────────
-
-    @commands.hybrid_command(
-        name="highfive",
-        description="High five someone! \U0001f64c",
-        extras={
-            "category": "\U0001f389 Fun",
-            "short": "High five someone",
-            "usage": "highfive [user]",
-            "desc": "High fives another user with a random anime GIF.",
-            "args": [("user", "Who to high five (optional)")],
-            "perms": "None",
-            "example": "!highfive @Snow",
-        },
-    )
+    @fun.command(name="highfive", description="High five someone! \U0001f64c")
     @app_commands.describe(user="Who to high five")
     @commands.cooldown(1, 3, commands.BucketType.user)
-    async def highfive(
+    async def fun_highfive(
         self, ctx: commands.Context, user: Optional[discord.Member] = None
     ):
         await self._do_action(
@@ -487,24 +369,10 @@ class Fun(commands.Cog):
             color=h.GREEN,
         )
 
-    # ── cuddle ─────────────────────────────────────────────────────────────────
-
-    @commands.hybrid_command(
-        name="cuddle",
-        description="Cuddle someone! \U0001f97a",
-        extras={
-            "category": "\U0001f389 Fun",
-            "short": "Cuddle someone",
-            "usage": "cuddle [user]",
-            "desc": "Cuddles another user with a random anime GIF.",
-            "args": [("user", "Who to cuddle (optional)")],
-            "perms": "None",
-            "example": "!cuddle @Snow",
-        },
-    )
+    @fun.command(name="cuddle", description="Cuddle someone! \U0001f97a")
     @app_commands.describe(user="Who to cuddle")
     @commands.cooldown(1, 3, commands.BucketType.user)
-    async def cuddle(
+    async def fun_cuddle(
         self, ctx: commands.Context, user: Optional[discord.Member] = None
     ):
         await self._do_action(
@@ -516,24 +384,12 @@ class Fun(commands.Cog):
             action_msg="{author} cuddles {target}! \U0001f97a",
         )
 
-    # ── slap ───────────────────────────────────────────────────────────────────
-
-    @commands.hybrid_command(
-        name="slap",
-        description="Slap someone! \U0001f44f",
-        extras={
-            "category": "\U0001f389 Fun",
-            "short": "Slap someone",
-            "usage": "slap [user]",
-            "desc": "Slaps another user with a random anime GIF.",
-            "args": [("user", "Who to slap (optional)")],
-            "perms": "None",
-            "example": "!slap @Snow",
-        },
-    )
+    @fun.command(name="slap", description="Slap someone! \U0001f44f")
     @app_commands.describe(user="Who to slap")
     @commands.cooldown(1, 3, commands.BucketType.user)
-    async def slap(self, ctx: commands.Context, user: Optional[discord.Member] = None):
+    async def fun_slap(
+        self, ctx: commands.Context, user: Optional[discord.Member] = None
+    ):
         await self._do_action(
             ctx,
             "slap",
@@ -544,24 +400,10 @@ class Fun(commands.Cog):
             color=h.RED,
         )
 
-    # ── tickle ─────────────────────────────────────────────────────────────────
-
-    @commands.hybrid_command(
-        name="tickle",
-        description="Tickle someone! \U0001f923",
-        extras={
-            "category": "\U0001f389 Fun",
-            "short": "Tickle someone",
-            "usage": "tickle [user]",
-            "desc": "Tickles another user with a random anime GIF.",
-            "args": [("user", "Who to tickle (optional)")],
-            "perms": "None",
-            "example": "!tickle @Snow",
-        },
-    )
+    @fun.command(name="tickle", description="Tickle someone! \U0001f923")
     @app_commands.describe(user="Who to tickle")
     @commands.cooldown(1, 3, commands.BucketType.user)
-    async def tickle(
+    async def fun_tickle(
         self, ctx: commands.Context, user: Optional[discord.Member] = None
     ):
         await self._do_action(
@@ -574,24 +416,12 @@ class Fun(commands.Cog):
             color=h.YELLOW,
         )
 
-    # ── bite ────────────────────────────────────────────────────────────────────
-
-    @commands.hybrid_command(
-        name="bite",
-        description="Bite someone! \U0001f9db",
-        extras={
-            "category": "\U0001f389 Fun",
-            "short": "Bite someone",
-            "usage": "bite [user]",
-            "desc": "Bites another user with a random anime GIF.",
-            "args": [("user", "Who to bite (optional)")],
-            "perms": "None",
-            "example": "!bite @Snow",
-        },
-    )
+    @fun.command(name="bite", description="Bite someone! \U0001f9db")
     @app_commands.describe(user="Who to bite")
     @commands.cooldown(1, 3, commands.BucketType.user)
-    async def bite(self, ctx: commands.Context, user: Optional[discord.Member] = None):
+    async def fun_bite(
+        self, ctx: commands.Context, user: Optional[discord.Member] = None
+    ):
         await self._do_action(
             ctx,
             "bite",
@@ -602,24 +432,12 @@ class Fun(commands.Cog):
             color=h.RED,
         )
 
-    # ── kick ────────────────────────────────────────────────────────────────────
-
-    @commands.hybrid_command(
-        name="funkick",
-        description="Kick someone (for fun, not moderation)! \U0001f9b5",
-        extras={
-            "category": "\U0001f389 Fun",
-            "short": "Fun-kick someone",
-            "usage": "funkick [user]",
-            "desc": "Kicks another user with a random anime GIF. This is just for fun, not actual moderation.",
-            "args": [("user", "Who to kick (optional)")],
-            "perms": "None",
-            "example": "!funkick @Snow",
-        },
+    @fun.command(
+        name="kick", description="Kick someone (for fun, not moderation)! \U0001f9b5"
     )
     @app_commands.describe(user="Who to kick (for fun!)")
     @commands.cooldown(1, 3, commands.BucketType.user)
-    async def funkick(
+    async def fun_kick(
         self, ctx: commands.Context, user: Optional[discord.Member] = None
     ):
         await self._do_action(
@@ -632,24 +450,12 @@ class Fun(commands.Cog):
             color=h.YELLOW,
         )
 
-    # ── punch ──────────────────────────────────────────────────────────────────
-
-    @commands.hybrid_command(
-        name="punch",
-        description="Punch someone! \U0001f91c",
-        extras={
-            "category": "\U0001f389 Fun",
-            "short": "Punch someone",
-            "usage": "punch [user]",
-            "desc": "Punches another user with a random anime GIF.",
-            "args": [("user", "Who to punch (optional)")],
-            "perms": "None",
-            "example": "!punch @Snow",
-        },
-    )
+    @fun.command(name="punch", description="Punch someone! \U0001f91c")
     @app_commands.describe(user="Who to punch")
     @commands.cooldown(1, 3, commands.BucketType.user)
-    async def punch(self, ctx: commands.Context, user: Optional[discord.Member] = None):
+    async def fun_punch(
+        self, ctx: commands.Context, user: Optional[discord.Member] = None
+    ):
         await self._do_action(
             ctx,
             "punch",
@@ -660,24 +466,12 @@ class Fun(commands.Cog):
             color=h.RED,
         )
 
-    # ── yeet ───────────────────────────────────────────────────────────────────
-
-    @commands.hybrid_command(
-        name="yeet",
-        description="Yeet someone into orbit! \U0001f680",
-        extras={
-            "category": "\U0001f389 Fun",
-            "short": "Yeet someone",
-            "usage": "yeet [user]",
-            "desc": "Yeets another user with a random anime GIF.",
-            "args": [("user", "Who to yeet (optional)")],
-            "perms": "None",
-            "example": "!yeet @Snow",
-        },
-    )
+    @fun.command(name="yeet", description="Yeet someone into orbit! \U0001f680")
     @app_commands.describe(user="Who to yeet")
     @commands.cooldown(1, 3, commands.BucketType.user)
-    async def yeet(self, ctx: commands.Context, user: Optional[discord.Member] = None):
+    async def fun_yeet(
+        self, ctx: commands.Context, user: Optional[discord.Member] = None
+    ):
         await self._do_action(
             ctx,
             "yeet",
@@ -688,24 +482,12 @@ class Fun(commands.Cog):
             color=h.YELLOW,
         )
 
-    # ── feed ───────────────────────────────────────────────────────────────────
-
-    @commands.hybrid_command(
-        name="feed",
-        description="Feed someone! \U0001f35c",
-        extras={
-            "category": "\U0001f389 Fun",
-            "short": "Feed someone",
-            "usage": "feed [user]",
-            "desc": "Feeds another user with a random anime GIF.",
-            "args": [("user", "Who to feed (optional)")],
-            "perms": "None",
-            "example": "!feed @Snow",
-        },
-    )
+    @fun.command(name="feed", description="Feed someone! \U0001f35c")
     @app_commands.describe(user="Who to feed")
     @commands.cooldown(1, 3, commands.BucketType.user)
-    async def feed(self, ctx: commands.Context, user: Optional[discord.Member] = None):
+    async def fun_feed(
+        self, ctx: commands.Context, user: Optional[discord.Member] = None
+    ):
         await self._do_action(
             ctx,
             "feed",
@@ -715,24 +497,10 @@ class Fun(commands.Cog):
             action_msg="{author} feeds {target}! \U0001f35c",
         )
 
-    # ── handhold ───────────────────────────────────────────────────────────────
-
-    @commands.hybrid_command(
-        name="handhold",
-        description="Hold someone's hand! \U0001f91d",
-        extras={
-            "category": "\U0001f389 Fun",
-            "short": "Hold someone's hand",
-            "usage": "handhold [user]",
-            "desc": "Holds another user's hand with a random anime GIF.",
-            "args": [("user", "Who to hold hands with (optional)")],
-            "perms": "None",
-            "example": "!handhold @Snow",
-        },
-    )
+    @fun.command(name="handhold", description="Hold someone's hand! \U0001f91d")
     @app_commands.describe(user="Who to hold hands with")
     @commands.cooldown(1, 3, commands.BucketType.user)
-    async def handhold(
+    async def fun_handhold(
         self, ctx: commands.Context, user: Optional[discord.Member] = None
     ):
         await self._do_action(
@@ -744,24 +512,10 @@ class Fun(commands.Cog):
             action_msg="{author} holds {target}'s hand! \U0001f91d",
         )
 
-    # ── handshake ──────────────────────────────────────────────────────────────
-
-    @commands.hybrid_command(
-        name="handshake",
-        description="Shake someone's hand! \U0001f91d",
-        extras={
-            "category": "\U0001f389 Fun",
-            "short": "Shake someone's hand",
-            "usage": "handshake [user]",
-            "desc": "Shakes another user's hand with a random anime GIF.",
-            "args": [("user", "Who to shake hands with (optional)")],
-            "perms": "None",
-            "example": "!handshake @Snow",
-        },
-    )
+    @fun.command(name="handshake", description="Shake someone's hand! \U0001f91d")
     @app_commands.describe(user="Who to shake hands with")
     @commands.cooldown(1, 3, commands.BucketType.user)
-    async def handshake(
+    async def fun_handshake(
         self, ctx: commands.Context, user: Optional[discord.Member] = None
     ):
         await self._do_action(
@@ -774,24 +528,12 @@ class Fun(commands.Cog):
             color=h.BLUE,
         )
 
-    # ── peck ───────────────────────────────────────────────────────────────────
-
-    @commands.hybrid_command(
-        name="peck",
-        description="Give someone a quick peck! \U0001f617",
-        extras={
-            "category": "\U0001f389 Fun",
-            "short": "Give a quick peck",
-            "usage": "peck [user]",
-            "desc": "Gives another user a quick peck with a random anime GIF.",
-            "args": [("user", "Who to peck (optional)")],
-            "perms": "None",
-            "example": "!peck @Snow",
-        },
-    )
+    @fun.command(name="peck", description="Give someone a quick peck! \U0001f617")
     @app_commands.describe(user="Who to give a peck")
     @commands.cooldown(1, 3, commands.BucketType.user)
-    async def peck(self, ctx: commands.Context, user: Optional[discord.Member] = None):
+    async def fun_peck(
+        self, ctx: commands.Context, user: Optional[discord.Member] = None
+    ):
         await self._do_action(
             ctx,
             "peck",
@@ -801,24 +543,12 @@ class Fun(commands.Cog):
             action_msg="{author} gives {target} a quick peck! \U0001f617",
         )
 
-    # ── nom ─────────────────────────────────────────────────────────────────────
-
-    @commands.hybrid_command(
-        name="nom",
-        description="Nom on someone! \U0001f60b",
-        extras={
-            "category": "\U0001f389 Fun",
-            "short": "Nom on someone",
-            "usage": "nom [user]",
-            "desc": "Noms on another user with a random anime GIF.",
-            "args": [("user", "Who to nom on (optional)")],
-            "perms": "None",
-            "example": "!nom @Snow",
-        },
-    )
+    @fun.command(name="nom", description="Nom on someone! \U0001f60b")
     @app_commands.describe(user="Who to nom on")
     @commands.cooldown(1, 3, commands.BucketType.user)
-    async def nom(self, ctx: commands.Context, user: Optional[discord.Member] = None):
+    async def fun_nom(
+        self, ctx: commands.Context, user: Optional[discord.Member] = None
+    ):
         await self._do_action(
             ctx,
             "nom",
@@ -828,24 +558,14 @@ class Fun(commands.Cog):
             action_msg="{author} noms on {target}! \U0001f60b",
         )
 
-    # ── shoot ──────────────────────────────────────────────────────────────────
-
-    @commands.hybrid_command(
-        name="shoot",
-        description="Shoot someone (with finger guns)! \U0001f52b",
-        extras={
-            "category": "\U0001f389 Fun",
-            "short": "Finger-gun someone",
-            "usage": "shoot [user]",
-            "desc": "Shoots another user with finger guns and a random anime GIF.",
-            "args": [("user", "Who to shoot (optional)")],
-            "perms": "None",
-            "example": "!shoot @Snow",
-        },
+    @fun.command(
+        name="shoot", description="Shoot someone (with finger guns)! \U0001f449"
     )
     @app_commands.describe(user="Who to shoot (finger guns!)")
     @commands.cooldown(1, 3, commands.BucketType.user)
-    async def shoot(self, ctx: commands.Context, user: Optional[discord.Member] = None):
+    async def fun_shoot(
+        self, ctx: commands.Context, user: Optional[discord.Member] = None
+    ):
         await self._do_action(
             ctx,
             "shoot",
@@ -856,24 +576,12 @@ class Fun(commands.Cog):
             color=h.RED,
         )
 
-    # ── stare ──────────────────────────────────────────────────────────────────
-
-    @commands.hybrid_command(
-        name="stare",
-        description="Stare at someone! \U0001f440",
-        extras={
-            "category": "\U0001f389 Fun",
-            "short": "Stare at someone",
-            "usage": "stare [user]",
-            "desc": "Stares at another user with a random anime GIF.",
-            "args": [("user", "Who to stare at (optional)")],
-            "perms": "None",
-            "example": "!stare @Snow",
-        },
-    )
+    @fun.command(name="stare", description="Stare at someone! \U0001f440")
     @app_commands.describe(user="Who to stare at")
     @commands.cooldown(1, 3, commands.BucketType.user)
-    async def stare(self, ctx: commands.Context, user: Optional[discord.Member] = None):
+    async def fun_stare(
+        self, ctx: commands.Context, user: Optional[discord.Member] = None
+    ):
         await self._do_action(
             ctx,
             "stare",
@@ -884,15 +592,563 @@ class Fun(commands.Cog):
             color=h.BLUE,
         )
 
+    # ── solo reaction subcommands ─────────────────────────────────────────────
+
+    @fun.command(name="cry", description="Have a good cry. \U0001f622")
+    @commands.cooldown(1, 3, commands.BucketType.user)
+    async def fun_cry(self, ctx: commands.Context):
+        await self._do_solo(ctx, "cry", msg="{author} is crying... \U0001f622")
+
+    @fun.command(name="dance", description="Show off your moves! \U0001f57a")
+    @commands.cooldown(1, 3, commands.BucketType.user)
+    async def fun_dance(self, ctx: commands.Context):
+        await self._do_solo(
+            ctx, "dance", msg="{author} is dancing! \U0001f57a", color=h.GREEN
+        )
+
+    @fun.command(name="blush", description="Blush! \U0001f633")
+    @commands.cooldown(1, 3, commands.BucketType.user)
+    async def fun_blush(self, ctx: commands.Context):
+        await self._do_solo(ctx, "blush", msg="{author} is blushing! \U0001f633")
+
+    @fun.command(name="smile", description="Smile! \U0001f60a")
+    @commands.cooldown(1, 3, commands.BucketType.user)
+    async def fun_smile(self, ctx: commands.Context):
+        await self._do_solo(
+            ctx, "smile", msg="{author} smiles! \U0001f60a", color=h.GREEN
+        )
+
+    @fun.command(name="laugh", description="Laugh out loud! \U0001f602")
+    @commands.cooldown(1, 3, commands.BucketType.user)
+    async def fun_laugh(self, ctx: commands.Context):
+        await self._do_solo(
+            ctx, "laugh", msg="{author} is laughing! \U0001f602", color=h.YELLOW
+        )
+
+    @fun.command(name="smug", description="Look smug. \U0001f60f")
+    @commands.cooldown(1, 3, commands.BucketType.user)
+    async def fun_smug(self, ctx: commands.Context):
+        await self._do_solo(ctx, "smug", msg="{author} looks smug. \U0001f60f")
+
+    @fun.command(name="think", description="Think hard about something. \U0001f914")
+    @commands.cooldown(1, 3, commands.BucketType.user)
+    async def fun_think(self, ctx: commands.Context):
+        await self._do_solo(
+            ctx, "think", msg="{author} is thinking... \U0001f914", color=h.BLUE
+        )
+
+    @fun.command(name="shrug", description="Shrug it off. \U0001f937")
+    @commands.cooldown(1, 3, commands.BucketType.user)
+    async def fun_shrug(self, ctx: commands.Context):
+        await self._do_solo(ctx, "shrug", msg="{author} shrugs. \U0001f937")
+
+    @fun.command(name="pout", description="Pout! \U0001f61e")
+    @commands.cooldown(1, 3, commands.BucketType.user)
+    async def fun_pout(self, ctx: commands.Context):
+        await self._do_solo(ctx, "pout", msg="{author} is pouting! \U0001f61e")
+
+    @fun.command(name="facepalm", description="Facepalm. \U0001f926")
+    @commands.cooldown(1, 3, commands.BucketType.user)
+    async def fun_facepalm(self, ctx: commands.Context):
+        await self._do_solo(
+            ctx, "facepalm", msg="{author} facepalms. \U0001f926", color=h.YELLOW
+        )
+
+    @fun.command(name="happy", description="Express your happiness! \U0001f60a")
+    @commands.cooldown(1, 3, commands.BucketType.user)
+    async def fun_happy(self, ctx: commands.Context):
+        await self._do_solo(
+            ctx, "happy", msg="{author} is happy! \U0001f60a", color=h.GREEN
+        )
+
+    @fun.command(name="bored", description="Express your boredom. \U0001f971")
+    @commands.cooldown(1, 3, commands.BucketType.user)
+    async def fun_bored(self, ctx: commands.Context):
+        await self._do_solo(ctx, "bored", msg="{author} is bored... \U0001f971")
+
+    @fun.command(name="sleep", description="Go to sleep. \U0001f634")
+    @commands.cooldown(1, 3, commands.BucketType.user)
+    async def fun_sleep(self, ctx: commands.Context):
+        await self._do_solo(
+            ctx, "sleep", msg="{author} is sleeping... zzZ \U0001f634", color=h.BLUE
+        )
+
+    @fun.command(name="thumbsup", description="Give a thumbs up! \U0001f44d")
+    @commands.cooldown(1, 3, commands.BucketType.user)
+    async def fun_thumbsup(self, ctx: commands.Context):
+        await self._do_solo(
+            ctx, "thumbsup", msg="{author} gives a thumbs up! \U0001f44d", color=h.GREEN
+        )
+
+    @fun.command(name="nod", description="Nod in agreement. \U0001f642")
+    @commands.cooldown(1, 3, commands.BucketType.user)
+    async def fun_nod(self, ctx: commands.Context):
+        await self._do_solo(ctx, "nod", msg="{author} nods. \U0001f642")
+
+    @fun.command(name="nope", description="Nope out. \U0001f645")
+    @commands.cooldown(1, 3, commands.BucketType.user)
+    async def fun_nope(self, ctx: commands.Context):
+        await self._do_solo(
+            ctx, "nope", msg="{author} says NOPE. \U0001f645", color=h.RED
+        )
+
+    @fun.command(name="wink", description="Wink! \U0001f609")
+    @commands.cooldown(1, 3, commands.BucketType.user)
+    async def fun_wink(self, ctx: commands.Context):
+        await self._do_solo(ctx, "wink", msg="{author} winks! \U0001f609")
+
+    @fun.command(name="yawn", description="Yawn. \U0001f971")
+    @commands.cooldown(1, 3, commands.BucketType.user)
+    async def fun_yawn(self, ctx: commands.Context):
+        await self._do_solo(ctx, "yawn", msg="{author} yawns... \U0001f971")
+
+    @fun.command(name="lurk", description="Lurk in the shadows. \U0001f440")
+    @commands.cooldown(1, 3, commands.BucketType.user)
+    async def fun_lurk(self, ctx: commands.Context):
+        await self._do_solo(
+            ctx, "lurk", msg="{author} is lurking... \U0001f440", color=h.BLUE
+        )
+
+    @fun.command(name="baka", description="Call someone a baka! \U0001f621")
+    @commands.cooldown(1, 3, commands.BucketType.user)
+    async def fun_baka(self, ctx: commands.Context):
+        await self._do_solo(
+            ctx, "baka", msg="{author} yells BAKA! \U0001f621", color=h.RED
+        )
+
+    @fun.command(name="angry", description="Express your anger! \U0001f620")
+    @commands.cooldown(1, 3, commands.BucketType.user)
+    async def fun_angry(self, ctx: commands.Context):
+        await self._do_solo(
+            ctx, "angry", msg="{author} is angry! \U0001f620", color=h.RED
+        )
+
+    @fun.command(name="run", description="Run away! \U0001f3c3")
+    @commands.cooldown(1, 3, commands.BucketType.user)
+    async def fun_run(self, ctx: commands.Context):
+        await self._do_solo(
+            ctx, "run", msg="{author} is running away! \U0001f3c3", color=h.YELLOW
+        )
+
+    # ── other fun subcommands ─────────────────────────────────────────────────
+
+    @fun.command(
+        name="ship", description="Check the compatibility between two users. \U0001f495"
+    )
+    @app_commands.describe(user1="First user", user2="Second user")
+    @commands.cooldown(1, 5, commands.BucketType.user)
+    async def fun_ship(
+        self, ctx: commands.Context, user1: discord.Member, user2: discord.Member
+    ):
+        if user1 == user2:
+            e = discord.Embed(
+                title="\U0001f495 Ship",
+                description=f"**{user1.display_name}** + **{user2.display_name}**\n\nLoving yourself is valid, but this is next level. \U0001f4af",
+                color=_PINK,
+            )
+            e.set_footer(text="NanoBot Fun \u00b7 Results are totally scientific")
+            return await ctx.reply(embed=e)
+        if ctx.guild.me in (user1, user2):
+            e = discord.Embed(
+                title="\U0001f495 Ship",
+                description="I'm flattered, but I'm in a committed relationship with my codebase. \U0001f4be",
+                color=_PINK,
+            )
+            e.set_footer(text="NanoBot Fun \u00b7 Results are totally scientific")
+            return await ctx.reply(embed=e)
+        score = _ship_score(user1.id, user2.id)
+        name = _ship_name(user1.display_name, user2.display_name)
+        bar = _progress_bar(score)
+        verdict = _ship_verdict(score)
+        e = discord.Embed(title=f"\U0001f495 {name}", color=_PINK)
+        e.add_field(
+            name=f"{user1.display_name} \u00d7 {user2.display_name}",
+            value=f"{bar} **{score}%**\n{verdict}",
+            inline=False,
+        )
+        e.set_footer(text="NanoBot Fun \u00b7 Results are totally scientific")
+        await ctx.reply(embed=e)
+
+    @fun.command(
+        name="8ball", description="Ask the magic 8-ball a question. \U0001f3b1"
+    )
+    @app_commands.describe(question="Your yes/no question")
+    @commands.cooldown(1, 3, commands.BucketType.user)
+    async def fun_8ball(self, ctx: commands.Context, *, question: str):
+        pool = random.choice([_8BALL_POSITIVE, _8BALL_NEUTRAL, _8BALL_NEGATIVE])
+        answer = random.choice(pool)
+        if pool is _8BALL_POSITIVE:
+            color = h.GREEN
+        elif pool is _8BALL_NEUTRAL:
+            color = h.YELLOW
+        else:
+            color = h.RED
+        e = discord.Embed(title="\U0001f3b1 Magic 8-Ball", color=color)
+        e.add_field(name="Question", value=question[:256], inline=False)
+        e.add_field(name="Answer", value=f"**{answer}**", inline=False)
+        e.set_footer(text="NanoBot Fun")
+        await ctx.reply(embed=e)
+
     # ══════════════════════════════════════════════════════════════════════════
-    #  SOLO REACTION COMMANDS (no target needed)
+    #  PREFIX-ONLY ALIASES
+    #  !hug, !slap, etc. -- commands.command (not hybrid) so no slash slot.
     # ══════════════════════════════════════════════════════════════════════════
 
-    # ── cry ─────────────────────────────────────────────────────────────────────
+    @commands.command(
+        name="hug",
+        extras={
+            "category": "\U0001f389 Fun",
+            "short": "Give someone a hug",
+            "usage": "hug [user]",
+            "desc": "Hugs another user with a random anime GIF.",
+            "args": [("user", "Who to hug (optional)")],
+            "perms": "None",
+            "example": "!hug @Snow\n!hug",
+        },
+    )
+    @commands.cooldown(1, 3, commands.BucketType.user)
+    async def pfx_hug(self, ctx, user: Optional[discord.Member] = None):
+        await self.fun_hug(ctx, user=user)
 
-    @commands.hybrid_command(
+    @commands.command(
+        name="kiss",
+        extras={
+            "category": "\U0001f389 Fun",
+            "short": "Kiss someone",
+            "usage": "kiss [user]",
+            "desc": "Kisses another user with a random anime GIF.",
+            "args": [("user", "Who to kiss (optional)")],
+            "perms": "None",
+            "example": "!kiss @Snow",
+        },
+    )
+    @commands.cooldown(1, 3, commands.BucketType.user)
+    async def pfx_kiss(self, ctx, user: Optional[discord.Member] = None):
+        await self.fun_kiss(ctx, user=user)
+
+    @commands.command(
+        name="cheekskiss",
+        extras={
+            "category": "\U0001f389 Fun",
+            "short": "Give a cheek kiss",
+            "usage": "cheekskiss [user]",
+            "desc": "Gives another user a cheek kiss with a random anime GIF.",
+            "args": [("user", "Who to cheek kiss (optional)")],
+            "perms": "None",
+            "example": "!cheekskiss @Snow",
+        },
+    )
+    @commands.cooldown(1, 3, commands.BucketType.user)
+    async def pfx_cheekskiss(self, ctx, user: Optional[discord.Member] = None):
+        await self.fun_cheekskiss(ctx, user=user)
+
+    @commands.command(
+        name="pat",
+        extras={
+            "category": "\U0001f389 Fun",
+            "short": "Head pat someone",
+            "usage": "pat [user]",
+            "desc": "Pats another user on the head with a random anime GIF.",
+            "args": [("user", "Who to pat (optional)")],
+            "perms": "None",
+            "example": "!pat @Snow",
+        },
+    )
+    @commands.cooldown(1, 3, commands.BucketType.user)
+    async def pfx_pat(self, ctx, user: Optional[discord.Member] = None):
+        await self.fun_pat(ctx, user=user)
+
+    @commands.command(
+        name="poke",
+        extras={
+            "category": "\U0001f389 Fun",
+            "short": "Poke someone",
+            "usage": "poke [user]",
+            "desc": "Pokes another user with a random anime GIF.",
+            "args": [("user", "Who to poke (optional)")],
+            "perms": "None",
+            "example": "!poke @Snow",
+        },
+    )
+    @commands.cooldown(1, 3, commands.BucketType.user)
+    async def pfx_poke(self, ctx, user: Optional[discord.Member] = None):
+        await self.fun_poke(ctx, user=user)
+
+    @commands.command(
+        name="boop",
+        extras={
+            "category": "\U0001f389 Fun",
+            "short": "Boop the snoot",
+            "usage": "boop [user]",
+            "desc": "Boops another user's snoot with a random anime GIF.",
+            "args": [("user", "Who to boop (optional)")],
+            "perms": "None",
+            "example": "!boop @Snow",
+        },
+    )
+    @commands.cooldown(1, 3, commands.BucketType.user)
+    async def pfx_boop(self, ctx, user: Optional[discord.Member] = None):
+        await self.fun_boop(ctx, user=user)
+
+    @commands.command(
+        name="wave",
+        extras={
+            "category": "\U0001f389 Fun",
+            "short": "Wave at someone",
+            "usage": "wave [user]",
+            "desc": "Waves at another user with a random anime GIF.",
+            "args": [("user", "Who to wave at (optional)")],
+            "perms": "None",
+            "example": "!wave @Snow",
+        },
+    )
+    @commands.cooldown(1, 3, commands.BucketType.user)
+    async def pfx_wave(self, ctx, user: Optional[discord.Member] = None):
+        await self.fun_wave(ctx, user=user)
+
+    @commands.command(
+        name="highfive",
+        extras={
+            "category": "\U0001f389 Fun",
+            "short": "High five someone",
+            "usage": "highfive [user]",
+            "desc": "High fives another user with a random anime GIF.",
+            "args": [("user", "Who to high five (optional)")],
+            "perms": "None",
+            "example": "!highfive @Snow",
+        },
+    )
+    @commands.cooldown(1, 3, commands.BucketType.user)
+    async def pfx_highfive(self, ctx, user: Optional[discord.Member] = None):
+        await self.fun_highfive(ctx, user=user)
+
+    @commands.command(
+        name="cuddle",
+        extras={
+            "category": "\U0001f389 Fun",
+            "short": "Cuddle someone",
+            "usage": "cuddle [user]",
+            "desc": "Cuddles another user with a random anime GIF.",
+            "args": [("user", "Who to cuddle (optional)")],
+            "perms": "None",
+            "example": "!cuddle @Snow",
+        },
+    )
+    @commands.cooldown(1, 3, commands.BucketType.user)
+    async def pfx_cuddle(self, ctx, user: Optional[discord.Member] = None):
+        await self.fun_cuddle(ctx, user=user)
+
+    @commands.command(
+        name="slap",
+        extras={
+            "category": "\U0001f389 Fun",
+            "short": "Slap someone",
+            "usage": "slap [user]",
+            "desc": "Slaps another user with a random anime GIF.",
+            "args": [("user", "Who to slap (optional)")],
+            "perms": "None",
+            "example": "!slap @Snow",
+        },
+    )
+    @commands.cooldown(1, 3, commands.BucketType.user)
+    async def pfx_slap(self, ctx, user: Optional[discord.Member] = None):
+        await self.fun_slap(ctx, user=user)
+
+    @commands.command(
+        name="tickle",
+        extras={
+            "category": "\U0001f389 Fun",
+            "short": "Tickle someone",
+            "usage": "tickle [user]",
+            "desc": "Tickles another user with a random anime GIF.",
+            "args": [("user", "Who to tickle (optional)")],
+            "perms": "None",
+            "example": "!tickle @Snow",
+        },
+    )
+    @commands.cooldown(1, 3, commands.BucketType.user)
+    async def pfx_tickle(self, ctx, user: Optional[discord.Member] = None):
+        await self.fun_tickle(ctx, user=user)
+
+    @commands.command(
+        name="bite",
+        extras={
+            "category": "\U0001f389 Fun",
+            "short": "Bite someone",
+            "usage": "bite [user]",
+            "desc": "Bites another user with a random anime GIF.",
+            "args": [("user", "Who to bite (optional)")],
+            "perms": "None",
+            "example": "!bite @Snow",
+        },
+    )
+    @commands.cooldown(1, 3, commands.BucketType.user)
+    async def pfx_bite(self, ctx, user: Optional[discord.Member] = None):
+        await self.fun_bite(ctx, user=user)
+
+    @commands.command(
+        name="funkick",
+        aliases=["fk"],
+        extras={
+            "category": "\U0001f389 Fun",
+            "short": "Fun-kick someone",
+            "usage": "funkick [user]",
+            "desc": "Kicks another user with a random anime GIF. Just for fun, not moderation.",
+            "args": [("user", "Who to kick (optional)")],
+            "perms": "None",
+            "example": "!funkick @Snow",
+        },
+    )
+    @commands.cooldown(1, 3, commands.BucketType.user)
+    async def pfx_funkick(self, ctx, user: Optional[discord.Member] = None):
+        await self.fun_kick(ctx, user=user)
+
+    @commands.command(
+        name="punch",
+        extras={
+            "category": "\U0001f389 Fun",
+            "short": "Punch someone",
+            "usage": "punch [user]",
+            "desc": "Punches another user with a random anime GIF.",
+            "args": [("user", "Who to punch (optional)")],
+            "perms": "None",
+            "example": "!punch @Snow",
+        },
+    )
+    @commands.cooldown(1, 3, commands.BucketType.user)
+    async def pfx_punch(self, ctx, user: Optional[discord.Member] = None):
+        await self.fun_punch(ctx, user=user)
+
+    @commands.command(
+        name="yeet",
+        extras={
+            "category": "\U0001f389 Fun",
+            "short": "Yeet someone",
+            "usage": "yeet [user]",
+            "desc": "Yeets another user with a random anime GIF.",
+            "args": [("user", "Who to yeet (optional)")],
+            "perms": "None",
+            "example": "!yeet @Snow",
+        },
+    )
+    @commands.cooldown(1, 3, commands.BucketType.user)
+    async def pfx_yeet(self, ctx, user: Optional[discord.Member] = None):
+        await self.fun_yeet(ctx, user=user)
+
+    @commands.command(
+        name="feed",
+        extras={
+            "category": "\U0001f389 Fun",
+            "short": "Feed someone",
+            "usage": "feed [user]",
+            "desc": "Feeds another user with a random anime GIF.",
+            "args": [("user", "Who to feed (optional)")],
+            "perms": "None",
+            "example": "!feed @Snow",
+        },
+    )
+    @commands.cooldown(1, 3, commands.BucketType.user)
+    async def pfx_feed(self, ctx, user: Optional[discord.Member] = None):
+        await self.fun_feed(ctx, user=user)
+
+    @commands.command(
+        name="handhold",
+        extras={
+            "category": "\U0001f389 Fun",
+            "short": "Hold someone's hand",
+            "usage": "handhold [user]",
+            "desc": "Holds another user's hand with a random anime GIF.",
+            "args": [("user", "Who to hold hands with (optional)")],
+            "perms": "None",
+            "example": "!handhold @Snow",
+        },
+    )
+    @commands.cooldown(1, 3, commands.BucketType.user)
+    async def pfx_handhold(self, ctx, user: Optional[discord.Member] = None):
+        await self.fun_handhold(ctx, user=user)
+
+    @commands.command(
+        name="handshake",
+        extras={
+            "category": "\U0001f389 Fun",
+            "short": "Shake someone's hand",
+            "usage": "handshake [user]",
+            "desc": "Shakes another user's hand with a random anime GIF.",
+            "args": [("user", "Who to shake hands with (optional)")],
+            "perms": "None",
+            "example": "!handshake @Snow",
+        },
+    )
+    @commands.cooldown(1, 3, commands.BucketType.user)
+    async def pfx_handshake(self, ctx, user: Optional[discord.Member] = None):
+        await self.fun_handshake(ctx, user=user)
+
+    @commands.command(
+        name="peck",
+        extras={
+            "category": "\U0001f389 Fun",
+            "short": "Give a quick peck",
+            "usage": "peck [user]",
+            "desc": "Gives another user a quick peck with a random anime GIF.",
+            "args": [("user", "Who to peck (optional)")],
+            "perms": "None",
+            "example": "!peck @Snow",
+        },
+    )
+    @commands.cooldown(1, 3, commands.BucketType.user)
+    async def pfx_peck(self, ctx, user: Optional[discord.Member] = None):
+        await self.fun_peck(ctx, user=user)
+
+    @commands.command(
+        name="nom",
+        extras={
+            "category": "\U0001f389 Fun",
+            "short": "Nom on someone",
+            "usage": "nom [user]",
+            "desc": "Noms on another user with a random anime GIF.",
+            "args": [("user", "Who to nom on (optional)")],
+            "perms": "None",
+            "example": "!nom @Snow",
+        },
+    )
+    @commands.cooldown(1, 3, commands.BucketType.user)
+    async def pfx_nom(self, ctx, user: Optional[discord.Member] = None):
+        await self.fun_nom(ctx, user=user)
+
+    @commands.command(
+        name="shoot",
+        extras={
+            "category": "\U0001f389 Fun",
+            "short": "Finger-gun someone",
+            "usage": "shoot [user]",
+            "desc": "Shoots another user with finger guns and a random anime GIF.",
+            "args": [("user", "Who to shoot (optional)")],
+            "perms": "None",
+            "example": "!shoot @Snow",
+        },
+    )
+    @commands.cooldown(1, 3, commands.BucketType.user)
+    async def pfx_shoot(self, ctx, user: Optional[discord.Member] = None):
+        await self.fun_shoot(ctx, user=user)
+
+    @commands.command(
+        name="stare",
+        extras={
+            "category": "\U0001f389 Fun",
+            "short": "Stare at someone",
+            "usage": "stare [user]",
+            "desc": "Stares at another user with a random anime GIF.",
+            "args": [("user", "Who to stare at (optional)")],
+            "perms": "None",
+            "example": "!stare @Snow",
+        },
+    )
+    @commands.cooldown(1, 3, commands.BucketType.user)
+    async def pfx_stare(self, ctx, user: Optional[discord.Member] = None):
+        await self.fun_stare(ctx, user=user)
+
+    @commands.command(
         name="cry",
-        description="Have a good cry. \U0001f622",
         extras={
             "category": "\U0001f389 Fun",
             "short": "Cry",
@@ -904,14 +1160,11 @@ class Fun(commands.Cog):
         },
     )
     @commands.cooldown(1, 3, commands.BucketType.user)
-    async def cry(self, ctx: commands.Context):
-        await self._do_solo(ctx, "cry", msg="{author} is crying... \U0001f622")
+    async def pfx_cry(self, ctx):
+        await self.fun_cry(ctx)
 
-    # ── dance ──────────────────────────────────────────────────────────────────
-
-    @commands.hybrid_command(
+    @commands.command(
         name="dance",
-        description="Show off your moves! \U0001f57a",
         extras={
             "category": "\U0001f389 Fun",
             "short": "Dance",
@@ -923,16 +1176,11 @@ class Fun(commands.Cog):
         },
     )
     @commands.cooldown(1, 3, commands.BucketType.user)
-    async def dance(self, ctx: commands.Context):
-        await self._do_solo(
-            ctx, "dance", msg="{author} is dancing! \U0001f57a", color=h.GREEN
-        )
+    async def pfx_dance(self, ctx):
+        await self.fun_dance(ctx)
 
-    # ── blush ──────────────────────────────────────────────────────────────────
-
-    @commands.hybrid_command(
+    @commands.command(
         name="blush",
-        description="Blush! \U0001f633",
         extras={
             "category": "\U0001f389 Fun",
             "short": "Blush",
@@ -944,14 +1192,11 @@ class Fun(commands.Cog):
         },
     )
     @commands.cooldown(1, 3, commands.BucketType.user)
-    async def blush(self, ctx: commands.Context):
-        await self._do_solo(ctx, "blush", msg="{author} is blushing! \U0001f633")
+    async def pfx_blush(self, ctx):
+        await self.fun_blush(ctx)
 
-    # ── smile ──────────────────────────────────────────────────────────────────
-
-    @commands.hybrid_command(
+    @commands.command(
         name="smile",
-        description="Smile! \U0001f60a",
         extras={
             "category": "\U0001f389 Fun",
             "short": "Smile",
@@ -963,16 +1208,11 @@ class Fun(commands.Cog):
         },
     )
     @commands.cooldown(1, 3, commands.BucketType.user)
-    async def smile(self, ctx: commands.Context):
-        await self._do_solo(
-            ctx, "smile", msg="{author} smiles! \U0001f60a", color=h.GREEN
-        )
+    async def pfx_smile(self, ctx):
+        await self.fun_smile(ctx)
 
-    # ── laugh ──────────────────────────────────────────────────────────────────
-
-    @commands.hybrid_command(
+    @commands.command(
         name="laugh",
-        description="Laugh out loud! \U0001f602",
         extras={
             "category": "\U0001f389 Fun",
             "short": "Laugh",
@@ -984,16 +1224,11 @@ class Fun(commands.Cog):
         },
     )
     @commands.cooldown(1, 3, commands.BucketType.user)
-    async def laugh(self, ctx: commands.Context):
-        await self._do_solo(
-            ctx, "laugh", msg="{author} is laughing! \U0001f602", color=h.YELLOW
-        )
+    async def pfx_laugh(self, ctx):
+        await self.fun_laugh(ctx)
 
-    # ── smug ───────────────────────────────────────────────────────────────────
-
-    @commands.hybrid_command(
+    @commands.command(
         name="smug",
-        description="Look smug. \U0001f60f",
         extras={
             "category": "\U0001f389 Fun",
             "short": "Look smug",
@@ -1005,14 +1240,11 @@ class Fun(commands.Cog):
         },
     )
     @commands.cooldown(1, 3, commands.BucketType.user)
-    async def smug(self, ctx: commands.Context):
-        await self._do_solo(ctx, "smug", msg="{author} looks smug. \U0001f60f")
+    async def pfx_smug(self, ctx):
+        await self.fun_smug(ctx)
 
-    # ── think ──────────────────────────────────────────────────────────────────
-
-    @commands.hybrid_command(
+    @commands.command(
         name="think",
-        description="Think hard about something. \U0001f914",
         extras={
             "category": "\U0001f389 Fun",
             "short": "Think",
@@ -1024,16 +1256,11 @@ class Fun(commands.Cog):
         },
     )
     @commands.cooldown(1, 3, commands.BucketType.user)
-    async def think(self, ctx: commands.Context):
-        await self._do_solo(
-            ctx, "think", msg="{author} is thinking... \U0001f914", color=h.BLUE
-        )
+    async def pfx_think(self, ctx):
+        await self.fun_think(ctx)
 
-    # ── shrug ──────────────────────────────────────────────────────────────────
-
-    @commands.hybrid_command(
+    @commands.command(
         name="shrug",
-        description="Shrug it off. \U0001f937",
         extras={
             "category": "\U0001f389 Fun",
             "short": "Shrug",
@@ -1045,14 +1272,11 @@ class Fun(commands.Cog):
         },
     )
     @commands.cooldown(1, 3, commands.BucketType.user)
-    async def shrug(self, ctx: commands.Context):
-        await self._do_solo(ctx, "shrug", msg="{author} shrugs. \U0001f937")
+    async def pfx_shrug(self, ctx):
+        await self.fun_shrug(ctx)
 
-    # ── pout ───────────────────────────────────────────────────────────────────
-
-    @commands.hybrid_command(
+    @commands.command(
         name="pout",
-        description="Pout! \U0001f61e",
         extras={
             "category": "\U0001f389 Fun",
             "short": "Pout",
@@ -1064,14 +1288,11 @@ class Fun(commands.Cog):
         },
     )
     @commands.cooldown(1, 3, commands.BucketType.user)
-    async def pout(self, ctx: commands.Context):
-        await self._do_solo(ctx, "pout", msg="{author} is pouting! \U0001f61e")
+    async def pfx_pout(self, ctx):
+        await self.fun_pout(ctx)
 
-    # ── facepalm ───────────────────────────────────────────────────────────────
-
-    @commands.hybrid_command(
+    @commands.command(
         name="facepalm",
-        description="Facepalm. \U0001f926",
         extras={
             "category": "\U0001f389 Fun",
             "short": "Facepalm",
@@ -1083,16 +1304,11 @@ class Fun(commands.Cog):
         },
     )
     @commands.cooldown(1, 3, commands.BucketType.user)
-    async def facepalm(self, ctx: commands.Context):
-        await self._do_solo(
-            ctx, "facepalm", msg="{author} facepalms. \U0001f926", color=h.YELLOW
-        )
+    async def pfx_facepalm(self, ctx):
+        await self.fun_facepalm(ctx)
 
-    # ── happy ──────────────────────────────────────────────────────────────────
-
-    @commands.hybrid_command(
+    @commands.command(
         name="happy",
-        description="Express your happiness! \U0001f60a",
         extras={
             "category": "\U0001f389 Fun",
             "short": "Be happy",
@@ -1104,16 +1320,11 @@ class Fun(commands.Cog):
         },
     )
     @commands.cooldown(1, 3, commands.BucketType.user)
-    async def happy(self, ctx: commands.Context):
-        await self._do_solo(
-            ctx, "happy", msg="{author} is happy! \U0001f60a", color=h.GREEN
-        )
+    async def pfx_happy(self, ctx):
+        await self.fun_happy(ctx)
 
-    # ── bored ──────────────────────────────────────────────────────────────────
-
-    @commands.hybrid_command(
+    @commands.command(
         name="bored",
-        description="Express your boredom. \U0001f971",
         extras={
             "category": "\U0001f389 Fun",
             "short": "Be bored",
@@ -1125,14 +1336,11 @@ class Fun(commands.Cog):
         },
     )
     @commands.cooldown(1, 3, commands.BucketType.user)
-    async def bored(self, ctx: commands.Context):
-        await self._do_solo(ctx, "bored", msg="{author} is bored... \U0001f971")
+    async def pfx_bored(self, ctx):
+        await self.fun_bored(ctx)
 
-    # ── sleep ──────────────────────────────────────────────────────────────────
-
-    @commands.hybrid_command(
+    @commands.command(
         name="sleep",
-        description="Go to sleep. \U0001f634",
         extras={
             "category": "\U0001f389 Fun",
             "short": "Sleep",
@@ -1144,16 +1352,11 @@ class Fun(commands.Cog):
         },
     )
     @commands.cooldown(1, 3, commands.BucketType.user)
-    async def sleep(self, ctx: commands.Context):
-        await self._do_solo(
-            ctx, "sleep", msg="{author} is sleeping... zzZ \U0001f634", color=h.BLUE
-        )
+    async def pfx_sleep(self, ctx):
+        await self.fun_sleep(ctx)
 
-    # ── thumbsup ───────────────────────────────────────────────────────────────
-
-    @commands.hybrid_command(
+    @commands.command(
         name="thumbsup",
-        description="Give a thumbs up! \U0001f44d",
         extras={
             "category": "\U0001f389 Fun",
             "short": "Thumbs up",
@@ -1165,16 +1368,11 @@ class Fun(commands.Cog):
         },
     )
     @commands.cooldown(1, 3, commands.BucketType.user)
-    async def thumbsup(self, ctx: commands.Context):
-        await self._do_solo(
-            ctx, "thumbsup", msg="{author} gives a thumbs up! \U0001f44d", color=h.GREEN
-        )
+    async def pfx_thumbsup(self, ctx):
+        await self.fun_thumbsup(ctx)
 
-    # ── nod ─────────────────────────────────────────────────────────────────────
-
-    @commands.hybrid_command(
+    @commands.command(
         name="nod",
-        description="Nod in agreement. \U0001f642",
         extras={
             "category": "\U0001f389 Fun",
             "short": "Nod",
@@ -1186,14 +1384,11 @@ class Fun(commands.Cog):
         },
     )
     @commands.cooldown(1, 3, commands.BucketType.user)
-    async def nod(self, ctx: commands.Context):
-        await self._do_solo(ctx, "nod", msg="{author} nods. \U0001f642")
+    async def pfx_nod(self, ctx):
+        await self.fun_nod(ctx)
 
-    # ── nope ───────────────────────────────────────────────────────────────────
-
-    @commands.hybrid_command(
+    @commands.command(
         name="nope",
-        description="Nope out. \U0001f645",
         extras={
             "category": "\U0001f389 Fun",
             "short": "Nope",
@@ -1205,16 +1400,11 @@ class Fun(commands.Cog):
         },
     )
     @commands.cooldown(1, 3, commands.BucketType.user)
-    async def nope(self, ctx: commands.Context):
-        await self._do_solo(
-            ctx, "nope", msg="{author} says NOPE. \U0001f645", color=h.RED
-        )
+    async def pfx_nope(self, ctx):
+        await self.fun_nope(ctx)
 
-    # ── wink ───────────────────────────────────────────────────────────────────
-
-    @commands.hybrid_command(
+    @commands.command(
         name="wink",
-        description="Wink! \U0001f609",
         extras={
             "category": "\U0001f389 Fun",
             "short": "Wink",
@@ -1226,14 +1416,11 @@ class Fun(commands.Cog):
         },
     )
     @commands.cooldown(1, 3, commands.BucketType.user)
-    async def wink(self, ctx: commands.Context):
-        await self._do_solo(ctx, "wink", msg="{author} winks! \U0001f609")
+    async def pfx_wink(self, ctx):
+        await self.fun_wink(ctx)
 
-    # ── yawn ───────────────────────────────────────────────────────────────────
-
-    @commands.hybrid_command(
+    @commands.command(
         name="yawn",
-        description="Yawn. \U0001f971",
         extras={
             "category": "\U0001f389 Fun",
             "short": "Yawn",
@@ -1245,14 +1432,11 @@ class Fun(commands.Cog):
         },
     )
     @commands.cooldown(1, 3, commands.BucketType.user)
-    async def yawn(self, ctx: commands.Context):
-        await self._do_solo(ctx, "yawn", msg="{author} yawns... \U0001f971")
+    async def pfx_yawn(self, ctx):
+        await self.fun_yawn(ctx)
 
-    # ── lurk ───────────────────────────────────────────────────────────────────
-
-    @commands.hybrid_command(
+    @commands.command(
         name="lurk",
-        description="Lurk in the shadows. \U0001f440",
         extras={
             "category": "\U0001f389 Fun",
             "short": "Lurk",
@@ -1264,16 +1448,11 @@ class Fun(commands.Cog):
         },
     )
     @commands.cooldown(1, 3, commands.BucketType.user)
-    async def lurk(self, ctx: commands.Context):
-        await self._do_solo(
-            ctx, "lurk", msg="{author} is lurking... \U0001f440", color=h.BLUE
-        )
+    async def pfx_lurk(self, ctx):
+        await self.fun_lurk(ctx)
 
-    # ── baka ───────────────────────────────────────────────────────────────────
-
-    @commands.hybrid_command(
+    @commands.command(
         name="baka",
-        description="Call someone a baka! \U0001f621",
         extras={
             "category": "\U0001f389 Fun",
             "short": "Baka!",
@@ -1285,16 +1464,11 @@ class Fun(commands.Cog):
         },
     )
     @commands.cooldown(1, 3, commands.BucketType.user)
-    async def baka(self, ctx: commands.Context):
-        await self._do_solo(
-            ctx, "baka", msg="{author} yells BAKA! \U0001f621", color=h.RED
-        )
+    async def pfx_baka(self, ctx):
+        await self.fun_baka(ctx)
 
-    # ── angry ──────────────────────────────────────────────────────────────────
-
-    @commands.hybrid_command(
+    @commands.command(
         name="angry",
-        description="Express your anger! \U0001f620",
         extras={
             "category": "\U0001f389 Fun",
             "short": "Be angry",
@@ -1306,16 +1480,11 @@ class Fun(commands.Cog):
         },
     )
     @commands.cooldown(1, 3, commands.BucketType.user)
-    async def angry(self, ctx: commands.Context):
-        await self._do_solo(
-            ctx, "angry", msg="{author} is angry! \U0001f620", color=h.RED
-        )
+    async def pfx_angry(self, ctx):
+        await self.fun_angry(ctx)
 
-    # ── run ─────────────────────────────────────────────────────────────────────
-
-    @commands.hybrid_command(
+    @commands.command(
         name="run",
-        description="Run away! \U0001f3c3",
         extras={
             "category": "\U0001f389 Fun",
             "short": "Run away",
@@ -1327,89 +1496,28 @@ class Fun(commands.Cog):
         },
     )
     @commands.cooldown(1, 3, commands.BucketType.user)
-    async def run(self, ctx: commands.Context):
-        await self._do_solo(
-            ctx, "run", msg="{author} is running away! \U0001f3c3", color=h.YELLOW
-        )
+    async def pfx_run(self, ctx):
+        await self.fun_run(ctx)
 
-    # ══════════════════════════════════════════════════════════════════════════
-    #  OTHER FUN COMMANDS
-    # ══════════════════════════════════════════════════════════════════════════
-
-    # ── ship ───────────────────────────────────────────────────────────────────
-
-    @commands.hybrid_command(
+    @commands.command(
         name="ship",
-        description="Check the compatibility between two users. \U0001f495",
         extras={
             "category": "\U0001f389 Fun",
-            "short": "Ship two users and get a compatibility rating",
+            "short": "Ship two users",
             "usage": "ship <user1> <user2>",
-            "desc": (
-                "Smashes two users' names together into a ship name and gives a "
-                "compatibility score (0-100%). The same pair always gets the same score."
-            ),
-            "args": [
-                ("user1", "First user"),
-                ("user2", "Second user"),
-            ],
+            "desc": "Smashes two users' names together into a ship name and gives a compatibility score (0-100%).",
+            "args": [("user1", "First user"), ("user2", "Second user")],
             "perms": "None",
             "example": "!ship @Snow @Nano",
         },
     )
-    @app_commands.describe(user1="First user", user2="Second user")
     @commands.cooldown(1, 5, commands.BucketType.user)
-    async def ship(
-        self,
-        ctx: commands.Context,
-        user1: discord.Member,
-        user2: discord.Member,
-    ):
-        # Same user twice
-        if user1 == user2:
-            e = discord.Embed(
-                title="\U0001f495 Ship",
-                description=(
-                    f"**{user1.display_name}** + **{user2.display_name}**\n\n"
-                    "Loving yourself is valid, but this is next level. \U0001f4af"
-                ),
-                color=_PINK,
-            )
-            e.set_footer(text="NanoBot Fun \u00b7 Results are totally scientific")
-            return await ctx.reply(embed=e)
+    async def pfx_ship(self, ctx, user1: discord.Member, user2: discord.Member):
+        await self.fun_ship(ctx, user1=user1, user2=user2)
 
-        # Bot is involved
-        if ctx.guild.me in (user1, user2):
-            e = discord.Embed(
-                title="\U0001f495 Ship",
-                description=(
-                    "I'm flattered, but I'm in a committed relationship with my codebase. \U0001f4be"
-                ),
-                color=_PINK,
-            )
-            e.set_footer(text="NanoBot Fun \u00b7 Results are totally scientific")
-            return await ctx.reply(embed=e)
-
-        score = _ship_score(user1.id, user2.id)
-        name = _ship_name(user1.display_name, user2.display_name)
-        bar = _progress_bar(score)
-        verdict = _ship_verdict(score)
-
-        e = discord.Embed(title=f"\U0001f495 {name}", color=_PINK)
-        e.add_field(
-            name=f"{user1.display_name} \u00d7 {user2.display_name}",
-            value=f"{bar} **{score}%**\n{verdict}",
-            inline=False,
-        )
-        e.set_footer(text="NanoBot Fun \u00b7 Results are totally scientific")
-        await ctx.reply(embed=e)
-
-    # ── 8ball ──────────────────────────────────────────────────────────────────
-
-    @commands.hybrid_command(
+    @commands.command(
         name="8ball",
         aliases=["eightball", "magic8ball"],
-        description="Ask the magic 8-ball a question. \U0001f3b1",
         extras={
             "category": "\U0001f389 Fun",
             "short": "Ask the magic 8-ball",
@@ -1417,30 +1525,12 @@ class Fun(commands.Cog):
             "desc": "Ask a yes/no question and the magic 8-ball will answer.",
             "args": [("question", "Your yes/no question")],
             "perms": "None",
-            "example": "!8ball Will I pass my exam?\n!8ball Am I cool?",
+            "example": "!8ball Will I pass my exam?",
         },
     )
-    @app_commands.describe(question="Your yes/no question")
     @commands.cooldown(1, 3, commands.BucketType.user)
-    async def eightball(self, ctx: commands.Context, *, question: str):
-        pool = random.choice([_8BALL_POSITIVE, _8BALL_NEUTRAL, _8BALL_NEGATIVE])
-        answer = random.choice(pool)
-
-        if pool is _8BALL_POSITIVE:
-            color = h.GREEN
-        elif pool is _8BALL_NEUTRAL:
-            color = h.YELLOW
-        else:
-            color = h.RED
-
-        e = discord.Embed(title="\U0001f3b1 Magic 8-Ball", color=color)
-        e.add_field(name="Question", value=question[:256], inline=False)
-        e.add_field(name="Answer", value=f"**{answer}**", inline=False)
-        e.set_footer(text="NanoBot Fun")
-        await ctx.reply(embed=e)
-
-
-# ── Setup ─────────────────────────────────────────────────────────────────────
+    async def pfx_8ball(self, ctx, *, question: str):
+        await self.fun_8ball(ctx, question=question)
 
 
 async def setup(bot: commands.Bot):
