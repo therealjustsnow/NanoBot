@@ -841,11 +841,13 @@ class Fun(commands.Cog):
             "perms": "None",
             "example": f"!{name} @Snow",
         }
+
         @commands.command(name=name, aliases=aliases, extras=extras)
         @commands.cooldown(1, 3, commands.BucketType.user)
         async def cmd(self, ctx, user: Optional[discord.Member] = None, _d=data):
             e = await self._action_embed(ctx.guild.me, ctx.author, user, _d)
             await ctx.reply(embed=e)
+
         cmd.__qualname__ = f"Fun.pfx_{action}"
         return cmd
 
@@ -861,11 +863,13 @@ class Fun(commands.Cog):
             "perms": "None",
             "example": f"!{action}",
         }
+
         @commands.command(name=action, extras=extras)
         @commands.cooldown(1, 3, commands.BucketType.user)
         async def cmd(self, ctx, _d=data):
             e = await self._react_embed(ctx.author, _d)
             await ctx.reply(embed=e)
+
         cmd.__qualname__ = f"Fun.pfx_{action}"
         return cmd
 
