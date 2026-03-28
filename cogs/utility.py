@@ -62,6 +62,7 @@ _CATEGORY_ORDER: list[str] = [
     "🗳️ Voting",
     "🎉 Fun",
     "😄 React",
+    "🖼️ Images",
     "⚙️ Config & Info",
     "🔧 Owner / Admin",
 ]
@@ -361,6 +362,14 @@ _CATEGORY_ALIASES: dict[str, str] = {
     "reactions": "😄 React",
     "emote": "😄 React",
     "emotes": "😄 React",
+    # 🖼️ Images
+    "images": "🖼️ Images",
+    "image": "🖼️ Images",
+    "anime": "🖼️ Images",
+    "waifu": "🖼️ Images",
+    "neko": "🖼️ Images",
+    "kitsune": "🖼️ Images",
+    "husbando": "🖼️ Images",
     # 🔧 Owner / Admin
     "admin": "🔧 Owner / Admin",
     "owner": "🔧 Owner / Admin",
