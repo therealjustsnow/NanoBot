@@ -60,6 +60,8 @@ _CATEGORY_ORDER: list[str] = [
     "🛡️ Auto Mod",
     "🎛️ Role Panels",
     "🗳️ Voting",
+    "🎉 Fun",
+    "😄 React",
     "⚙️ Config & Info",
     "🔧 Owner / Admin",
 ]
@@ -348,6 +350,17 @@ _CATEGORY_ALIASES: dict[str, str] = {
     "settings": "⚙️ Config & Info",
     "utility": "⚙️ Config & Info",
     "general": "⚙️ Config & Info",
+    # 🎉 Fun
+    "fun": "🎉 Fun",
+    "social": "🎉 Fun",
+    "ship": "🎉 Fun",
+    "8ball": "🎉 Fun",
+    # 😄 React
+    "react": "😄 React",
+    "reaction": "😄 React",
+    "reactions": "😄 React",
+    "emote": "😄 React",
+    "emotes": "😄 React",
     # 🔧 Owner / Admin
     "admin": "🔧 Owner / Admin",
     "owner": "🔧 Owner / Admin",
