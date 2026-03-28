@@ -100,6 +100,7 @@ _ALL_COGS = (
     "cogs.automod",
     "cogs.roles",
     "cogs.fun",
+    "cogs.images",
     "cogs.eli5",
 )
 
