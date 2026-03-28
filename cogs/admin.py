@@ -45,6 +45,7 @@ _ALL_COGS = (
     "cogs.automod",
     "cogs.roles",
     "cogs.eli5",
+    "cogs.images",
     "cogs.fun",
 )
 
