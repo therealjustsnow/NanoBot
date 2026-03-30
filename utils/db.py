@@ -98,6 +98,7 @@ async def init() -> None:
             dm          INTEGER NOT NULL DEFAULT 1
         );
         CREATE INDEX IF NOT EXISTS reminders_target ON reminders (target_id);
+        CREATE INDEX IF NOT EXISTS reminders_setter ON reminders (set_by_id);
     """)
 
     await _db.commit()
@@ -488,6 +489,17 @@ async def count_user_reminders(user_id: int) -> int:
     ) as cur:
         row = await cur.fetchone()
     return row[0]
+
+
+async def get_sent_reminders(user_id: int) -> dict:
+    """Reminders this user set for OTHER people (set_by = user, target != user)."""
+    async with _conn().execute(
+        "SELECT id, target_id, set_by_id, guild_id, channel_id, message, due, duration, dm "
+        "FROM reminders WHERE set_by_id=? AND target_id!=?",
+        (str(user_id), str(user_id)),
+    ) as cur:
+        rows = await cur.fetchall()
+    return {r["id"]: _reminder_row(r) for r in rows}
 
 
 def _reminder_row(r: aiosqlite.Row) -> dict:
