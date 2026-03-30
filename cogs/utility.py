@@ -17,6 +17,8 @@ import platform
 import sys
 from typing import Optional
 
+import psutil
+
 import discord
 from discord import app_commands
 from discord.ext import commands
@@ -544,6 +546,9 @@ class Utility(commands.Cog):
 
     def __init__(self, bot: commands.Bot):
         self.bot = bot
+        # Prime psutil so the first stats call returns a real CPU %
+        self._proc = psutil.Process()
+        self._proc.cpu_percent(interval=None)
 
     # ══════════════════════════════════════════════════════════════════════
     #  help
@@ -1419,12 +1424,12 @@ class Utility(commands.Cog):
         description="NanoBot runtime statistics since last start.",
         extras={
             "category": "⚙️ Config & Info",
-            "short": "Runtime stats — commands ran, servers, members, uptime",
+            "short": "Runtime stats — commands ran, servers, members, uptime, CPU, memory",
             "usage": "stats",
             "desc": (
                 "Shows a snapshot of NanoBot's activity since the last start: "
                 "commands run, uptime, server count, member breakdown, "
-                "channel counts, and current latency."
+                "channel counts, CPU usage, memory usage, and current latency."
             ),
             "args": [],
             "perms": "None",
@@ -1484,6 +1489,17 @@ class Utility(commands.Cog):
             value=f"**{text_channels:,}** text · **{voice_channels:,}** voice",
             inline=True,
         )
+        # Process-level resource usage
+        cpu = self._proc.cpu_percent(interval=None)
+        mem = self._proc.memory_info().rss
+        if mem >= 1 << 30:
+            mem_str = f"{mem / (1 << 30):.2f} GB"
+        else:
+            mem_str = f"{mem / (1 << 20):.1f} MB"
+
+        e.add_field(name="🖥️ CPU", value=f"**{cpu:.1f}%**", inline=True)
+        e.add_field(name="🧠 Memory", value=f"**{mem_str}**", inline=True)
+
         e.add_field(
             name="📦 discord.py Version",
             value=f"**{discord.__version__}**",
