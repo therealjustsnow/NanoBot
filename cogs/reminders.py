@@ -11,31 +11,21 @@ Commands
   /remindme  <text> <time> [dm]
   /remind    @user  <text> <time> [dm]
   /reminders                           → list your active reminders
-  /reminders cancel <id>               → cancel one
+  /reminders cancel <number>           → cancel by list number
 
 Prefix shorthands:
   !remindme do this 8h
   !remindme do this in 8 hours
   !remind @user do that 1h
   !reminders
-  !reminders cancel abc123
+  !reminders cancel 2
 
 ──────────────────────────────────────────────────────
-Storage  (data/reminders.json)
+Storage  (SQLite via utils/db.py)
 ──────────────────────────────────────────────────────
-Flat dict keyed by reminder ID:
-  {
-    "abc123": {
-      "id":         "abc123",
-      "target_id":  "123456789",
-      "set_by_id":  "123456789",
-      "guild_id":   "987654321",
-      "channel_id": "111222333",
-      "message":    "do this",
-      "due":        1234567890.0,
-      "dm":         true
-    }
-  }
+Reminders table keyed by internal ID (hidden from users).
+Users see sequential numbers (#1, #2, #3) based on their
+sorted list at the time of viewing.
 """
 
 import asyncio
@@ -63,13 +53,33 @@ _MAX_SECS = 365 * 86400  # 1 year
 
 
 def _new_id() -> str:
-    """6-character alphanumeric ID — short enough to type on mobile."""
+    """6-character internal ID for DB/task tracking. Never shown to users."""
     alphabet = string.ascii_lowercase + string.digits
     return "".join(secrets.choice(alphabet) for _ in range(6))
 
 
 def _now() -> float:
     return datetime.now(timezone.utc).timestamp()
+
+
+def _build_numbered_list(own: dict, sent: dict) -> list[tuple[int, str, dict, str]]:
+    """Build a combined numbered list of reminders.
+
+    Returns list of (number, rid, info, section) tuples sorted by due date.
+    Own reminders come first, then sent reminders, each sorted by due date.
+    """
+    entries: list[tuple[int, str, dict, str]] = []
+    n = 1
+
+    for rid, info in sorted(own.items(), key=lambda x: x[1]["due"]):
+        entries.append((n, rid, info, "own"))
+        n += 1
+
+    for rid, info in sorted(sent.items(), key=lambda x: x[1]["due"]):
+        entries.append((n, rid, info, "sent"))
+        n += 1
+
+    return entries
 
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -238,7 +248,7 @@ class Reminders(commands.Cog):
                 ephemeral=True,
             )
 
-        # Generate a collision-free unique ID
+        # Generate a collision-free internal ID
         rid = _new_id()
         while await db.reminder_id_exists(rid):
             rid = _new_id()
@@ -272,10 +282,11 @@ class Reminders(commands.Cog):
                 if use_dm
                 else f"📬 Delivery: channel ping"
             ),
-            f"🆔 ID: `{rid}`  _(use to cancel)_",
         ]
         if not is_self:
             lines.insert(0, f"👤 Reminding **{target.display_name}**")
+
+        lines.append(f"View or cancel: `{ctx.prefix or '/'}reminders`")
 
         await ctx.reply(
             embed=h.ok("\n".join(lines), "⏰ Reminder Set"),
@@ -408,13 +419,13 @@ class Reminders(commands.Cog):
         extras={
             "category": "⏰ Reminders",
             "short": "List or cancel your active reminders",
-            "usage": "reminders [cancel <id>]",
-            "desc": "No args: lists all your active reminders. cancel <id>: cancels that reminder.",
+            "usage": "reminders [cancel <number>]",
+            "desc": "No args: lists all your active reminders. cancel <number>: cancels that reminder by its list number.",
             "args": [
-                ("id", "6-character reminder ID shown when the reminder was set"),
+                ("number", "Reminder number shown in the list"),
             ],
             "perms": "None",
-            "example": "!reminders cancel abc123",
+            "example": "!reminders cancel 2",
         },
     )
     @commands.cooldown(1, 5, commands.BucketType.user)
@@ -427,17 +438,18 @@ class Reminders(commands.Cog):
         await self._list(ctx)
 
     @reminders.command(
-        name="cancel", description="Cancel an active reminder by its ID."
+        name="cancel", description="Cancel an active reminder by its list number."
     )
     @app_commands.describe(
-        reminder_id="The 6-character ID shown when the reminder was set"
+        number="The number shown next to the reminder in your list"
     )
-    async def reminders_cancel(self, ctx: commands.Context, reminder_id: str):
-        await self._cancel(ctx, reminder_id.strip().lower())
+    async def reminders_cancel(self, ctx: commands.Context, number: int):
+        await self._cancel(ctx, number)
 
     # ── List helper ────────────────────────────────────────────────────────────
     async def _list(self, ctx: commands.Context):
-        user_rems = await db.get_user_reminders(ctx.author.id)
+        own_rems = await db.get_user_reminders(ctx.author.id)
+        sent_rems = await db.get_sent_reminders(ctx.author.id)
 
         try:
             from cogs.votes import get_reminder_limit
@@ -446,7 +458,7 @@ class Reminders(commands.Cog):
         except Exception:
             user_max = _MAX
 
-        if not user_rems:
+        if not own_rems and not sent_rems:
             return await ctx.reply(
                 embed=h.info(
                     "You have no active reminders.\nUse `remindme` to set one.",
@@ -455,63 +467,105 @@ class Reminders(commands.Cog):
                 ephemeral=True,
             )
 
+        entries = _build_numbered_list(own_rems, sent_rems)
+        now = _now()
+
         e = h.embed(
-            title=f"⏰ Your Reminders ({len(user_rems)}/{user_max})",
+            title=f"⏰ Your Reminders ({len(own_rems)}/{user_max})",
             color=h.BLUE,
         )
 
-        now = _now()
-        for rid, info in sorted(user_rems.items(), key=lambda x: x[1]["due"]):
-            due_dt = datetime.fromtimestamp(info["due"], tz=timezone.utc)
-            remaining = max(0, info["due"] - now)
-            msg_preview = info["message"][:80] + (
-                "…" if len(info["message"]) > 80 else ""
-            )
-            delivery = "DM" if info.get("dm") else "channel ping"
+        # ── Own reminders section ─────────────────────────────────────────────
+        own_entries = [x for x in entries if x[3] == "own"]
+        if own_entries:
+            lines = []
+            for num, rid, info, section in own_entries:
+                due_dt = datetime.fromtimestamp(info["due"], tz=timezone.utc)
+                remaining = max(0, info["due"] - now)
+                msg_preview = info["message"][:60] + (
+                    "..." if len(info["message"]) > 60 else ""
+                )
+                delivery = "DM" if info.get("dm") else "channel"
 
-            # Show who set it if it wasn't self-set
-            set_note = ""
-            if info.get("set_by_id") and info["set_by_id"] != info["target_id"]:
-                setter = self.bot.get_user(int(info["set_by_id"]))
-                set_note = f"\nSet by: {setter.display_name if setter else '?'}"
+                set_note = ""
+                if info.get("set_by_id") and info["set_by_id"] != info["target_id"]:
+                    setter = self.bot.get_user(int(info["set_by_id"]))
+                    set_note = f" (from {setter.display_name if setter else '?'})"
+
+                lines.append(
+                    f"**#{num}** {msg_preview}{set_note}\n"
+                    f"  {discord.utils.format_dt(due_dt, style='R')} · {delivery}"
+                )
 
             e.add_field(
-                name=f"`{rid}` — {discord.utils.format_dt(due_dt, style='R')}",
-                value=(
-                    f"{msg_preview}\n"
-                    f"📬 {delivery} · ⏱️ {h.fmt_duration(int(remaining))}{set_note}\n"
-                    f"_Cancel: `{ctx.prefix or '/'}reminders cancel {rid}`_"
-                ),
+                name="Your Reminders",
+                value="\n".join(lines),
                 inline=False,
             )
 
-        e.set_footer(text=f"NanoBot Reminders · {len(user_rems)}/{user_max} active")
+        # ── Sent reminders section ────────────────────────────────────────────
+        sent_entries = [x for x in entries if x[3] == "sent"]
+        if sent_entries:
+            lines = []
+            for num, rid, info, section in sent_entries:
+                due_dt = datetime.fromtimestamp(info["due"], tz=timezone.utc)
+                remaining = max(0, info["due"] - now)
+                msg_preview = info["message"][:60] + (
+                    "..." if len(info["message"]) > 60 else ""
+                )
+                delivery = "DM" if info.get("dm") else "channel"
+
+                target = self.bot.get_user(int(info["target_id"]))
+                target_name = target.display_name if target else "?"
+
+                lines.append(
+                    f"**#{num}** {msg_preview} (to {target_name})\n"
+                    f"  {discord.utils.format_dt(due_dt, style='R')} · {delivery}"
+                )
+
+            e.add_field(
+                name="Sent Reminders",
+                value="\n".join(lines),
+                inline=False,
+            )
+
+        cancel_prefix = ctx.prefix or "/"
+        e.set_footer(
+            text=f"Cancel: {cancel_prefix}reminders cancel <number>"
+        )
         await ctx.reply(embed=e, ephemeral=True)
 
     # ── Cancel helper ──────────────────────────────────────────────────────────
-    async def _cancel(self, ctx: commands.Context, rid: str):
-        # Look up in user's own reminders first, then globally (to check ownership)
-        user_rems = await db.get_user_reminders(ctx.author.id)
-        if rid in user_rems:
-            info = user_rems[rid]
-        else:
-            all_rems = await db.get_all_reminders()
-            if rid not in all_rems:
-                return await ctx.reply(
-                    embed=h.err(
-                        f"No reminder with ID `{rid}` found.\nUse `reminders` to see your active ones."
-                    ),
-                    ephemeral=True,
-                )
-            info = all_rems[rid]
+    async def _cancel(self, ctx: commands.Context, number: int):
+        own_rems = await db.get_user_reminders(ctx.author.id)
+        sent_rems = await db.get_sent_reminders(ctx.author.id)
+        entries = _build_numbered_list(own_rems, sent_rems)
 
-        # Only the target or the person who set it can cancel
-        allowed = {info.get("target_id"), info.get("set_by_id")}
-        if str(ctx.author.id) not in allowed:
+        if not entries:
             return await ctx.reply(
-                embed=h.err("You can only cancel your own reminders."),
+                embed=h.err("You have no active reminders to cancel."),
                 ephemeral=True,
             )
+
+        # Find the entry matching the requested number
+        match = None
+        for num, rid, info, section in entries:
+            if num == number:
+                match = (rid, info)
+                break
+
+        if not match:
+            total = len(entries)
+            return await ctx.reply(
+                embed=h.err(
+                    f"No reminder **#{number}**. You have **{total}** active "
+                    f"({'1' if total == 1 else f'1-{total}'}).\n"
+                    f"Use `{ctx.prefix or '/'}reminders` to see the list."
+                ),
+                ephemeral=True,
+            )
+
+        rid, info = match
 
         # Cancel the running task
         task = self._tasks.pop(rid, None)
@@ -523,14 +577,14 @@ class Reminders(commands.Cog):
         due_dt = datetime.fromtimestamp(info["due"], tz=timezone.utc)
         await ctx.reply(
             embed=h.ok(
-                f"Cancelled reminder `{rid}`.\n"
+                f"Cancelled reminder **#{number}**.\n"
                 f"📝 _{info['message'][:150]}_\n"
                 f"Was due {discord.utils.format_dt(due_dt, style='R')}.",
                 "⏰ Reminder Cancelled",
             ),
             ephemeral=True,
         )
-        log.info(f"Reminder {rid} cancelled by {ctx.author}")
+        log.info(f"Reminder {rid} (#{number}) cancelled by {ctx.author}")
 
 
 # ── Registration ───────────────────────────────────────────────────────────────
