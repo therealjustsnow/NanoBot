@@ -440,9 +440,7 @@ class Reminders(commands.Cog):
     @reminders.command(
         name="cancel", description="Cancel an active reminder by its list number."
     )
-    @app_commands.describe(
-        number="The number shown next to the reminder in your list"
-    )
+    @app_commands.describe(number="The number shown next to the reminder in your list")
     async def reminders_cancel(self, ctx: commands.Context, number: int):
         await self._cancel(ctx, number)
 
@@ -530,9 +528,7 @@ class Reminders(commands.Cog):
             )
 
         cancel_prefix = ctx.prefix or "/"
-        e.set_footer(
-            text=f"Cancel: {cancel_prefix}reminders cancel <number>"
-        )
+        e.set_footer(text=f"Cancel: {cancel_prefix}reminders cancel <number>")
         await ctx.reply(embed=e, ephemeral=True)
 
     # ── Cancel helper ──────────────────────────────────────────────────────────
