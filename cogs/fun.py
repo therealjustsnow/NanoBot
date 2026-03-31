@@ -649,6 +649,56 @@ async def _fetch_gif(session: aiohttp.ClientSession, endpoint: str) -> str | Non
     return None
 
 
+# ── Command factories (module-level so CogMeta reliably binds .cog) ───────
+
+def _pfx_social(action):
+    """Generate a prefix command for a social action from _SOCIAL_ACTIONS."""
+    data = _SOCIAL_ACTIONS[action]
+    name = "funkick" if action == "kick" else action
+    aliases = ["fk"] if action == "kick" else []
+    extras = {
+        "category": "\U0001f389 Fun",
+        "short": data["short"],
+        "usage": f"{name} [user]",
+        "desc": data["short"] + " with a random anime GIF.",
+        "args": [("user", "Who to target (optional)")],
+        "perms": "None",
+        "example": f"!{name} @Snow",
+    }
+
+    @commands.command(name=name, aliases=aliases, extras=extras)
+    @commands.cooldown(1, 3, commands.BucketType.user)
+    async def cmd(self, ctx, user: Optional[discord.Member] = None, _d=data):
+        e = await self._action_embed(ctx.guild.me, ctx.author, user, _d)
+        await ctx.reply(embed=e)
+
+    cmd.__qualname__ = f"Fun.pfx_{action}"
+    return cmd
+
+
+def _pfx_react(action):
+    """Generate a prefix command for a solo reaction from _REACT_ACTIONS."""
+    data = _REACT_ACTIONS[action]
+    extras = {
+        "category": "\U0001f604 React",
+        "short": data["short"],
+        "usage": action,
+        "desc": data["short"] + " with a random anime GIF.",
+        "args": [],
+        "perms": "None",
+        "example": f"!{action}",
+    }
+
+    @commands.command(name=action, extras=extras)
+    @commands.cooldown(1, 3, commands.BucketType.user)
+    async def cmd(self, ctx, _d=data):
+        e = await self._react_embed(ctx.author, _d)
+        await ctx.reply(embed=e)
+
+    cmd.__qualname__ = f"Fun.pfx_{action}"
+    return cmd
+
+
 # ══════════════════════════════════════════════════════════════════════════════
 class Fun(commands.Cog):
     """Fun social interaction and reaction commands."""
@@ -824,54 +874,6 @@ class Fun(commands.Cog):
     # ══════════════════════════════════════════════════════════════════════════
     #  PREFIX: flat commands  (!hug, !cry, !ship, !8ball, etc.)
     # ══════════════════════════════════════════════════════════════════════════
-
-    # ── factories ─────────────────────────────────────────────────────────────
-
-    def _pfx_social(action):
-        """Generate a prefix command for a social action from _SOCIAL_ACTIONS."""
-        data = _SOCIAL_ACTIONS[action]
-        name = "funkick" if action == "kick" else action
-        aliases = ["fk"] if action == "kick" else []
-        extras = {
-            "category": "\U0001f389 Fun",
-            "short": data["short"],
-            "usage": f"{name} [user]",
-            "desc": data["short"] + " with a random anime GIF.",
-            "args": [("user", "Who to target (optional)")],
-            "perms": "None",
-            "example": f"!{name} @Snow",
-        }
-
-        @commands.command(name=name, aliases=aliases, extras=extras)
-        @commands.cooldown(1, 3, commands.BucketType.user)
-        async def cmd(self, ctx, user: Optional[discord.Member] = None, _d=data):
-            e = await self._action_embed(ctx.guild.me, ctx.author, user, _d)
-            await ctx.reply(embed=e)
-
-        cmd.__qualname__ = f"Fun.pfx_{action}"
-        return cmd
-
-    def _pfx_react(action):
-        """Generate a prefix command for a solo reaction from _REACT_ACTIONS."""
-        data = _REACT_ACTIONS[action]
-        extras = {
-            "category": "\U0001f604 React",
-            "short": data["short"],
-            "usage": action,
-            "desc": data["short"] + " with a random anime GIF.",
-            "args": [],
-            "perms": "None",
-            "example": f"!{action}",
-        }
-
-        @commands.command(name=action, extras=extras)
-        @commands.cooldown(1, 3, commands.BucketType.user)
-        async def cmd(self, ctx, _d=data):
-            e = await self._react_embed(ctx.author, _d)
-            await ctx.reply(embed=e)
-
-        cmd.__qualname__ = f"Fun.pfx_{action}"
-        return cmd
 
     # ── social prefix commands ────────────────────────────────────────────────
     pfx_bite = _pfx_social("bite")
