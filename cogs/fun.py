@@ -852,9 +852,7 @@ class Fun(commands.Cog):
             async def social_cmd(
                 _self, ctx, user: Optional[discord.Member] = None, _d=data
             ):
-                e = await cog._action_embed(
-                    ctx.guild.me, ctx.author, user, _d
-                )
+                e = await cog._action_embed(ctx.guild.me, ctx.author, user, _d)
                 await ctx.reply(embed=e)
 
             social_cmd.cog = cog
