@@ -649,57 +649,6 @@ async def _fetch_gif(session: aiohttp.ClientSession, endpoint: str) -> str | Non
     return None
 
 
-# ── Command factories (module-level so CogMeta reliably binds .cog) ───────
-
-
-def _pfx_social(action):
-    """Generate a prefix command for a social action from _SOCIAL_ACTIONS."""
-    data = _SOCIAL_ACTIONS[action]
-    name = "funkick" if action == "kick" else action
-    aliases = ["fk"] if action == "kick" else []
-    extras = {
-        "category": "\U0001f389 Fun",
-        "short": data["short"],
-        "usage": f"{name} [user]",
-        "desc": data["short"] + " with a random anime GIF.",
-        "args": [("user", "Who to target (optional)")],
-        "perms": "None",
-        "example": f"!{name} @Snow",
-    }
-
-    @commands.command(name=name, aliases=aliases, extras=extras)
-    @commands.cooldown(1, 3, commands.BucketType.user)
-    async def cmd(self, ctx, user: Optional[discord.Member] = None, _d=data):
-        e = await self._action_embed(ctx.guild.me, ctx.author, user, _d)
-        await ctx.reply(embed=e)
-
-    cmd.__qualname__ = f"Fun.pfx_{action}"
-    return cmd
-
-
-def _pfx_react(action):
-    """Generate a prefix command for a solo reaction from _REACT_ACTIONS."""
-    data = _REACT_ACTIONS[action]
-    extras = {
-        "category": "\U0001f604 React",
-        "short": data["short"],
-        "usage": action,
-        "desc": data["short"] + " with a random anime GIF.",
-        "args": [],
-        "perms": "None",
-        "example": f"!{action}",
-    }
-
-    @commands.command(name=action, extras=extras)
-    @commands.cooldown(1, 3, commands.BucketType.user)
-    async def cmd(self, ctx, _d=data):
-        e = await self._react_embed(ctx.author, _d)
-        await ctx.reply(embed=e)
-
-    cmd.__qualname__ = f"Fun.pfx_{action}"
-    return cmd
-
-
 # ══════════════════════════════════════════════════════════════════════════════
 class Fun(commands.Cog):
     """Fun social interaction and reaction commands."""
@@ -710,8 +659,12 @@ class Fun(commands.Cog):
 
     async def cog_load(self):
         self._session = aiohttp.ClientSession()
+        self._dynamic_cmds: list[commands.Command] = []
+        self._register_prefix_commands()
 
     async def cog_unload(self):
+        for cmd in self._dynamic_cmds:
+            self.bot.remove_command(cmd.name)
         if self._session and not self._session.closed:
             await self._session.close()
 
@@ -874,70 +827,60 @@ class Fun(commands.Cog):
 
     # ══════════════════════════════════════════════════════════════════════════
     #  PREFIX: flat commands  (!hug, !cry, !ship, !8ball, etc.)
+    #  Registered dynamically in cog_load so .cog binding is not needed.
     # ══════════════════════════════════════════════════════════════════════════
 
-    # ── social prefix commands ────────────────────────────────────────────────
-    pfx_bite = _pfx_social("bite")
-    pfx_blowkiss = _pfx_social("blowkiss")
-    pfx_bonk = _pfx_social("bonk")
-    pfx_boop = _pfx_social("boop")
-    pfx_cheekskiss = _pfx_social("cheekskiss")
-    pfx_cuddle = _pfx_social("cuddle")
-    pfx_feed = _pfx_social("feed")
-    pfx_handhold = _pfx_social("handhold")
-    pfx_handshake = _pfx_social("handshake")
-    pfx_highfive = _pfx_social("highfive")
-    pfx_hug = _pfx_social("hug")
-    pfx_funkick = _pfx_social("kick")
-    pfx_kiss = _pfx_social("kiss")
-    pfx_lappillow = _pfx_social("lappillow")
-    pfx_nom = _pfx_social("nom")
-    pfx_pat = _pfx_social("pat")
-    pfx_peck = _pfx_social("peck")
-    pfx_poke = _pfx_social("poke")
-    pfx_punch = _pfx_social("punch")
-    pfx_shake = _pfx_social("shake")
-    pfx_shoot = _pfx_social("shoot")
-    pfx_slap = _pfx_social("slap")
-    pfx_stare = _pfx_social("stare")
-    pfx_tickle = _pfx_social("tickle")
-    pfx_wave = _pfx_social("wave")
-    pfx_yeet = _pfx_social("yeet")
+    def _register_prefix_commands(self):
+        """Build and register all factory prefix commands on the bot."""
+        cog = self  # captured by every closure below
 
-    # ── react prefix commands ─────────────────────────────────────────────────
-    pfx_angry = _pfx_react("angry")
-    pfx_baka = _pfx_react("baka")
-    pfx_bleh = _pfx_react("bleh")
-    pfx_blush = _pfx_react("blush")
-    pfx_bored = _pfx_react("bored")
-    pfx_clap = _pfx_react("clap")
-    pfx_confused = _pfx_react("confused")
-    pfx_cry = _pfx_react("cry")
-    pfx_dance = _pfx_react("dance")
-    pfx_facepalm = _pfx_react("facepalm")
-    pfx_happy = _pfx_react("happy")
-    pfx_laugh = _pfx_react("laugh")
-    pfx_lurk = _pfx_react("lurk")
-    pfx_nod = _pfx_react("nod")
-    pfx_nope = _pfx_react("nope")
-    pfx_nya = _pfx_react("nya")
-    pfx_pout = _pfx_react("pout")
-    pfx_run = _pfx_react("run")
-    pfx_salute = _pfx_react("salute")
-    pfx_shocked = _pfx_react("shocked")
-    pfx_shrug = _pfx_react("shrug")
-    pfx_sip = _pfx_react("sip")
-    pfx_sleep = _pfx_react("sleep")
-    pfx_smile = _pfx_react("smile")
-    pfx_smug = _pfx_react("smug")
-    pfx_spin = _pfx_react("spin")
-    pfx_tableflip = _pfx_react("tableflip")
-    pfx_teehee = _pfx_react("teehee")
-    pfx_think = _pfx_react("think")
-    pfx_thumbsup = _pfx_react("thumbsup")
-    pfx_wag = _pfx_react("wag")
-    pfx_wink = _pfx_react("wink")
-    pfx_yawn = _pfx_react("yawn")
+        for action, data in _SOCIAL_ACTIONS.items():
+            name = "funkick" if action == "kick" else action
+            aliases = ["fk"] if action == "kick" else []
+            extras = {
+                "category": "\U0001f389 Fun",
+                "short": data["short"],
+                "usage": f"{name} [user]",
+                "desc": data["short"] + " with a random anime GIF.",
+                "args": [("user", "Who to target (optional)")],
+                "perms": "None",
+                "example": f"!{name} @Snow",
+            }
+
+            @commands.command(name=name, aliases=aliases, extras=extras)
+            @commands.cooldown(1, 3, commands.BucketType.user)
+            async def social_cmd(
+                _self, ctx, user: Optional[discord.Member] = None, _d=data
+            ):
+                e = await cog._action_embed(
+                    ctx.guild.me, ctx.author, user, _d
+                )
+                await ctx.reply(embed=e)
+
+            social_cmd.cog = cog
+            self.bot.add_command(social_cmd)
+            self._dynamic_cmds.append(social_cmd)
+
+        for action, data in _REACT_ACTIONS.items():
+            extras = {
+                "category": "\U0001f604 React",
+                "short": data["short"],
+                "usage": action,
+                "desc": data["short"] + " with a random anime GIF.",
+                "args": [],
+                "perms": "None",
+                "example": f"!{action}",
+            }
+
+            @commands.command(name=action, extras=extras)
+            @commands.cooldown(1, 3, commands.BucketType.user)
+            async def react_cmd(_self, ctx, _d=data):
+                e = await cog._react_embed(ctx.author, _d)
+                await ctx.reply(embed=e)
+
+            react_cmd.cog = cog
+            self.bot.add_command(react_cmd)
+            self._dynamic_cmds.append(react_cmd)
 
     # ── ship & 8ball prefix ───────────────────────────────────────────────────
 
