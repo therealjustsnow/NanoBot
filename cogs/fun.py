@@ -921,13 +921,10 @@ class Fun(commands.Cog):
             def _make_social(name, aliases, extras, data):
                 @commands.command(name=name, aliases=aliases, extras=extras)
                 @commands.cooldown(1, 3, commands.BucketType.user)
-                async def social_cmd(
-                    _self, ctx, user: Optional[discord.Member] = None
-                ):
-                    e = await cog._action_embed(
-                        ctx.guild.me, ctx.author, user, data
-                    )
+                async def social_cmd(_self, ctx, user: Optional[discord.Member] = None):
+                    e = await cog._action_embed(ctx.guild.me, ctx.author, user, data)
                     await ctx.reply(embed=e)
+
                 return social_cmd
 
             social_cmd = _make_social(name, aliases, extras, data)
@@ -952,6 +949,7 @@ class Fun(commands.Cog):
                 async def react_cmd(_self, ctx):
                     e = await cog._react_embed(ctx.author, data)
                     await ctx.reply(embed=e)
+
                 return react_cmd
 
             react_cmd = _make_react(action, extras, data)
