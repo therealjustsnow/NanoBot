@@ -651,6 +651,7 @@ async def _fetch_gif(session: aiohttp.ClientSession, endpoint: str) -> str | Non
 
 # ── Command factories (module-level so CogMeta reliably binds .cog) ───────
 
+
 def _pfx_social(action):
     """Generate a prefix command for a social action from _SOCIAL_ACTIONS."""
     data = _SOCIAL_ACTIONS[action]
