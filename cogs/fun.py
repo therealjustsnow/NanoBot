@@ -1,24 +1,28 @@
 """
 cogs/fun.py
-Fun commands -- social interactions, solo reactions, ship, 8-ball.
+Fun commands -- social interactions, solo reactions, ship, 8-ball, fml.
 
 GIFs sourced from nekos.best (no API key required).
+FML stories scraped from fmylife.com (no API key required).
 Falls back gracefully (text-only) if the API is unavailable.
 
-Slash (1 top-level slot, 4 subcommands):
-  /fun social <action> [user]   — autocomplete picker, 26 social actions
-  /fun react <action>           — autocomplete picker, 33 solo reactions
+Slash (1 top-level slot, 5 subcommands):
+  /fun social <action> [user]   -- autocomplete picker, 26 social actions
+  /fun react <action>           -- autocomplete picker, 33 solo reactions
   /fun ship <user1> <user2>
   /fun 8ball <question>
+  /fun fml
 
 Prefix (flat):
-  !hug, !slap, !cry, !dance, !ship, !8ball, etc.
+  !hug, !slap, !cry, !dance, !ship, !8ball, !fml, etc.
 """
 
+import asyncio
 import hashlib
 import logging
 import random
 import re
+from html import unescape
 from typing import Optional
 
 import aiohttp
@@ -32,6 +36,8 @@ log = logging.getLogger("NanoBot.fun")
 
 _NEKOS_BASE = "https://nekos.best/api/v2"
 _PINK = 0xFF6EB4
+_FML_URL = "https://www.fmylife.com/random"
+_FML_BLUE = 0x00B2FF
 
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -649,6 +655,42 @@ async def _fetch_gif(session: aiohttp.ClientSession, endpoint: str) -> str | Non
     return None
 
 
+# ── FML story scraper ────────────────────────────────────────────────────
+_FML_RE = re.compile(r"Today,\s.+?FML", re.DOTALL)
+_FML_TAG_RE = re.compile(r"<[^>]+>")
+
+
+async def _fetch_fml_stories(
+    session: aiohttp.ClientSession,
+) -> list[str]:
+    """Scrape fmylife.com/random and return a list of story strings."""
+    try:
+        async with session.get(
+            _FML_URL,
+            headers={"User-Agent": "Mozilla/5.0 (compatible; NanoBot)"},
+            timeout=aiohttp.ClientTimeout(total=8),
+        ) as resp:
+            if resp.status != 200:
+                return []
+            html = await resp.text()
+    except Exception as exc:
+        log.debug(f"FML fetch failed: {exc}")
+        return []
+
+    raw_matches = _FML_RE.findall(html)
+    stories: list[str] = []
+    seen: set[str] = set()
+    for raw in raw_matches:
+        text = _FML_TAG_RE.sub("", raw)
+        text = unescape(text)
+        text = re.sub(r"\s+", " ", text).strip()
+        # Skip duplicates and fragments that leaked into share widgets
+        if len(text) > 40 and text not in seen:
+            seen.add(text)
+            stories.append(text)
+    return stories
+
+
 # ══════════════════════════════════════════════════════════════════════════════
 class Fun(commands.Cog):
     """Fun social interaction and reaction commands."""
@@ -656,6 +698,8 @@ class Fun(commands.Cog):
     def __init__(self, bot: commands.Bot):
         self.bot = bot
         self._session: aiohttp.ClientSession | None = None
+        self._fml_buffer: list[str] = []
+        self._fml_lock = asyncio.Lock()
 
     async def cog_load(self):
         self._session = aiohttp.ClientSession()
@@ -667,6 +711,16 @@ class Fun(commands.Cog):
             self.bot.remove_command(cmd.name)
         if self._session and not self._session.closed:
             await self._session.close()
+
+    # ── FML helper ────────────────────────────────────────────────────────────
+
+    async def _get_fml(self) -> str | None:
+        """Pop a story from the buffer, refilling from the site if needed."""
+        async with self._fml_lock:
+            if not self._fml_buffer and self._session:
+                self._fml_buffer = await _fetch_fml_stories(self._session)
+                random.shuffle(self._fml_buffer)
+            return self._fml_buffer.pop() if self._fml_buffer else None
 
     # ── Shared embed builders ─────────────────────────────────────────────────
 
@@ -711,7 +765,7 @@ class Fun(commands.Cog):
 
     fun_group = app_commands.Group(
         name="fun",
-        description="Fun commands -- social interactions, reactions, ship, 8-ball!",
+        description="Fun commands -- social interactions, reactions, ship, 8-ball, fml!",
         guild_only=True,
     )
 
@@ -825,6 +879,23 @@ class Fun(commands.Cog):
         e.set_footer(text="NanoBot Fun")
         await i.response.send_message(embed=e)
 
+    # ── /fun fml ──────────────────────────────────────────────────────────
+
+    @fun_group.command(
+        name="fml", description="Get a random FML story from fmylife.com"
+    )
+    async def s_fml(self, i: discord.Interaction):
+        await i.response.defer()
+        story = await self._get_fml()
+        if not story:
+            return await i.followup.send(
+                "Couldn't fetch an FML story right now. Try again later!",
+                ephemeral=True,
+            )
+        e = discord.Embed(description=story, color=_FML_BLUE)
+        e.set_footer(text="NanoBot Fun \u00b7 fmylife.com")
+        await i.followup.send(embed=e)
+
     # ══════════════════════════════════════════════════════════════════════════
     #  PREFIX: flat commands  (!hug, !cry, !ship, !8ball, etc.)
     #  Registered dynamically in cog_load so .cog binding is not needed.
@@ -847,14 +918,19 @@ class Fun(commands.Cog):
                 "example": f"!{name} @Snow",
             }
 
-            @commands.command(name=name, aliases=aliases, extras=extras)
-            @commands.cooldown(1, 3, commands.BucketType.user)
-            async def social_cmd(
-                _self, ctx, user: Optional[discord.Member] = None, _d=data
-            ):
-                e = await cog._action_embed(ctx.guild.me, ctx.author, user, _d)
-                await ctx.reply(embed=e)
+            def _make_social(name, aliases, extras, data):
+                @commands.command(name=name, aliases=aliases, extras=extras)
+                @commands.cooldown(1, 3, commands.BucketType.user)
+                async def social_cmd(
+                    _self, ctx, user: Optional[discord.Member] = None
+                ):
+                    e = await cog._action_embed(
+                        ctx.guild.me, ctx.author, user, data
+                    )
+                    await ctx.reply(embed=e)
+                return social_cmd
 
+            social_cmd = _make_social(name, aliases, extras, data)
             social_cmd.cog = cog
             self.bot.add_command(social_cmd)
             self._dynamic_cmds.append(social_cmd)
@@ -870,12 +946,15 @@ class Fun(commands.Cog):
                 "example": f"!{action}",
             }
 
-            @commands.command(name=action, extras=extras)
-            @commands.cooldown(1, 3, commands.BucketType.user)
-            async def react_cmd(_self, ctx, _d=data):
-                e = await cog._react_embed(ctx.author, _d)
-                await ctx.reply(embed=e)
+            def _make_react(action, extras, data):
+                @commands.command(name=action, extras=extras)
+                @commands.cooldown(1, 3, commands.BucketType.user)
+                async def react_cmd(_self, ctx):
+                    e = await cog._react_embed(ctx.author, data)
+                    await ctx.reply(embed=e)
+                return react_cmd
 
+            react_cmd = _make_react(action, extras, data)
             react_cmd.cog = cog
             self.bot.add_command(react_cmd)
             self._dynamic_cmds.append(react_cmd)
@@ -952,6 +1031,30 @@ class Fun(commands.Cog):
         e.add_field(name="Question", value=question[:256], inline=False)
         e.add_field(name="Answer", value=f"**{answer}**", inline=False)
         e.set_footer(text="NanoBot Fun")
+        await ctx.reply(embed=e)
+
+    @commands.command(
+        name="fml",
+        extras={
+            "category": "\U0001f389 Fun",
+            "short": "Random FML story",
+            "usage": "fml",
+            "desc": "Get a random FML story from fmylife.com.",
+            "args": [],
+            "perms": "None",
+            "example": "!fml",
+        },
+    )
+    @commands.cooldown(1, 5, commands.BucketType.user)
+    async def pfx_fml(self, ctx):
+        async with ctx.typing():
+            story = await self._get_fml()
+        if not story:
+            return await ctx.reply(
+                "Couldn't fetch an FML story right now. Try again later!"
+            )
+        e = discord.Embed(description=story, color=_FML_BLUE)
+        e.set_footer(text="NanoBot Fun \u00b7 fmylife.com")
         await ctx.reply(embed=e)
 
 
