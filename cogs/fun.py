@@ -656,7 +656,7 @@ async def _fetch_gif(session: aiohttp.ClientSession, endpoint: str) -> str | Non
 
 
 # ── FML story scraper ────────────────────────────────────────────────────
-_FML_RE = re.compile(r"Today,\s.+?FML", re.DOTALL)
+_FML_RE = re.compile(r"Today,\s.+?FML")
 _FML_TAG_RE = re.compile(r"<[^>]+>")
 
 
@@ -677,14 +677,16 @@ async def _fetch_fml_stories(
         log.debug(f"FML fetch failed: {exc}")
         return []
 
-    raw_matches = _FML_RE.findall(html)
+    # Strip all HTML tags first so the regex only sees clean text
+    clean = _FML_TAG_RE.sub(" ", html)
+    clean = unescape(clean)
+
+    raw_matches = _FML_RE.findall(clean)
     stories: list[str] = []
     seen: set[str] = set()
     for raw in raw_matches:
-        text = _FML_TAG_RE.sub("", raw)
-        text = unescape(text)
-        text = re.sub(r"\s+", " ", text).strip()
-        # Skip duplicates and fragments that leaked into share widgets
+        text = re.sub(r"\s+", " ", raw).strip()
+        # Skip duplicates and short fragments
         if len(text) > 40 and text not in seen:
             seen.add(text)
             stories.append(text)
@@ -921,14 +923,16 @@ class Fun(commands.Cog):
             def _make_social(name, aliases, extras, data):
                 @commands.command(name=name, aliases=aliases, extras=extras)
                 @commands.cooldown(1, 3, commands.BucketType.user)
-                async def social_cmd(_self, ctx, user: Optional[discord.Member] = None):
-                    e = await cog._action_embed(ctx.guild.me, ctx.author, user, data)
+                async def social_cmd(
+                    ctx, user: Optional[discord.Member] = None
+                ):
+                    e = await cog._action_embed(
+                        ctx.guild.me, ctx.author, user, data
+                    )
                     await ctx.reply(embed=e)
-
                 return social_cmd
 
             social_cmd = _make_social(name, aliases, extras, data)
-            social_cmd.cog = cog
             self.bot.add_command(social_cmd)
             self._dynamic_cmds.append(social_cmd)
 
@@ -946,14 +950,12 @@ class Fun(commands.Cog):
             def _make_react(action, extras, data):
                 @commands.command(name=action, extras=extras)
                 @commands.cooldown(1, 3, commands.BucketType.user)
-                async def react_cmd(_self, ctx):
+                async def react_cmd(ctx):
                     e = await cog._react_embed(ctx.author, data)
                     await ctx.reply(embed=e)
-
                 return react_cmd
 
             react_cmd = _make_react(action, extras, data)
-            react_cmd.cog = cog
             self.bot.add_command(react_cmd)
             self._dynamic_cmds.append(react_cmd)
 
