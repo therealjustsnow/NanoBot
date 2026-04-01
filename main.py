@@ -51,21 +51,40 @@ def _setup_logging(cfg: dict) -> logging.Logger:
         level_str = "INFO"
     level = getattr(logging, level_str)
 
-    file_handler = logging.handlers.RotatingFileHandler(
-        filename="logs/nanobot.log",
-        maxBytes=5 * 1024 * 1024,
-        backupCount=3,
-        encoding="utf-8",
-    )
-    file_handler.setFormatter(
-        logging.Formatter(
-            fmt="%(asctime)s [%(levelname)-8s] %(name)s: %(message)s",
-            datefmt="%Y-%m-%d %H:%M:%S",
-        )
+    # ── Shared formatter ──────────────────────────────────────────────────────
+    fmt = logging.Formatter(
+        fmt="%(asctime)s [%(levelname)-8s] %(name)s: %(message)s",
+        datefmt="%Y-%m-%d %H:%M:%S",
     )
 
-    discord.utils.setup_logging(level=level, root=True)
-    logging.getLogger().addHandler(file_handler)
+    # ── File handler (rotating) ───────────────────────────────────────────────
+    # ~50 KB per file ≈ 500 lines. Small enough for quick n!logs reads,
+    # 5 backups = ~300 KB total history across nanobot.log + .1 through .5.
+    file_handler = logging.handlers.RotatingFileHandler(
+        filename="logs/nanobot.log",
+        maxBytes=50 * 1024,
+        backupCount=5,
+        encoding="utf-8",
+    )
+    file_handler.setFormatter(fmt)
+
+    # ── Console handler (with colour if supported) ────────────────────────────
+    # Build it ourselves instead of calling discord.utils.setup_logging, which
+    # can stack duplicate handlers on restart and doesn't let us share the
+    # formatter with the file handler.
+    console_handler = logging.StreamHandler()
+    if discord.utils.stream_supports_colour(console_handler.stream):
+        console_handler.setFormatter(discord.utils._ColourFormatter())
+    else:
+        console_handler.setFormatter(fmt)
+
+    # ── Wire up the root logger ───────────────────────────────────────────────
+    root = logging.getLogger()
+    # Prevent handler stacking if this somehow runs twice
+    root.handlers.clear()
+    root.setLevel(level)
+    root.addHandler(file_handler)
+    root.addHandler(console_handler)
 
     http_level = logging.DEBUG if cfg.get("log_http") else logging.WARNING
     logging.getLogger("discord.http").setLevel(http_level)
