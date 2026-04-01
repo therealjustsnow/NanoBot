@@ -3,7 +3,8 @@ cogs/images.py
 Random anime image commands -- mobile-first.
 
 Images sourced from nekos.best (no API key required).
-Falls back gracefully if the API is unavailable.
+URLs cached in cache_db; scraping handled by the Fun cog's daily loop.
+Falls back to live API if cache is empty for an endpoint.
 
 Slash:  /husbando, /kitsune, /neko, /waifu  (4 top-level slots)
 Prefix: !husbando, !kitsune, !neko, !waifu
@@ -19,7 +20,6 @@ from utils import helpers as h
 
 log = logging.getLogger("NanoBot.images")
 
-_NEKOS_BASE = "https://nekos.best/api/v2"
 _PINK = 0xFF6EB4
 
 _ENDPOINTS: dict[str, dict] = {
@@ -50,23 +50,6 @@ _ENDPOINTS: dict[str, dict] = {
 }
 
 
-async def _fetch_image(session: aiohttp.ClientSession, endpoint: str) -> dict | None:
-    """Fetch a random image from nekos.best. Returns {url, artist_*} or None."""
-    try:
-        async with session.get(
-            f"{_NEKOS_BASE}/{endpoint}",
-            timeout=aiohttp.ClientTimeout(total=5),
-        ) as resp:
-            if resp.status == 200:
-                data = await resp.json()
-                results = data.get("results", [])
-                if results:
-                    return results[0]
-    except Exception as exc:
-        log.debug(f"Image fetch failed for '{endpoint}': {exc}")
-    return None
-
-
 # ══════════════════════════════════════════════════════════════════════════════
 class Images(commands.Cog):
     """Random anime image commands."""
@@ -86,10 +69,12 @@ class Images(commands.Cog):
 
     async def _image_cmd(self, ctx_or_i, key: str):
         """Handle both prefix and slash invocations."""
+        # Import here to avoid circular import at module level.
+        # fun.py owns the cache-aware getter; images.py just calls it.
+        from cogs.fun import _get_nekos_image
+
         info = _ENDPOINTS[key]
-        result = None
-        if self._session:
-            result = await _fetch_image(self._session, info["endpoint"])
+        result = await _get_nekos_image(self._session, info["endpoint"])
 
         if not result:
             e = discord.Embed(
@@ -107,9 +92,8 @@ class Images(commands.Cog):
         )
         e.set_image(url=result["url"])
 
-        # Credit the artist if nekos.best provides it
-        artist = result.get("artist_name")
-        artist_url = result.get("artist_href")
+        # Credit the artist if available
+        artist = result.get("artist")
         source_url = result.get("source_url")
         footer_parts = ["NanoBot Images"]
         if artist:
@@ -117,8 +101,6 @@ class Images(commands.Cog):
         e.set_footer(text=" \u00b7 ".join(footer_parts))
         if source_url:
             e.description = f"[\U0001f517 Source]({source_url})"
-        elif artist_url:
-            e.description = f"[\U0001f517 Artist]({artist_url})"
 
         if isinstance(ctx_or_i, discord.Interaction):
             await ctx_or_i.response.send_message(embed=e)

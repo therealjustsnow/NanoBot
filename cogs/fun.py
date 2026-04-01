@@ -7,7 +7,8 @@ GIFs sourced from nekos.best (no API key required).
 Thigh images sourced from Nekosia API (no API key required).
 WYR questions cached from truthordarebot.xyz (scraped daily).
 FML stories cached from fmylife.com (scraped daily).
-Falls back gracefully (text-only) if an API is unavailable.
+All image/GIF URLs cached in cache_db and served from cache.
+Falls back to live API if cache is empty for a given endpoint.
 
 Slash (1 top-level slot, 7 subcommands):
   /fun social <action> [user]   -- autocomplete picker, 26 social actions
@@ -56,9 +57,14 @@ _PINK = 0xFF6EB4
 _FML_URL = "https://www.fmylife.com/random"
 _FML_BLUE = 0x00B2FF
 
-# Scraper settings
-_FML_PAGES_PER_SCRAPE = 15  # ~5-10 stories each = 75-150 per run
-_WYR_REQUESTS_PER_SCRAPE = 100  # 1 question each, deduped
+# ── Scraper settings ─────────────────────────────────────────────────────────
+_FML_PAGES_PER_SCRAPE = 15       # ~5-10 stories each = 75-150 per run
+_WYR_REQUESTS_PER_SCRAPE = 100   # 1 question each, deduped
+_NEKOS_PER_ENDPOINT = 20         # GIFs/images per nekos.best endpoint per run
+_NEKOSIA_PER_TAG = 40            # images per Nekosia tag per run
+_REVALIDATE_AGE = 7 * 86400      # check URLs older than 7 days
+_REVALIDATE_BATCH = 200           # max URLs to check per revalidation cycle
+
 
 # ══════════════════════════════════════════════════════════════════════════════
 #  Action data -- single source of truth for slash AND prefix commands.
@@ -658,8 +664,15 @@ def _ship_verdict(pct: int) -> str:
     return "\U0001f494 Not meant to be."
 
 
-# ── GIF fetcher ───────────────────────────────────────────────────────────────
-async def _fetch_gif(session: aiohttp.ClientSession, endpoint: str) -> str | None:
+# ══════════════════════════════════════════════════════════════════════════════
+#  Live API fetchers -- used as fallback when cache is empty AND for scraping
+# ══════════════════════════════════════════════════════════════════════════════
+
+
+async def _fetch_nekos_single(
+    session: aiohttp.ClientSession, endpoint: str
+) -> dict | None:
+    """Fetch one result from nekos.best. Returns full result dict or None."""
     try:
         async with session.get(
             f"{_NEKOS_BASE}/{endpoint}",
@@ -669,10 +682,64 @@ async def _fetch_gif(session: aiohttp.ClientSession, endpoint: str) -> str | Non
                 data = await resp.json()
                 results = data.get("results", [])
                 if results:
-                    return results[0]["url"]
+                    return results[0]
     except Exception as exc:
-        log.debug(f"GIF fetch failed for '{endpoint}': {exc}")
+        log.debug(f"nekos.best fetch failed for '{endpoint}': {exc}")
     return None
+
+
+async def _fetch_nekos_batch(
+    session: aiohttp.ClientSession, endpoint: str, amount: int
+) -> list[dict]:
+    """Fetch up to `amount` results from nekos.best in one request (API supports amount param)."""
+    # nekos.best supports ?amount=N (max 20 per request)
+    results: list[dict] = []
+    remaining = amount
+    while remaining > 0:
+        batch = min(remaining, 20)
+        try:
+            async with session.get(
+                f"{_NEKOS_BASE}/{endpoint}",
+                params={"amount": batch},
+                timeout=aiohttp.ClientTimeout(total=8),
+            ) as resp:
+                if resp.status == 200:
+                    data = await resp.json()
+                    batch_results = data.get("results", [])
+                    results.extend(batch_results)
+                    remaining -= len(batch_results)
+                    if len(batch_results) < batch:
+                        break  # API gave us less than requested, stop
+                else:
+                    break
+        except Exception as exc:
+            log.debug(f"nekos.best batch fetch failed for '{endpoint}': {exc}")
+            break
+        if remaining > 0:
+            await asyncio.sleep(0.3)
+    return results
+
+
+async def _fetch_nekosia_single(
+    session: aiohttp.ClientSession, category: str
+) -> tuple[str | None, str | None]:
+    """Fetch a random SFW image from Nekosia. Returns (image_url, source_url)."""
+    try:
+        async with session.get(
+            f"{_NEKOSIA_BASE}/{category}",
+            timeout=aiohttp.ClientTimeout(total=6),
+        ) as resp:
+            if resp.status == 200:
+                data = await resp.json()
+                if data.get("success"):
+                    img = data.get("image", {}).get("compressed", {}).get(
+                        "url"
+                    ) or data.get("image", {}).get("original", {}).get("url")
+                    src = data.get("source", {}).get("url")
+                    return img, src
+    except Exception as exc:
+        log.debug(f"Nekosia fetch failed for '{category}': {exc}")
+    return None, None
 
 
 # ── FML story scraper (bulk, for daily cache refresh) ─────────────────────────
@@ -695,7 +762,6 @@ async def _scrape_fml_page(session: aiohttp.ClientSession) -> list[str]:
         log.debug(f"FML scrape failed: {exc}")
         return []
 
-    # Strip all HTML tags first so the regex only sees clean text
     clean = _FML_TAG_RE.sub(" ", html)
     clean = unescape(clean)
 
@@ -704,7 +770,6 @@ async def _scrape_fml_page(session: aiohttp.ClientSession) -> list[str]:
     seen: set[str] = set()
     for raw in raw_matches:
         text = re.sub(r"\s+", " ", raw).strip()
-        # Skip duplicates and short fragments
         if len(text) > 40 and text not in seen:
             seen.add(text)
             stories.append(text)
@@ -723,7 +788,6 @@ async def _scrape_fml_bulk(
             if s not in seen:
                 seen.add(s)
                 all_stories.append(s)
-        # Be polite -- don't hammer the site
         if i < pages - 1:
             await asyncio.sleep(2)
     return all_stories
@@ -757,24 +821,86 @@ async def _scrape_wyr_bulk(
         if q and q not in seen:
             seen.add(q)
             questions.append(q)
-        # Small delay to avoid rate limits
         if i < count - 1:
             await asyncio.sleep(0.5)
     return questions
 
 
+# ══════════════════════════════════════════════════════════════════════════════
+#  Cache-aware image getter -- used by commands
+# ══════════════════════════════════════════════════════════════════════════════
+
+
+async def _get_gif(
+    session: aiohttp.ClientSession | None, endpoint: str
+) -> str | None:
+    """Get a GIF URL for a nekos.best endpoint, cache-first with live fallback."""
+    cached = await cache_db.get_random_image("nekos", endpoint)
+    if cached:
+        return cached["url"]
+
+    # Cache miss -- fall back to live API
+    if not session:
+        return None
+    result = await _fetch_nekos_single(session, endpoint)
+    if result:
+        # Store it for next time
+        await cache_db.add_images("nekos", endpoint, [{"url": result["url"]}])
+        return result["url"]
+    return None
+
+
+async def _get_nekosia(
+    session: aiohttp.ClientSession | None, tag: str
+) -> tuple[str | None, str | None]:
+    """Get a Nekosia image, cache-first with live fallback."""
+    cached = await cache_db.get_random_image("nekosia", tag)
+    if cached:
+        return cached["url"], cached.get("source_url")
+
+    # Cache miss -- fall back to live API
+    if not session:
+        return None, None
+    img, src = await _fetch_nekosia_single(session, tag)
+    if img:
+        await cache_db.add_images("nekosia", tag, [{"url": img, "source_url": src}])
+    return img, src
+
+
+async def _get_nekos_image(
+    session: aiohttp.ClientSession | None, endpoint: str
+) -> dict | None:
+    """Get a nekos.best static image (for images cog), cache-first with live fallback.
+
+    Returns dict with url, source_url, artist -- or None.
+    """
+    cached = await cache_db.get_random_image("nekos", endpoint)
+    if cached:
+        return cached
+
+    # Cache miss -- fall back to live API
+    if not session:
+        return None
+    result = await _fetch_nekos_single(session, endpoint)
+    if result:
+        img_data = {
+            "url": result["url"],
+            "source_url": result.get("source_url"),
+            "artist": result.get("artist_name"),
+        }
+        await cache_db.add_images("nekos", endpoint, [img_data])
+        return img_data
+    return None
+
+
 # ── Safe typing indicator ─────────────────────────────────────────────────────
 @contextlib.asynccontextmanager
 async def _safe_typing(ctx: commands.Context):
-    """Wrapper around ctx.typing() that swallows Discord HTTP errors.
-
-    A transient 503 on the typing endpoint shouldn't kill the command.
-    """
+    """Wrapper around ctx.typing() that swallows Discord HTTP errors."""
     try:
         ctx_mgr = ctx.typing()
         await ctx_mgr.__aenter__()
     except discord.HTTPException:
-        # Typing failed, run the body without the indicator
         yield
         return
     try:
@@ -782,29 +908,6 @@ async def _safe_typing(ctx: commands.Context):
     finally:
         with contextlib.suppress(Exception):
             await ctx_mgr.__aexit__(None, None, None)
-
-
-# ── Nekosia image fetcher ─────────────────────────────────────────────────────
-async def _fetch_nekosia(
-    session: aiohttp.ClientSession, category: str
-) -> tuple[str | None, str | None]:
-    """Fetch a random SFW image from Nekosia. Returns (image_url, source_url)."""
-    try:
-        async with session.get(
-            f"{_NEKOSIA_BASE}/{category}",
-            timeout=aiohttp.ClientTimeout(total=6),
-        ) as resp:
-            if resp.status == 200:
-                data = await resp.json()
-                if data.get("success"):
-                    img = data.get("image", {}).get("compressed", {}).get(
-                        "url"
-                    ) or data.get("image", {}).get("original", {}).get("url")
-                    src = data.get("source", {}).get("url")
-                    return img, src
-    except Exception as exc:
-        log.debug(f"Nekosia fetch failed for '{category}': {exc}")
-    return None, None
 
 
 # ── WYR question splitter ─────────────────────────────────────────────────────
@@ -821,7 +924,6 @@ def _split_wyr(question: str) -> tuple[str, str]:
         a = m.group(1).strip().capitalize()
         b = m.group(2).strip().capitalize()
         return a, b
-    # Fallback: just split on " or " near the middle
     parts = question.split(" or ", 1)
     if len(parts) == 2:
         a = parts[0].replace("Would you rather ", "").strip().capitalize()
@@ -838,11 +940,9 @@ _DURATION_RE = re.compile(
 
 
 def _parse_duration(text: str | None) -> int:
-    """Parse a human duration string into seconds. Returns default 3600 (1h)."""
     if not text:
         return 3600
     text = text.strip()
-    # Plain number = minutes
     if text.isdigit():
         mins = int(text)
         return max(60, min(mins * 60, 86400))
@@ -851,12 +951,11 @@ def _parse_duration(text: str | None) -> int:
         hours = int(m.group(1) or 0)
         mins = int(m.group(2) or 0)
         total = hours * 3600 + mins * 60
-        return max(60, min(total, 86400))  # clamp 1m..24h
+        return max(60, min(total, 86400))
     return 3600
 
 
 def _fmt_duration(seconds: int) -> str:
-    """Format seconds into a human-readable string like '1h 30m'."""
     h, rem = divmod(seconds, 3600)
     m = rem // 60
     parts = []
@@ -875,7 +974,7 @@ class WyrView(discord.ui.View):
         super().__init__(timeout=duration)
         self.option_a = option_a
         self.option_b = option_b
-        self.votes: dict[int, str] = {}  # user_id -> "A" | "B"
+        self.votes: dict[int, str] = {}
         self.ended = False
         self.message: discord.Message | None = None
         self.end_ts = int(time.time() + duration)
@@ -956,7 +1055,6 @@ class WyrView(discord.ui.View):
         else:
             msg = f"Voted for **{label}**!"
         await interaction.response.send_message(msg, ephemeral=True)
-        # Update the vote count on the embed
         try:
             await interaction.message.edit(embed=self._voting_embed())
         except discord.HTTPException:
@@ -976,6 +1074,23 @@ class WyrView(discord.ui.View):
 
 
 # ══════════════════════════════════════════════════════════════════════════════
+#  Collect all unique nekos.best endpoints to scrape
+# ══════════════════════════════════════════════════════════════════════════════
+
+# Images cog endpoints (static images, not GIFs -- scraped the same way)
+_IMAGE_ENDPOINTS = ("husbando", "kitsune", "neko", "waifu")
+
+# All unique nekos.best endpoints across social + react + images
+_ALL_NEKOS_ENDPOINTS: tuple[str, ...] = tuple(
+    sorted(
+        {d["endpoint"] for d in _SOCIAL_ACTIONS.values()}
+        | {d["endpoint"] for d in _REACT_ACTIONS.values()}
+        | set(_IMAGE_ENDPOINTS)
+    )
+)
+
+
+# ══════════════════════════════════════════════════════════════════════════════
 class Fun(commands.Cog):
     """Fun social interaction and reaction commands."""
 
@@ -988,23 +1103,27 @@ class Fun(commands.Cog):
         self._dynamic_cmds: list[commands.Command] = []
         self._register_prefix_commands()
         self._scrape_loop.start()
+        self._revalidate_loop.start()
 
     async def cog_unload(self):
         self._scrape_loop.cancel()
+        self._revalidate_loop.cancel()
         for cmd in self._dynamic_cmds:
             self.bot.remove_command(cmd.name)
         if self._session and not self._session.closed:
             await self._session.close()
 
     # ══════════════════════════════════════════════════════════════════════════
-    #  Daily content scraper — fills cache_db with FML stories & WYR questions
+    #  Daily content scraper -- fills cache_db
     # ══════════════════════════════════════════════════════════════════════════
 
     @tasks.loop(hours=24)
     async def _scrape_loop(self):
-        """Scrape FML and WYR, store results in cache_db."""
+        """Scrape FML, WYR, nekos.best, and Nekosia into cache_db."""
         if not self._session or self._session.closed:
             return
+
+        start = time.monotonic()
 
         # ── FML ───────────────────────────────────────────────────────────
         try:
@@ -1014,10 +1133,10 @@ class Fun(commands.Cog):
                 total = await cache_db.count_fml()
                 log.info(
                     f"FML scrape: {len(fml_stories)} scraped, "
-                    f"{added} new, {total} total cached"
+                    f"{added} new, {total} total"
                 )
             else:
-                log.warning("FML scrape: got 0 stories (site may be down)")
+                log.warning("FML scrape: 0 stories (site may be down)")
         except Exception as exc:
             log.error(f"FML scrape error: {exc}")
 
@@ -1029,35 +1148,133 @@ class Fun(commands.Cog):
                 total = await cache_db.count_wyr()
                 log.info(
                     f"WYR scrape: {len(wyr_questions)} fetched, "
-                    f"{added} new, {total} total cached"
+                    f"{added} new, {total} total"
                 )
             else:
-                log.warning("WYR scrape: got 0 questions (API may be down)")
+                log.warning("WYR scrape: 0 questions (API may be down)")
         except Exception as exc:
             log.error(f"WYR scrape error: {exc}")
 
+        # ── nekos.best (GIFs + static images) ─────────────────────────────
+        nekos_total_added = 0
+        for ep in _ALL_NEKOS_ENDPOINTS:
+            try:
+                results = await _fetch_nekos_batch(
+                    self._session, ep, _NEKOS_PER_ENDPOINT
+                )
+                if results:
+                    img_dicts = [
+                        {
+                            "url": r["url"],
+                            "source_url": r.get("source_url"),
+                            "artist": r.get("artist_name"),
+                        }
+                        for r in results
+                    ]
+                    added = await cache_db.add_images("nekos", ep, img_dicts)
+                    nekos_total_added += added
+            except Exception as exc:
+                log.debug(f"nekos.best scrape error for '{ep}': {exc}")
+            await asyncio.sleep(0.3)
+
+        nekos_total = await cache_db.count_images("nekos")
+        log.info(
+            f"nekos.best scrape: {len(_ALL_NEKOS_ENDPOINTS)} endpoints, "
+            f"{nekos_total_added} new, {nekos_total} total"
+        )
+
+        # ── Nekosia (thigh tags) ──────────────────────────────────────────
+        nekosia_total_added = 0
+        for tag in _THIGH_TAGS:
+            for _ in range(_NEKOSIA_PER_TAG):
+                try:
+                    img, src = await _fetch_nekosia_single(self._session, tag)
+                    if img:
+                        added = await cache_db.add_images(
+                            "nekosia", tag,
+                            [{"url": img, "source_url": src}],
+                        )
+                        nekosia_total_added += added
+                except Exception as exc:
+                    log.debug(f"Nekosia scrape error for '{tag}': {exc}")
+                await asyncio.sleep(0.5)
+
+        nekosia_total = await cache_db.count_images("nekosia")
+        log.info(
+            f"Nekosia scrape: {len(_THIGH_TAGS)} tags, "
+            f"{nekosia_total_added} new, {nekosia_total} total"
+        )
+
+        elapsed = time.monotonic() - start
         await cache_db.set_meta("last_scrape", str(time.time()))
+        log.info(f"Daily scrape complete in {elapsed:.0f}s")
 
     @_scrape_loop.before_loop
     async def _before_scrape(self):
-        """Wait for bot ready, then seed cache if empty."""
+        """Wait for bot ready, log cache state."""
         await self.bot.wait_until_ready()
-
-        # If cache is empty, scrape immediately instead of waiting 24h
         fml_count = await cache_db.count_fml()
         wyr_count = await cache_db.count_wyr()
-
-        if fml_count == 0 or wyr_count == 0:
+        img_count = await cache_db.count_images()
+        if fml_count == 0 or wyr_count == 0 or img_count == 0:
             log.info(
-                f"Cache empty (FML={fml_count}, WYR={wyr_count}), "
-                "running initial scrape..."
+                f"Cache sparse (FML={fml_count}, WYR={wyr_count}, "
+                f"images={img_count}), initial scrape starting..."
             )
-            # The loop body will fire right after this returns, so we're good.
-            # No need to scrape here -- the loop runs immediately on start.
         else:
             log.info(
-                f"Cache loaded: {fml_count} FML stories, {wyr_count} WYR questions"
+                f"Cache loaded: {fml_count} FML, {wyr_count} WYR, "
+                f"{img_count} images"
             )
+
+    # ══════════════════════════════════════════════════════════════════════════
+    #  URL revalidation -- prune dead image URLs every 6 hours
+    # ══════════════════════════════════════════════════════════════════════════
+
+    @tasks.loop(hours=6)
+    async def _revalidate_loop(self):
+        """HEAD-check stale image URLs and remove dead ones."""
+        if not self._session or self._session.closed:
+            return
+
+        stale = await cache_db.get_stale_images(
+            max_age_seconds=_REVALIDATE_AGE,
+            limit=_REVALIDATE_BATCH,
+        )
+        if not stale:
+            return
+
+        removed = 0
+        verified = 0
+        for entry in stale:
+            try:
+                async with self._session.head(
+                    entry["url"],
+                    timeout=aiohttp.ClientTimeout(total=5),
+                    allow_redirects=True,
+                ) as resp:
+                    if resp.status in (200, 301, 302, 304):
+                        await cache_db.mark_verified(entry["hash"])
+                        verified += 1
+                    else:
+                        await cache_db.remove_image(entry["hash"])
+                        removed += 1
+            except Exception:
+                # Network error -- don't remove, just skip this round
+                pass
+            await asyncio.sleep(0.2)
+
+        if removed or verified:
+            log.info(
+                f"Revalidation: {verified} verified, {removed} removed "
+                f"(of {len(stale)} checked)"
+            )
+
+    @_revalidate_loop.before_loop
+    async def _before_revalidate(self):
+        await self.bot.wait_until_ready()
+        # Stagger so it doesn't overlap with the scrape loop start
+        await asyncio.sleep(300)
 
     # ── Shared embed builders ─────────────────────────────────────────────────
 
@@ -1075,10 +1292,9 @@ class Fun(commands.Cog):
                 .replace("{target}", target.mention)
             )
         e = discord.Embed(description=desc, color=c)
-        if self._session:
-            gif = await _fetch_gif(self._session, data["endpoint"])
-            if gif:
-                e.set_image(url=gif)
+        gif = await _get_gif(self._session, data["endpoint"])
+        if gif:
+            e.set_image(url=gif)
         e.set_footer(text="NanoBot Fun")
         return e
 
@@ -1089,10 +1305,9 @@ class Fun(commands.Cog):
             description=data["msg"].replace("{author}", f"**{author.display_name}**"),
             color=c,
         )
-        if self._session:
-            gif = await _fetch_gif(self._session, data["endpoint"])
-            if gif:
-                e.set_image(url=gif)
+        gif = await _get_gif(self._session, data["endpoint"])
+        if gif:
+            e.set_image(url=gif)
         e.set_footer(text="NanoBot Fun")
         return e
 
@@ -1236,11 +1451,11 @@ class Fun(commands.Cog):
 
     @fun_group.command(name="thigh", description="Random anime thigh pic (SFW)")
     async def s_thigh(self, i: discord.Interaction):
-        await i.response.defer()
-        img, src = await _fetch_nekosia(self._session, random.choice(_THIGH_TAGS))
+        tag = random.choice(_THIGH_TAGS)
+        img, src = await _get_nekosia(self._session, tag)
         if not img:
-            return await i.followup.send(
-                "Couldn't fetch an image right now. Try again later!",
+            return await i.response.send_message(
+                "No thigh images cached yet -- try again in a few minutes!",
                 ephemeral=True,
             )
         e = discord.Embed(color=_PINK)
@@ -1248,7 +1463,7 @@ class Fun(commands.Cog):
         if src:
             e.description = f"[\U0001f517 Source]({src})"
         e.set_footer(text="NanoBot Fun \u00b7 nekosia.cat")
-        await i.followup.send(embed=e)
+        await i.response.send_message(embed=e)
 
     # ── /fun wyr ───────────────────────────────────────────────────────────
 
@@ -1264,7 +1479,6 @@ class Fun(commands.Cog):
                 "No WYR questions cached yet -- try again in a few minutes!",
                 ephemeral=True,
             )
-        # Parse "Would you rather X or Y?" into two options
         opt_a, opt_b = _split_wyr(question)
         view = WyrView(opt_a, opt_b, duration=secs)
         await i.response.send_message(embed=view._voting_embed(), view=view)
@@ -1272,12 +1486,11 @@ class Fun(commands.Cog):
 
     # ══════════════════════════════════════════════════════════════════════════
     #  PREFIX: flat commands  (!hug, !cry, !ship, !8ball, etc.)
-    #  Registered dynamically in cog_load so .cog binding is not needed.
     # ══════════════════════════════════════════════════════════════════════════
 
     def _register_prefix_commands(self):
         """Build and register all factory prefix commands on the bot."""
-        cog = self  # captured by every closure below
+        cog = self
 
         for action, data in _SOCIAL_ACTIONS.items():
             name = "funkick" if action == "kick" else action
@@ -1440,11 +1653,11 @@ class Fun(commands.Cog):
     )
     @commands.cooldown(1, 5, commands.BucketType.user)
     async def pfx_thigh(self, ctx):
-        async with _safe_typing(ctx):
-            img, src = await _fetch_nekosia(self._session, random.choice(_THIGH_TAGS))
+        tag = random.choice(_THIGH_TAGS)
+        img, src = await _get_nekosia(self._session, tag)
         if not img:
             return await ctx.reply(
-                "Couldn't fetch an image right now. Try again later!"
+                "No thigh images cached yet -- try again in a few minutes!"
             )
         e = discord.Embed(color=_PINK)
         e.set_image(url=img)
