@@ -491,6 +491,7 @@ async def main():
             await bot.start(token)
     finally:
         await db.close()
+        await cache_db.close()
 
 
 if __name__ == "__main__":
