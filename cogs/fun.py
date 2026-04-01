@@ -58,12 +58,12 @@ _FML_URL = "https://www.fmylife.com/random"
 _FML_BLUE = 0x00B2FF
 
 # ── Scraper settings ─────────────────────────────────────────────────────────
-_FML_PAGES_PER_SCRAPE = 15  # ~5-10 stories each = 75-150 per run
+_FML_PAGES_PER_SCRAPE = 100  # ~5-10 stories each = 500-1000 per run
 _WYR_REQUESTS_PER_SCRAPE = 100  # 1 question each, deduped
-_NEKOS_PER_ENDPOINT = 20  # GIFs/images per nekos.best endpoint per run
+_NEKOS_PER_ENDPOINT = 40  # GIFs/images per nekos.best endpoint per run
 _NEKOSIA_PER_TAG = 40  # images per Nekosia tag per run
 _REVALIDATE_AGE = 7 * 86400  # check URLs older than 7 days
-_REVALIDATE_BATCH = 200  # max URLs to check per revalidation cycle
+_REVALIDATE_BATCH = 400  # max URLs to check per revalidation cycle
 
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -789,7 +789,7 @@ async def _scrape_fml_bulk(
                 seen.add(s)
                 all_stories.append(s)
         if i < pages - 1:
-            await asyncio.sleep(2)
+            await asyncio.sleep(1)
     return all_stories
 
 
