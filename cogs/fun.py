@@ -5,8 +5,8 @@ thigh, would-you-rather.
 
 GIFs sourced from nekos.best (no API key required).
 Thigh images sourced from Nekosia API (no API key required).
-WYR questions sourced from truthordarebot.xyz (no API key required).
-FML stories scraped from fmylife.com (no API key required).
+WYR questions cached from truthordarebot.xyz (scraped daily).
+FML stories cached from fmylife.com (scraped daily).
 Falls back gracefully (text-only) if an API is unavailable.
 
 Slash (1 top-level slot, 7 subcommands):
@@ -35,8 +35,9 @@ from typing import Optional
 import aiohttp
 import discord
 from discord import app_commands
-from discord.ext import commands
+from discord.ext import commands, tasks
 
+from utils import cache_db
 from utils import helpers as h
 
 log = logging.getLogger("NanoBot.fun")
@@ -55,6 +56,9 @@ _PINK = 0xFF6EB4
 _FML_URL = "https://www.fmylife.com/random"
 _FML_BLUE = 0x00B2FF
 
+# Scraper settings
+_FML_PAGES_PER_SCRAPE = 15  # ~5-10 stories each = 75-150 per run
+_WYR_REQUESTS_PER_SCRAPE = 100  # 1 question each, deduped
 
 # ══════════════════════════════════════════════════════════════════════════════
 #  Action data -- single source of truth for slash AND prefix commands.
@@ -671,14 +675,12 @@ async def _fetch_gif(session: aiohttp.ClientSession, endpoint: str) -> str | Non
     return None
 
 
-# ── FML story scraper ────────────────────────────────────────────────────
-_FML_RE = re.compile(r"Today,\s.+?FML")
+# ── FML story scraper (bulk, for daily cache refresh) ─────────────────────────
+_FML_RE = re.compile(r"(?:Today|I)\s.+?FML")
 _FML_TAG_RE = re.compile(r"<[^>]+>")
 
 
-async def _fetch_fml_stories(
-    session: aiohttp.ClientSession,
-) -> list[str]:
+async def _scrape_fml_page(session: aiohttp.ClientSession) -> list[str]:
     """Scrape fmylife.com/random and return a list of story strings."""
     try:
         async with session.get(
@@ -690,7 +692,7 @@ async def _fetch_fml_stories(
                 return []
             html = await resp.text()
     except Exception as exc:
-        log.debug(f"FML fetch failed: {exc}")
+        log.debug(f"FML scrape failed: {exc}")
         return []
 
     # Strip all HTML tags first so the regex only sees clean text
@@ -707,6 +709,58 @@ async def _fetch_fml_stories(
             seen.add(text)
             stories.append(text)
     return stories
+
+
+async def _scrape_fml_bulk(
+    session: aiohttp.ClientSession, pages: int = _FML_PAGES_PER_SCRAPE
+) -> list[str]:
+    """Hit fmylife.com/random multiple times and return all unique stories."""
+    all_stories: list[str] = []
+    seen: set[str] = set()
+    for i in range(pages):
+        page_stories = await _scrape_fml_page(session)
+        for s in page_stories:
+            if s not in seen:
+                seen.add(s)
+                all_stories.append(s)
+        # Be polite -- don't hammer the site
+        if i < pages - 1:
+            await asyncio.sleep(2)
+    return all_stories
+
+
+# ── WYR question fetcher (bulk, for daily cache refresh) ──────────────────────
+async def _fetch_wyr_single(session: aiohttp.ClientSession) -> str | None:
+    """Fetch a single Would You Rather question from truthordarebot.xyz."""
+    try:
+        async with session.get(
+            _WYR_URL,
+            params={"rating": "pg13"},
+            timeout=aiohttp.ClientTimeout(total=5),
+        ) as resp:
+            if resp.status == 200:
+                data = await resp.json()
+                return data.get("question")
+    except Exception as exc:
+        log.debug(f"WYR fetch failed: {exc}")
+    return None
+
+
+async def _scrape_wyr_bulk(
+    session: aiohttp.ClientSession, count: int = _WYR_REQUESTS_PER_SCRAPE
+) -> list[str]:
+    """Fetch many WYR questions, deduplicating as we go."""
+    questions: list[str] = []
+    seen: set[str] = set()
+    for i in range(count):
+        q = await _fetch_wyr_single(session)
+        if q and q not in seen:
+            seen.add(q)
+            questions.append(q)
+        # Small delay to avoid rate limits
+        if i < count - 1:
+            await asyncio.sleep(0.5)
+    return questions
 
 
 # ── Safe typing indicator ─────────────────────────────────────────────────────
@@ -751,23 +805,6 @@ async def _fetch_nekosia(
     except Exception as exc:
         log.debug(f"Nekosia fetch failed for '{category}': {exc}")
     return None, None
-
-
-# ── WYR question fetcher ─────────────────────────────────────────────────────
-async def _fetch_wyr(session: aiohttp.ClientSession) -> str | None:
-    """Fetch a Would You Rather question from truthordarebot.xyz."""
-    try:
-        async with session.get(
-            _WYR_URL,
-            params={"rating": "pg13"},
-            timeout=aiohttp.ClientTimeout(total=5),
-        ) as resp:
-            if resp.status == 200:
-                data = await resp.json()
-                return data.get("question")
-    except Exception as exc:
-        log.debug(f"WYR fetch failed: {exc}")
-    return None
 
 
 # ── WYR question splitter ─────────────────────────────────────────────────────
@@ -945,29 +982,80 @@ class Fun(commands.Cog):
     def __init__(self, bot: commands.Bot):
         self.bot = bot
         self._session: aiohttp.ClientSession | None = None
-        self._fml_buffer: list[str] = []
-        self._fml_lock = asyncio.Lock()
 
     async def cog_load(self):
         self._session = aiohttp.ClientSession()
         self._dynamic_cmds: list[commands.Command] = []
         self._register_prefix_commands()
+        self._scrape_loop.start()
 
     async def cog_unload(self):
+        self._scrape_loop.cancel()
         for cmd in self._dynamic_cmds:
             self.bot.remove_command(cmd.name)
         if self._session and not self._session.closed:
             await self._session.close()
 
-    # ── FML helper ────────────────────────────────────────────────────────────
+    # ══════════════════════════════════════════════════════════════════════════
+    #  Daily content scraper — fills cache_db with FML stories & WYR questions
+    # ══════════════════════════════════════════════════════════════════════════
 
-    async def _get_fml(self) -> str | None:
-        """Pop a story from the buffer, refilling from the site if needed."""
-        async with self._fml_lock:
-            if not self._fml_buffer and self._session:
-                self._fml_buffer = await _fetch_fml_stories(self._session)
-                random.shuffle(self._fml_buffer)
-            return self._fml_buffer.pop() if self._fml_buffer else None
+    @tasks.loop(hours=24)
+    async def _scrape_loop(self):
+        """Scrape FML and WYR, store results in cache_db."""
+        if not self._session or self._session.closed:
+            return
+
+        # ── FML ───────────────────────────────────────────────────────────
+        try:
+            fml_stories = await _scrape_fml_bulk(self._session)
+            if fml_stories:
+                added = await cache_db.add_fml_stories(fml_stories)
+                total = await cache_db.count_fml()
+                log.info(
+                    f"FML scrape: {len(fml_stories)} scraped, "
+                    f"{added} new, {total} total cached"
+                )
+            else:
+                log.warning("FML scrape: got 0 stories (site may be down)")
+        except Exception as exc:
+            log.error(f"FML scrape error: {exc}")
+
+        # ── WYR ───────────────────────────────────────────────────────────
+        try:
+            wyr_questions = await _scrape_wyr_bulk(self._session)
+            if wyr_questions:
+                added = await cache_db.add_wyr_questions(wyr_questions)
+                total = await cache_db.count_wyr()
+                log.info(
+                    f"WYR scrape: {len(wyr_questions)} fetched, "
+                    f"{added} new, {total} total cached"
+                )
+            else:
+                log.warning("WYR scrape: got 0 questions (API may be down)")
+        except Exception as exc:
+            log.error(f"WYR scrape error: {exc}")
+
+        await cache_db.set_meta("last_scrape", str(time.time()))
+
+    @_scrape_loop.before_loop
+    async def _before_scrape(self):
+        """Wait for bot ready, then seed cache if empty."""
+        await self.bot.wait_until_ready()
+
+        # If cache is empty, scrape immediately instead of waiting 24h
+        fml_count = await cache_db.count_fml()
+        wyr_count = await cache_db.count_wyr()
+
+        if fml_count == 0 or wyr_count == 0:
+            log.info(
+                f"Cache empty (FML={fml_count}, WYR={wyr_count}), "
+                "running initial scrape..."
+            )
+            # The loop body will fire right after this returns, so we're good.
+            # No need to scrape here -- the loop runs immediately on start.
+        else:
+            log.info(f"Cache loaded: {fml_count} FML stories, {wyr_count} WYR questions")
 
     # ── Shared embed builders ─────────────────────────────────────────────────
 
@@ -1007,7 +1095,7 @@ class Fun(commands.Cog):
         return e
 
     # ══════════════════════════════════════════════════════════════════════════
-    #  SLASH: /fun group  (4 subcommands, 1 top-level slot)
+    #  SLASH: /fun group  (7 subcommands, 1 top-level slot)
     # ══════════════════════════════════════════════════════════════════════════
 
     fun_group = app_commands.Group(
@@ -1132,16 +1220,15 @@ class Fun(commands.Cog):
         name="fml", description="Get a random FML story from fmylife.com"
     )
     async def s_fml(self, i: discord.Interaction):
-        await i.response.defer()
-        story = await self._get_fml()
+        story = await cache_db.get_random_fml()
         if not story:
-            return await i.followup.send(
-                "Couldn't fetch an FML story right now. Try again later!",
+            return await i.response.send_message(
+                "No FML stories cached yet -- try again in a few minutes!",
                 ephemeral=True,
             )
         e = discord.Embed(description=story, color=_FML_BLUE)
         e.set_footer(text="NanoBot Fun \u00b7 fmylife.com")
-        await i.followup.send(embed=e)
+        await i.response.send_message(embed=e)
 
     # ── /fun thigh ─────────────────────────────────────────────────────────
 
@@ -1169,18 +1256,17 @@ class Fun(commands.Cog):
     )
     async def s_wyr(self, i: discord.Interaction, duration: str | None = None):
         secs = _parse_duration(duration)
-        await i.response.defer()
-        question = await _fetch_wyr(self._session)
+        question = await cache_db.get_random_wyr()
         if not question:
-            return await i.followup.send(
-                "Couldn't fetch a question right now. Try again later!",
+            return await i.response.send_message(
+                "No WYR questions cached yet -- try again in a few minutes!",
                 ephemeral=True,
             )
         # Parse "Would you rather X or Y?" into two options
         opt_a, opt_b = _split_wyr(question)
         view = WyrView(opt_a, opt_b, duration=secs)
-        msg = await i.followup.send(embed=view._voting_embed(), view=view)
-        view.message = msg
+        await i.response.send_message(embed=view._voting_embed(), view=view)
+        view.message = await i.original_response()
 
     # ══════════════════════════════════════════════════════════════════════════
     #  PREFIX: flat commands  (!hug, !cry, !ship, !8ball, etc.)
@@ -1329,11 +1415,10 @@ class Fun(commands.Cog):
     )
     @commands.cooldown(1, 5, commands.BucketType.user)
     async def pfx_fml(self, ctx):
-        async with _safe_typing(ctx):
-            story = await self._get_fml()
+        story = await cache_db.get_random_fml()
         if not story:
             return await ctx.reply(
-                "Couldn't fetch an FML story right now. Try again later!"
+                "No FML stories cached yet -- try again in a few minutes!"
             )
         e = discord.Embed(description=story, color=_FML_BLUE)
         e.set_footer(text="NanoBot Fun \u00b7 fmylife.com")
@@ -1382,11 +1467,10 @@ class Fun(commands.Cog):
     @commands.cooldown(1, 10, commands.BucketType.channel)
     async def pfx_wyr(self, ctx, *, duration: str | None = None):
         secs = _parse_duration(duration)
-        async with _safe_typing(ctx):
-            question = await _fetch_wyr(self._session)
+        question = await cache_db.get_random_wyr()
         if not question:
             return await ctx.reply(
-                "Couldn't fetch a question right now. Try again later!"
+                "No WYR questions cached yet -- try again in a few minutes!"
             )
         opt_a, opt_b = _split_wyr(question)
         view = WyrView(opt_a, opt_b, duration=secs)
