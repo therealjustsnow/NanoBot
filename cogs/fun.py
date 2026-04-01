@@ -1640,7 +1640,7 @@ class Fun(commands.Cog):
 
     @commands.command(
         name="thigh",
-        aliases=["thighs"],
+        aliases=["thighs", "legs", "leg"],
         extras={
             "category": "\U0001f389 Fun",
             "short": "Random anime thigh pic",
