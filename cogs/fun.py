@@ -1,20 +1,25 @@
 """
 cogs/fun.py
-Fun commands -- social interactions, solo reactions, ship, 8-ball, fml.
+Fun commands -- social interactions, solo reactions, ship, 8-ball, fml,
+thigh, would-you-rather.
 
 GIFs sourced from nekos.best (no API key required).
+Thigh images sourced from Nekosia API (no API key required).
+WYR questions sourced from truthordarebot.xyz (no API key required).
 FML stories scraped from fmylife.com (no API key required).
-Falls back gracefully (text-only) if the API is unavailable.
+Falls back gracefully (text-only) if an API is unavailable.
 
-Slash (1 top-level slot, 5 subcommands):
+Slash (1 top-level slot, 7 subcommands):
   /fun social <action> [user]   -- autocomplete picker, 26 social actions
   /fun react <action>           -- autocomplete picker, 33 solo reactions
   /fun ship <user1> <user2>
   /fun 8ball <question>
   /fun fml
+  /fun thigh
+  /fun wyr [duration]
 
 Prefix (flat):
-  !hug, !slap, !cry, !dance, !ship, !8ball, !fml, etc.
+  !hug, !slap, !cry, !dance, !ship, !8ball, !fml, !thigh, !wyr, etc.
 """
 
 import asyncio
@@ -22,6 +27,7 @@ import hashlib
 import logging
 import random
 import re
+import time
 from html import unescape
 from typing import Optional
 
@@ -35,6 +41,8 @@ from utils import helpers as h
 log = logging.getLogger("NanoBot.fun")
 
 _NEKOS_BASE = "https://nekos.best/api/v2"
+_NEKOSIA_BASE = "https://api.nekosia.cat/api/v1/images"
+_WYR_URL = "https://api.truthordarebot.xyz/api/wyr"
 _PINK = 0xFF6EB4
 _FML_URL = "https://www.fmylife.com/random"
 _FML_BLUE = 0x00B2FF
@@ -693,6 +701,219 @@ async def _fetch_fml_stories(
     return stories
 
 
+# ── Nekosia image fetcher (thigh-high-socks) ─────────────────────────────────
+async def _fetch_nekosia(
+    session: aiohttp.ClientSession, category: str
+) -> tuple[str | None, str | None]:
+    """Fetch a random SFW image from Nekosia. Returns (image_url, source_url)."""
+    try:
+        async with session.get(
+            f"{_NEKOSIA_BASE}/{category}",
+            timeout=aiohttp.ClientTimeout(total=6),
+        ) as resp:
+            if resp.status == 200:
+                data = await resp.json()
+                if data.get("success"):
+                    img = (
+                        data.get("image", {}).get("compressed", {}).get("url")
+                        or data.get("image", {}).get("original", {}).get("url")
+                    )
+                    src = data.get("source", {}).get("url")
+                    return img, src
+    except Exception as exc:
+        log.debug(f"Nekosia fetch failed for '{category}': {exc}")
+    return None, None
+
+
+# ── WYR question fetcher ─────────────────────────────────────────────────────
+async def _fetch_wyr(session: aiohttp.ClientSession) -> str | None:
+    """Fetch a Would You Rather question from truthordarebot.xyz."""
+    try:
+        async with session.get(
+            _WYR_URL,
+            params={"rating": "pg13"},
+            timeout=aiohttp.ClientTimeout(total=5),
+        ) as resp:
+            if resp.status == 200:
+                data = await resp.json()
+                return data.get("question")
+    except Exception as exc:
+        log.debug(f"WYR fetch failed: {exc}")
+    return None
+
+
+# ── WYR question splitter ─────────────────────────────────────────────────────
+_WYR_SPLIT_RE = re.compile(
+    r"^would you rather\s+(.+?)\s+or\s+(.+?)\??$",
+    re.IGNORECASE,
+)
+
+
+def _split_wyr(question: str) -> tuple[str, str]:
+    """Split 'Would you rather X or Y?' into (X, Y). Capitalizes each."""
+    m = _WYR_SPLIT_RE.match(question.strip())
+    if m:
+        a = m.group(1).strip().capitalize()
+        b = m.group(2).strip().capitalize()
+        return a, b
+    # Fallback: just split on " or " near the middle
+    parts = question.split(" or ", 1)
+    if len(parts) == 2:
+        a = parts[0].replace("Would you rather ", "").strip().capitalize()
+        b = parts[1].rstrip("?").strip().capitalize()
+        return a, b
+    return question, "???"
+
+
+# ── Duration parser ───────────────────────────────────────────────────────────
+_DURATION_RE = re.compile(
+    r"(?:(\d+)\s*h(?:ours?|r)?)?[\s,]*(?:(\d+)\s*m(?:in(?:utes?)?)?)?",
+    re.IGNORECASE,
+)
+
+
+def _parse_duration(text: str | None) -> int:
+    """Parse a human duration string into seconds. Returns default 3600 (1h)."""
+    if not text:
+        return 3600
+    text = text.strip()
+    # Plain number = minutes
+    if text.isdigit():
+        mins = int(text)
+        return max(60, min(mins * 60, 86400))
+    m = _DURATION_RE.match(text)
+    if m and (m.group(1) or m.group(2)):
+        hours = int(m.group(1) or 0)
+        mins = int(m.group(2) or 0)
+        total = hours * 3600 + mins * 60
+        return max(60, min(total, 86400))  # clamp 1m..24h
+    return 3600
+
+
+def _fmt_duration(seconds: int) -> str:
+    """Format seconds into a human-readable string like '1h 30m'."""
+    h, rem = divmod(seconds, 3600)
+    m = rem // 60
+    parts = []
+    if h:
+        parts.append(f"{h}h")
+    if m:
+        parts.append(f"{m}m")
+    return " ".join(parts) or "1m"
+
+
+# ── WYR persistent view ──────────────────────────────────────────────────────
+class WyrView(discord.ui.View):
+    """Two-button vote view for Would You Rather. Edits itself on expiry."""
+
+    def __init__(self, option_a: str, option_b: str, duration: int = 3600):
+        super().__init__(timeout=duration)
+        self.option_a = option_a
+        self.option_b = option_b
+        self.votes: dict[int, str] = {}  # user_id -> "A" | "B"
+        self.ended = False
+        self.message: discord.Message | None = None
+        self.end_ts = int(time.time() + duration)
+
+    def _tally(self) -> tuple[int, int]:
+        a = sum(1 for v in self.votes.values() if v == "A")
+        b = sum(1 for v in self.votes.values() if v == "B")
+        return a, b
+
+    def _results_embed(self) -> discord.Embed:
+        a, b = self._tally()
+        total = a + b
+        pct_a = round(a / total * 100) if total else 0
+        pct_b = 100 - pct_a if total else 0
+        bar_a = "\u2593" * round(pct_a / 10) + "\u2591" * (10 - round(pct_a / 10))
+        bar_b = "\u2593" * round(pct_b / 10) + "\u2591" * (10 - round(pct_b / 10))
+        e = discord.Embed(
+            title="\U0001f914 Would You Rather -- Results!",
+            color=0x5865F2,
+        )
+        e.add_field(
+            name=f"\U0001f1e6 {self.option_a}",
+            value=f"{bar_a} **{pct_a}%** ({a} vote{'s' if a != 1 else ''})",
+            inline=False,
+        )
+        e.add_field(
+            name=f"\U0001f1e7 {self.option_b}",
+            value=f"{bar_b} **{pct_b}%** ({b} vote{'s' if b != 1 else ''})",
+            inline=False,
+        )
+        e.set_footer(
+            text=f"NanoBot Fun \u00b7 {total} total vote{'s' if total != 1 else ''}"
+        )
+        return e
+
+    def _voting_embed(self) -> discord.Embed:
+        total = len(self.votes)
+        e = discord.Embed(
+            title="\U0001f914 Would You Rather...",
+            color=0x5865F2,
+        )
+        e.add_field(name="\U0001f1e6", value=self.option_a, inline=False)
+        e.add_field(name="\U0001f1e7", value=self.option_b, inline=False)
+        e.add_field(
+            name="",
+            value=f"\U0001f4ca {total} vote{'s' if total != 1 else ''} so far \u00b7 Results <t:{self.end_ts}:R>",
+            inline=False,
+        )
+        e.set_footer(text="NanoBot Fun \u00b7 Tap a button to vote!")
+        return e
+
+    async def on_timeout(self):
+        self.ended = True
+        for item in self.children:
+            item.disabled = True
+        if self.message:
+            try:
+                await self.message.edit(
+                    embed=self._results_embed(), view=self
+                )
+            except discord.HTTPException:
+                pass
+
+    async def _handle_vote(
+        self, interaction: discord.Interaction, choice: str
+    ):
+        if self.ended:
+            return await interaction.response.send_message(
+                "Voting has ended!", ephemeral=True
+            )
+        uid = interaction.user.id
+        previous = self.votes.get(uid)
+        if previous == choice:
+            return await interaction.response.send_message(
+                f"You already voted for **{self.option_a if choice == 'A' else self.option_b}**!",
+                ephemeral=True,
+            )
+        self.votes[uid] = choice
+        label = self.option_a if choice == "A" else self.option_b
+        if previous:
+            msg = f"Changed your vote to **{label}**!"
+        else:
+            msg = f"Voted for **{label}**!"
+        await interaction.response.send_message(msg, ephemeral=True)
+        # Update the vote count on the embed
+        try:
+            await interaction.message.edit(embed=self._voting_embed())
+        except discord.HTTPException:
+            pass
+
+    @discord.ui.button(
+        label="Option A", style=discord.ButtonStyle.blurple, emoji="\U0001f1e6"
+    )
+    async def btn_a(self, interaction: discord.Interaction, button: discord.ui.Button):
+        await self._handle_vote(interaction, "A")
+
+    @discord.ui.button(
+        label="Option B", style=discord.ButtonStyle.blurple, emoji="\U0001f1e7"
+    )
+    async def btn_b(self, interaction: discord.Interaction, button: discord.ui.Button):
+        await self._handle_vote(interaction, "B")
+
+
 # ══════════════════════════════════════════════════════════════════════════════
 class Fun(commands.Cog):
     """Fun social interaction and reaction commands."""
@@ -898,6 +1119,49 @@ class Fun(commands.Cog):
         e.set_footer(text="NanoBot Fun \u00b7 fmylife.com")
         await i.followup.send(embed=e)
 
+    # ── /fun thigh ─────────────────────────────────────────────────────────
+
+    @fun_group.command(
+        name="thigh", description="Random anime thigh-high socks pic (SFW)"
+    )
+    async def s_thigh(self, i: discord.Interaction):
+        await i.response.defer()
+        img, src = await _fetch_nekosia(self._session, "thigh-high-socks")
+        if not img:
+            return await i.followup.send(
+                "Couldn't fetch an image right now. Try again later!",
+                ephemeral=True,
+            )
+        e = discord.Embed(color=_PINK)
+        e.set_image(url=img)
+        if src:
+            e.description = f"[\U0001f517 Source]({src})"
+        e.set_footer(text="NanoBot Fun \u00b7 nekosia.cat")
+        await i.followup.send(embed=e)
+
+    # ── /fun wyr ───────────────────────────────────────────────────────────
+
+    @fun_group.command(
+        name="wyr", description="Would You Rather -- vote with buttons!"
+    )
+    @app_commands.describe(
+        duration="How long voting lasts (e.g. 30m, 2h, 1h30m). Default: 1h"
+    )
+    async def s_wyr(self, i: discord.Interaction, duration: str | None = None):
+        secs = _parse_duration(duration)
+        await i.response.defer()
+        question = await _fetch_wyr(self._session)
+        if not question:
+            return await i.followup.send(
+                "Couldn't fetch a question right now. Try again later!",
+                ephemeral=True,
+            )
+        # Parse "Would you rather X or Y?" into two options
+        opt_a, opt_b = _split_wyr(question)
+        view = WyrView(opt_a, opt_b, duration=secs)
+        msg = await i.followup.send(embed=view._voting_embed(), view=view)
+        view.message = msg
+
     # ══════════════════════════════════════════════════════════════════════════
     #  PREFIX: flat commands  (!hug, !cry, !ship, !8ball, etc.)
     #  Registered dynamically in cog_load so .cog binding is not needed.
@@ -923,10 +1187,13 @@ class Fun(commands.Cog):
             def _make_social(name, aliases, extras, data):
                 @commands.command(name=name, aliases=aliases, extras=extras)
                 @commands.cooldown(1, 3, commands.BucketType.user)
-                async def social_cmd(ctx, user: Optional[discord.Member] = None):
-                    e = await cog._action_embed(ctx.guild.me, ctx.author, user, data)
+                async def social_cmd(
+                    ctx, user: Optional[discord.Member] = None
+                ):
+                    e = await cog._action_embed(
+                        ctx.guild.me, ctx.author, user, data
+                    )
                     await ctx.reply(embed=e)
-
                 return social_cmd
 
             social_cmd = _make_social(name, aliases, extras, data)
@@ -950,7 +1217,6 @@ class Fun(commands.Cog):
                 async def react_cmd(ctx):
                     e = await cog._react_embed(ctx.author, data)
                     await ctx.reply(embed=e)
-
                 return react_cmd
 
             react_cmd = _make_react(action, extras, data)
@@ -1054,6 +1320,60 @@ class Fun(commands.Cog):
         e = discord.Embed(description=story, color=_FML_BLUE)
         e.set_footer(text="NanoBot Fun \u00b7 fmylife.com")
         await ctx.reply(embed=e)
+
+    @commands.command(
+        name="thigh",
+        extras={
+            "category": "\U0001f389 Fun",
+            "short": "Random anime thigh pic",
+            "usage": "thigh",
+            "desc": "Get a random anime thigh-high socks pic (SFW).",
+            "args": [],
+            "perms": "None",
+            "example": "!thigh",
+        },
+    )
+    @commands.cooldown(1, 5, commands.BucketType.user)
+    async def pfx_thigh(self, ctx):
+        async with ctx.typing():
+            img, src = await _fetch_nekosia(self._session, "thigh-high-socks")
+        if not img:
+            return await ctx.reply(
+                "Couldn't fetch an image right now. Try again later!"
+            )
+        e = discord.Embed(color=_PINK)
+        e.set_image(url=img)
+        if src:
+            e.description = f"[\U0001f517 Source]({src})"
+        e.set_footer(text="NanoBot Fun \u00b7 nekosia.cat")
+        await ctx.reply(embed=e)
+
+    @commands.command(
+        name="wyr",
+        aliases=["wouldyourather"],
+        extras={
+            "category": "\U0001f389 Fun",
+            "short": "Would You Rather",
+            "usage": "wyr [duration]",
+            "desc": "Start a Would You Rather poll with buttons. Duration examples: 30m, 2h, 1h30m. Default: 1h. Max: 24h.",
+            "args": [("duration", "How long voting lasts (optional, default 1h)")],
+            "perms": "None",
+            "example": "!wyr 30m",
+        },
+    )
+    @commands.cooldown(1, 10, commands.BucketType.channel)
+    async def pfx_wyr(self, ctx, *, duration: str | None = None):
+        secs = _parse_duration(duration)
+        async with ctx.typing():
+            question = await _fetch_wyr(self._session)
+        if not question:
+            return await ctx.reply(
+                "Couldn't fetch a question right now. Try again later!"
+            )
+        opt_a, opt_b = _split_wyr(question)
+        view = WyrView(opt_a, opt_b, duration=secs)
+        msg = await ctx.reply(embed=view._voting_embed(), view=view)
+        view.message = msg
 
 
 async def setup(bot: commands.Bot):
