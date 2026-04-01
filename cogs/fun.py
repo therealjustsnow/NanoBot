@@ -58,12 +58,12 @@ _FML_URL = "https://www.fmylife.com/random"
 _FML_BLUE = 0x00B2FF
 
 # ── Scraper settings ─────────────────────────────────────────────────────────
-_FML_PAGES_PER_SCRAPE = 15       # ~5-10 stories each = 75-150 per run
-_WYR_REQUESTS_PER_SCRAPE = 100   # 1 question each, deduped
-_NEKOS_PER_ENDPOINT = 20         # GIFs/images per nekos.best endpoint per run
-_NEKOSIA_PER_TAG = 40            # images per Nekosia tag per run
-_REVALIDATE_AGE = 7 * 86400      # check URLs older than 7 days
-_REVALIDATE_BATCH = 200           # max URLs to check per revalidation cycle
+_FML_PAGES_PER_SCRAPE = 15  # ~5-10 stories each = 75-150 per run
+_WYR_REQUESTS_PER_SCRAPE = 100  # 1 question each, deduped
+_NEKOS_PER_ENDPOINT = 20  # GIFs/images per nekos.best endpoint per run
+_NEKOSIA_PER_TAG = 40  # images per Nekosia tag per run
+_REVALIDATE_AGE = 7 * 86400  # check URLs older than 7 days
+_REVALIDATE_BATCH = 200  # max URLs to check per revalidation cycle
 
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -831,9 +831,7 @@ async def _scrape_wyr_bulk(
 # ══════════════════════════════════════════════════════════════════════════════
 
 
-async def _get_gif(
-    session: aiohttp.ClientSession | None, endpoint: str
-) -> str | None:
+async def _get_gif(session: aiohttp.ClientSession | None, endpoint: str) -> str | None:
     """Get a GIF URL for a nekos.best endpoint, cache-first with live fallback."""
     cached = await cache_db.get_random_image("nekos", endpoint)
     if cached:
@@ -1191,7 +1189,8 @@ class Fun(commands.Cog):
                     img, src = await _fetch_nekosia_single(self._session, tag)
                     if img:
                         added = await cache_db.add_images(
-                            "nekosia", tag,
+                            "nekosia",
+                            tag,
                             [{"url": img, "source_url": src}],
                         )
                         nekosia_total_added += added
