@@ -21,6 +21,7 @@ from discord import app_commands
 from discord.ext import commands
 
 from utils import db
+from utils import cache_db
 
 
 # ── Config (read once at module level so logging init can use it) ──────────────
@@ -151,6 +152,7 @@ class NanoBot(commands.Bot):
     async def setup_hook(self):
         os.makedirs("data", exist_ok=True)
         await db.init()
+        await cache_db.init()
         await self._load_prefixes()
 
         for cog in _ALL_COGS:
