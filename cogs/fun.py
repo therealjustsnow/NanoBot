@@ -1055,7 +1055,9 @@ class Fun(commands.Cog):
             # The loop body will fire right after this returns, so we're good.
             # No need to scrape here -- the loop runs immediately on start.
         else:
-            log.info(f"Cache loaded: {fml_count} FML stories, {wyr_count} WYR questions")
+            log.info(
+                f"Cache loaded: {fml_count} FML stories, {wyr_count} WYR questions"
+            )
 
     # ── Shared embed builders ─────────────────────────────────────────────────
 
