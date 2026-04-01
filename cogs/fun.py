@@ -743,10 +743,9 @@ async def _fetch_nekosia(
             if resp.status == 200:
                 data = await resp.json()
                 if data.get("success"):
-                    img = (
-                        data.get("image", {}).get("compressed", {}).get("url")
-                        or data.get("image", {}).get("original", {}).get("url")
-                    )
+                    img = data.get("image", {}).get("compressed", {}).get(
+                        "url"
+                    ) or data.get("image", {}).get("original", {}).get("url")
                     src = data.get("source", {}).get("url")
                     return img, src
     except Exception as exc:
@@ -897,15 +896,11 @@ class WyrView(discord.ui.View):
             item.disabled = True
         if self.message:
             try:
-                await self.message.edit(
-                    embed=self._results_embed(), view=self
-                )
+                await self.message.edit(embed=self._results_embed(), view=self)
             except discord.HTTPException:
                 pass
 
-    async def _handle_vote(
-        self, interaction: discord.Interaction, choice: str
-    ):
+    async def _handle_vote(self, interaction: discord.Interaction, choice: str):
         if self.ended:
             return await interaction.response.send_message(
                 "Voting has ended!", ephemeral=True
@@ -1150,14 +1145,10 @@ class Fun(commands.Cog):
 
     # ── /fun thigh ─────────────────────────────────────────────────────────
 
-    @fun_group.command(
-        name="thigh", description="Random anime thigh pic (SFW)"
-    )
+    @fun_group.command(name="thigh", description="Random anime thigh pic (SFW)")
     async def s_thigh(self, i: discord.Interaction):
         await i.response.defer()
-        img, src = await _fetch_nekosia(
-            self._session, random.choice(_THIGH_TAGS)
-        )
+        img, src = await _fetch_nekosia(self._session, random.choice(_THIGH_TAGS))
         if not img:
             return await i.followup.send(
                 "Couldn't fetch an image right now. Try again later!",
@@ -1172,9 +1163,7 @@ class Fun(commands.Cog):
 
     # ── /fun wyr ───────────────────────────────────────────────────────────
 
-    @fun_group.command(
-        name="wyr", description="Would You Rather -- vote with buttons!"
-    )
+    @fun_group.command(name="wyr", description="Would You Rather -- vote with buttons!")
     @app_commands.describe(
         duration="How long voting lasts (e.g. 30m, 2h, 1h30m). Default: 1h"
     )
@@ -1218,13 +1207,10 @@ class Fun(commands.Cog):
             def _make_social(name, aliases, extras, data):
                 @commands.command(name=name, aliases=aliases, extras=extras)
                 @commands.cooldown(1, 3, commands.BucketType.user)
-                async def social_cmd(
-                    ctx, user: Optional[discord.Member] = None
-                ):
-                    e = await cog._action_embed(
-                        ctx.guild.me, ctx.author, user, data
-                    )
+                async def social_cmd(ctx, user: Optional[discord.Member] = None):
+                    e = await cog._action_embed(ctx.guild.me, ctx.author, user, data)
                     await ctx.reply(embed=e)
+
                 return social_cmd
 
             social_cmd = _make_social(name, aliases, extras, data)
@@ -1248,6 +1234,7 @@ class Fun(commands.Cog):
                 async def react_cmd(ctx):
                     e = await cog._react_embed(ctx.author, data)
                     await ctx.reply(embed=e)
+
                 return react_cmd
 
             react_cmd = _make_react(action, extras, data)
@@ -1367,9 +1354,7 @@ class Fun(commands.Cog):
     @commands.cooldown(1, 5, commands.BucketType.user)
     async def pfx_thigh(self, ctx):
         async with _safe_typing(ctx):
-            img, src = await _fetch_nekosia(
-                self._session, random.choice(_THIGH_TAGS)
-            )
+            img, src = await _fetch_nekosia(self._session, random.choice(_THIGH_TAGS))
         if not img:
             return await ctx.reply(
                 "Couldn't fetch an image right now. Try again later!"
