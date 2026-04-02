@@ -13,6 +13,8 @@ Commands:
   restart            — graceful shutdown then re-exec the process
   setloglevel <lvl>  — change log level live and persist to config.json
   logs [lines]       — tail the log file right in Discord
+  scrape             — manually trigger the daily content cache scrape
+  cachestats         — show cache DB statistics (FML, WYR, images)
 """
 
 import asyncio
@@ -587,6 +589,83 @@ class Admin(commands.Cog):
             text=f"logs/nanobot.log  ·  {total_lines} total line(s)  ·  NanoBot"
         )
         await ctx.reply(embed=e, ephemeral=True)
+
+    # ══════════════════════════════════════════════════════════════════════════
+    #  scrape
+    # ══════════════════════════════════════════════════════════════════════════
+    @commands.command(
+        name="scrape",
+        help=(
+            "Manually trigger the daily content scrape.\n\n"
+            "Runs the same scrape loop that fires every 24h:\n"
+            "FML stories, WYR questions, nekos.best GIFs/images, Nekosia thighs.\n\n"
+            "Safe to run anytime — duplicates are skipped automatically."
+        ),
+    )
+    async def scrape(self, ctx: commands.Context):
+        fun_cog = self.bot.get_cog("Fun")
+        if not fun_cog:
+            return await ctx.reply(
+                embed=h.err("Fun cog is not loaded."), ephemeral=True
+            )
+
+        await ctx.reply(
+            embed=h.info(
+                "Scrape started -- this takes a few minutes.\n"
+                "Check `!logs` or `!cachestats` when it's done.",
+                "\U0001f504 Scrape Running",
+            )
+        )
+        # Fire the loop body as a background task so we don't block
+        self.bot.loop.create_task(fun_cog._scrape_loop())
+
+    # ══════════════════════════════════════════════════════════════════════════
+    #  cachestats
+    # ══════════════════════════════════════════════════════════════════════════
+    @commands.command(
+        name="cachestats",
+        aliases=["cs"],
+        help=(
+            "Show content cache statistics.\n\n"
+            "Displays counts for FML stories, WYR questions, and\n"
+            "cached image URLs broken down by source and endpoint."
+        ),
+    )
+    async def cachestats(self, ctx: commands.Context):
+        from utils import cache_db
+
+        fml = await cache_db.count_fml()
+        wyr = await cache_db.count_wyr()
+        img_stats = await cache_db.get_image_stats()
+        last_scrape = await cache_db.get_meta("last_scrape")
+
+        # Build image summary
+        total_imgs = 0
+        img_lines = []
+        for source, endpoints in sorted(img_stats.items()):
+            source_total = sum(endpoints.values())
+            total_imgs += source_total
+            img_lines.append(f"**{source}**: {source_total:,} ({len(endpoints)} endpoints)")
+
+        desc_parts = [
+            f"**FML stories:** {fml:,}",
+            f"**WYR questions:** {wyr:,}",
+            f"**Images/GIFs:** {total_imgs:,}",
+        ]
+        if img_lines:
+            desc_parts.append("")
+            desc_parts.extend(img_lines)
+
+        if last_scrape:
+            desc_parts.append(f"\nLast scrape: <t:{int(float(last_scrape))}:R>")
+
+        e = h.embed(
+            title="\U0001f4ca Cache Stats",
+            description="\n".join(desc_parts),
+            color=h.BLUE,
+        )
+        e.set_footer(text="data/cache.db \u00b7 NanoBot Admin")
+        await ctx.reply(embed=e)
 
     # ══════════════════════════════════════════════════════════════════════════
     #  servers
