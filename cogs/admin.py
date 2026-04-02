@@ -645,7 +645,9 @@ class Admin(commands.Cog):
         for source, endpoints in sorted(img_stats.items()):
             source_total = sum(endpoints.values())
             total_imgs += source_total
-            img_lines.append(f"**{source}**: {source_total:,} ({len(endpoints)} endpoints)")
+            img_lines.append(
+                f"**{source}**: {source_total:,} ({len(endpoints)} endpoints)"
+            )
 
         desc_parts = [
             f"**FML stories:** {fml:,}",
