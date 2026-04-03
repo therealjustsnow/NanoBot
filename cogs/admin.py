@@ -7,6 +7,7 @@ All commands here require the invoker to be the bot owner
 
 Commands:
   reload  [cog|all]  — hot-reload one cog or every cog
+  unload  <cog>      — unload a single cog without restarting
   update             — git pull + reload all cogs (no slash command sync)
   sync   [guild_id]  — push slash commands to Discord (global or one guild)
   shutdown           — graceful shutdown (flushes logs, closes connection)
@@ -141,6 +142,78 @@ class Admin(commands.Cog):
             e.set_footer(text="NanoBot Admin")
 
         await ctx.reply(embed=e)
+
+    # ══════════════════════════════════════════════════════════════════════════
+    #  unload
+    # ══════════════════════════════════════════════════════════════════════════
+    @commands.command(
+        name="unload",
+        aliases=["ul"],
+        help=(
+            "Unload a single cog by name.\n\n"
+            "The cog's commands become unavailable until you !reload it.\n"
+            "Cannot unload admin (that would lock you out).\n\n"
+            "Examples:\n"
+            "  !unload fun\n"
+            "  !unload cogs.images"
+        ),
+    )
+    async def unload(self, ctx: commands.Context, cog: str):
+        """
+        !unload <cog>
+
+        Accepted formats:
+          cogs.moderation    — full dotted name
+          moderation         — shorthand (cogs. prefix added automatically)
+        """
+        target = cog.lower().strip()
+
+        if "." not in target:
+            target = f"cogs.{target}"
+
+        # Block unloading admin — you'd lose the ability to reload anything
+        if target == "cogs.admin":
+            return await ctx.reply(
+                embed=h.err(
+                    "Cannot unload `cogs.admin` — that would lock you out.\n"
+                    "Use `!reload cogs.admin` instead if you need to refresh it."
+                ),
+                ephemeral=True,
+            )
+
+        if target not in _ALL_COGS:
+            return await ctx.reply(
+                embed=h.err(
+                    f"Unknown cog: `{target}`\n"
+                    f"Available: {', '.join(f'`{c}`' for c in _ALL_COGS)}"
+                ),
+                ephemeral=True,
+            )
+
+        try:
+            await self.bot.unload_extension(target)
+            log.info(f"Unloaded: {target} (by {ctx.author})")
+            await ctx.reply(
+                embed=h.ok(
+                    f"Unloaded `{target}`.\n"
+                    f"Use `!reload {target}` to bring it back.",
+                    "📦 Cog Unloaded",
+                )
+            )
+        except commands.ExtensionNotLoaded:
+            await ctx.reply(
+                embed=h.warn(
+                    f"`{target}` is already unloaded.",
+                    "📦 Already Unloaded",
+                ),
+                ephemeral=True,
+            )
+        except Exception as exc:
+            log.error(f"Failed to unload {target}: {exc}", exc_info=exc)
+            await ctx.reply(
+                embed=h.err(f"Failed to unload `{target}`: {exc}"),
+                ephemeral=True,
+            )
 
     # ══════════════════════════════════════════════════════════════════════════
     #  shutdown
