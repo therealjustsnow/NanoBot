@@ -5,7 +5,10 @@ thigh, would-you-rather.
 
 GIFs sourced from nekos.best (no API key required).
 Thigh images sourced from Nekosia API (no API key required).
-WYR questions cached from truthordarebot.xyz (scraped daily).
+WYR questions from three sources (scraped/generated daily):
+  1. truthordarebot.xyz API (PG + PG13 ratings, separate pools)
+  2. Kaggle dataset one-time seed (~2700 questions on first run)
+  3. Groq LLM generation (~20 fresh questions per day, if API key set)
 FML stories cached from fmylife.com (scraped daily).
 All image/GIF URLs cached in cache_db and served from cache.
 Falls back to live API if cache is empty for a given endpoint.
@@ -25,7 +28,10 @@ Prefix (flat):
 
 import asyncio
 import contextlib
+import csv
 import hashlib
+import io
+import json
 import logging
 import random
 import re
@@ -56,6 +62,27 @@ _THIGH_TAGS = (
 _PINK = 0xFF6EB4
 _FML_URL = "https://www.fmylife.com/random"
 _FML_BLUE = 0x00B2FF
+
+# ── Kaggle WYR dataset (one-time seed) ────────────────────────────────────────
+_KAGGLE_WYR_URL = (
+    "https://www.kaggle.com/api/v1/datasets/download/charlieray668/would-you-rather"
+)
+
+# ── Groq WYR generation ──────────────────────────────────────────────────────
+_GROQ_API_URL = "https://api.groq.com/openai/v1/chat/completions"
+_GROQ_MODEL = "llama-3.1-8b-instant"
+_GROQ_WYR_COUNT = 20  # questions to generate per daily scrape
+_GROQ_WYR_SYSTEM = (
+    "You generate Would You Rather questions for a Discord bot. "
+    "Return ONLY a JSON array of strings. Each string must start with "
+    '"Would you rather" and contain exactly two options separated by " or ". '
+    "End each with a question mark. Make them fun, creative, and varied -- "
+    "mix silly, deep, gross, impossible, and everyday scenarios. "
+    "No numbered lists, no markdown, no explanation. Just the JSON array."
+)
+
+# ── WYR API ratings to scrape (separate question pools) ──────────────────────
+_WYR_RATINGS = ("pg", "pg13")
 
 # ── Scraper settings ─────────────────────────────────────────────────────────
 _FML_PAGES_PER_SCRAPE = 100  # ~5-10 stories each = 500-1000 per run
@@ -794,12 +821,14 @@ async def _scrape_fml_bulk(
 
 
 # ── WYR question fetcher (bulk, for daily cache refresh) ──────────────────────
-async def _fetch_wyr_single(session: aiohttp.ClientSession) -> str | None:
+async def _fetch_wyr_single(
+    session: aiohttp.ClientSession, rating: str = "pg13"
+) -> str | None:
     """Fetch a single Would You Rather question from truthordarebot.xyz."""
     try:
         async with session.get(
             _WYR_URL,
-            params={"rating": "pg13"},
+            params={"rating": rating},
             timeout=aiohttp.ClientTimeout(total=5),
         ) as resp:
             if resp.status == 200:
@@ -813,17 +842,131 @@ async def _fetch_wyr_single(session: aiohttp.ClientSession) -> str | None:
 async def _scrape_wyr_bulk(
     session: aiohttp.ClientSession, count: int = _WYR_REQUESTS_PER_SCRAPE
 ) -> list[str]:
-    """Fetch many WYR questions, deduplicating as we go."""
+    """Fetch many WYR questions across all ratings, deduplicating as we go."""
     questions: list[str] = []
     seen: set[str] = set()
-    for i in range(count):
-        q = await _fetch_wyr_single(session)
-        if q and q not in seen:
-            seen.add(q)
-            questions.append(q)
-        if i < count - 1:
-            await asyncio.sleep(0.5)
+    for rating in _WYR_RATINGS:
+        for i in range(count):
+            q = await _fetch_wyr_single(session, rating=rating)
+            if q and q not in seen:
+                seen.add(q)
+                questions.append(q)
+            if i < count - 1:
+                await asyncio.sleep(0.5)
     return questions
+
+
+# ── Kaggle WYR dataset seed (one-time bulk import) ────────────────────────────
+async def _seed_kaggle_wyr(session: aiohttp.ClientSession) -> list[str]:
+    """Download the Kaggle WYR CSV and return formatted questions.
+
+    The CSV has columns: option_a, votes_a, option_b, votes_b.
+    We format each row as 'Would you rather X or Y?'.
+    """
+    try:
+        async with session.get(
+            _KAGGLE_WYR_URL,
+            timeout=aiohttp.ClientTimeout(total=30),
+        ) as resp:
+            if resp.status != 200:
+                log.warning(f"Kaggle WYR download failed: HTTP {resp.status}")
+                return []
+            zip_bytes = await resp.read()
+    except Exception as exc:
+        log.warning(f"Kaggle WYR download error: {exc}")
+        return []
+
+    # The zip contains all_unique.csv
+    import zipfile
+
+    questions: list[str] = []
+    try:
+        with zipfile.ZipFile(io.BytesIO(zip_bytes)) as zf:
+            for name in zf.namelist():
+                if name.endswith(".csv"):
+                    with zf.open(name) as csvfile:
+                        reader = csv.DictReader(io.TextIOWrapper(csvfile, "utf-8"))
+                        for row in reader:
+                            a = row.get("option_a", "").strip()
+                            b = row.get("option_b", "").strip()
+                            if a and b:
+                                # Lowercase the first letter of each option
+                                a_fmt = a[0].lower() + a[1:] if len(a) > 1 else a.lower()
+                                b_fmt = b[0].lower() + b[1:] if len(b) > 1 else b.lower()
+                                questions.append(
+                                    f"Would you rather {a_fmt} or {b_fmt}?"
+                                )
+                    break
+    except Exception as exc:
+        log.warning(f"Kaggle WYR parse error: {exc}")
+        return []
+
+    return questions
+
+
+# ── Groq WYR generation ──────────────────────────────────────────────────────
+async def _generate_wyr_groq(
+    session: aiohttp.ClientSession,
+    api_key: str,
+    count: int = _GROQ_WYR_COUNT,
+) -> list[str]:
+    """Use Groq LLM to generate fresh WYR questions. Returns list of strings."""
+    try:
+        payload = {
+            "model": _GROQ_MODEL,
+            "messages": [
+                {"role": "system", "content": _GROQ_WYR_SYSTEM},
+                {
+                    "role": "user",
+                    "content": f"Generate {count} unique Would You Rather questions.",
+                },
+            ],
+            "temperature": 1.0,
+            "max_tokens": 2048,
+        }
+        async with session.post(
+            _GROQ_API_URL,
+            headers={
+                "Authorization": f"Bearer {api_key}",
+                "Content-Type": "application/json",
+            },
+            json=payload,
+            timeout=aiohttp.ClientTimeout(total=15),
+        ) as resp:
+            if resp.status != 200:
+                body = await resp.text()
+                log.warning(f"Groq WYR generation failed: HTTP {resp.status} {body[:200]}")
+                return []
+            data = await resp.json()
+
+        text = data["choices"][0]["message"]["content"].strip()
+        # Strip markdown fences if present
+        text = re.sub(r"^```(?:json)?\s*", "", text)
+        text = re.sub(r"\s*```$", "", text)
+
+        raw_list = json.loads(text)
+        if not isinstance(raw_list, list):
+            log.warning("Groq WYR: response was not a JSON array")
+            return []
+
+        # Validate format
+        questions: list[str] = []
+        for item in raw_list:
+            if (
+                isinstance(item, str)
+                and item.lower().startswith("would you rather")
+                and " or " in item.lower()
+            ):
+                q = item.strip().rstrip("?") + "?"
+                questions.append(q)
+        return questions
+
+    except json.JSONDecodeError as exc:
+        log.warning(f"Groq WYR: failed to parse JSON: {exc}")
+        return []
+    except Exception as exc:
+        log.warning(f"Groq WYR generation error: {exc}")
+        return []
 
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -1138,7 +1281,7 @@ class Fun(commands.Cog):
         except Exception as exc:
             log.error(f"FML scrape error: {exc}")
 
-        # ── WYR ───────────────────────────────────────────────────────────
+        # ── WYR (truthordarebot API -- PG + PG13) ─────────────────────────
         try:
             wyr_questions = await _scrape_wyr_bulk(self._session)
             if wyr_questions:
@@ -1152,6 +1295,41 @@ class Fun(commands.Cog):
                 log.warning("WYR scrape: 0 questions (API may be down)")
         except Exception as exc:
             log.error(f"WYR scrape error: {exc}")
+
+        # ── WYR Kaggle seed (one-time) ────────────────────────────────────
+        kaggle_done = await cache_db.get_meta("kaggle_wyr_seeded")
+        if not kaggle_done:
+            try:
+                kaggle_qs = await _seed_kaggle_wyr(self._session)
+                if kaggle_qs:
+                    added = await cache_db.add_wyr_questions(kaggle_qs)
+                    await cache_db.set_meta("kaggle_wyr_seeded", "1")
+                    total = await cache_db.count_wyr()
+                    log.info(
+                        f"WYR Kaggle seed: {len(kaggle_qs)} parsed, "
+                        f"{added} new, {total} total"
+                    )
+                else:
+                    log.warning("WYR Kaggle seed: 0 questions (download failed)")
+            except Exception as exc:
+                log.error(f"WYR Kaggle seed error: {exc}")
+
+        # ── WYR Groq generation ───────────────────────────────────────────
+        groq_key = getattr(self.bot, "groq_api_key", None)
+        if groq_key:
+            try:
+                groq_qs = await _generate_wyr_groq(self._session, groq_key)
+                if groq_qs:
+                    added = await cache_db.add_wyr_questions(groq_qs)
+                    total = await cache_db.count_wyr()
+                    log.info(
+                        f"WYR Groq: {len(groq_qs)} generated, "
+                        f"{added} new, {total} total"
+                    )
+            except Exception as exc:
+                log.error(f"WYR Groq generation error: {exc}")
+        else:
+            log.debug("WYR Groq: no API key, skipping generation")
 
         # ── nekos.best (GIFs + static images) ─────────────────────────────
         nekos_total_added = 0
