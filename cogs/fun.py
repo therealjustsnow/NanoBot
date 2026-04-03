@@ -891,8 +891,12 @@ async def _seed_kaggle_wyr(session: aiohttp.ClientSession) -> list[str]:
                             b = row.get("option_b", "").strip()
                             if a and b:
                                 # Lowercase the first letter of each option
-                                a_fmt = a[0].lower() + a[1:] if len(a) > 1 else a.lower()
-                                b_fmt = b[0].lower() + b[1:] if len(b) > 1 else b.lower()
+                                a_fmt = (
+                                    a[0].lower() + a[1:] if len(a) > 1 else a.lower()
+                                )
+                                b_fmt = (
+                                    b[0].lower() + b[1:] if len(b) > 1 else b.lower()
+                                )
                                 questions.append(
                                     f"Would you rather {a_fmt} or {b_fmt}?"
                                 )
@@ -935,7 +939,9 @@ async def _generate_wyr_groq(
         ) as resp:
             if resp.status != 200:
                 body = await resp.text()
-                log.warning(f"Groq WYR generation failed: HTTP {resp.status} {body[:200]}")
+                log.warning(
+                    f"Groq WYR generation failed: HTTP {resp.status} {body[:200]}"
+                )
                 return []
             data = await resp.json()
 
