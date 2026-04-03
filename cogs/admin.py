@@ -765,7 +765,16 @@ class Admin(commands.Cog):
         # Build lines — compact for mobile readability
         lines = []
         for i, g in enumerate(guilds, start=1):
-            owner_str = f"<@{g.owner_id}>" if g.owner_id else "Unknown"
+            if g.owner_id:
+                owner = g.get_member(g.owner_id)
+                if owner is None:
+                    try:
+                        owner = await self.bot.fetch_user(g.owner_id)
+                    except Exception:
+                        owner = None
+                owner_str = str(owner) if owner else f"ID: {g.owner_id}"
+            else:
+                owner_str = "Unknown"
             lines.append(
                 f"`{i}.` **{g.name}**\n"
                 f"    🆔 `{g.id}` · 👥 {g.member_count:,} · 👑 {owner_str}"
