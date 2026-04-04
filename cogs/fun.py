@@ -13,7 +13,7 @@ FML stories cached from fmylife.com (scraped daily).
 All image/GIF URLs cached in cache_db and served from cache.
 Falls back to live API if cache is empty for a given endpoint.
 
-Slash (1 top-level slot, 7 subcommands):
+Slash (1 top-level slot, 8 subcommands):
   /fun social <action> [user]   -- autocomplete picker, 26 social actions
   /fun react <action>           -- autocomplete picker, 33 solo reactions
   /fun ship <user1> <user2>
@@ -21,9 +21,10 @@ Slash (1 top-level slot, 7 subcommands):
   /fun fml
   /fun thigh
   /fun wyr [duration]
+  /fun rps [user]
 
 Prefix (flat):
-  !hug, !slap, !cry, !dance, !ship, !8ball, !fml, !thigh, !wyr, etc.
+  !hug, !slap, !cry, !dance, !ship, !8ball, !fml, !thigh, !wyr, !rps, etc.
 """
 
 import asyncio
@@ -659,6 +660,11 @@ _8BALL_NEGATIVE = [
     "Very doubtful.",
 ]
 
+# ── Rock Paper Scissors ──────────────────────────────────────────────────────
+_RPS_CHOICES = {"rock": "\u270a", "paper": "\u270b", "scissors": "\u2702\ufe0f"}
+_RPS_WINS = {"rock": "scissors", "scissors": "paper", "paper": "rock"}
+_RPS_COLOR = 0x5865F2
+
 
 # ── Ship helpers ──────────────────────────────────────────────────────────────
 def _ship_score(id1: int, id2: int) -> int:
@@ -1220,6 +1226,201 @@ class WyrView(discord.ui.View):
         await self._handle_vote(interaction, "B")
 
 
+# ── RPS view ─────────────────────────────────────────────────────────────────
+class RpsView(discord.ui.View):
+    """Three-button Rock Paper Scissors view. Handles PvP and PvBot."""
+
+    def __init__(
+        self,
+        challenger: discord.Member,
+        opponent: discord.Member | None,
+        *,
+        is_bot: bool = False,
+    ):
+        super().__init__(timeout=30)
+        self.challenger = challenger
+        self.opponent = opponent  # None means vs bot
+        self.is_bot = is_bot
+        self.choices: dict[int, str] = {}  # user_id -> choice
+        self.ended = False
+        self.message: discord.Message | None = None
+
+    def _result_embed(self) -> discord.Embed:
+        """Build the final results embed."""
+        c_choice = self.choices.get(self.challenger.id, "rock")
+        if self.is_bot:
+            o_choice = random.choice(list(_RPS_CHOICES.keys()))
+            o_name = "NanoBot"
+        else:
+            o_choice = self.choices.get(self.opponent.id, "rock")
+            o_name = self.opponent.display_name
+
+        c_emoji = _RPS_CHOICES[c_choice]
+        o_emoji = _RPS_CHOICES[o_choice]
+
+        if c_choice == o_choice:
+            result = "It's a tie! \U0001f91d"
+            color = h.YELLOW
+        elif _RPS_WINS[c_choice] == o_choice:
+            result = f"**{self.challenger.display_name}** wins! \U0001f389"
+            color = h.GREEN
+        else:
+            result = f"**{o_name}** wins! \U0001f389"
+            color = h.RED
+
+        e = discord.Embed(
+            title="\u270a\u270b\u2702\ufe0f Rock Paper Scissors",
+            color=color,
+        )
+        e.add_field(
+            name=self.challenger.display_name,
+            value=f"{c_emoji} {c_choice.capitalize()}",
+            inline=True,
+        )
+        e.add_field(name="vs", value="\u200b", inline=True)
+        e.add_field(
+            name=o_name,
+            value=f"{o_emoji} {o_choice.capitalize()}",
+            inline=True,
+        )
+        e.add_field(name="", value=result, inline=False)
+        e.set_footer(text="NanoBot Fun")
+        return e
+
+    def _waiting_embed(self) -> discord.Embed:
+        """Embed shown while waiting for picks."""
+        picked = len(self.choices)
+        if self.is_bot:
+            desc = f"{self.challenger.mention} vs **NanoBot** -- pick your move!"
+        else:
+            desc = (
+                f"{self.challenger.mention} vs {self.opponent.mention} -- "
+                f"pick your moves!\n\n"
+                f"\U0001f4e5 {picked}/2 players have chosen"
+            )
+        e = discord.Embed(
+            title="\u270a\u270b\u2702\ufe0f Rock Paper Scissors",
+            description=desc,
+            color=_RPS_COLOR,
+        )
+        e.set_footer(text="NanoBot Fun \u00b7 Tap a button!")
+        return e
+
+    async def _handle_pick(self, interaction: discord.Interaction, choice: str):
+        if self.ended:
+            return await interaction.response.send_message(
+                "This game is over!", ephemeral=True
+            )
+        uid = interaction.user.id
+
+        # Only allowed players can pick
+        allowed = {self.challenger.id}
+        if self.opponent and not self.is_bot:
+            allowed.add(self.opponent.id)
+        if uid not in allowed:
+            return await interaction.response.send_message(
+                "This isn't your game! Start your own with `/fun rps` or `!rps`.",
+                ephemeral=True,
+            )
+
+        # Already picked
+        if uid in self.choices:
+            return await interaction.response.send_message(
+                f"You already picked **{self.choices[uid].capitalize()}**!",
+                ephemeral=True,
+            )
+
+        self.choices[uid] = choice
+
+        # PvBot: reveal immediately
+        if self.is_bot:
+            self.ended = True
+            for item in self.children:
+                item.disabled = True
+            await interaction.response.edit_message(
+                embed=self._result_embed(), view=self
+            )
+            self.stop()
+            return
+
+        # PvP: check if both have picked
+        await interaction.response.send_message(
+            f"You picked **{choice.capitalize()}**! Waiting on your opponent...",
+            ephemeral=True,
+        )
+        if len(self.choices) >= 2:
+            self.ended = True
+            for item in self.children:
+                item.disabled = True
+            try:
+                await self.message.edit(embed=self._result_embed(), view=self)
+            except discord.HTTPException:
+                pass
+            self.stop()
+        else:
+            try:
+                await self.message.edit(embed=self._waiting_embed())
+            except discord.HTTPException:
+                pass
+
+    async def on_timeout(self):
+        if self.ended:
+            return
+        self.ended = True
+        for item in self.children:
+            item.disabled = True
+
+        # Figure out who didn't pick
+        if self.is_bot:
+            desc = "Time's up! Nobody picked."
+        elif len(self.choices) == 0:
+            desc = "Time's up! Nobody picked."
+        elif len(self.choices) == 1:
+            picker_id = next(iter(self.choices))
+            if self.opponent and picker_id != self.opponent.id:
+                desc = f"Time's up! {self.opponent.mention} didn't pick."
+            else:
+                desc = f"Time's up! {self.challenger.mention} didn't pick."
+        else:
+            desc = "Time's up!"
+
+        e = discord.Embed(
+            title="\u270a\u270b\u2702\ufe0f Rock Paper Scissors",
+            description=desc,
+            color=h.YELLOW,
+        )
+        e.set_footer(text="NanoBot Fun")
+        if self.message:
+            try:
+                await self.message.edit(embed=e, view=self)
+            except discord.HTTPException:
+                pass
+
+    @discord.ui.button(
+        label="Rock", style=discord.ButtonStyle.blurple, emoji="\u270a"
+    )
+    async def btn_rock(
+        self, interaction: discord.Interaction, button: discord.ui.Button
+    ):
+        await self._handle_pick(interaction, "rock")
+
+    @discord.ui.button(
+        label="Paper", style=discord.ButtonStyle.blurple, emoji="\u270b"
+    )
+    async def btn_paper(
+        self, interaction: discord.Interaction, button: discord.ui.Button
+    ):
+        await self._handle_pick(interaction, "paper")
+
+    @discord.ui.button(
+        label="Scissors", style=discord.ButtonStyle.blurple, emoji="\u2702\ufe0f"
+    )
+    async def btn_scissors(
+        self, interaction: discord.Interaction, button: discord.ui.Button
+    ):
+        await self._handle_pick(interaction, "scissors")
+
+
 # ══════════════════════════════════════════════════════════════════════════════
 #  Collect all unique nekos.best endpoints to scrape
 # ══════════════════════════════════════════════════════════════════════════════
@@ -1667,6 +1868,30 @@ class Fun(commands.Cog):
         await i.response.send_message(embed=view._voting_embed(), view=view)
         view.message = await i.original_response()
 
+    # ── /fun rps ───────────────────────────────────────────────────────────
+
+    @fun_group.command(
+        name="rps", description="Rock Paper Scissors -- challenge someone or the bot!"
+    )
+    @app_commands.describe(user="Who to challenge (leave empty to play vs the bot)")
+    async def s_rps(
+        self, i: discord.Interaction, user: Optional[discord.Member] = None
+    ):
+        if user and user == i.user:
+            e = discord.Embed(
+                title="\u270a\u270b\u2702\ufe0f Rock Paper Scissors",
+                description="You can't challenge yourself! Try challenging someone else or the bot.",
+                color=h.YELLOW,
+            )
+            e.set_footer(text="NanoBot Fun")
+            return await i.response.send_message(embed=e, ephemeral=True)
+
+        is_bot = user is None or user == i.guild.me
+        opponent = None if is_bot else user
+        view = RpsView(i.user, opponent, is_bot=is_bot)
+        await i.response.send_message(embed=view._waiting_embed(), view=view)
+        view.message = await i.original_response()
+
     # ══════════════════════════════════════════════════════════════════════════
     #  PREFIX: flat commands  (!hug, !cry, !ship, !8ball, etc.)
     # ══════════════════════════════════════════════════════════════════════════
@@ -1874,6 +2099,36 @@ class Fun(commands.Cog):
         opt_a, opt_b = _split_wyr(question)
         view = WyrView(opt_a, opt_b, duration=secs)
         msg = await ctx.reply(embed=view._voting_embed(), view=view)
+        view.message = msg
+
+    @commands.command(
+        name="rps",
+        aliases=["rockpaperscissors"],
+        extras={
+            "category": "\U0001f389 Fun",
+            "short": "Rock Paper Scissors",
+            "usage": "rps [user]",
+            "desc": "Challenge someone to Rock Paper Scissors! Leave user empty to play vs the bot.",
+            "args": [("user", "Who to challenge (optional)")],
+            "perms": "None",
+            "example": "!rps @Snow",
+        },
+    )
+    @commands.cooldown(1, 5, commands.BucketType.user)
+    async def pfx_rps(self, ctx, user: Optional[discord.Member] = None):
+        if user and user == ctx.author:
+            e = discord.Embed(
+                title="\u270a\u270b\u2702\ufe0f Rock Paper Scissors",
+                description="You can't challenge yourself! Try challenging someone else or the bot.",
+                color=h.YELLOW,
+            )
+            e.set_footer(text="NanoBot Fun")
+            return await ctx.reply(embed=e)
+
+        is_bot = user is None or user == ctx.guild.me
+        opponent = None if is_bot else user
+        view = RpsView(ctx.author, opponent, is_bot=is_bot)
+        msg = await ctx.reply(embed=view._waiting_embed(), view=view)
         view.message = msg
 
 
