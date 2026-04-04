@@ -1396,17 +1396,13 @@ class RpsView(discord.ui.View):
             except discord.HTTPException:
                 pass
 
-    @discord.ui.button(
-        label="Rock", style=discord.ButtonStyle.blurple, emoji="\u270a"
-    )
+    @discord.ui.button(label="Rock", style=discord.ButtonStyle.blurple, emoji="\u270a")
     async def btn_rock(
         self, interaction: discord.Interaction, button: discord.ui.Button
     ):
         await self._handle_pick(interaction, "rock")
 
-    @discord.ui.button(
-        label="Paper", style=discord.ButtonStyle.blurple, emoji="\u270b"
-    )
+    @discord.ui.button(label="Paper", style=discord.ButtonStyle.blurple, emoji="\u270b")
     async def btn_paper(
         self, interaction: discord.Interaction, button: discord.ui.Button
     ):
