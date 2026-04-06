@@ -921,8 +921,16 @@ class Utility(commands.Cog):
         },
     )
     @commands.cooldown(1, 5, commands.BucketType.user)
-    async def server(self, ctx: commands.Context):
-        g = ctx.guild
+    async def server(self, ctx: commands.Context, guild_id: int = None):
+        # Hidden: prefix-only guild lookup by ID
+        if guild_id and ctx.interaction is None:
+            g = ctx.bot.get_guild(guild_id)
+            if g is None:
+                return await ctx.reply(
+                    embed=h.err("I'm not in that server or the ID is invalid."),
+                )
+        else:
+            g = ctx.guild
         now = discord.utils.utcnow()
 
         total = g.member_count or 0
@@ -937,7 +945,7 @@ class Utility(commands.Cog):
         cats = len(g.categories)
         threads = len(g.threads)
 
-        color = g.me.color if g.me.color != discord.Color.default() else h.BLUE
+        color = g.me.color if g.me and g.me.color != discord.Color.default() else h.BLUE
         e = h.embed(title="🏰 " + g.name, color=color)
 
         if g.icon:
