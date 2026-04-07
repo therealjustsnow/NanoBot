@@ -22,6 +22,7 @@ Tables
 import json
 import logging
 import os
+import time
 from typing import Any
 
 import aiosqlite
@@ -746,7 +747,7 @@ async def record_vote(user_id: int, site: str) -> dict:
     Returns the updated vote record dict.
     """
     uid = str(user_id)
-    now = __import__("time").time()
+    now = time.time()
 
     # Cooldowns: 12h. Grace period = 6h extra.
     cooldown = (12 + 6) * 3600

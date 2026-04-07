@@ -474,12 +474,13 @@ async def main():
 
     from utils.config import validate as _validate_cfg
 
-    for issue in _validate_cfg(cfg):
+    all_issues = _validate_cfg(cfg)
+    for issue in all_issues:
         if issue.fatal:
             log.critical(f"Config error [{issue.field}]: {issue.message}")
         else:
             log.warning(f"Config warning [{issue.field}]: {issue.message}")
-    fatal_issues = [i for i in _validate_cfg(cfg) if i.fatal]
+    fatal_issues = [i for i in all_issues if i.fatal]
     if fatal_issues:
         log.critical("Aborting — fix config.json and restart.")
         return

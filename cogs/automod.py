@@ -41,7 +41,7 @@ import logging
 import re
 import time
 from collections import defaultdict, deque
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from typing import Optional
 
 import discord
@@ -82,6 +82,12 @@ _RE_URL = re.compile(
     r"https?://[^\s<>\"]+|www\.[^\s<>\"]+",
     re.IGNORECASE,
 )
+
+# Cache for user-defined per-guild regex patterns (keyed by raw pattern string).
+# Avoids recompiling the same pattern on every incoming message.
+# Entries are never explicitly evicted — patterns are short strings and guilds
+# tend to have at most a handful, so memory growth is negligible.
+_user_regex_cache: dict[str, re.Pattern] = {}
 
 
 # ── In-memory spam tracker ─────────────────────────────────────────────────────
@@ -146,10 +152,18 @@ def _matches_regex(content: str, patterns: list[dict]) -> str | None:
     Returns the label or pattern string of the first match, or None.
     Silently skips any pattern that fails to compile (shouldn't happen since
     we validate on add, but safe to guard here too).
+
+    Compiled patterns are cached in _user_regex_cache to avoid recompiling
+    the same pattern string on every incoming message.
     """
     for p in patterns:
+        raw = p["pattern"]
         try:
-            if re.search(p["pattern"], content, re.IGNORECASE):
+            compiled = _user_regex_cache.get(raw)
+            if compiled is None:
+                compiled = re.compile(raw, re.IGNORECASE)
+                _user_regex_cache[raw] = compiled
+            if compiled.search(content):
                 return p["label"] or p["pattern"]
         except re.error:
             pass
@@ -236,9 +250,7 @@ async def _execute_action(
 
     if action == "timeout":
         try:
-            until = discord.utils.utcnow() + __import__("datetime").timedelta(
-                seconds=TIMEOUT_SECONDS
-            )
+            until = discord.utils.utcnow() + timedelta(seconds=TIMEOUT_SECONDS)
             await member.timeout(until, reason=reason_text)
             log.info(f"AutoMod timed out {member} ({member.id}) in {guild} — {rule}")
         except discord.Forbidden:
