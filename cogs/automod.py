@@ -46,7 +46,7 @@ from typing import Optional
 
 import discord
 from discord import app_commands
-from discord.ext import commands
+from discord.ext import commands, tasks
 
 from utils import db
 from utils import helpers as h
@@ -204,9 +204,7 @@ async def _execute_action(
                 color=h.YELLOW,
             )
         )
-        asyncio.get_event_loop().call_later(
-            6, asyncio.ensure_future, _soft_delete(notice)
-        )
+        asyncio.create_task(_soft_delete_after(notice, 6.0))
     except (discord.Forbidden, discord.HTTPException):
         pass
 
@@ -259,7 +257,9 @@ async def _execute_action(
             log.error(f"AutoMod timeout failed: {exc}", exc_info=exc)
 
 
-async def _soft_delete(message: discord.Message) -> None:
+async def _soft_delete_after(message: discord.Message, delay: float) -> None:
+    """Delete *message* after *delay* seconds, ignoring any errors."""
+    await asyncio.sleep(delay)
     try:
         await message.delete()
     except (discord.NotFound, discord.HTTPException):
@@ -320,15 +320,52 @@ class AutoMod(commands.Cog):
         self._cache: dict[int, dict] = {}
 
     async def _get_cfg(self, guild_id: int) -> dict | None:
-        """Return automod config from cache, falling back to DB."""
+        """Return automod config from cache, falling back to DB.
+
+        The cached dict is augmented with two extra keys so the message
+        listener never hits the database for per-guild word/pattern lists:
+          _badwords        — list[str] from automod_badwords
+          _regex_patterns  — list[dict] from automod_regex_patterns
+        Both are invalidated together with the rest of the config via
+        _invalidate(), which must be called after any mutation to these lists.
+        """
         if guild_id not in self._cache:
             cfg = await db.get_automod_config(guild_id)
             if cfg:
+                cfg["_badwords"] = await db.get_automod_badwords(guild_id)
+                cfg["_regex_patterns"] = await db.get_automod_regex_patterns(guild_id)
                 self._cache[guild_id] = cfg
         return self._cache.get(guild_id)
 
     def _invalidate(self, guild_id: int) -> None:
         self._cache.pop(guild_id, None)
+
+    async def cog_load(self) -> None:
+        self._prune_spam_tracker.start()
+
+    async def cog_unload(self) -> None:
+        self._prune_spam_tracker.cancel()
+
+    # ── Background: spam tracker pruning ──────────────────────────────────────
+    @tasks.loop(minutes=5)
+    async def _prune_spam_tracker(self) -> None:
+        """Remove stale entries from the in-memory spam tracker.
+
+        Runs every 5 minutes. Any timestamp older than 60 s (the maximum
+        configurable spam window) is expired. Empty deques and empty guild
+        dicts are then deleted so the dict doesn't grow unboundedly for bots
+        serving many guilds over long runtimes.
+        """
+        cutoff = time.monotonic() - 60  # max possible spam window
+        for guild_data in list(_spam_tracker.values()):
+            for uid in list(guild_data.keys()):
+                q = guild_data[uid]
+                while q and q[0] < cutoff:
+                    q.popleft()
+                if not q:
+                    del guild_data[uid]
+        for gid in [g for g, d in list(_spam_tracker.items()) if not d]:
+            del _spam_tracker[gid]
 
     # ── /automod group ─────────────────────────────────────────────────────────
     automod_group = app_commands.Group(
@@ -577,6 +614,7 @@ class AutoMod(commands.Cog):
             )
             return
         added = await db.add_automod_badword(interaction.guild_id, word)
+        self._invalidate(interaction.guild_id)
         if added:
             await interaction.response.send_message(
                 embed=h.ok(f"Added `{word}` to the bad-word filter.", "🤬 Word Added"),
@@ -594,6 +632,7 @@ class AutoMod(commands.Cog):
     async def bw_remove(self, interaction: discord.Interaction, word: str):
         word = word.lower().strip()
         removed = await db.remove_automod_badword(interaction.guild_id, word)
+        self._invalidate(interaction.guild_id)
         if removed:
             await interaction.response.send_message(
                 embed=h.ok(
@@ -655,6 +694,7 @@ class AutoMod(commands.Cog):
             return
 
         added = await db.add_automod_regex(interaction.guild_id, pattern, label)
+        self._invalidate(interaction.guild_id)
         if added:
             display = f"`{pattern}`" + (f"\nLabel: **{label}**" if label else "")
             await interaction.response.send_message(
@@ -679,6 +719,7 @@ class AutoMod(commands.Cog):
     @has_admin_perms()
     async def rx_remove(self, interaction: discord.Interaction, pattern: str):
         removed = await db.remove_automod_regex(interaction.guild_id, pattern)
+        self._invalidate(interaction.guild_id)
         if removed:
             await interaction.response.send_message(
                 embed=h.ok(
@@ -865,23 +906,31 @@ class AutoMod(commands.Cog):
                 )
                 return  # one action per message
 
+        # Pre-compute invite check — used by both the invite and link rules to
+        # avoid calling _has_invite (a regex search) twice per message.
+        _invites_rule = rules.get("invites", {})
+        _links_rule = rules.get("links", {})
+        invite_in_msg = (
+            _has_invite(content)
+            if (_invites_rule.get("enabled") or _links_rule.get("enabled"))
+            else False
+        )
+
         # ── Invite links ──────────────────────────────────────────────────────
-        r = rules.get("invites", {})
-        if r.get("enabled") and _has_invite(content):
+        if _invites_rule.get("enabled") and invite_in_msg:
             await _execute_action(
                 message,
-                r.get("action", "delete"),
+                _invites_rule.get("action", "delete"),
                 "invites",
                 "Discord invite link",
             )
             return
 
         # ── External links ────────────────────────────────────────────────────
-        r = rules.get("links", {})
-        if r.get("enabled") and _has_link(content) and not _has_invite(content):
+        if _links_rule.get("enabled") and _has_link(content) and not invite_in_msg:
             await _execute_action(
                 message,
-                r.get("action", "delete"),
+                _links_rule.get("action", "delete"),
                 "links",
                 "External URL",
             )
@@ -905,20 +954,20 @@ class AutoMod(commands.Cog):
         r = rules.get("mentions", {})
         if r.get("enabled"):
             limit = r.get("limit", 5)
-            if _mention_count(message) >= limit:
+            mention_count = _mention_count(message)
+            if mention_count >= limit:
                 await _execute_action(
                     message,
                     r.get("action", "warn"),
                     "mentions",
-                    f"{_mention_count(message)} mentions",
+                    f"{mention_count} mentions",
                 )
                 return
 
         # ── Bad words ─────────────────────────────────────────────────────────
         r = rules.get("badwords", {})
         if r.get("enabled"):
-            words = await db.get_automod_badwords(message.guild.id)
-            match = _has_badword(content, words)
+            match = _has_badword(content, cfg.get("_badwords", []))
             if match:
                 await _execute_action(
                     message,
@@ -931,8 +980,7 @@ class AutoMod(commands.Cog):
         # ── Regex filter ──────────────────────────────────────────────────────
         r = rules.get("regex", {})
         if r.get("enabled"):
-            patterns = await db.get_automod_regex_patterns(message.guild.id)
-            match = _matches_regex(content, patterns)
+            match = _matches_regex(content, cfg.get("_regex_patterns", []))
             if match:
                 await _execute_action(
                     message,
