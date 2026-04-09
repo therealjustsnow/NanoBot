@@ -60,7 +60,7 @@ log = logging.getLogger("NanoBot.moderation")
 # ── Helpers ────────────────────────────────────────────────────────────────────
 
 
-async def resolve_target(bot, channel_id, explicit):
+def resolve_target(bot, channel_id, explicit):
     return explicit if explicit else bot.last_senders.get(channel_id)
 
 
@@ -298,7 +298,7 @@ class Moderation(commands.Cog):
         *,
         message: Optional[str] = None,
     ):
-        target = await resolve_target(self.bot, ctx.channel.id, user)
+        target = resolve_target(self.bot, ctx.channel.id, user)
         if not target:
             return await ctx.reply(
                 embed=h.err("No user specified and no recent sender tracked."),
@@ -407,7 +407,7 @@ class Moderation(commands.Cog):
         *,
         message: Optional[str] = None,
     ):
-        target = await resolve_target(self.bot, ctx.channel.id, user)
+        target = resolve_target(self.bot, ctx.channel.id, user)
         if not target:
             return await ctx.reply(
                 embed=h.err("No user specified and no recent sender tracked."),
@@ -609,7 +609,7 @@ class Moderation(commands.Cog):
         *,
         message: Optional[str] = None,
     ):
-        target = await resolve_target(self.bot, ctx.channel.id, user)
+        target = resolve_target(self.bot, ctx.channel.id, user)
         if not target:
             return await ctx.reply(
                 embed=h.err("No user specified and no recent sender tracked."),
@@ -895,7 +895,14 @@ class Moderation(commands.Cog):
             return all(c(m) for c in checks) if checks else True
 
         deleted = await ctx.channel.purge(limit=amount + 1, check=combined, bulk=True)
-        count = max(0, len(deleted) - (1 if not ctx.interaction else 0))
+        # Only subtract the command message from the count if it was actually
+        # deleted (i.e. it matched the active filter). A filter like bots=True
+        # would exclude the !purge message, so it won't appear in `deleted`.
+        cmd_deleted = (
+            ctx.message is not None
+            and any(m.id == ctx.message.id for m in deleted)
+        )
+        count = len(deleted) - (1 if cmd_deleted else 0)
 
         parts = [f"Deleted **{count}** message{'s' if count != 1 else ''}."]
         if bots:
@@ -1086,7 +1093,7 @@ class Moderation(commands.Cog):
         *,
         reason: Optional[str] = None,
     ):
-        target = await resolve_target(self.bot, ctx.channel.id, user)
+        target = resolve_target(self.bot, ctx.channel.id, user)
         if not target:
             return await ctx.reply(
                 embed=h.err("No user specified and no recent sender tracked."),
@@ -1385,7 +1392,7 @@ class Moderation(commands.Cog):
                 "📜 Note Saved",
             ),
             ephemeral=True,
-        ),
+        )
 
     @commands.hybrid_command(
         name="notes",
@@ -1532,7 +1539,7 @@ class Moderation(commands.Cog):
         *,
         reason: Optional[str] = None,
     ):
-        target = await resolve_target(self.bot, ctx.channel.id, user)
+        target = resolve_target(self.bot, ctx.channel.id, user)
         if not target:
             return await ctx.reply(
                 embed=h.err("No user specified and no recent sender tracked."),
@@ -1561,6 +1568,11 @@ class Moderation(commands.Cog):
                 embed=h.err(
                     "Invalid duration. Use e.g. `1h`, `12h`, `7d` (minimum 1 minute)."
                 ),
+                ephemeral=True,
+            )
+        if wait_secs > 365 * 86400:
+            return await ctx.reply(
+                embed=h.err("Maximum tempban duration is **1 year**."),
                 ephemeral=True,
             )
 
