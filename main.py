@@ -474,7 +474,10 @@ async def main():
 
     from utils.config import validate as _validate_cfg
 
-    all_issues = _validate_cfg(cfg)
+    # Pass the resolved token so an env-var-only setup (no "token" key in
+    # config.json) doesn't trigger a false fatal "Missing or placeholder" error.
+    cfg_to_validate = {**cfg, "token": token}
+    all_issues = _validate_cfg(cfg_to_validate)
     for issue in all_issues:
         if issue.fatal:
             log.critical(f"Config error [{issue.field}]: {issue.message}")

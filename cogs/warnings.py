@@ -142,20 +142,18 @@ class Warnings(commands.Cog):
                 inline=False,
             )
 
-        lines = [f"**{len(warns)}** total warning(s)"]
-        if cfg["kick_at"]:
-            lines.append(f"\U0001f462 Auto-kick at {cfg['kick_at']}")
-        if cfg["ban_at"]:
-            lines.append(f"\U0001f528 Auto-ban at {cfg['ban_at']}")
-
-        e.set_footer(
-            text=(
-                f"{'Showing last 8 of ' + str(len(warns)) if len(warns) > 8 else str(len(warns))} warning(s)  \u00b7  "
-                + "  \u00b7  ".join(lines[1:])
-                if len(lines) > 1
-                else f"{len(warns)} warning(s)  \u00b7  NanoBot"
-            )
+        count_label = (
+            f"Showing last 8 of {len(warns)}"
+            if len(warns) > 8
+            else str(len(warns))
         )
+        footer_parts = [f"{count_label} warning(s)"]
+        if cfg["kick_at"]:
+            footer_parts.append(f"\U0001f462 Auto-kick at {cfg['kick_at']}")
+        if cfg["ban_at"]:
+            footer_parts.append(f"\U0001f528 Auto-ban at {cfg['ban_at']}")
+        footer_parts.append("NanoBot")
+        e.set_footer(text="  \u00b7  ".join(footer_parts))
         return e
 
     async def _do_clear(self, guild, user, author):

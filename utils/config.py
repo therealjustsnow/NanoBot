@@ -149,6 +149,26 @@ def validate(cfg: dict) -> list[ConfigIssue]:
                 )
             )
 
+    # ── vote_webhook_port ──────────────────────────────────────────────────────
+    port = cfg.get("vote_webhook_port")
+    if port is not None:
+        if not isinstance(port, int) or isinstance(port, bool):
+            issues.append(
+                ConfigIssue(
+                    field="vote_webhook_port",
+                    message=f"Must be an integer, got {type(port).__name__} '{port}'",
+                    fatal=False,
+                )
+            )
+        elif not (1 <= port <= 65535):
+            issues.append(
+                ConfigIssue(
+                    field="vote_webhook_port",
+                    message=f"{port} is not a valid port number (must be 1–65535)",
+                    fatal=False,
+                )
+            )
+
     return issues
 
 
