@@ -776,7 +776,7 @@ async def _fetch_nekosia_single(
 
 
 # ── FML story scraper (bulk, for daily cache refresh) ─────────────────────────
-_FML_RE = re.compile(r"(?:Today|I)\s.+?FML")
+_FML_RE = re.compile(r"(?:Today|I)\s.+?FML", re.DOTALL)
 _FML_TAG_RE = re.compile(r"<[^>]+>")
 
 
