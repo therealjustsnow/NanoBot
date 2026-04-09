@@ -86,12 +86,12 @@ _GROQ_WYR_SYSTEM = (
 _WYR_RATINGS = ("pg", "pg13")
 
 # ── Scraper settings ─────────────────────────────────────────────────────────
-_FML_PAGES_PER_SCRAPE = 100  # ~5-10 stories each = 500-1000 per run
-_WYR_REQUESTS_PER_SCRAPE = 100  # 1 question each, deduped
-_NEKOS_PER_ENDPOINT = 40  # GIFs/images per nekos.best endpoint per run
-_NEKOSIA_PER_TAG = 40  # images per Nekosia tag per run
+_FML_PAGES_PER_SCRAPE = 500  # ~5-10 stories each = 1500-5000 per run
+_WYR_REQUESTS_PER_SCRAPE = 500  # 1 question each, deduped
+_NEKOS_PER_ENDPOINT = 400  # GIFs/images per nekos.best endpoint per run
+_NEKOSIA_PER_TAG = 400  # images per Nekosia tag per run
 _REVALIDATE_AGE = 7 * 86400  # check URLs older than 7 days
-_REVALIDATE_BATCH = 400  # max URLs to check per revalidation cycle
+_REVALIDATE_BATCH = 1000  # max URLs to check per revalidation cycle
 
 
 # ══════════════════════════════════════════════════════════════════════════════
