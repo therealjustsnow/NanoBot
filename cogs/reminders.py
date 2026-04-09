@@ -466,7 +466,6 @@ class Reminders(commands.Cog):
             )
 
         entries = _build_numbered_list(own_rems, sent_rems)
-        now = _now()
 
         e = h.embed(
             title=f"⏰ Your Reminders ({len(own_rems)}/{user_max})",
@@ -479,7 +478,6 @@ class Reminders(commands.Cog):
             lines = []
             for num, rid, info, section in own_entries:
                 due_dt = datetime.fromtimestamp(info["due"], tz=timezone.utc)
-                remaining = max(0, info["due"] - now)
                 msg_preview = info["message"][:60] + (
                     "..." if len(info["message"]) > 60 else ""
                 )
@@ -507,7 +505,6 @@ class Reminders(commands.Cog):
             lines = []
             for num, rid, info, section in sent_entries:
                 due_dt = datetime.fromtimestamp(info["due"], tz=timezone.utc)
-                remaining = max(0, info["due"] - now)
                 msg_preview = info["message"][:60] + (
                     "..." if len(info["message"]) > 60 else ""
                 )
