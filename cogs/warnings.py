@@ -143,9 +143,7 @@ class Warnings(commands.Cog):
             )
 
         count_label = (
-            f"Showing last 8 of {len(warns)}"
-            if len(warns) > 8
-            else str(len(warns))
+            f"Showing last 8 of {len(warns)}" if len(warns) > 8 else str(len(warns))
         )
         footer_parts = [f"{count_label} warning(s)"]
         if cfg["kick_at"]:
