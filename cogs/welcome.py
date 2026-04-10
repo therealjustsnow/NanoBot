@@ -27,7 +27,7 @@ log = logging.getLogger("NanoBot.welcome")
 
 _VARS_HELP = (
     "`{user}` — display name  ·  `{mention}` — ping  ·  "
-    "`{server}` — server name  ·  `{count}` — member count"
+    "`{server}` — server name  ·  `{count}` — member count  ·  `{username}` — full username"
 )
 
 
