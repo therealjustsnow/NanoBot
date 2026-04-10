@@ -724,7 +724,7 @@ class Utility(commands.Cog):
 
     # ══════════════════════════════════════════════════════════════════════════
     #  ping
-    # ══════════════════════════════════════════════════════════════════════════,
+    # ══════════════════════════════════════════════════════════════════════════
     @commands.hybrid_command(
         name="ping",
         description="Check NanoBot's latency.",
@@ -921,7 +921,7 @@ class Utility(commands.Cog):
         },
     )
     @commands.cooldown(1, 5, commands.BucketType.user)
-    async def server(self, ctx: commands.Context, guild_id: int = None):
+    async def server(self, ctx: commands.Context, guild_id: Optional[int] = None):
         # Hidden: prefix-only guild lookup by ID
         if guild_id and ctx.interaction is None:
             g = ctx.bot.get_guild(guild_id)

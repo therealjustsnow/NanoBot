@@ -633,7 +633,7 @@ class Tags(commands.Cog):
         e = h.embed(title="🏷️ Tag List", color=h.BLUE)
         e.description = (
             f"`{prefix}tag <name>` or `{prefix}<name>` → post it in the channel\n"
-            f"`{prefix}tag + <name> <content>` → create  ·  `{prefix}tag - <name>` → delete\n"
+            f"`{prefix}tag + <name> | <content>` → create  ·  `{prefix}tag - <name>` → delete\n"
             f"🖼️ = has image\n\u200b"
         )
 
@@ -772,7 +772,7 @@ class Tags(commands.Cog):
             image_url = meta.get("image_url")
 
             # Must have at least one of content or image_url, and name must be valid
-            if not name or len(name) > 64:
+            if not name or len(name) > 32:
                 bad += 1
                 continue
             if not content and not image_url:

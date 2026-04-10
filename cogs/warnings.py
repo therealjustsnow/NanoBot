@@ -273,6 +273,7 @@ class Warnings(commands.Cog):
         name="clear", description="Clear all warnings for a user. Admin only."
     )
     @app_commands.describe(user="User whose warnings to clear")
+    @app_commands.default_permissions(administrator=True)
     async def slash_warn_clear(
         self, interaction: discord.Interaction, user: discord.Member
     ):
