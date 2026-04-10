@@ -898,9 +898,8 @@ class Moderation(commands.Cog):
         # Only subtract the command message from the count if it was actually
         # deleted (i.e. it matched the active filter). A filter like bots=True
         # would exclude the !purge message, so it won't appear in `deleted`.
-        cmd_deleted = (
-            ctx.message is not None
-            and any(m.id == ctx.message.id for m in deleted)
+        cmd_deleted = ctx.message is not None and any(
+            m.id == ctx.message.id for m in deleted
         )
         count = len(deleted) - (1 if cmd_deleted else 0)
 
