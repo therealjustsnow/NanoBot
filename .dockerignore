@@ -1,0 +1,26 @@
+# Secrets and user data — never bake into the image
+config.json
+data/
+logs/
+.env
+
+# Python bytecode
+__pycache__/
+*.py[cod]
+*.pyo
+
+# Git
+.git/
+.gitignore
+
+# Dev/IDE
+.vscode/
+.idea/
+*.swp
+.DS_Store
+Thumbs.db
+
+# Virtual envs
+venv/
+.venv/
+env/
