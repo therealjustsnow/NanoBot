@@ -114,8 +114,8 @@ class Votes(commands.Cog):
         self.post_stats.start()
         self.notify_loop.start()
         # Sync commands to applicable sites once the bot is ready — fire-and-forget
-        self.bot.loop.create_task(self._sync_dbl_commands())
-        self.bot.loop.create_task(self._sync_topgg_commands())
+        asyncio.create_task(self._sync_dbl_commands())
+        asyncio.create_task(self._sync_topgg_commands())
         log.info("Votes cog loaded — webhook server started, stat loop running")
 
     async def _fetch_discord_commands(self) -> list | None:

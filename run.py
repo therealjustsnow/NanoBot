@@ -106,8 +106,10 @@ def check_file_structure():
         "cogs/utility.py",
         "cogs/admin.py",
         "utils/__init__.py",
-        "utils/storage.py",
+        "utils/db.py",
         "utils/helpers.py",
+        "utils/checks.py",
+        "utils/config.py",
     ]
 
     for d in required_dirs:

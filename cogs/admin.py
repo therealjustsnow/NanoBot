@@ -690,7 +690,7 @@ class Admin(commands.Cog):
             )
         )
         # Fire the loop body as a background task so we don't block
-        self.bot.loop.create_task(fun_cog._scrape_loop())
+        asyncio.create_task(fun_cog._scrape_loop())
 
     # ══════════════════════════════════════════════════════════════════════════
     #  cachestats
