@@ -936,9 +936,6 @@ class Utility(commands.Cog):
         total = g.member_count or 0
         bots = sum(1 for m in g.members if m.bot)
         humans = total - bots
-        online = sum(
-            1 for m in g.members if m.status != discord.Status.offline and not m.bot
-        )
 
         text_ch = len(g.text_channels)
         voice_ch = len(g.voice_channels)
@@ -971,9 +968,6 @@ class Utility(commands.Cog):
             "**"
             + str(total)
             + "** total\n"
-            + "🟢 "
-            + str(online)
-            + " online · "
             + "👤 "
             + str(humans)
             + " humans · "
@@ -1465,10 +1459,8 @@ class Utility(commands.Cog):
             parts.append(f"{secs}s")
         uptime_str = " ".join(parts)
 
-        # Member breakdown across all guilds
+        # member_count is accurate; g.members cache is sparse for large guilds
         total_members = sum(g.member_count or 0 for g in self.bot.guilds)
-        total_bots = sum(sum(1 for m in g.members if m.bot) for g in self.bot.guilds)
-        total_humans = total_members - total_bots
 
         # Channel counts
         text_channels = sum(len(g.text_channels) for g in self.bot.guilds)
@@ -1489,7 +1481,7 @@ class Utility(commands.Cog):
         )
         e.add_field(
             name="👥 Members",
-            value=f"**{total_humans:,}** humans · **{total_bots:,}** bots",
+            value=f"**{total_members:,}** total",
             inline=True,
         )
         e.add_field(
