@@ -755,7 +755,7 @@ class Admin(commands.Cog):
             "Paginates automatically at 10 servers per embed."
         ),
     )
-    async def servers(self, ctx: commands.Context):
+    async def servers(self, ctx: commands.Context, page: int = 1):
         guilds = sorted(
             self.bot.guilds, key=lambda g: g.member_count or 0, reverse=True
         )
@@ -780,30 +780,27 @@ class Admin(commands.Cog):
                 f"    🆔 `{g.id}` · 👥 {g.member_count:,} · 👑 {owner_str}"
             )
 
-        # Pages of 10 guilds each
+        # One page at a time — no more embed floods
         page_size = 10
         pages = [lines[i : i + page_size] for i in range(0, len(lines), page_size)]
         total_pages = len(pages)
+        page = max(1, min(page, total_pages))
 
-        embeds = []
-        for page_num, page_lines in enumerate(pages, start=1):
-            e = h.embed(
-                title=f"🌐 Servers ({total_guilds})",
-                description="\n".join(page_lines),
-                color=h.BLUE,
-            )
-            e.set_footer(
-                text=(
-                    f"Page {page_num}/{total_pages}  ·  "
-                    f"{total_guilds} server(s)  ·  {total_members:,} total members  ·  NanoBot"
-                )
-            )
-            embeds.append(e)
+        e = h.embed(
+            title=f"🌐 Servers ({total_guilds})",
+            description="\n".join(pages[page - 1]),
+            color=h.BLUE,
+        )
+        footer = (
+            f"Page {page}/{total_pages}  ·  "
+            f"{total_guilds} server(s)  ·  {total_members:,} total members  ·  NanoBot"
+        )
+        if total_pages > 1:
+            footer += f"  ·  !servers {page + 1 if page < total_pages else 1} for next"
+        e.set_footer(text=footer)
+        await ctx.send(embed=e)
 
-        for embed in embeds:
-            await ctx.send(embed=embed)
-
-        log.info(f"servers: listed {total_guilds} guild(s) for {ctx.author}")
+        log.info(f"servers: page {page}/{total_pages} for {ctx.author}")
 
 
 # ── Registration ───────────────────────────────────────────────────────────────

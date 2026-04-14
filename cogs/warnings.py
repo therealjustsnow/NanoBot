@@ -133,17 +133,16 @@ class Warnings(commands.Cog):
         )
         e.set_thumbnail(url=user.display_avatar.url)
 
-        shown = warns[-8:]
+        shown = warns[-5:]
+        lines = []
         for w in shown:
             date = w["at"][:10]
-            e.add_field(
-                name=f"#{w['id']}  \u00b7  {w['by_name']}  \u00b7  {date}",
-                value=w["reason"][:300],
-                inline=False,
-            )
+            reason = w["reason"][:120] + ("\u2026" if len(w["reason"]) > 120 else "")
+            lines.append(f"**#{w['id']}** \u00b7 {date} \u00b7 {w['by_name']}\n{reason}")
+        e.description = "\n\n".join(lines)
 
         count_label = (
-            f"Showing last 8 of {len(warns)}" if len(warns) > 8 else str(len(warns))
+            f"Showing last 5 of {len(warns)}" if len(warns) > 5 else str(len(warns))
         )
         footer_parts = [f"{count_label} warning(s)"]
         if cfg["kick_at"]:

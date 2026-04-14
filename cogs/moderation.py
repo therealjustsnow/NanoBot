@@ -1420,15 +1420,14 @@ class Moderation(commands.Cog):
                 ephemeral=True,
             )
         e = h.embed(title=f"📜 Notes — {user.display_name}", color=h.BLUE)
-        for i, n in enumerate(user_notes[-8:], start=max(1, len(user_notes) - 7)):
-            e.add_field(
-                name=f"#{i}  ·  {n.get('by_name','?')}  ·  {n.get('at','')[:10]}",
-                value=n["note"][:300],
-                inline=False,
-            )
-        e.set_footer(
-            text=f"Showing {min(8,len(user_notes))}/{len(user_notes)} notes  ·  NanoBot"
-        )
+        shown = user_notes[-5:]
+        lines = []
+        for i, n in enumerate(shown, start=max(1, len(user_notes) - len(shown) + 1)):
+            text = n["note"][:120] + ("…" if len(n["note"]) > 120 else "")
+            lines.append(f"**#{i}** · {n.get('at','')[:10]} · {n.get('by_name','?')}\n{text}")
+        e.description = "\n\n".join(lines)
+        count_str = f"Showing last 5 of {len(user_notes)}" if len(user_notes) > 5 else str(len(user_notes))
+        e.set_footer(text=f"{count_str} note(s)  ·  NanoBot")
         e.timestamp = datetime.now(timezone.utc)
         await ctx.reply(embed=e, ephemeral=True)
 
@@ -1908,6 +1907,111 @@ class Moderation(commands.Cog):
             "moveall",
             detail=f"{moved} from #{source.name} → #{to_channel.name}",
         )
+
+    # ══════════════════════════════════════════════════════════════════════════
+    #  modcheck — combined mod investigation card
+    # ══════════════════════════════════════════════════════════════════════════
+    @commands.hybrid_command(
+        name="modcheck",
+        aliases=["check", "mc2"],
+        description="Full mod snapshot — user info, warnings, and notes in one embed.",
+        extras={
+            "category": "🔎 Info & Notes",
+            "short": "User info + warnings + notes in one embed",
+            "usage": "modcheck <user>",
+            "desc": (
+                "Combines !user + !warn list + !notes into a single compact embed. "
+                "Designed for mobile mods who need a quick picture before taking action — "
+                "one command instead of three."
+            ),
+            "args": [("user", "User to investigate")],
+            "perms": "Manage Messages",
+            "example": "!modcheck @Troublemaker\n!check @Troublemaker",
+        },
+    )
+    @app_commands.describe(user="User to investigate")
+    @has_mod_perms()
+    async def modcheck(self, ctx, user: discord.Member):
+        now = datetime.now(timezone.utc)
+
+        warns, notes = await asyncio.gather(
+            db.get_warnings(ctx.guild.id, user.id),
+            db.get_notes(ctx.guild.id, user.id),
+        )
+
+        color = user.color if user.color != discord.Color.default() else h.BLUE
+        e = discord.Embed(
+            title=f"🔍 Mod Check — {user.display_name}",
+            color=color,
+        )
+        e.set_thumbnail(url=user.display_avatar.url)
+
+        # ── Account info ──────────────────────────────────────────────────────
+        created = discord.utils.format_dt(user.created_at, style="R")
+        joined = (
+            discord.utils.format_dt(user.joined_at, style="R")
+            if user.joined_at
+            else "Unknown"
+        )
+        roles = [r for r in reversed(user.roles) if r != ctx.guild.default_role]
+        roles_str = " ".join(r.mention for r in roles[:5])
+        if len(roles) > 5:
+            roles_str += f" _+{len(roles) - 5} more_"
+        if not roles_str:
+            roles_str = "_None_"
+
+        info_lines = [
+            f"🆔 `{user.id}`",
+            f"📅 Created {created}",
+            f"📥 Joined {joined}",
+            f"🎭 {roles_str}",
+        ]
+        if user.timed_out_until and user.timed_out_until > now:
+            info_lines.append(
+                f"🧊 Timed out until {discord.utils.format_dt(user.timed_out_until, style='R')}"
+            )
+        e.description = "\n".join(info_lines)
+
+        # ── Warnings ──────────────────────────────────────────────────────────
+        if warns:
+            shown_w = warns[-3:]
+            w_lines = []
+            for w in shown_w:
+                reason = w["reason"][:80] + ("…" if len(w["reason"]) > 80 else "")
+                w_lines.append(
+                    f"**#{w['id']}** · {w['at'][:10]} · {w['by_name']}\n{reason}"
+                )
+            suffix = f" _(last 3 of {len(warns)})_" if len(warns) > 3 else f" _({len(warns)} total)_"
+            e.add_field(
+                name=f"⚠️ Warnings{suffix}",
+                value="\n\n".join(w_lines),
+                inline=False,
+            )
+        else:
+            e.add_field(name="⚠️ Warnings", value="_None_", inline=False)
+
+        # ── Notes ────────────────────────────────────────────────────────────
+        if notes:
+            shown_n = notes[-2:]
+            n_lines = []
+            for i, n in enumerate(shown_n, start=max(1, len(notes) - 1)):
+                text = n["note"][:80] + ("…" if len(n["note"]) > 80 else "")
+                n_lines.append(
+                    f"**#{i}** · {n.get('at','')[:10]} · {n.get('by_name','?')}\n{text}"
+                )
+            suffix = f" _(last 2 of {len(notes)})_" if len(notes) > 2 else f" _({len(notes)} total)_"
+            e.add_field(
+                name=f"📜 Notes{suffix}",
+                value="\n\n".join(n_lines),
+                inline=False,
+            )
+        else:
+            e.add_field(name="📜 Notes", value="_None_", inline=False)
+
+        e.set_footer(text=f"NanoBot · {user.name}")
+        e.timestamp = now
+        await ctx.reply(embed=e, ephemeral=True)
+        log.info(f"modcheck: {ctx.author} checked {user} ({user.id}) in {ctx.guild}")
 
 
 async def setup(bot):
