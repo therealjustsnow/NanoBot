@@ -138,7 +138,9 @@ class Warnings(commands.Cog):
         for w in shown:
             date = w["at"][:10]
             reason = w["reason"][:120] + ("\u2026" if len(w["reason"]) > 120 else "")
-            lines.append(f"**#{w['id']}** \u00b7 {date} \u00b7 {w['by_name']}\n{reason}")
+            lines.append(
+                f"**#{w['id']}** \u00b7 {date} \u00b7 {w['by_name']}\n{reason}"
+            )
         e.description = "\n\n".join(lines)
 
         count_label = (

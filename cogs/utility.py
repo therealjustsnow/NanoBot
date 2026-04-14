@@ -797,7 +797,9 @@ class Utility(commands.Cog):
                 "Shows the Discord ID in a code block for easy copying on mobile. "
                 "Accepts @mentions and #channel. No arg = your own ID."
             ),
-            "args": [("target", "User, role, or channel to look up (blank = yourself)")],
+            "args": [
+                ("target", "User, role, or channel to look up (blank = yourself)")
+            ],
             "perms": "None",
             "example": "!id\n!id @someone\n!id #general\n!id @Moderator",
         },
@@ -1639,7 +1641,9 @@ class Utility(commands.Cog):
             "example": "!firstmsg\n!firstmsg #rules",
         },
     )
-    @app_commands.describe(channel="Channel to look up (leave blank for current channel)")
+    @app_commands.describe(
+        channel="Channel to look up (leave blank for current channel)"
+    )
     @commands.cooldown(1, 10, commands.BucketType.channel)
     async def firstmsg(
         self,

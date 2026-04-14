@@ -1424,9 +1424,15 @@ class Moderation(commands.Cog):
         lines = []
         for i, n in enumerate(shown, start=max(1, len(user_notes) - len(shown) + 1)):
             text = n["note"][:120] + ("…" if len(n["note"]) > 120 else "")
-            lines.append(f"**#{i}** · {n.get('at','')[:10]} · {n.get('by_name','?')}\n{text}")
+            lines.append(
+                f"**#{i}** · {n.get('at','')[:10]} · {n.get('by_name','?')}\n{text}"
+            )
         e.description = "\n\n".join(lines)
-        count_str = f"Showing last 5 of {len(user_notes)}" if len(user_notes) > 5 else str(len(user_notes))
+        count_str = (
+            f"Showing last 5 of {len(user_notes)}"
+            if len(user_notes) > 5
+            else str(len(user_notes))
+        )
         e.set_footer(text=f"{count_str} note(s)  ·  NanoBot")
         e.timestamp = datetime.now(timezone.utc)
         await ctx.reply(embed=e, ephemeral=True)
@@ -1981,7 +1987,11 @@ class Moderation(commands.Cog):
                 w_lines.append(
                     f"**#{w['id']}** · {w['at'][:10]} · {w['by_name']}\n{reason}"
                 )
-            suffix = f" _(last 3 of {len(warns)})_" if len(warns) > 3 else f" _({len(warns)} total)_"
+            suffix = (
+                f" _(last 3 of {len(warns)})_"
+                if len(warns) > 3
+                else f" _({len(warns)} total)_"
+            )
             e.add_field(
                 name=f"⚠️ Warnings{suffix}",
                 value="\n\n".join(w_lines),
@@ -1999,7 +2009,11 @@ class Moderation(commands.Cog):
                 n_lines.append(
                     f"**#{i}** · {n.get('at','')[:10]} · {n.get('by_name','?')}\n{text}"
                 )
-            suffix = f" _(last 2 of {len(notes)})_" if len(notes) > 2 else f" _({len(notes)} total)_"
+            suffix = (
+                f" _(last 2 of {len(notes)})_"
+                if len(notes) > 2
+                else f" _({len(notes)} total)_"
+            )
             e.add_field(
                 name=f"📜 Notes{suffix}",
                 value="\n\n".join(n_lines),
