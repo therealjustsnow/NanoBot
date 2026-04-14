@@ -15,7 +15,8 @@ Commands:
 import logging
 import platform
 import sys
-from typing import Optional
+import time
+from typing import Optional, Union
 
 import psutil
 
@@ -23,6 +24,7 @@ import discord
 from discord import app_commands
 from discord.ext import commands
 
+from utils import db
 from utils import helpers as h
 
 log = logging.getLogger("NanoBot.utility")
@@ -740,9 +742,111 @@ class Utility(commands.Cog):
     )
     @commands.cooldown(1, 10, commands.BucketType.user)
     async def ping(self, ctx: commands.Context):
-        ms = round(self.bot.latency * 1000)
-        status = "🟢 Great" if ms < 100 else ("🟡 Okay" if ms < 200 else "🔴 Slow")
-        await ctx.reply(embed=h.ok(f"**{ms}ms** — {status}", "🏓 Pong!"))
+        ws_ms = round(self.bot.latency * 1000)
+        ws_status = "🟢" if ws_ms < 100 else ("🟡" if ws_ms < 200 else "🔴")
+
+        t0 = time.perf_counter()
+        await db._conn().execute("SELECT 1")
+        db_ms = round((time.perf_counter() - t0) * 1000)
+        db_status = "🟢" if db_ms < 10 else ("🟡" if db_ms < 50 else "🔴")
+
+        await ctx.reply(
+            embed=h.ok(
+                f"{ws_status} WebSocket: **{ws_ms}ms**\n{db_status} Database: **{db_ms}ms**",
+                "🏓 Pong!",
+            ),
+            ephemeral=True,
+        )
+
+    # ══════════════════════════════════════════════════════════════════════════
+    #  mc — quick member count
+    # ══════════════════════════════════════════════════════════════════════════
+    @commands.hybrid_command(
+        name="mc",
+        aliases=["membercount"],
+        description="Quick member count for this server.",
+        extras={
+            "category": "🔍 Server & User Info",
+            "short": "Quick member count",
+            "usage": "mc",
+            "desc": "One-tap member count. Faster than !server for when you just need the number.",
+            "args": [],
+            "perms": "None",
+            "example": "!mc",
+        },
+    )
+    @commands.cooldown(1, 5, commands.BucketType.user)
+    async def mc(self, ctx: commands.Context):
+        count = ctx.guild.member_count or 0
+        await ctx.reply(
+            embed=h.info(f"👥 **{count:,}** members", f"🏰 {ctx.guild.name}"),
+            ephemeral=True,
+        )
+
+    # ══════════════════════════════════════════════════════════════════════════
+    #  id — quick ID lookup (mobile lifesaver)
+    # ══════════════════════════════════════════════════════════════════════════
+    @commands.hybrid_command(
+        name="id",
+        description="Get the ID of a user, role, or channel — copyable code block.",
+        extras={
+            "category": "🔍 Server & User Info",
+            "short": "Show ID of a user, role, or channel",
+            "usage": "id [user|role|channel]",
+            "desc": (
+                "Shows the Discord ID in a code block for easy copying on mobile. "
+                "Accepts @mentions and #channel. No arg = your own ID."
+            ),
+            "args": [("target", "User, role, or channel to look up (blank = yourself)")],
+            "perms": "None",
+            "example": "!id\n!id @someone\n!id #general\n!id @Moderator",
+        },
+    )
+    @app_commands.describe(target="User, role, or channel (blank = yourself)")
+    @commands.cooldown(1, 5, commands.BucketType.user)
+    async def id_cmd(
+        self,
+        ctx: commands.Context,
+        *,
+        target: Optional[str] = None,
+    ):
+        obj = None
+        name = None
+
+        if target:
+            # Try member → role → channel in order
+            try:
+                obj = await commands.MemberConverter().convert(ctx, target)
+                name = f"👤 {obj.display_name}"
+            except commands.BadArgument:
+                pass
+            if obj is None:
+                try:
+                    obj = await commands.RoleConverter().convert(ctx, target)
+                    name = f"🎭 @{obj.name}"
+                except commands.BadArgument:
+                    pass
+            if obj is None:
+                try:
+                    obj = await commands.TextChannelConverter().convert(ctx, target)
+                    name = f"💬 #{obj.name}"
+                except commands.BadArgument:
+                    pass
+            if obj is None:
+                return await ctx.reply(
+                    embed=h.err(
+                        f"Couldn't find `{target}`.\nTry mentioning them: `{ctx.prefix}id @user`"
+                    ),
+                    ephemeral=True,
+                )
+        else:
+            obj = ctx.author
+            name = f"👤 {ctx.author.display_name}"
+
+        await ctx.reply(
+            embed=h.info(f"{name}\n```\n{obj.id}\n```", "🆔 Discord ID"),
+            ephemeral=True,
+        )
 
     # ══════════════════════════════════════════════════════════════════════════
     #  invite
@@ -1513,6 +1617,52 @@ class Utility(commands.Cog):
 
         e.set_footer(text="NanoBot — stats reset on restart")
         await ctx.reply(embed=e, ephemeral=True)
+
+    # ══════════════════════════════════════════════════════════════════════════
+    #  firstmsg — link to oldest message in a channel
+    # ══════════════════════════════════════════════════════════════════════════
+    @commands.hybrid_command(
+        name="firstmsg",
+        aliases=["first", "oldest"],
+        description="Get a link to the first (oldest) message in a channel.",
+        extras={
+            "category": "🔍 Server & User Info",
+            "short": "Link to the first message in a channel",
+            "usage": "firstmsg [channel]",
+            "desc": (
+                "Fetches a direct jump link to the oldest message in the channel. "
+                "Handy for linking to #rules or pinned announcements on mobile "
+                "without having to scroll to the top."
+            ),
+            "args": [("channel", "Channel to look up (blank = current channel)")],
+            "perms": "None",
+            "example": "!firstmsg\n!firstmsg #rules",
+        },
+    )
+    @app_commands.describe(channel="Channel to look up (leave blank for current channel)")
+    @commands.cooldown(1, 10, commands.BucketType.channel)
+    async def firstmsg(
+        self,
+        ctx: commands.Context,
+        channel: Optional[discord.TextChannel] = None,
+    ):
+        ch = channel or ctx.channel
+        async for msg in ch.history(limit=1, oldest_first=True):
+            jump = f"[Jump to first message]({msg.jump_url})"
+            created = discord.utils.format_dt(msg.created_at, style="R")
+            preview = (msg.content or "_[no text content]_")[:100]
+            await ctx.reply(
+                embed=h.info(
+                    f"{jump}\n📅 Sent {created} by **{msg.author.display_name}**\n\n{preview}",
+                    f"📌 #{ch.name} — First Message",
+                ),
+                ephemeral=True,
+            )
+            return
+        await ctx.reply(
+            embed=h.info(f"#{ch.name} appears to be empty.", "📌 First Message"),
+            ephemeral=True,
+        )
 
 
 # ── Registration ───────────────────────────────────────────────────────────────
