@@ -816,6 +816,15 @@ class Admin(commands.Cog):
                 embed=h.err("Fun cog is not loaded."), ephemeral=True
             )
 
+        if fun_cog._scrape_lock.locked():
+            return await ctx.reply(
+                embed=h.warn(
+                    "Scrape already in progress. Check `!logs` or `!cachestats` for status.",
+                    "\u23f3 Scrape Already Running",
+                ),
+                ephemeral=True,
+            )
+
         await ctx.reply(
             embed=h.info(
                 "Scrape started -- this takes a few minutes.\n"
@@ -823,8 +832,7 @@ class Admin(commands.Cog):
                 "\U0001f504 Scrape Running",
             )
         )
-        # Fire the loop body as a background task so we don't block
-        asyncio.create_task(fun_cog._scrape_loop())
+        asyncio.create_task(fun_cog._run_scrape())
 
     # ══════════════════════════════════════════════════════════════════════════
     #  cachestats

@@ -1445,6 +1445,7 @@ class Fun(commands.Cog):
     async def cog_load(self):
         self._session = aiohttp.ClientSession()
         self._dynamic_cmds: list[commands.Command] = []
+        self._scrape_lock = asyncio.Lock()
         self._register_prefix_commands()
         self._scrape_loop.start()
         self._revalidate_loop.start()
@@ -1463,131 +1464,139 @@ class Fun(commands.Cog):
 
     @tasks.loop(hours=24)
     async def _scrape_loop(self):
-        """Scrape FML, WYR, nekos.best, and Nekosia into cache_db."""
+        await self._run_scrape()
+
+    async def _run_scrape(self) -> bool:
+        """Run full content scrape. Returns False if already running."""
+        if self._scrape_lock.locked():
+            log.warning("Scrape already in progress, skipping.")
+            return False
         if not self._session or self._session.closed:
-            return
+            return False
 
-        start = time.monotonic()
+        async with self._scrape_lock:
+            start = time.monotonic()
 
-        # ── FML ───────────────────────────────────────────────────────────
-        try:
-            fml_stories = await _scrape_fml_bulk(self._session)
-            if fml_stories:
-                added = await cache_db.add_fml_stories(fml_stories)
-                total = await cache_db.count_fml()
-                log.info(
-                    f"FML scrape: {len(fml_stories)} scraped, "
-                    f"{added} new, {total} total"
-                )
-            else:
-                log.warning("FML scrape: 0 stories (site may be down)")
-        except Exception as exc:
-            log.error(f"FML scrape error: {exc}")
-
-        # ── WYR (truthordarebot API -- PG + PG13) ─────────────────────────
-        try:
-            wyr_questions = await _scrape_wyr_bulk(self._session)
-            if wyr_questions:
-                added = await cache_db.add_wyr_questions(wyr_questions)
-                total = await cache_db.count_wyr()
-                log.info(
-                    f"WYR scrape: {len(wyr_questions)} fetched, "
-                    f"{added} new, {total} total"
-                )
-            else:
-                log.warning("WYR scrape: 0 questions (API may be down)")
-        except Exception as exc:
-            log.error(f"WYR scrape error: {exc}")
-
-        # ── WYR Kaggle seed (one-time) ────────────────────────────────────
-        kaggle_done = await cache_db.get_meta("kaggle_wyr_seeded")
-        if not kaggle_done:
+            # ── FML ───────────────────────────────────────────────────────────
             try:
-                kaggle_qs = await _seed_kaggle_wyr(self._session)
-                if kaggle_qs:
-                    added = await cache_db.add_wyr_questions(kaggle_qs)
-                    await cache_db.set_meta("kaggle_wyr_seeded", "1")
-                    total = await cache_db.count_wyr()
+                fml_stories = await _scrape_fml_bulk(self._session)
+                if fml_stories:
+                    added = await cache_db.add_fml_stories(fml_stories)
+                    total = await cache_db.count_fml()
                     log.info(
-                        f"WYR Kaggle seed: {len(kaggle_qs)} parsed, "
+                        f"FML scrape: {len(fml_stories)} scraped, "
                         f"{added} new, {total} total"
                     )
                 else:
-                    log.warning("WYR Kaggle seed: 0 questions (download failed)")
+                    log.warning("FML scrape: 0 stories (site may be down)")
             except Exception as exc:
-                log.error(f"WYR Kaggle seed error: {exc}")
+                log.error(f"FML scrape error: {exc}")
 
-        # ── WYR Groq generation ───────────────────────────────────────────
-        groq_key = getattr(self.bot, "groq_api_key", None)
-        if groq_key:
+            # ── WYR (truthordarebot API -- PG + PG13) ─────────────────────────
             try:
-                groq_qs = await _generate_wyr_groq(self._session, groq_key)
-                if groq_qs:
-                    added = await cache_db.add_wyr_questions(groq_qs)
+                wyr_questions = await _scrape_wyr_bulk(self._session)
+                if wyr_questions:
+                    added = await cache_db.add_wyr_questions(wyr_questions)
                     total = await cache_db.count_wyr()
                     log.info(
-                        f"WYR Groq: {len(groq_qs)} generated, "
+                        f"WYR scrape: {len(wyr_questions)} fetched, "
                         f"{added} new, {total} total"
                     )
+                else:
+                    log.warning("WYR scrape: 0 questions (API may be down)")
             except Exception as exc:
-                log.error(f"WYR Groq generation error: {exc}")
-        else:
-            log.debug("WYR Groq: no API key, skipping generation")
+                log.error(f"WYR scrape error: {exc}")
 
-        # ── nekos.best (GIFs + static images) ─────────────────────────────
-        nekos_total_added = 0
-        for ep in _ALL_NEKOS_ENDPOINTS:
-            try:
-                results = await _fetch_nekos_batch(
-                    self._session, ep, _NEKOS_PER_ENDPOINT
-                )
-                if results:
-                    img_dicts = [
-                        {
-                            "url": r["url"],
-                            "source_url": r.get("source_url"),
-                            "artist": r.get("artist_name"),
-                        }
-                        for r in results
-                    ]
-                    added = await cache_db.add_images("nekos", ep, img_dicts)
-                    nekos_total_added += added
-            except Exception as exc:
-                log.debug(f"nekos.best scrape error for '{ep}': {exc}")
-            await asyncio.sleep(0.3)
-
-        nekos_total = await cache_db.count_images("nekos")
-        log.info(
-            f"nekos.best scrape: {len(_ALL_NEKOS_ENDPOINTS)} endpoints, "
-            f"{nekos_total_added} new, {nekos_total} total"
-        )
-
-        # ── Nekosia (thigh tags) ──────────────────────────────────────────
-        nekosia_total_added = 0
-        for tag in _THIGH_TAGS:
-            for _ in range(_NEKOSIA_PER_TAG):
+            # ── WYR Kaggle seed (one-time) ────────────────────────────────────
+            kaggle_done = await cache_db.get_meta("kaggle_wyr_seeded")
+            if not kaggle_done:
                 try:
-                    img, src = await _fetch_nekosia_single(self._session, tag)
-                    if img:
-                        added = await cache_db.add_images(
-                            "nekosia",
-                            tag,
-                            [{"url": img, "source_url": src}],
+                    kaggle_qs = await _seed_kaggle_wyr(self._session)
+                    if kaggle_qs:
+                        added = await cache_db.add_wyr_questions(kaggle_qs)
+                        await cache_db.set_meta("kaggle_wyr_seeded", "1")
+                        total = await cache_db.count_wyr()
+                        log.info(
+                            f"WYR Kaggle seed: {len(kaggle_qs)} parsed, "
+                            f"{added} new, {total} total"
                         )
-                        nekosia_total_added += added
+                    else:
+                        log.warning("WYR Kaggle seed: 0 questions (download failed)")
                 except Exception as exc:
-                    log.debug(f"Nekosia scrape error for '{tag}': {exc}")
-                await asyncio.sleep(0.5)
+                    log.error(f"WYR Kaggle seed error: {exc}")
 
-        nekosia_total = await cache_db.count_images("nekosia")
-        log.info(
-            f"Nekosia scrape: {len(_THIGH_TAGS)} tags, "
-            f"{nekosia_total_added} new, {nekosia_total} total"
-        )
+            # ── WYR Groq generation ───────────────────────────────────────────
+            groq_key = getattr(self.bot, "groq_api_key", None)
+            if groq_key:
+                try:
+                    groq_qs = await _generate_wyr_groq(self._session, groq_key)
+                    if groq_qs:
+                        added = await cache_db.add_wyr_questions(groq_qs)
+                        total = await cache_db.count_wyr()
+                        log.info(
+                            f"WYR Groq: {len(groq_qs)} generated, "
+                            f"{added} new, {total} total"
+                        )
+                except Exception as exc:
+                    log.error(f"WYR Groq generation error: {exc}")
+            else:
+                log.debug("WYR Groq: no API key, skipping generation")
 
-        elapsed = time.monotonic() - start
-        await cache_db.set_meta("last_scrape", str(time.time()))
-        log.info(f"Daily scrape complete in {elapsed:.0f}s")
+            # ── nekos.best (GIFs + static images) ─────────────────────────────
+            nekos_total_added = 0
+            for ep in _ALL_NEKOS_ENDPOINTS:
+                try:
+                    results = await _fetch_nekos_batch(
+                        self._session, ep, _NEKOS_PER_ENDPOINT
+                    )
+                    if results:
+                        img_dicts = [
+                            {
+                                "url": r["url"],
+                                "source_url": r.get("source_url"),
+                                "artist": r.get("artist_name"),
+                            }
+                            for r in results
+                        ]
+                        added = await cache_db.add_images("nekos", ep, img_dicts)
+                        nekos_total_added += added
+                except Exception as exc:
+                    log.debug(f"nekos.best scrape error for '{ep}': {exc}")
+                await asyncio.sleep(0.3)
+
+            nekos_total = await cache_db.count_images("nekos")
+            log.info(
+                f"nekos.best scrape: {len(_ALL_NEKOS_ENDPOINTS)} endpoints, "
+                f"{nekos_total_added} new, {nekos_total} total"
+            )
+
+            # ── Nekosia (thigh tags) ──────────────────────────────────────────
+            nekosia_total_added = 0
+            for tag in _THIGH_TAGS:
+                for _ in range(_NEKOSIA_PER_TAG):
+                    try:
+                        img, src = await _fetch_nekosia_single(self._session, tag)
+                        if img:
+                            added = await cache_db.add_images(
+                                "nekosia",
+                                tag,
+                                [{"url": img, "source_url": src}],
+                            )
+                            nekosia_total_added += added
+                    except Exception as exc:
+                        log.debug(f"Nekosia scrape error for '{tag}': {exc}")
+                    await asyncio.sleep(0.5)
+
+            nekosia_total = await cache_db.count_images("nekosia")
+            log.info(
+                f"Nekosia scrape: {len(_THIGH_TAGS)} tags, "
+                f"{nekosia_total_added} new, {nekosia_total} total"
+            )
+
+            elapsed = time.monotonic() - start
+            await cache_db.set_meta("last_scrape", str(time.time()))
+            log.info(f"Daily scrape complete in {elapsed:.0f}s")
+            return True
 
     @_scrape_loop.before_loop
     async def _before_scrape(self):
