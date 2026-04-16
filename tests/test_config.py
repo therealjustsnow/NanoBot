@@ -9,7 +9,6 @@ import pytest
 
 from utils.config import validate
 
-
 # ══════════════════════════════════════════════════════════════════════════════
 #  Helpers
 # ══════════════════════════════════════════════════════════════════════════════
@@ -107,13 +106,17 @@ def test_single_char_prefix_valid():
 
 def test_invalid_log_level_is_warning():
     issues = validate({"token": _VALID_TOKEN, "log_level": "VERBOSE"})
-    assert _warnings(issues, "log_level"), "expected non-fatal warning for bad log_level"
+    assert _warnings(
+        issues, "log_level"
+    ), "expected non-fatal warning for bad log_level"
 
 
 def test_valid_log_levels():
     for level in ("DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"):
         issues = validate({"token": _VALID_TOKEN, "log_level": level})
-        assert not [i for i in issues if i.field == "log_level"], f"unexpected issue for level {level}"
+        assert not [
+            i for i in issues if i.field == "log_level"
+        ], f"unexpected issue for level {level}"
 
 
 # ══════════════════════════════════════════════════════════════════════════════

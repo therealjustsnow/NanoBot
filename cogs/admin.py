@@ -451,7 +451,9 @@ class Admin(commands.Cog):
             e = h.embed(title="📥 Upgrade — Git Pull Failed", color=h.RED)
             e.description = f"```\n{git_output}\n```"
             e.set_footer(text="pip install and restart were skipped  ·  NanoBot Admin")
-            log.error(f"upgrade: git pull failed (rc={git_result.returncode}): {git_output}")
+            log.error(
+                f"upgrade: git pull failed (rc={git_result.returncode}): {git_output}"
+            )
             return await ctx.reply(embed=e)
 
         log.info(f"upgrade: git pull OK by {ctx.author}: {git_stdout[:200]}")
@@ -460,6 +462,7 @@ class Admin(commands.Cog):
         pip_ok = False
         pip_output = ""
         try:
+
             def _run_pip():
                 return subprocess.run(
                     [
@@ -499,7 +502,9 @@ class Admin(commands.Cog):
         e = h.embed(title="🚀 Upgrade Complete — Restarting", color=colour)
         e.add_field(name="📥 Git Pull", value=f"```\n{git_output}\n```", inline=False)
         pip_display = pip_output or "_(nothing to install / all up to date)_"
-        e.add_field(name="📦 Pip Install", value=f"```\n{pip_display}\n```", inline=False)
+        e.add_field(
+            name="📦 Pip Install", value=f"```\n{pip_display}\n```", inline=False
+        )
 
         if pip_ok:
             e.set_footer(
