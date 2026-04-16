@@ -134,6 +134,15 @@ async def count_fml() -> int:
     return row[0]
 
 
+async def purge_fml() -> int:
+    """Delete all cached FML stories. Returns number of rows removed."""
+    async with _conn().execute("SELECT COUNT(*) FROM fml_stories") as cur:
+        before = (await cur.fetchone())[0]
+    await _conn().execute("DELETE FROM fml_stories")
+    await _conn().commit()
+    return before
+
+
 # ══════════════════════════════════════════════════════════════════════════════
 #  WYR Questions
 # ══════════════════════════════════════════════════════════════════════════════
