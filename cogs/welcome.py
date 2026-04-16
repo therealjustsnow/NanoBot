@@ -3,7 +3,15 @@ cogs/welcome.py
 Per-server welcome and leave messages.
 
 Supports channel messages and DMs, custom embed titles, content,
-and image URLs. Variables in content: {user}, {mention}, {server}, {count}.
+image URLs, footer text, thumbnail control, embed color, and optional
+text-on-image overlays (requires Pillow).
+
+Variables supported everywhere (title, content, footer_text, image_text):
+  {user}     — display name
+  {mention}  — ping
+  {server}   — server name
+  {count}    — member count
+  {username} — full username (user#0000 style)
 
 Commands:
   welcome        — configure or view welcome settings
@@ -12,9 +20,12 @@ Commands:
   testleave      — preview the leave message
 """
 
+import io
 import logging
+import os
 from typing import Optional
 
+import aiohttp
 import discord
 from discord import app_commands
 from discord.ext import commands
@@ -25,10 +36,37 @@ from utils.checks import has_admin_perms
 
 log = logging.getLogger("NanoBot.welcome")
 
+# ---------------------------------------------------------------------------
+# Optional Pillow import — image overlay is silently skipped if not installed
+# ---------------------------------------------------------------------------
+try:
+    from PIL import Image, ImageDraw, ImageFont
+
+    _PILLOW_OK = True
+except ImportError:  # pragma: no cover
+    _PILLOW_OK = False
+    log.warning(
+        "Pillow not installed — image text overlay will be disabled. "
+        "Run: pip install Pillow>=10.0.0"
+    )
+
 _VARS_HELP = (
     "`{user}` — display name  ·  `{mention}` — ping  ·  "
     "`{server}` — server name  ·  `{count}` — member count  ·  `{username}` — full username"
 )
+
+# Common system font paths tried in order; falls back to PIL built-in.
+_FONT_PATHS = [
+    "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf",
+    "/usr/share/fonts/dejavu/DejaVuSans-Bold.ttf",
+    "/usr/share/fonts/truetype/liberation/LiberationSans-Bold.ttf",
+    "/usr/share/fonts/TTF/DejaVuSans-Bold.ttf",
+    "/System/Library/Fonts/Helvetica.ttc",  # macOS
+    "C:/Windows/Fonts/arialbd.ttf",  # Windows
+]
+
+
+# ── Template helpers ──────────────────────────────────────────────────────────
 
 
 def _fill(template: str, member: discord.Member) -> str:
@@ -41,53 +79,206 @@ def _fill(template: str, member: discord.Member) -> str:
     )
 
 
+def _is_valid_hex(color: str) -> bool:
+    c = color.lstrip("#")
+    if len(c) != 6:
+        return False
+    try:
+        int(c, 16)
+        return True
+    except ValueError:
+        return False
+
+
+def _parse_color(color_str: str | None) -> int:
+    """Return an integer embed color from a hex string, or the default blue."""
+    if color_str:
+        try:
+            return int(color_str.lstrip("#"), 16)
+        except ValueError:
+            pass
+    return h.BLUE
+
+
+# ── Image overlay helpers ─────────────────────────────────────────────────────
+
+
+def _load_font(size: int):
+    for path in _FONT_PATHS:
+        if os.path.isfile(path):
+            try:
+                return ImageFont.truetype(path, size)
+            except Exception:
+                continue
+    # Built-in bitmap font — no size argument in Pillow < 10.1
+    try:
+        return ImageFont.load_default(size=size)
+    except TypeError:
+        return ImageFont.load_default()
+
+
+def _wrap_text(draw: "ImageDraw.ImageDraw", text: str, font, max_width: int) -> str:
+    """Word-wrap *text* so each line fits within *max_width* pixels."""
+    words = text.split()
+    lines: list[str] = []
+    current = ""
+    for word in words:
+        candidate = (current + " " + word).strip()
+        bbox = draw.textbbox((0, 0), candidate, font=font)
+        if bbox[2] - bbox[0] <= max_width:
+            current = candidate
+        else:
+            if current:
+                lines.append(current)
+            current = word
+    if current:
+        lines.append(current)
+    return "\n".join(lines)
+
+
+async def _make_overlay_image(image_url: str, text: str) -> discord.File | None:
+    """
+    Download *image_url*, render *text* on it, and return a discord.File.
+    Returns None on any error (network, decode, draw) so the caller can
+    gracefully fall back to embedding the raw URL.
+    """
+    if not _PILLOW_OK:
+        return None
+
+    try:
+        async with aiohttp.ClientSession() as session:
+            async with session.get(
+                image_url, timeout=aiohttp.ClientTimeout(total=10)
+            ) as resp:
+                if resp.status != 200:
+                    log.warning(
+                        f"Image overlay: HTTP {resp.status} fetching {image_url}"
+                    )
+                    return None
+                raw = await resp.read()
+
+        img = Image.open(io.BytesIO(raw)).convert("RGBA")
+        w, h_px = img.size
+
+        font_size = max(24, h_px // 10)
+        font = _load_font(font_size)
+
+        # Measure & wrap text
+        probe_draw = ImageDraw.Draw(Image.new("RGBA", (1, 1)))
+        wrapped = _wrap_text(probe_draw, text, font, w - 40)
+
+        draw_tmp = ImageDraw.Draw(Image.new("RGBA", (1, 1)))
+        bbox = draw_tmp.textbbox((0, 0), wrapped, font=font)
+        text_w = bbox[2] - bbox[0]
+        text_h = bbox[3] - bbox[1]
+
+        padding = 16
+        text_x = (w - text_w) // 2
+        text_y = h_px - text_h - padding * 3
+
+        # Semi-transparent dark pill behind the text for readability
+        overlay = Image.new("RGBA", img.size, (0, 0, 0, 0))
+        ov_draw = ImageDraw.Draw(overlay)
+        ov_draw.rounded_rectangle(
+            [
+                text_x - padding,
+                text_y - padding,
+                text_x + text_w + padding,
+                text_y + text_h + padding,
+            ],
+            radius=10,
+            fill=(0, 0, 0, 160),
+        )
+        img = Image.alpha_composite(img, overlay)
+
+        final_draw = ImageDraw.Draw(img)
+        final_draw.text((text_x, text_y), wrapped, font=font, fill=(255, 255, 255, 255))
+
+        buf = io.BytesIO()
+        img.convert("RGB").save(buf, format="PNG")
+        buf.seek(0)
+        return discord.File(buf, filename="welcome_banner.png")
+
+    except Exception as exc:
+        log.warning(f"Image overlay failed for {image_url!r}: {exc}")
+        return None
+
+
+# ── Core delivery ─────────────────────────────────────────────────────────────
+
+
 async def _send_event(
     bot: commands.Bot,
     member: discord.Member,
     cfg: dict,
-    event: str,  # "welcome" or "leave"
+    event: str,  # "welcome" | "leave"
 ):
     """Build and deliver a welcome or leave embed."""
-    title = _fill(
-        cfg["title"] or ("👋 Welcome!" if event == "welcome" else "👋 Goodbye!"), member
-    )
-    content = _fill(
-        cfg["content"]
-        or (
-            f"Welcome to **{member.guild.name}**, {member.mention}! We're glad to have you."
-            if event == "welcome"
-            else f"**{member.display_name}** has left the server. Farewell!"
-        ),
-        member,
+    default_title = "👋 Welcome!" if event == "welcome" else "👋 Goodbye!"
+    default_content = (
+        f"Welcome to **{member.guild.name}**, {member.mention}! We're glad to have you."
+        if event == "welcome"
+        else f"**{member.display_name}** has left the server. Farewell!"
     )
 
-    e = discord.Embed(title=title, description=content, color=h.BLUE)
-    e.set_thumbnail(url=member.display_avatar.url)
+    title = _fill(cfg["title"] or default_title, member)
+    content = _fill(cfg["content"] or default_content, member)
+
+    e = discord.Embed(
+        title=title,
+        description=content,
+        color=_parse_color(cfg.get("color")),
+    )
+
+    # Thumbnail: "avatar" (default) | "none" | https://... URL
+    thumbnail = cfg.get("thumbnail")
+    if thumbnail is None or thumbnail == "avatar":
+        e.set_thumbnail(url=member.display_avatar.url)
+    elif thumbnail.startswith("https://"):
+        e.set_thumbnail(url=thumbnail)
+    # "none" → no thumbnail set
+
+    # Image with optional text overlay
+    image_file: discord.File | None = None
     if cfg.get("image_url"):
-        e.set_image(url=cfg["image_url"])
-    e.set_footer(text=member.guild.name)
+        raw_image_text = cfg.get("image_text") or ""
+        image_text = _fill(raw_image_text.replace("\\n", "\n"), member)
+        if image_text:
+            image_file = await _make_overlay_image(cfg["image_url"], image_text)
+
+        if image_file:
+            e.set_image(url="attachment://welcome_banner.png")
+        else:
+            e.set_image(url=cfg["image_url"])
+
+    # Footer
+    footer_raw = cfg.get("footer_text") or member.guild.name
+    e.set_footer(text=_fill(footer_raw, member))
     e.timestamp = discord.utils.utcnow()
+
+    send_kwargs: dict = {"embed": e}
+    if image_file:
+        send_kwargs["file"] = image_file
 
     # DM delivery
     if cfg["dm"]:
         try:
-            await member.send(embed=e)
+            await member.send(**send_kwargs)
             log.info(f"{event} DM sent to {member} ({member.id}) in {member.guild}")
             return
         except discord.Forbidden:
             log.debug(f"{event} DM failed for {member} ({member.id}) — closed DMs")
 
     # Channel delivery
-    channel = None
+    channel: discord.TextChannel | None = None
     if cfg.get("channel_id"):
-        channel = member.guild.get_channel(int(cfg["channel_id"]))
+        channel = member.guild.get_channel(int(cfg["channel_id"]))  # type: ignore
     if not channel:
-        # Fall back to system channel
-        channel = member.guild.system_channel
+        channel = member.guild.system_channel  # type: ignore
 
     if channel:
         try:
-            await channel.send(embed=e)
+            await channel.send(**send_kwargs)
             log.info(f"{event} message sent to #{channel} in {member.guild}")
         except discord.Forbidden:
             log.warning(f"Can't send {event} message to #{channel} in {member.guild}")
@@ -131,10 +322,14 @@ class Welcome(commands.Cog):
     @welcome.command(name="set", description="Configure the welcome message.")
     @app_commands.describe(
         enabled="Enable or disable welcome messages",
-        channel="Channel to post in — defaults to the current channel if not set",
-        title="Embed title (supports {user}, {server})",
-        content="Message body (supports {user}, {mention}, {server}, {count})",
-        image_url="Image URL to show in the embed (https://...)",
+        channel="Channel to post in (defaults to current channel if not set)",
+        title="Embed title — supports {user}, {server}, etc.",
+        content="Message body — supports {user}, {mention}, {server}, {count}",
+        image_url="Background image URL (https://...)",
+        image_text="Text to draw on the image itself — supports all vars",
+        footer_text="Footer text — supports all vars (default: server name)",
+        thumbnail='Member avatar by default. Set to "none" to hide, or an https:// URL',
+        color="Embed color as a hex value, e.g. #5865F2",
         dm="DM the joining user instead of posting in a channel",
     )
     @has_admin_perms()
@@ -146,10 +341,25 @@ class Welcome(commands.Cog):
         title: Optional[str] = None,
         content: Optional[str] = None,
         image_url: Optional[str] = None,
+        image_text: Optional[str] = None,
+        footer_text: Optional[str] = None,
+        thumbnail: Optional[str] = None,
+        color: Optional[str] = None,
         dm: Optional[bool] = None,
     ):
         await self._do_set(
-            ctx, "welcome", enabled, channel, title, content, image_url, dm
+            ctx,
+            "welcome",
+            enabled,
+            channel,
+            title,
+            content,
+            image_url,
+            image_text,
+            footer_text,
+            thumbnail,
+            color,
+            dm,
         )
 
     @welcome.command(
@@ -184,10 +394,14 @@ class Welcome(commands.Cog):
     @leave.command(name="set", description="Configure the leave message.")
     @app_commands.describe(
         enabled="Enable or disable leave messages",
-        channel="Channel to post in — defaults to the current channel if not set",
-        title="Embed title (supports {user}, {server})",
-        content="Message body (supports {user}, {mention}, {server}, {count})",
-        image_url="Image URL to show in the embed (https://...)",
+        channel="Channel to post in (defaults to current channel if not set)",
+        title="Embed title — supports {user}, {server}, etc.",
+        content="Message body — supports {user}, {mention}, {server}, {count}",
+        image_url="Background image URL (https://...)",
+        image_text="Text to draw on the image itself — supports all vars",
+        footer_text="Footer text — supports all vars (default: server name)",
+        thumbnail='Member avatar by default. Set to "none" to hide, or an https:// URL',
+        color="Embed color as a hex value, e.g. #FF5733",
         dm="DM the leaving user instead of posting in a channel",
     )
     @has_admin_perms()
@@ -199,10 +413,25 @@ class Welcome(commands.Cog):
         title: Optional[str] = None,
         content: Optional[str] = None,
         image_url: Optional[str] = None,
+        image_text: Optional[str] = None,
+        footer_text: Optional[str] = None,
+        thumbnail: Optional[str] = None,
+        color: Optional[str] = None,
         dm: Optional[bool] = None,
     ):
         await self._do_set(
-            ctx, "leave", enabled, channel, title, content, image_url, dm
+            ctx,
+            "leave",
+            enabled,
+            channel,
+            title,
+            content,
+            image_url,
+            image_text,
+            footer_text,
+            thumbnail,
+            color,
+            dm,
         )
 
     @leave.command(
@@ -258,8 +487,37 @@ class Welcome(commands.Cog):
                 value=(cfg.get("content") or "_Default_")[:500],
                 inline=False,
             )
+            e.add_field(
+                name="🎨 Color",
+                value=(
+                    f"`#{cfg['color'].lstrip('#').upper()}`"
+                    if cfg.get("color")
+                    else "_Default (NanoBot blue)_"
+                ),
+                inline=True,
+            )
+            e.add_field(
+                name="👤 Thumbnail",
+                value=(
+                    cfg["thumbnail"]
+                    if cfg.get("thumbnail")
+                    else "_Member avatar (default)_"
+                ),
+                inline=True,
+            )
+            e.add_field(
+                name="📄 Footer",
+                value=cfg.get("footer_text") or "_Server name (default)_",
+                inline=False,
+            )
             if cfg.get("image_url"):
-                e.add_field(name="🖼️ Image", value=cfg["image_url"], inline=False)
+                e.add_field(name="🖼️ Image URL", value=cfg["image_url"], inline=False)
+            if cfg.get("image_text"):
+                e.add_field(
+                    name="✍️ Image Text",
+                    value=f"`{cfg['image_text'][:200]}`",
+                    inline=False,
+                )
 
         e.set_footer(text=f"{_VARS_HELP}  ·  NanoBot")
         await ctx.reply(embed=e, ephemeral=True)
@@ -273,16 +531,45 @@ class Welcome(commands.Cog):
         title: Optional[str],
         content: Optional[str],
         image_url: Optional[str],
+        image_text: Optional[str],
+        footer_text: Optional[str],
+        thumbnail: Optional[str],
+        color: Optional[str],
         dm: Optional[bool],
     ):
+        # ── Validate inputs ────────────────────────────────────────────────
+        if image_url and not image_url.startswith("https://"):
+            return await ctx.reply(
+                embed=h.err("Image URL must start with `https://`."), ephemeral=True
+            )
+
+        if color and not _is_valid_hex(color):
+            return await ctx.reply(
+                embed=h.err(
+                    "Color must be a hex value like `#5865F2` or `FF0000` (6 hex digits)."
+                ),
+                ephemeral=True,
+            )
+
+        if thumbnail is not None:
+            thumbnail = thumbnail.strip()
+            tl = thumbnail.lower()
+            if tl in ("avatar", "none"):
+                thumbnail = tl
+            elif not thumbnail.startswith("https://"):
+                return await ctx.reply(
+                    embed=h.err(
+                        "Thumbnail must be `avatar`, `none`, or an `https://` URL."
+                    ),
+                    ephemeral=True,
+                )
+
+        # ── Merge with existing config ─────────────────────────────────────
         getter = db.get_welcome_config if event == "welcome" else db.get_leave_config
         setter = db.set_welcome_config if event == "welcome" else db.set_leave_config
 
         existing = await getter(ctx.guild.id) or {}
 
-        # If no channel was provided and there's no existing channel saved,
-        # default to the current channel — mobile users can just run the command
-        # from inside their welcome/leave channel without touching the argument.
         if channel is None and not existing.get("channel_id"):
             channel = ctx.channel  # type: ignore[assignment]
 
@@ -296,13 +583,18 @@ class Welcome(commands.Cog):
             "image_url": (
                 image_url if image_url is not None else existing.get("image_url")
             ),
+            "image_text": (
+                image_text if image_text is not None else existing.get("image_text")
+            ),
+            "footer_text": (
+                footer_text if footer_text is not None else existing.get("footer_text")
+            ),
+            "thumbnail": (
+                thumbnail if thumbnail is not None else existing.get("thumbnail")
+            ),
+            "color": color if color is not None else existing.get("color"),
             "dm": dm if dm is not None else existing.get("dm", False),
         }
-
-        if image_url and not image_url.startswith("https://"):
-            return await ctx.reply(
-                embed=h.err("Image URL must start with `https://`."), ephemeral=True
-            )
 
         await setter(ctx.guild.id, **new_cfg)
         log.info(
@@ -321,6 +613,25 @@ class Welcome(commands.Cog):
         ]
         if new_cfg.get("title"):
             lines.append(f"📝 Title: {new_cfg['title'][:100]}")
+        if new_cfg.get("color"):
+            lines.append(f"🎨 Color: `#{new_cfg['color'].lstrip('#').upper()}`")
+        if new_cfg.get("thumbnail"):
+            lines.append(f"👤 Thumbnail: `{new_cfg['thumbnail']}`")
+        if new_cfg.get("footer_text"):
+            lines.append(f"📄 Footer: {new_cfg['footer_text'][:100]}")
+        if new_cfg.get("image_url"):
+            lines.append("🖼️ Image: set")
+        if new_cfg.get("image_text"):
+            if not new_cfg.get("image_url"):
+                lines.append(
+                    "⚠️ Image text is set but no image URL is configured — it won't appear."
+                )
+            elif not _PILLOW_OK:
+                lines.append(
+                    "⚠️ Image text is set but Pillow is not installed — overlay disabled."
+                )
+            else:
+                lines.append(f"✍️ Image text: `{new_cfg['image_text'][:80]}`")
 
         emoji = "👋" if event == "welcome" else "🚪"
         await ctx.reply(
