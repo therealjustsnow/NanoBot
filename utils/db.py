@@ -642,32 +642,56 @@ async def set_warn_config(
 async def _ensure_welcome_tables():
     await _conn().execute("""
         CREATE TABLE IF NOT EXISTS welcome_config (
-            guild_id   TEXT PRIMARY KEY,
-            enabled    INTEGER NOT NULL DEFAULT 0,
-            channel_id TEXT,
-            title      TEXT,
-            content    TEXT,
-            image_url  TEXT,
-            dm         INTEGER NOT NULL DEFAULT 0
+            guild_id    TEXT PRIMARY KEY,
+            enabled     INTEGER NOT NULL DEFAULT 0,
+            channel_id  TEXT,
+            title       TEXT,
+            content     TEXT,
+            image_url   TEXT,
+            dm          INTEGER NOT NULL DEFAULT 0,
+            footer_text TEXT,
+            thumbnail   TEXT,
+            color       TEXT,
+            image_text  TEXT
         )
     """)
     await _conn().execute("""
         CREATE TABLE IF NOT EXISTS leave_config (
-            guild_id   TEXT PRIMARY KEY,
-            enabled    INTEGER NOT NULL DEFAULT 0,
-            channel_id TEXT,
-            title      TEXT,
-            content    TEXT,
-            image_url  TEXT,
-            dm         INTEGER NOT NULL DEFAULT 0
+            guild_id    TEXT PRIMARY KEY,
+            enabled     INTEGER NOT NULL DEFAULT 0,
+            channel_id  TEXT,
+            title       TEXT,
+            content     TEXT,
+            image_url   TEXT,
+            dm          INTEGER NOT NULL DEFAULT 0,
+            footer_text TEXT,
+            thumbnail   TEXT,
+            color       TEXT,
+            image_text  TEXT
         )
     """)
+    await _conn().commit()
+
+    # Migration: add new columns to existing tables that pre-date this change.
+    new_columns = {
+        "footer_text": "TEXT",
+        "thumbnail": "TEXT",
+        "color": "TEXT",
+        "image_text": "TEXT",
+    }
+    for table in ("welcome_config", "leave_config"):
+        async with _conn().execute(f"PRAGMA table_info({table})") as cur:
+            existing = {row["name"] for row in await cur.fetchall()}
+        for col, typ in new_columns.items():
+            if col not in existing:
+                await _conn().execute(f"ALTER TABLE {table} ADD COLUMN {col} {typ}")
     await _conn().commit()
 
 
 async def _get_event_config(table: str, guild_id: int) -> dict | None:
     async with _conn().execute(
-        f"SELECT enabled, channel_id, title, content, image_url, dm FROM {table} WHERE guild_id=?",
+        f"SELECT enabled, channel_id, title, content, image_url, dm, "
+        f"footer_text, thumbnail, color, image_text FROM {table} WHERE guild_id=?",
         (str(guild_id),),
     ) as cur:
         row = await cur.fetchone()
@@ -680,17 +704,25 @@ async def _get_event_config(table: str, guild_id: int) -> dict | None:
         "content": row["content"],
         "image_url": row["image_url"],
         "dm": bool(row["dm"]),
+        "footer_text": row["footer_text"],
+        "thumbnail": row["thumbnail"],
+        "color": row["color"],
+        "image_text": row["image_text"],
     }
 
 
 async def _set_event_config(table: str, guild_id: int, **kwargs) -> None:
     await _conn().execute(
-        f"INSERT INTO {table} (guild_id, enabled, channel_id, title, content, image_url, dm) "
-        "VALUES (?,?,?,?,?,?,?) "
+        f"INSERT INTO {table} "
+        "(guild_id, enabled, channel_id, title, content, image_url, dm, "
+        "footer_text, thumbnail, color, image_text) "
+        "VALUES (?,?,?,?,?,?,?,?,?,?,?) "
         "ON CONFLICT(guild_id) DO UPDATE SET "
         "enabled=excluded.enabled, channel_id=excluded.channel_id, "
         "title=excluded.title, content=excluded.content, "
-        "image_url=excluded.image_url, dm=excluded.dm",
+        "image_url=excluded.image_url, dm=excluded.dm, "
+        "footer_text=excluded.footer_text, thumbnail=excluded.thumbnail, "
+        "color=excluded.color, image_text=excluded.image_text",
         (
             str(guild_id),
             1 if kwargs.get("enabled", False) else 0,
@@ -699,6 +731,10 @@ async def _set_event_config(table: str, guild_id: int, **kwargs) -> None:
             kwargs.get("content"),
             kwargs.get("image_url"),
             1 if kwargs.get("dm", False) else 0,
+            kwargs.get("footer_text"),
+            kwargs.get("thumbnail"),
+            kwargs.get("color"),
+            kwargs.get("image_text"),
         ),
     )
     await _conn().commit()
