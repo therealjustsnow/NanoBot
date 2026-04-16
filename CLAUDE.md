@@ -22,12 +22,24 @@ pip install black
 black .
 ```
 
+**Test (pytest):**
+```bash
+pip install -r requirements.txt      # discord.py is required by utils/helpers.py
+pip install -r requirements-dev.txt
+pytest tests/ -v
+```
+
+Tests cover pure-Python utilities with no Discord dependency:
+- `tests/test_helpers.py` — `parse_duration`, `parse_duration_from_end`, `fmt_duration`, `parse_interval`, `fmt_interval`
+- `tests/test_config.py` — `validate()` from `utils/config.py`
+
+CI runs `pytest tests/ -v` on every push and pull request (`.github/workflows/tests.yml`).
+Manual end-to-end testing against a Discord test server is still required for cog-level features.
+
 **Migration (JSON → SQLite, idempotent):**
 ```bash
 python migrate.py
 ```
-
-There is no test suite. Testing is done manually by running the bot against a Discord test server and invoking commands directly.
 
 ## Architecture
 
@@ -48,7 +60,7 @@ All features live in `cogs/` as discord.py cogs, hot-reloadable via `n!reload <c
 | `auditlog.py` | 12 server event types logged to a configurable channel |
 | `roles.py` | Persistent button-based self-assign role panels |
 | `tags.py` | Personal and global text snippets; `n!tagname` shortcut fires any tag |
-| `admin.py` | Owner-only: reload cogs, restart, git pull update, sync slash commands |
+| `admin.py` | Owner-only: reload cogs, restart, git pull update, full upgrade (pull+pip+restart), sync slash commands |
 | `reminders.py` / `recurring.py` | One-time and repeating reminders, restart-safe via SQLite |
 | `welcome.py` | Per-guild join/leave messages with template variables |
 | `utility.py` | Info commands (`/serverinfo`, `/userinfo`, `/help`) |
@@ -108,4 +120,6 @@ Tag shortcuts are detected in `on_message`: if a message matches no command but 
 
 ### CI
 
-GitHub Actions (`.github/workflows/black.yml`) runs Black on every push. If formatting is needed, it auto-commits with `[skip ci]`. Run `black .` locally before pushing to avoid the auto-commit noise.
+GitHub Actions runs two workflows on every push:
+- **`black.yml`** — Auto-formats code with Black. If formatting is needed, it auto-commits with `[skip ci]`. Run `black .` locally before pushing to avoid the auto-commit noise.
+- **`tests.yml`** — Runs the pytest suite (`pytest tests/ -v`). Installs `requirements.txt` then `requirements-dev.txt` before running.

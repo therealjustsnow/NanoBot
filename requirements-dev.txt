@@ -1,0 +1,6 @@
+# NanoBot dev/test dependencies
+# Install with: pip install -r requirements-dev.txt
+# Requires requirements.txt to already be installed (discord.py is needed by utils/helpers.py)
+
+pytest>=8.0.0
+pytest-asyncio>=0.23.0
