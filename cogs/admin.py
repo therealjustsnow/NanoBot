@@ -9,6 +9,7 @@ Commands:
   reload  [cog|all]  — hot-reload one cog or every cog
   unload  <cog>      — unload a single cog without restarting
   update             — git pull + reload all cogs (no slash command sync)
+  upgrade            — git pull + pip install + spawn new process + close
   sync   [guild_id]  — push slash commands to Discord (global or one guild)
   shutdown           — graceful shutdown (flushes logs, closes connection)
   restart            — graceful shutdown then re-exec the process
@@ -388,6 +389,133 @@ class Admin(commands.Cog):
             f"update complete: git_ok={git_ok}, reload_errors={had_errors}, by {ctx.author}"
         )
         await ctx.reply(embed=e)
+
+    # ══════════════════════════════════════════════════════════════════════════
+    #  upgrade
+    # ══════════════════════════════════════════════════════════════════════════
+    @commands.command(
+        name="upgrade",
+        aliases=["deploy", "ud"],
+        help=(
+            "Full upgrade: git pull → pip install -r requirements.txt → restart.\n\n"
+            "Use this to deploy new code and dependency changes from mobile.\n"
+            "Stops at git pull failure — won't install or restart if pull fails.\n"
+            "If pip fails, reports the error but restarts anyway (existing code still works).\n\n"
+            "See also: !update (pull + reload cogs, no restart), !restart (restart only)."
+        ),
+    )
+    async def upgrade(self, ctx: commands.Context):
+        """
+        !upgrade  /  !deploy
+
+        1. Runs `git pull` and reports the output.
+        2. If pull fails, stops — no install, no restart.
+        3. Runs `pip install -r requirements.txt --quiet` in a background thread
+           (can be slow; uses asyncio.to_thread to avoid blocking the event loop).
+        4. Sends a result embed showing both steps, then spawns a new process
+           and closes this one — identical to !restart.
+        """
+        await ctx.defer()
+
+        log.warning(f"Upgrade initiated by {ctx.author} ({ctx.author.id})")
+
+        # ── Step 1: git pull ───────────────────────────────────────────────────
+        try:
+            git_result = subprocess.run(
+                ["git", "pull"],
+                capture_output=True,
+                text=True,
+                timeout=30,
+            )
+            git_stdout = git_result.stdout.strip()
+            git_stderr = git_result.stderr.strip()
+            git_ok = git_result.returncode == 0
+        except FileNotFoundError:
+            return await ctx.reply(
+                embed=h.err(
+                    "`git` not found. Make sure git is installed and NanoBot was cloned from a repo."
+                ),
+                ephemeral=True,
+            )
+        except subprocess.TimeoutExpired:
+            return await ctx.reply(
+                embed=h.err("Git pull timed out after 30 seconds."),
+                ephemeral=True,
+            )
+
+        git_output = git_stdout or git_stderr or "_(no output)_"
+        if len(git_output) > 900:
+            git_output = git_output[:900] + "\n…(truncated)"
+
+        if not git_ok:
+            e = h.embed(title="📥 Upgrade — Git Pull Failed", color=h.RED)
+            e.description = f"```\n{git_output}\n```"
+            e.set_footer(text="pip install and restart were skipped  ·  NanoBot Admin")
+            log.error(f"upgrade: git pull failed (rc={git_result.returncode}): {git_output}")
+            return await ctx.reply(embed=e)
+
+        log.info(f"upgrade: git pull OK by {ctx.author}: {git_stdout[:200]}")
+
+        # ── Step 2: pip install (run in thread — can take 30s+) ───────────────
+        pip_ok = False
+        pip_output = ""
+        try:
+            def _run_pip():
+                return subprocess.run(
+                    [
+                        sys.executable,
+                        "-m",
+                        "pip",
+                        "install",
+                        "-r",
+                        "requirements.txt",
+                        "--quiet",
+                    ],
+                    capture_output=True,
+                    text=True,
+                    timeout=120,
+                )
+
+            pip_result = await asyncio.to_thread(_run_pip)
+            pip_ok = pip_result.returncode == 0
+            pip_output = (pip_result.stdout + pip_result.stderr).strip()
+        except subprocess.TimeoutExpired:
+            pip_output = "pip install timed out after 120 seconds"
+            log.error("upgrade: pip install timed out")
+        except Exception as exc:
+            pip_output = f"pip install error: {exc}"
+            log.error(f"upgrade: pip install raised: {exc}", exc_info=exc)
+
+        if len(pip_output) > 800:
+            pip_output = pip_output[:800] + "\n…(truncated)"
+
+        if pip_ok:
+            log.info("upgrade: pip install OK")
+        else:
+            log.warning(f"upgrade: pip install failed — {pip_output[:200]}")
+
+        # ── Step 3: build embed, spawn new process, close ─────────────────────
+        colour = h.GREEN if pip_ok else h.YELLOW
+        e = h.embed(title="🚀 Upgrade Complete — Restarting", color=colour)
+        e.add_field(name="📥 Git Pull", value=f"```\n{git_output}\n```", inline=False)
+        pip_display = pip_output or "_(nothing to install / all up to date)_"
+        e.add_field(name="📦 Pip Install", value=f"```\n{pip_display}\n```", inline=False)
+
+        if pip_ok:
+            e.set_footer(
+                text="Spawning new process… back in a few seconds  ·  NanoBot Admin"
+            )
+        else:
+            e.set_footer(
+                text="pip install had errors but restarting anyway  ·  NanoBot Admin"
+            )
+
+        await ctx.reply(embed=e)
+        await asyncio.sleep(0.5)
+
+        subprocess.Popen([sys.executable] + sys.argv)
+        log.info(f"upgrade: spawned new process — shutting down (by {ctx.author})")
+        await self.bot.close()
 
     # ══════════════════════════════════════════════════════════════════════════
     #  sync
