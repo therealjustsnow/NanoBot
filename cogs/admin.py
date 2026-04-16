@@ -17,6 +17,7 @@ Commands:
   logs [lines]       — tail the log file right in Discord
   scrape             — manually trigger the daily content cache scrape
   cachestats         — show cache DB statistics (FML, WYR, images)
+  fmlpurge           — wipe all cached FML stories (forces re-scrape)
 """
 
 import asyncio
@@ -874,6 +875,29 @@ class Admin(commands.Cog):
         )
         e.set_footer(text="data/cache.db \u00b7 NanoBot Admin")
         await ctx.reply(embed=e)
+
+    # ══════════════════════════════════════════════════════════════════════════
+    #  fmlpurge
+    # ══════════════════════════════════════════════════════════════════════════
+    @commands.command(
+        name="fmlpurge",
+        help=(
+            "Wipe all cached FML stories.\n\n"
+            "Use after a scraper bugfix to drop poisoned entries. "
+            "The next `!scrape` repopulates the table."
+        ),
+    )
+    async def fmlpurge(self, ctx: commands.Context):
+        from utils import cache_db
+
+        removed = await cache_db.purge_fml()
+        await ctx.reply(
+            embed=h.ok(
+                f"Removed **{removed:,}** cached FML stories.\n"
+                "Run `!scrape` to repopulate.",
+                "\U0001f9f9 FML Cache Purged",
+            )
+        )
 
     # ══════════════════════════════════════════════════════════════════════════
     #  servers
