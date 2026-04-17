@@ -3,11 +3,12 @@ services:
     build: .
     restart: unless-stopped
     volumes:
-      # config.json must exist on the host — copy example_config.json to get started
-      - ./config.json:/app/config.json:ro
+      # config.ini must exist on the host — copy example_config.ini to get started.
+      # Mounted read-write so `!config set` and `!setloglevel` can persist changes.
+      - ./config.ini:/app/config.ini
       # Persistent SQLite DB and logs
       - ./data:/app/data
       - ./logs:/app/logs
     environment:
-      # Optional: set DISCORD_TOKEN here instead of in config.json
+      # Optional: set DISCORD_TOKEN here instead of in config.ini
       - DISCORD_TOKEN=${DISCORD_TOKEN:-}

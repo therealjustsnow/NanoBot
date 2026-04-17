@@ -104,41 +104,71 @@ pip install -r requirements.txt
 
 ### 3. Config
 
-Copy `example_config.json` to `config.json` and fill in your values:
+Copy `example_config.ini` to `config.ini` and fill in your values:
 
-```json
-{
-  "token": "YOUR_BOT_TOKEN_HERE",
-  "default_prefix": "n!",
-  "owner_id": null,
-  "log_level": "INFO",
-  "log_http": false,
-  "topgg_token": null,
-  "topgg_v1_token": null,
-  "dbl_token": null,
-  "discordbotsgg_token": null,
-  "vote_webhook_port": 5000,
-  "vote_webhook_secret": null,
-  "groq_api_key": null
-}
+```ini
+[bot]
+token = YOUR_BOT_TOKEN_HERE
+default_prefix = n!
+owner_id =
+
+[logging]
+log_level = INFO
+log_http = false
+
+[votes]
+topgg_token =
+topgg_v1_token =
+dbl_token =
+discordbotsgg_token =
+vote_webhook_port = 5000
+vote_webhook_secret =
+
+[groq]
+groq_api_key =
+
+[scraper]
+fml_pages_per_scrape = 500
+wyr_requests_per_scrape = 500
+nekos_per_endpoint = 400
+nekosia_per_tag = 400
+revalidate_age = 604800
+revalidate_batch = 1000
+groq_wyr_system = You generate Would You Rather questions for a Discord bot. ...
 ```
 
-| Key | Required | Description |
-|-----|----------|-------------|
-| `token` | **Yes** | Bot token from the Developer Portal |
-| `default_prefix` | No | Default prefix for all servers (changeable per-server with `/prefix`). Default `n!` |
-| `owner_id` | No | Your Discord user ID -- overrides app owner for admin commands. `null` = use app owner |
-| `log_level` | No | `DEBUG` / `INFO` / `WARNING` / `ERROR`. Changeable live with `!setloglevel` |
-| `log_http` | No | `true` to log every raw HTTP request (very verbose, for debugging) |
-| `topgg_token` | No | top.gg API token -- enables stat posting and vote webhooks |
-| `topgg_v1_token` | No | top.gg v1 API token -- enables command sync to top.gg |
-| `dbl_token` | No | discordbotlist.com bot token -- enables stat posting, command sync, and vote webhooks |
-| `discordbotsgg_token` | No | discord.bots.gg bot token -- enables stat posting and vote webhooks |
-| `vote_webhook_port` | No | Port for the vote webhook HTTP server. Default `5000` |
-| `vote_webhook_secret` | No | Shared secret for webhook verification. top.gg uses HMAC-SHA256; DBL and discord.bots.gg use a plain `Authorization` header match |
-| `groq_api_key` | No | Groq API key for the `/eli5` command. Free at [console.groq.com](https://console.groq.com). Also accepts `GROQ_API_KEY` env var |
+| Section | Key | Required | Description |
+|---------|-----|----------|-------------|
+| `bot` | `token` | **Yes** | Bot token from the Developer Portal |
+| `bot` | `default_prefix` | No | Default prefix for all servers (changeable per-server with `/prefix`). Default `n!` |
+| `bot` | `owner_id` | No | Your Discord user ID -- overrides app owner for admin commands. Blank = use app owner |
+| `logging` | `log_level` | No | `DEBUG` / `INFO` / `WARNING` / `ERROR`. Changeable live with `!setloglevel` |
+| `logging` | `log_http` | No | `true` to log every raw HTTP request (very verbose, for debugging) |
+| `votes` | `topgg_token` | No | top.gg API token -- enables stat posting and vote webhooks |
+| `votes` | `topgg_v1_token` | No | top.gg v1 API token -- enables command sync to top.gg |
+| `votes` | `dbl_token` | No | discordbotlist.com bot token -- enables stat posting, command sync, and vote webhooks |
+| `votes` | `discordbotsgg_token` | No | discord.bots.gg bot token -- enables stat posting and vote webhooks |
+| `votes` | `vote_webhook_port` | No | Port for the vote webhook HTTP server. Default `5000` |
+| `votes` | `vote_webhook_secret` | No | Shared secret for webhook verification |
+| `groq` | `groq_api_key` | No | Groq API key for `/eli5` + daily WYR generation. Free at [console.groq.com](https://console.groq.com). Also accepts `GROQ_API_KEY` env var |
+| `scraper` | `fml_pages_per_scrape` | No | FML pages fetched per daily scrape. Default `500` |
+| `scraper` | `wyr_requests_per_scrape` | No | WYR requests per rating per daily scrape. Default `500` |
+| `scraper` | `nekos_per_endpoint` | No | nekos.best images per endpoint per daily scrape. Default `400` |
+| `scraper` | `nekosia_per_tag` | No | Nekosia images per tag per daily scrape. Default `400` |
+| `scraper` | `revalidate_age` | No | Seconds before a cached URL is rechecked. Default `604800` (7 days) |
+| `scraper` | `revalidate_batch` | No | Max URLs HEAD-checked per 6-hour cycle. Default `1000` |
+| `scraper` | `groq_wyr_system` | No | System prompt used when Groq generates WYR questions |
 
-> ⚠️ **Never commit `config.json` to git.** It's already in `.gitignore`.
+> Migrating from an older version? An existing `config.json` is auto-migrated to
+> `config.ini` on first start and renamed to `config.json.bak`.
+
+**Live editing without a restart:**
+
+* `!reloadconfig` — re-read `config.ini` from disk.
+* `!config show` / `!config get <section>.<key>` / `!config set <section>.<key> <value>` — **DM-only** commands to inspect or edit values right from Discord.
+* `!setloglevel DEBUG` — change log level and save to `config.ini` in one shot.
+
+> ⚠️ **Never commit `config.ini` to git.** It's already in `.gitignore`.
 
 Token via environment variable also works:
 ```bash
@@ -590,8 +620,8 @@ NanoBot/
 ├── main.py                ← Bot core, prefix resolution, event handlers, tag shortcuts
 ├── run.py                 ← Pre-flight checker + launcher
 ├── migrate.py             ← One-time JSON → SQLite migration script
-├── example_config.json    ← Config template (copy to config.json)
-├── config.json            ← Your config (gitignored)
+├── example_config.ini     ← Config template (copy to config.ini)
+├── config.ini             ← Your config (gitignored)
 ├── requirements.txt
 ├── .gitignore
 ├── LICENSE

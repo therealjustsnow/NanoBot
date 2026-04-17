@@ -73,25 +73,39 @@ _KAGGLE_WYR_URL = (
 _GROQ_API_URL = "https://api.groq.com/openai/v1/chat/completions"
 _GROQ_MODEL = "llama-3.1-8b-instant"
 _GROQ_WYR_COUNT = 20  # questions to generate per daily scrape
-_GROQ_WYR_SYSTEM = (
-    "You generate Would You Rather questions for a Discord bot. "
-    "Return ONLY a JSON array of strings. Each string must start with "
-    '"Would you rather" and contain exactly two options separated by " or ". '
-    "End each with a question mark. Make them fun, creative, and varied -- "
-    "mix silly, deep, gross, impossible, and everyday scenarios. "
-    "No numbered lists, no markdown, no explanation. Just the JSON array."
-)
 
 # ── WYR API ratings to scrape (separate question pools) ──────────────────────
 _WYR_RATINGS = ("pg", "pg13")
 
-# ── Scraper settings ─────────────────────────────────────────────────────────
-_FML_PAGES_PER_SCRAPE = 500  # ~5-10 stories each = 1500-5000 per run
-_WYR_REQUESTS_PER_SCRAPE = 500  # 1 question each, deduped
-_NEKOS_PER_ENDPOINT = 400  # GIFs/images per nekos.best endpoint per run
-_NEKOSIA_PER_TAG = 400  # images per Nekosia tag per run
-_REVALIDATE_AGE = 7 * 86400  # check URLs older than 7 days
-_REVALIDATE_BATCH = 1000  # max URLs to check per revalidation cycle
+# ── Scraper knobs ────────────────────────────────────────────────────────────
+# Everything below is read from [scraper] in config.ini. The fallback dict only
+# kicks in if a key is blank, missing, or the cog is somehow loaded without a
+# bot.config attribute. Keys stay in sync with utils/config.DEFAULTS.
+_SCRAPER_DEFAULTS = {
+    "fml_pages_per_scrape": 500,
+    "wyr_requests_per_scrape": 500,
+    "nekos_per_endpoint": 400,
+    "nekosia_per_tag": 400,
+    "revalidate_age": 7 * 86400,
+    "revalidate_batch": 1000,
+    "groq_wyr_system": (
+        "You generate Would You Rather questions for a Discord bot. "
+        "Return ONLY a JSON array of strings. Each string must start with "
+        '"Would you rather" and contain exactly two options separated by " or ". '
+        "End each with a question mark. Make them fun, creative, and varied -- "
+        "mix silly, deep, gross, impossible, and everyday scenarios. "
+        "No numbered lists, no markdown, no explanation. Just the JSON array."
+    ),
+}
+
+
+def _scrape_cfg(bot, key: str):
+    """Look up a [scraper] key on bot.config, falling back to the module default."""
+    cfg = getattr(bot, "config", None) or {}
+    val = cfg.get(key)
+    if val is None or val == "":
+        return _SCRAPER_DEFAULTS[key]
+    return val
 
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -809,9 +823,7 @@ async def _scrape_fml_page(session: aiohttp.ClientSession) -> list[str]:
     return stories
 
 
-async def _scrape_fml_bulk(
-    session: aiohttp.ClientSession, pages: int = _FML_PAGES_PER_SCRAPE
-) -> list[str]:
+async def _scrape_fml_bulk(session: aiohttp.ClientSession, pages: int) -> list[str]:
     """Hit fmylife.com/random multiple times and return all unique stories."""
     all_stories: list[str] = []
     seen: set[str] = set()
@@ -845,9 +857,7 @@ async def _fetch_wyr_single(
     return None
 
 
-async def _scrape_wyr_bulk(
-    session: aiohttp.ClientSession, count: int = _WYR_REQUESTS_PER_SCRAPE
-) -> list[str]:
+async def _scrape_wyr_bulk(session: aiohttp.ClientSession, count: int) -> list[str]:
     """Fetch many WYR questions across all ratings, deduplicating as we go."""
     questions: list[str] = []
     seen: set[str] = set()
@@ -918,6 +928,7 @@ async def _seed_kaggle_wyr(session: aiohttp.ClientSession) -> list[str]:
 async def _generate_wyr_groq(
     session: aiohttp.ClientSession,
     api_key: str,
+    system_prompt: str,
     count: int = _GROQ_WYR_COUNT,
 ) -> list[str]:
     """Use Groq LLM to generate fresh WYR questions. Returns list of strings."""
@@ -925,7 +936,7 @@ async def _generate_wyr_groq(
         payload = {
             "model": _GROQ_MODEL,
             "messages": [
-                {"role": "system", "content": _GROQ_WYR_SYSTEM},
+                {"role": "system", "content": system_prompt},
                 {
                     "role": "user",
                     "content": f"Generate {count} unique Would You Rather questions.",
@@ -1479,7 +1490,9 @@ class Fun(commands.Cog):
 
             # ── FML ───────────────────────────────────────────────────────────
             try:
-                fml_stories = await _scrape_fml_bulk(self._session)
+                fml_stories = await _scrape_fml_bulk(
+                    self._session, _scrape_cfg(self.bot, "fml_pages_per_scrape")
+                )
                 if fml_stories:
                     added = await cache_db.add_fml_stories(fml_stories)
                     total = await cache_db.count_fml()
@@ -1494,7 +1507,9 @@ class Fun(commands.Cog):
 
             # ── WYR (truthordarebot API -- PG + PG13) ─────────────────────────
             try:
-                wyr_questions = await _scrape_wyr_bulk(self._session)
+                wyr_questions = await _scrape_wyr_bulk(
+                    self._session, _scrape_cfg(self.bot, "wyr_requests_per_scrape")
+                )
                 if wyr_questions:
                     added = await cache_db.add_wyr_questions(wyr_questions)
                     total = await cache_db.count_wyr()
@@ -1529,7 +1544,11 @@ class Fun(commands.Cog):
             groq_key = getattr(self.bot, "groq_api_key", None)
             if groq_key:
                 try:
-                    groq_qs = await _generate_wyr_groq(self._session, groq_key)
+                    groq_qs = await _generate_wyr_groq(
+                        self._session,
+                        groq_key,
+                        _scrape_cfg(self.bot, "groq_wyr_system"),
+                    )
                     if groq_qs:
                         added = await cache_db.add_wyr_questions(groq_qs)
                         total = await cache_db.count_wyr()
@@ -1543,11 +1562,12 @@ class Fun(commands.Cog):
                 log.debug("WYR Groq: no API key, skipping generation")
 
             # ── nekos.best (GIFs + static images) ─────────────────────────────
+            nekos_per_endpoint = _scrape_cfg(self.bot, "nekos_per_endpoint")
             nekos_total_added = 0
             for ep in _ALL_NEKOS_ENDPOINTS:
                 try:
                     results = await _fetch_nekos_batch(
-                        self._session, ep, _NEKOS_PER_ENDPOINT
+                        self._session, ep, nekos_per_endpoint
                     )
                     if results:
                         img_dicts = [
@@ -1571,9 +1591,10 @@ class Fun(commands.Cog):
             )
 
             # ── Nekosia (thigh tags) ──────────────────────────────────────────
+            nekosia_per_tag = _scrape_cfg(self.bot, "nekosia_per_tag")
             nekosia_total_added = 0
             for tag in _THIGH_TAGS:
-                for _ in range(_NEKOSIA_PER_TAG):
+                for _ in range(nekosia_per_tag):
                     try:
                         img, src = await _fetch_nekosia_single(self._session, tag)
                         if img:
@@ -1627,8 +1648,8 @@ class Fun(commands.Cog):
             return
 
         stale = await cache_db.get_stale_images(
-            max_age_seconds=_REVALIDATE_AGE,
-            limit=_REVALIDATE_BATCH,
+            max_age_seconds=_scrape_cfg(self.bot, "revalidate_age"),
+            limit=_scrape_cfg(self.bot, "revalidate_batch"),
         )
         if not stale:
             return

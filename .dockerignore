@@ -1,5 +1,7 @@
 # Secrets and user data — never bake into the image
+config.ini
 config.json
+config.json.bak
 data/
 logs/
 .env

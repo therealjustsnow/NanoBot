@@ -13,7 +13,7 @@ Commands
 
 Config
 ──────────────────────────────────────────────────────
-  Requires GROQ_API_KEY env var  OR  "groq_api_key" in config.json.
+  Requires GROQ_API_KEY env var  OR  [groq] groq_api_key in config.ini.
   Get a free key at: https://console.groq.com
   Free tier: 14,400 requests/day, 30 RPM — very generous.
 
@@ -48,7 +48,7 @@ _SYSTEM_PROMPT = (
 
 
 def _get_api_key(bot: commands.Bot) -> str | None:
-    """Env var takes priority; fall back to config.json value stored on the bot."""
+    """Env var takes priority; fall back to config.ini value stored on the bot."""
     return os.getenv("GROQ_API_KEY") or getattr(bot, "groq_api_key", None)
 
 
@@ -104,7 +104,7 @@ class ELI5(commands.Cog):
             return await ctx.reply(
                 embed=h.err(
                     "No Groq API key configured.\n"
-                    "Add `GROQ_API_KEY` to your environment or `config.json`.\n"
+                    "Add `GROQ_API_KEY` to your environment or `config.ini`.\n"
                     "Get a free key at: https://console.groq.com",
                     "⚙️ Not Configured",
                 ),

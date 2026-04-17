@@ -3,7 +3,7 @@ cogs/admin.py
 Owner-only bot management commands.
 
 All commands here require the invoker to be the bot owner
-(set via config.json → owner_id, or the Discord application owner).
+(set via config.ini → [bot] owner_id, or the Discord application owner).
 
 Commands:
   reload  [cog|all]  — hot-reload one cog or every cog
@@ -13,15 +13,16 @@ Commands:
   sync   [guild_id]  — push slash commands to Discord (global or one guild)
   shutdown           — graceful shutdown (flushes logs, closes connection)
   restart            — graceful shutdown then re-exec the process
-  setloglevel <lvl>  — change log level live and persist to config.json
+  setloglevel <lvl>  — change log level live and persist to config.ini
   logs [lines]       — tail the log file right in Discord
   scrape             — manually trigger the daily content cache scrape
   cachestats         — show cache DB statistics (FML, WYR, images)
   fmlpurge           — wipe all cached FML stories (forces re-scrape)
+  reloadconfig       — re-read config.ini without restarting
+  config             — DM-only: show/get/set config values
 """
 
 import asyncio
-import json
 import logging
 import os
 import subprocess
@@ -31,6 +32,7 @@ from typing import Optional
 import discord
 from discord.ext import commands
 
+from utils import config as cfg_mod
 from utils import helpers as h
 
 log = logging.getLogger("NanoBot.admin")
@@ -680,7 +682,7 @@ class Admin(commands.Cog):
         name="setloglevel",
         aliases=["loglevel", "loglvl"],
         help=(
-            "Change the log level live and save it to config.json.\n\n"
+            "Change the log level live and save it to config.ini.\n\n"
             f"Valid levels: {', '.join(_VALID_LEVELS)}\n\n"
             "Examples:\n"
             "  !setloglevel DEBUG    → verbose (see every gateway event)\n"
@@ -705,19 +707,10 @@ class Admin(commands.Cog):
         logging.getLogger().setLevel(numeric)
         log.info(f"Log level changed to {level} by {ctx.author} ({ctx.author.id})")
 
-        # Persist to config.json
-        cfg_path = "config.json"
-        cfg = {}
-        if os.path.exists(cfg_path):
-            with open(cfg_path, encoding="utf-8") as f:
-                try:
-                    cfg = json.load(f)
-                except json.JSONDecodeError:
-                    pass
-
-        cfg["log_level"] = level
-        with open(cfg_path, "w", encoding="utf-8") as f:
-            json.dump(cfg, f, indent=2)
+        # Persist to config.ini and refresh bot.config.
+        cfg_mod.set_value("log_level", level)
+        if hasattr(self.bot, "reload_config"):
+            self.bot.reload_config()
 
         level_descriptions = {
             "DEBUG": "verbose — every gateway event, HTTP call, and internal step",
@@ -730,7 +723,7 @@ class Admin(commands.Cog):
         await ctx.reply(
             embed=h.ok(
                 f"Log level set to **{level}** — {level_descriptions[level]}.\n"
-                f"Saved to `config.json`. Takes effect immediately.",
+                f"Saved to `config.ini`. Takes effect immediately.",
                 "📋 Log Level Updated",
             )
         )
@@ -904,6 +897,264 @@ class Admin(commands.Cog):
                 f"Removed **{removed:,}** cached FML stories.\n"
                 "Run `!scrape` to repopulate.",
                 "\U0001f9f9 FML Cache Purged",
+            )
+        )
+
+    # ══════════════════════════════════════════════════════════════════════════
+    #  reloadconfig
+    # ══════════════════════════════════════════════════════════════════════════
+    @commands.command(
+        name="reloadconfig",
+        aliases=["rlc", "rlconfig"],
+        help=(
+            "Re-read config.ini from disk without restarting the bot.\n\n"
+            "Refreshes: log level, owner_id, default_prefix, Groq key, and every\n"
+            "[scraper] knob used by !scrape. Webhook-related values in the votes\n"
+            "cog are captured at init — use `!reload votes` after changing those."
+        ),
+    )
+    async def reloadconfig(self, ctx: commands.Context):
+        if not hasattr(self.bot, "reload_config"):
+            return await ctx.reply(
+                embed=h.err(
+                    "This bot instance doesn't expose `reload_config()` — "
+                    "running an old main.py? Restart with `!restart`."
+                ),
+                ephemeral=True,
+            )
+
+        try:
+            new_cfg = self.bot.reload_config()
+        except Exception as exc:
+            log.error(f"reloadconfig failed: {exc}", exc_info=exc)
+            return await ctx.reply(
+                embed=h.err(f"Failed to reload config.ini: {exc}"),
+                ephemeral=True,
+            )
+
+        issues = cfg_mod.validate(new_cfg)
+        fatals = [i for i in issues if i.fatal]
+        warns = [i for i in issues if not i.fatal]
+
+        lines = [f"Reloaded **{len(new_cfg)}** key(s) from `config.ini`."]
+        if fatals:
+            lines.append("\n**Fatal issues** (take effect on next restart):")
+            lines.extend(f"• `{i.field}` — {i.message}" for i in fatals)
+        if warns:
+            lines.append("\n**Warnings:**")
+            lines.extend(f"• `{i.field}` — {i.message}" for i in warns)
+        if not fatals and not warns:
+            lines.append("All values validated cleanly.")
+
+        log.info(
+            f"reloadconfig by {ctx.author} ({ctx.author.id}) — "
+            f"{len(fatals)} fatal, {len(warns)} warning(s)"
+        )
+        await ctx.reply(
+            embed=h.ok(
+                "\n".join(lines),
+                "🔁 Config Reloaded",
+            )
+        )
+
+    # ══════════════════════════════════════════════════════════════════════════
+    #  config  (DM-only)
+    # ══════════════════════════════════════════════════════════════════════════
+    @commands.command(
+        name="config",
+        aliases=["cfg"],
+        help=(
+            "View or edit config.ini from Discord. **DM-only** for safety —\n"
+            "prevents leaking secrets in a public channel.\n\n"
+            "Usage:\n"
+            "  !config show                     — list every key (secrets masked)\n"
+            "  !config get <section>.<key>      — read one value\n"
+            "  !config set <section>.<key> <v>  — write one value\n"
+            "  !config unset <section>.<key>    — clear a value\n\n"
+            "Key may be given as `key` or `section.key`. After a change the\n"
+            "bot auto-refreshes its live settings (log level, scraper knobs,\n"
+            "etc.) — you do not need to run !reloadconfig separately."
+        ),
+    )
+    async def config_cmd(
+        self,
+        ctx: commands.Context,
+        action: Optional[str] = None,
+        key: Optional[str] = None,
+        *,
+        value: Optional[str] = None,
+    ):
+        # ── DM-only gate ──────────────────────────────────────────────────────
+        if ctx.guild is not None:
+            try:
+                await ctx.message.delete()
+            except (discord.Forbidden, discord.HTTPException):
+                pass
+            try:
+                await ctx.author.send(
+                    embed=h.warn(
+                        "`!config` is DM-only — run it here instead.\n"
+                        "This prevents the bot token and other secrets from "
+                        "being echoed in a channel.",
+                        "🔒 DM-Only",
+                    )
+                )
+            except discord.Forbidden:
+                await ctx.reply(
+                    embed=h.err(
+                        "`!config` is DM-only and I can't DM you. "
+                        "Enable DMs from server members and try again."
+                    ),
+                    ephemeral=True,
+                )
+            return
+
+        action = (action or "show").lower().strip()
+
+        # ── show ──────────────────────────────────────────────────────────────
+        if action == "show":
+            return await self._config_show(ctx)
+
+        # ── get / set / unset need a key ──────────────────────────────────────
+        if not key:
+            return await ctx.reply(
+                embed=h.err(
+                    "Missing key. Usage:\n"
+                    "`!config get <section>.<key>` or "
+                    "`!config set <section>.<key> <value>`"
+                )
+            )
+
+        resolved = self._resolve_key(key)
+        if resolved is None:
+            return await ctx.reply(
+                embed=h.err(
+                    f"Unknown config key: `{key}`.\n"
+                    "Run `!config show` to see every valid key."
+                )
+            )
+        section, bare_key = resolved
+
+        if action == "get":
+            return await self._config_get(ctx, section, bare_key)
+        if action == "set":
+            if value is None:
+                return await ctx.reply(
+                    embed=h.err(
+                        f"Missing value. Usage: `!config set {section}.{bare_key} <value>`"
+                    )
+                )
+            return await self._config_set(ctx, section, bare_key, value)
+        if action == "unset":
+            return await self._config_set(ctx, section, bare_key, "")
+
+        await ctx.reply(
+            embed=h.err(
+                f"Unknown action `{action}`. Use `show`, `get`, `set`, or `unset`."
+            )
+        )
+
+    # ── config helpers ────────────────────────────────────────────────────────
+    @staticmethod
+    def _resolve_key(raw: str) -> Optional[tuple[str, str]]:
+        """Accept either 'section.key' or bare 'key'. Returns (section, key) or None."""
+        raw = raw.strip().lower()
+        if "." in raw:
+            section, _, bare = raw.partition(".")
+            if (
+                section in cfg_mod.SECTION_ORDER
+                and cfg_mod.SECTION_MAP.get(bare) == section
+            ):
+                return section, bare
+            return None
+        if raw in cfg_mod.SECTION_MAP:
+            return cfg_mod.SECTION_MAP[raw], raw
+        return None
+
+    @staticmethod
+    def _display(key: str, val) -> str:
+        if val is None or val == "":
+            return "_(unset)_"
+        if key in cfg_mod.SENSITIVE_KEYS:
+            s = str(val)
+            return f"`{s[:4]}…{s[-2:]}`" if len(s) > 8 else "`***`"
+        # Truncate long strings (like groq_wyr_system) for readability.
+        s = str(val)
+        if len(s) > 120:
+            return f"`{s[:117]}…`"
+        return f"`{s}`"
+
+    async def _config_show(self, ctx: commands.Context):
+        cfg = cfg_mod.load()
+        lines: list[str] = []
+        for section in cfg_mod.SECTION_ORDER:
+            keys = [k for k, sec in cfg_mod.SECTION_MAP.items() if sec == section]
+            if not keys:
+                continue
+            lines.append(f"**[{section}]**")
+            for k in keys:
+                val = cfg.get(k, cfg_mod.DEFAULTS.get(k))
+                lines.append(f"  `{k}` = {self._display(k, val)}")
+            lines.append("")
+        e = h.embed(
+            title="⚙️ Config (config.ini)",
+            description="\n".join(lines).rstrip(),
+            color=h.BLUE,
+        )
+        e.set_footer(
+            text="Secrets are masked · `!config set <key> <value>` to change · NanoBot"
+        )
+        await ctx.reply(embed=e)
+
+    async def _config_get(self, ctx: commands.Context, section: str, key: str):
+        cfg = cfg_mod.load()
+        val = cfg.get(key, cfg_mod.DEFAULTS.get(key))
+        desc = f"**[{section}]** `{key}` = {self._display(key, val)}"
+        if key in cfg_mod.SENSITIVE_KEYS:
+            desc += "\n_(masked — secret)_"
+        await ctx.reply(
+            embed=h.embed(
+                title="⚙️ Config Value",
+                description=desc,
+                color=h.BLUE,
+            )
+        )
+
+    async def _config_set(
+        self, ctx: commands.Context, section: str, key: str, raw_value: str
+    ):
+        # Coerce the string through the same pipeline used by config.load()
+        coerced = cfg_mod._coerce(key, raw_value)
+
+        # Block obviously bad values before touching disk.
+        cfg = cfg_mod.load()
+        cfg[key] = coerced
+        issues = [i for i in cfg_mod.validate(cfg) if i.field == key and i.fatal]
+        if issues:
+            return await ctx.reply(
+                embed=h.err(
+                    f"Rejected — `{key}` failed validation: {issues[0].message}"
+                )
+            )
+
+        try:
+            cfg_mod.set_value(key, coerced)
+        except Exception as exc:
+            log.error(f"config set {key} failed: {exc}", exc_info=exc)
+            return await ctx.reply(embed=h.err(f"Could not write config.ini: {exc}"))
+
+        if hasattr(self.bot, "reload_config"):
+            self.bot.reload_config()
+
+        log.info(
+            f"config set: [{section}] {key} changed by {ctx.author} ({ctx.author.id})"
+        )
+        display = self._display(key, coerced)
+        await ctx.reply(
+            embed=h.ok(
+                f"**[{section}]** `{key}` = {display}\n"
+                "Saved to `config.ini` and live now.",
+                "⚙️ Config Updated",
             )
         )
 

@@ -9,7 +9,7 @@ Features:
   - Extra reminder slots for voters (50 vs 25)
   - /vote command — links, status, and streak
 
-Config keys (config.json):
+Config keys (config.ini → [votes]):
   topgg_v1_token       — top.gg v1 API token (Bearer, from Integrations & API settings)
   dbl_token            — discordbotlist.com bot token
   discordbotsgg_token  — discord.bots.gg bot token
@@ -643,13 +643,11 @@ async def get_reminder_limit(user_id: int) -> int:
 
 # ── Registration ───────────────────────────────────────────────────────────────
 async def setup(bot: commands.Bot):
-    import json, os
+    # Prefer the already-loaded config attached to the bot by main.py; fall
+    # back to a fresh read (e.g. when this cog is reloaded standalone).
+    cfg = getattr(bot, "config", None)
+    if cfg is None:
+        from utils import config as cfg_mod
 
-    cfg = {}
-    if os.path.exists("config.json"):
-        with open("config.json", encoding="utf-8") as f:
-            try:
-                cfg = json.load(f)
-            except json.JSONDecodeError:
-                pass
+        cfg = cfg_mod.load()
     await bot.add_cog(Votes(bot, cfg))
