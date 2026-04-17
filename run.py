@@ -10,7 +10,6 @@ Usage:
 """
 
 import importlib.util
-import json
 import os
 import re
 import sys
@@ -98,7 +97,6 @@ def check_file_structure():
     optional_dirs = ["data"]
     required_files = [
         "main.py",
-        "config.json",
         "requirements.txt",
         "cogs/__init__.py",
         "cogs/moderation.py",
@@ -147,34 +145,46 @@ def _looks_like_token(token):
 
 
 def check_config():
-    head("Config  (config.json)")
+    head("Config  (config.ini)")
     all_good = True
 
-    if not os.path.isfile("config.json"):
+    # Lazy import so the pre-flight itself never crashes on a broken utils/.
+    try:
+        from utils import config as cfg_mod
+    except Exception as exc:
+        return err(f"could not import utils/config.py: {exc}")
+
+    # Auto-migrate an old config.json if present.
+    if not os.path.isfile("config.ini") and os.path.isfile("config.json"):
+        if cfg_mod.migrate_from_json("config.json", "config.ini"):
+            ok(
+                "Migrated config.json → config.ini (old file renamed to config.json.bak)"
+            )
+
+    if not os.path.isfile("config.ini"):
         return err(
-            "config.json not found.\n"
-            '      Create one with at least: {"token": "YOUR_BOT_TOKEN_HERE"}'
+            "config.ini not found.\n"
+            "      Copy example_config.ini to config.ini and fill in your token."
         )
 
     try:
-        with open("config.json", encoding="utf-8") as f:
-            cfg = json.load(f)
-    except json.JSONDecodeError as e:
-        return err(f"config.json is not valid JSON: {e}")
+        cfg = cfg_mod.load("config.ini")
+    except Exception as exc:
+        return err(f"config.ini could not be parsed: {exc}")
 
-    ok("config.json is valid JSON")
+    ok("config.ini parsed OK")
 
     # ── Token ──────────────────────────────────────────────────────────────────
     env_token = os.getenv("DISCORD_TOKEN", "")
-    token = cfg.get("token", "")
+    token = cfg.get("token") or ""
 
     if env_token:
-        ok("Token: DISCORD_TOKEN env var found (overrides config.json)")
+        ok("Token: DISCORD_TOKEN env var found (overrides config.ini)")
     elif not token or token in ("YOUR_BOT_TOKEN_HERE", "your_token_here", "TOKEN"):
         err(
             "Token: placeholder or missing.\n"
             "      Get your token: https://discord.com/developers/applications → Bot → Token\n"
-            "      Then paste it into config.json or set DISCORD_TOKEN env var."
+            "      Then paste it into config.ini or set DISCORD_TOKEN env var."
         )
         all_good = False
     elif not _looks_like_token(token):
@@ -188,7 +198,7 @@ def check_config():
         ok(f"Token: {safe}… (format looks valid — confirmed at connect time)")
 
     # ── Prefix ─────────────────────────────────────────────────────────────────
-    prefix = cfg.get("default_prefix", "!")
+    prefix = cfg.get("default_prefix") or "!"
 
     if not isinstance(prefix, str) or len(prefix) == 0:
         err("Prefix: must be a non-empty string")
@@ -204,7 +214,7 @@ def check_config():
 
     # ── Log level ──────────────────────────────────────────────────────────────
     valid_levels = {"DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"}
-    log_level = str(cfg.get("log_level", "INFO")).upper()
+    log_level = str(cfg.get("log_level") or "INFO").upper()
     if log_level not in valid_levels:
         err(
             f"log_level: '{log_level}' is not valid.\n      Choose from: {', '.join(sorted(valid_levels))}"
@@ -214,7 +224,9 @@ def check_config():
         ok(f"log_level: '{log_level}'")
 
     # ── log_http ───────────────────────────────────────────────────────────────
-    log_http = cfg.get("log_http", False)
+    log_http = cfg.get("log_http")
+    if log_http is None:
+        log_http = False
     if not isinstance(log_http, bool):
         warn("log_http: should be true or false — defaulting to false")
     else:

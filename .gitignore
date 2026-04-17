@@ -1,5 +1,7 @@
 # Config (contains bot token — NEVER commit this)
+config.ini
 config.json
+config.json.bak
 
 # Bot data (JSON storage — contains server/user data)
 data/

@@ -11,7 +11,6 @@ A lightweight Discord moderation bot — SQLite-backed, zero cloud dependency.
 """
 
 import asyncio
-import json
 import logging
 import logging.handlers
 import os
@@ -20,23 +19,12 @@ import discord
 from discord import app_commands
 from discord.ext import commands
 
-from utils import db
 from utils import cache_db
-
+from utils import config as cfg_mod
+from utils import db
 
 # ── Config (read once at module level so logging init can use it) ──────────────
-def _load_config() -> dict:
-    cfg = {}
-    if os.path.exists("config.json"):
-        with open("config.json", encoding="utf-8") as f:
-            try:
-                cfg = json.load(f)
-            except json.JSONDecodeError:
-                pass
-    return cfg
-
-
-_CFG = _load_config()
+_CFG = cfg_mod.load()
 
 
 # ── Logging ────────────────────────────────────────────────────────────────────
@@ -157,15 +145,40 @@ class NanoBot(commands.Bot):
             description="NanoBot — Small. Fast. Built for Mobile Mods.",
         )
 
-        self.default_prefix: str = cfg.get("default_prefix", "!")
+        self.config: dict = dict(cfg)
+        self._apply_config(cfg)
         self.prefixes: dict[str, str] = {}
         self.last_senders: dict[int, discord.Member] = {}
         self.start_time = discord.utils.utcnow()
-        self.groq_api_key: str | None = cfg.get("groq_api_key")
         self.commands_ran: int = 0  # incremented in on_command; resets on restart
 
+    # ── Config application / reload ───────────────────────────────────────────
+    def _apply_config(self, cfg: dict) -> None:
+        """Copy the flat config dict onto the bot's runtime attributes."""
+        self.default_prefix: str = cfg.get("default_prefix") or "!"
+        self.groq_api_key: str | None = cfg.get("groq_api_key")
         raw_owner = cfg.get("owner_id")
-        self.config_owner_id: int | None = int(raw_owner) if raw_owner else None
+        self.config_owner_id: int | None = (
+            int(raw_owner) if raw_owner not in (None, "") else None
+        )
+
+    def reload_config(self) -> dict:
+        """
+        Re-read config.ini from disk and refresh runtime attributes + log level.
+        Returns the new flat config dict. Cogs can read ``bot.config`` for any
+        key they care about.
+        """
+        new_cfg = cfg_mod.load()
+        self.config = dict(new_cfg)
+        self._apply_config(new_cfg)
+
+        level_str = str(new_cfg.get("log_level") or "INFO").upper()
+        if level_str in _VALID_LEVELS:
+            logging.getLogger().setLevel(getattr(logging, level_str))
+        http_level = logging.DEBUG if new_cfg.get("log_http") else logging.WARNING
+        logging.getLogger("discord.http").setLevel(http_level)
+
+        return new_cfg
 
     # ── Startup ────────────────────────────────────────────────────────────────
     async def setup_hook(self):
@@ -187,7 +200,7 @@ class NanoBot(commands.Bot):
 
     # ── Owner resolution ───────────────────────────────────────────────────────
     async def is_owner(self, user: discord.User) -> bool:
-        """config.json owner_id takes priority; falls back to application owner."""
+        """config.ini owner_id takes priority; falls back to application owner."""
         if self.config_owner_id:
             return user.id == self.config_owner_id
         return await super().is_owner(user)
@@ -468,16 +481,14 @@ async def main():
     token = os.getenv("DISCORD_TOKEN") or cfg.get("token")
     if not token:
         log.error(
-            "❌ No token found. Set DISCORD_TOKEN env var or add it to config.json"
+            "❌ No token found. Set DISCORD_TOKEN env var or add it to config.ini"
         )
         return
 
-    from utils.config import validate as _validate_cfg
-
-    # Pass the resolved token so an env-var-only setup (no "token" key in
-    # config.json) doesn't trigger a false fatal "Missing or placeholder" error.
+    # Pass the resolved token so an env-var-only setup (no token key in
+    # config.ini) doesn't trigger a false fatal "Missing or placeholder" error.
     cfg_to_validate = {**cfg, "token": token}
-    all_issues = _validate_cfg(cfg_to_validate)
+    all_issues = cfg_mod.validate(cfg_to_validate)
     for issue in all_issues:
         if issue.fatal:
             log.critical(f"Config error [{issue.field}]: {issue.message}")
@@ -485,7 +496,7 @@ async def main():
             log.warning(f"Config warning [{issue.field}]: {issue.message}")
     fatal_issues = [i for i in all_issues if i.fatal]
     if fatal_issues:
-        log.critical("Aborting — fix config.json and restart.")
+        log.critical("Aborting — fix config.ini and restart.")
         return
 
     bot = NanoBot(cfg)

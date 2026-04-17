@@ -11,7 +11,7 @@ NanoBot is a lightweight Discord moderation bot (Python 3.11+) built with discor
 **Install and run:**
 ```bash
 pip install -r requirements.txt
-cp example_config.json config.json   # then edit with your bot token
+cp example_config.ini config.ini     # then edit with your bot token
 python run.py                         # recommended: includes pre-flight validation
 python main.py                        # direct launch, skips validation
 ```
@@ -97,26 +97,24 @@ Tag shortcuts are detected in `on_message`: if a message matches no command but 
 
 ### Configuration
 
-`config.json` (gitignored) at the repo root. All keys are optional except `token` (or `DISCORD_TOKEN` env var):
+`config.ini` (gitignored) at the repo root, split into five sections:
 
-```json
-{
-  "token": "...",
-  "default_prefix": "n!",
-  "owner_id": null,
-  "log_level": "INFO",
-  "log_http": false,
-  "topgg_token": null,
-  "topgg_v1_token": null,
-  "dbl_token": null,
-  "discordbotsgg_token": null,
-  "vote_webhook_port": 5000,
-  "vote_webhook_secret": null,
-  "groq_api_key": null
-}
-```
+* **`[bot]`** — `token`, `default_prefix`, `owner_id`
+* **`[logging]`** — `log_level`, `log_http`
+* **`[votes]`** — top.gg / DBL / discord.bots.gg tokens, `vote_webhook_port`, `vote_webhook_secret`
+* **`[groq]`** — `groq_api_key`
+* **`[scraper]`** — `fml_pages_per_scrape`, `wyr_requests_per_scrape`, `nekos_per_endpoint`, `nekosia_per_tag`, `revalidate_age`, `revalidate_batch`, `groq_wyr_system`
 
-`log_level` changes take effect without restart (re-read dynamically). Logs rotate at 50 KB, 5 backups, written to `logs/nanobot.log`.
+All keys are optional except `token` (or the `DISCORD_TOKEN` env var). An old `config.json` is auto-migrated to `config.ini` on first start (the legacy file is renamed to `config.json.bak`).
+
+The bot keeps the whole flat config on `bot.config`. Cogs that need live values (fun.py scraper knobs, for example) read from `bot.config` on every use so `!reloadconfig` takes effect without a cog reload. Values captured at `__init__` time (e.g. votes.py webhook settings) still need `!reload votes` to change.
+
+Live editing:
+* `!setloglevel <level>` — changes the log level and persists to `config.ini`.
+* `!reloadconfig` — re-reads `config.ini` from disk.
+* `!config show|get|set|unset …` — DM-only inspect/edit. Secrets (token, API keys, webhook secret) are always masked when echoed back.
+
+Logs rotate at 50 KB, 5 backups, written to `logs/nanobot.log`.
 
 ### CI
 
