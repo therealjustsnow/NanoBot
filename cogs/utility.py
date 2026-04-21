@@ -599,7 +599,10 @@ class Utility(commands.Cog):
                 "or a page number to jump directly to that page."
             ),
             "args": [
-                ("command", "Command name, category keyword, or page number (optional)"),
+                (
+                    "command",
+                    "Command name, category keyword, or page number (optional)",
+                ),
             ],
             "perms": "None",
             "example": "!help\n!help ban\n!help banning\n!help 3",
@@ -623,7 +626,9 @@ class Utility(commands.Cog):
                 )
                 page_num = int(key)
                 if 1 <= page_num <= len(pages):
-                    view = HelpView(pages=pages, author=ctx.author, start_index=page_num - 1)
+                    view = HelpView(
+                        pages=pages, author=ctx.author, start_index=page_num - 1
+                    )
                     msg = await ctx.reply(
                         embed=pages[page_num - 1], view=view, ephemeral=True
                     )
