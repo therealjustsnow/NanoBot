@@ -315,6 +315,23 @@ class Welcome(commands.Cog):
         name="welcome",
         description="Configure or view welcome message settings.",
         invoke_without_command=True,
+        extras={
+            "category": "👋 Welcome & Leave",
+            "short": "Configure join welcome messages",
+            "usage": "welcome [set|test]",
+            "desc": (
+                "No args: show current welcome config.\n"
+                "`welcome set` — configure channel, message, image, color, and more.\n"
+                "`welcome test` — preview the welcome message as if you just joined.\n\n"
+                "Template variables: `{user}`, `{mention}`, `{server}`, `{count}`"
+            ),
+            "args": [
+                ("set [options]", "Configure the welcome message (see /welcome set)"),
+                ("test", "Preview the welcome message"),
+            ],
+            "perms": "Administrator",
+            "example": "/welcome set enabled:True channel:#welcome\n/welcome test",
+        },
     )
     async def welcome(self, ctx: commands.Context):
         await self._show_config(ctx, "welcome")
@@ -387,6 +404,23 @@ class Welcome(commands.Cog):
         name="leave",
         description="Configure or view leave message settings.",
         invoke_without_command=True,
+        extras={
+            "category": "👋 Welcome & Leave",
+            "short": "Configure member leave messages",
+            "usage": "leave [set|test]",
+            "desc": (
+                "No args: show current leave config.\n"
+                "`leave set` — configure channel, message, image, color, and more.\n"
+                "`leave test` — preview the leave message.\n\n"
+                "Template variables: `{user}`, `{mention}`, `{server}`, `{count}`"
+            ),
+            "args": [
+                ("set [options]", "Configure the leave message (see /leave set)"),
+                ("test", "Preview the leave message"),
+            ],
+            "perms": "Administrator",
+            "example": "/leave set enabled:True channel:#goodbye\n/leave test",
+        },
     )
     async def leave(self, ctx: commands.Context):
         await self._show_config(ctx, "leave")
