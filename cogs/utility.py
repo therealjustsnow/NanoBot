@@ -401,6 +401,9 @@ _CATEGORY_ALIASES: dict[str, str] = {
     "owner": "🔧 Owner / Admin",
     "reload": "🔧 Owner / Admin",
     "update": "🔧 Owner / Admin",
+    # 📦 Uncategorized
+    "uncategorized": "📦 Uncategorized",
+    "other": "📦 Uncategorized",
 }
 
 
@@ -455,7 +458,8 @@ def _build_help_pages(
             f"Prefix: `{prefix}` · Slash `/` · @{bot_name}\n"
             "Most mod commands default to the **last message sender** if no user is given.\n\n"
             f"`{prefix}help <command>` — full detail on any command\n"
-            f"`{prefix}help <category>` — browse a category (e.g. `{prefix}help banning`)\n\n"
+            f"`{prefix}help <category>` — browse a category (e.g. `{prefix}help banning`)\n"
+            f"`{prefix}help <number>` — jump to a page (e.g. `{prefix}help 3`)\n\n"
             + "\n".join(cover_lines)
         ),
         color=h.BLUE,
@@ -496,11 +500,16 @@ class HelpView(discord.ui.View):
     Buttons are automatically disabled after 120 s of inactivity.
     """
 
-    def __init__(self, pages: list[discord.Embed], author: discord.Member):
+    def __init__(
+        self,
+        pages: list[discord.Embed],
+        author: discord.Member,
+        start_index: int = 0,
+    ):
         super().__init__(timeout=120)
         self.pages = pages
         self.author = author
-        self.index = 0
+        self.index = start_index
         self.message: discord.Message | None = None
         self._update_buttons()
 
@@ -580,9 +589,24 @@ class Utility(commands.Cog):
     @commands.hybrid_command(
         name="help",
         description="Command reference. Use /help <command> for detail, or /help <category> to browse.",
+        extras={
+            "category": "⚙️ Config & Info",
+            "short": "Browse all commands or get detail on one",
+            "usage": "help [command|category|page]",
+            "desc": (
+                "Overview of all commands. Pass a command name for full details, "
+                "a category keyword (e.g. banning, tags) to browse a section, "
+                "or a page number to jump directly to that page."
+            ),
+            "args": [
+                ("command", "Command name, category keyword, or page number (optional)"),
+            ],
+            "perms": "None",
+            "example": "!help\n!help ban\n!help banning\n!help 3",
+        },
     )
     @app_commands.describe(
-        command="Command name for detail, or a category keyword (e.g. banning, tags, channel)"
+        command="Command name for detail, category keyword (e.g. banning, tags), or page number"
     )
     @commands.cooldown(1, 5, commands.BucketType.user)
     async def help(self, ctx: commands.Context, command: Optional[str] = None):
@@ -591,6 +615,26 @@ class Utility(commands.Cog):
 
         if command:
             key = command.lower().strip()
+
+            # ── 0. Page number jump ────────────────────────────────────────────
+            if key.isdigit():
+                pages = _build_help_pages(
+                    self.bot, prefix, self.bot.user.display_name, is_owner=is_owner
+                )
+                page_num = int(key)
+                if 1 <= page_num <= len(pages):
+                    view = HelpView(pages=pages, author=ctx.author, start_index=page_num - 1)
+                    msg = await ctx.reply(
+                        embed=pages[page_num - 1], view=view, ephemeral=True
+                    )
+                    view.message = msg
+                    return
+                return await ctx.reply(
+                    embed=h.err(
+                        f"Page **{page_num}** doesn't exist. Valid range: **1–{len(pages)}**."
+                    ),
+                    ephemeral=True,
+                )
 
             # ── 1. Exact command / alias lookup ───────────────────────────────
             flat = _flat_lookup(self.bot)
