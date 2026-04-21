@@ -249,10 +249,11 @@ class NanoBot(commands.Bot):
         log.info(f"➖ Left server: {guild.name} ({guild.id})")
 
     async def on_message(self, message: discord.Message):
-        if message.author.bot or not message.guild:
+        if message.author.bot:
             return
 
-        self.last_senders[message.channel.id] = message.author
+        if message.guild:
+            self.last_senders[message.channel.id] = message.author
 
         ctx = await self.get_context(message)
 
@@ -260,7 +261,7 @@ class NanoBot(commands.Bot):
             await self.invoke(ctx)
             return
 
-        if ctx.prefix is not None:
+        if message.guild and ctx.prefix is not None:
             after = message.content[len(ctx.prefix) :].strip()
             if after:
                 await _try_tag_shortcut(message, self, after.lower())

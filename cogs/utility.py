@@ -173,6 +173,12 @@ for _entry in _SLASH_GROUPS:
         _SLASH_GROUP_LOOKUP[_alias] = _entry
 
 
+def _is_admin_cog(cmd) -> bool:
+    """Return True if the command belongs to the Admin cog (owner-only)."""
+    cog = getattr(cmd, "cog", None)
+    return cog is not None and type(cog).__name__ == "Admin"
+
+
 def _collect_categories(
     bot: commands.Bot, *, is_owner: bool = False
 ) -> dict[str, list[dict]]:
@@ -181,7 +187,7 @@ def _collect_categories(
 
     Returns an ordered dict: {category_name: [cmd_entry, ...]}
       name, aliases, category, short, usage, desc, args, perms, example
-    Commands without extras land in '📦 Uncategorized'.
+    Commands without extras and not in Admin cog land in '📦 Uncategorized'.
     Owner categories are hidden from non-owners.
     Order follows _CATEGORY_ORDER; unknown categories append before Owner/Admin.
     """
@@ -195,7 +201,11 @@ def _collect_categories(
         seen.add(cmd.name)
 
         extras = getattr(cmd, "extras", None) or {}
-        cat = extras.get("category", "📦 Uncategorized")
+        in_admin = _is_admin_cog(cmd)
+        cat = extras.get(
+            "category", "🔧 Owner / Admin" if in_admin else "📦 Uncategorized"
+        )
+        perms = extras.get("perms", "Bot Owner" if in_admin else "None")
 
         if cat in _OWNER_CATEGORIES and not is_owner:
             continue
@@ -206,9 +216,14 @@ def _collect_categories(
             "category": cat,
             "short": extras.get("short", cmd.description or "—"),
             "usage": extras.get("usage", cmd.name),
-            "desc": extras.get("desc", cmd.description or "No description available."),
+            "desc": extras.get(
+                "desc",
+                getattr(cmd, "help", None)
+                or cmd.description
+                or "No description available.",
+            ),
             "args": extras.get("args", []),
-            "perms": extras.get("perms", "None"),
+            "perms": perms,
             "example": extras.get("example", f"!{cmd.name}"),
         }
         by_cat.setdefault(cat, []).append(entry)
@@ -242,25 +257,32 @@ def _collect_categories(
 
 def _flat_lookup(bot: commands.Bot) -> dict[str, dict]:
     """
-    Return {name: entry, alias: entry} for all commands that have extras.
-    Used by !help <cmd> for detail lookups.
+    Return {name: entry, alias: entry} for ALL commands.
+    Commands without extras get best-effort fallback values.
+    Admin-cog commands get perms='Bot Owner' so the owner check hides them.
     Includes slash group entries from _SLASH_GROUP_LOOKUP.
     """
     out: dict[str, dict] = {}
 
     for cmd in bot.commands:
         extras = getattr(cmd, "extras", None) or {}
-        if not extras.get("category"):
-            continue  # skip commands without extras
+        in_admin = _is_admin_cog(cmd)
+        cat = extras.get("category", "🔧 Owner / Admin" if in_admin else "")
+        perms = extras.get("perms", "Bot Owner" if in_admin else "None")
         entry = {
             "name": cmd.name,
             "aliases": list(cmd.aliases) if hasattr(cmd, "aliases") else [],
-            "category": extras.get("category", ""),
-            "short": extras.get("short", ""),
+            "category": cat,
+            "short": extras.get("short", cmd.description or "—"),
             "usage": extras.get("usage", cmd.name),
-            "desc": extras.get("desc", ""),
+            "desc": extras.get(
+                "desc",
+                getattr(cmd, "help", None)
+                or cmd.description
+                or "No description available.",
+            ),
             "args": extras.get("args", []),
-            "perms": extras.get("perms", "None"),
+            "perms": perms,
             "example": extras.get("example", f"!{cmd.name}"),
         }
         out[cmd.name] = entry
