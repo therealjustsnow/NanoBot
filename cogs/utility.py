@@ -202,7 +202,9 @@ def _collect_categories(
 
         extras = getattr(cmd, "extras", None) or {}
         in_admin = _is_admin_cog(cmd)
-        cat = extras.get("category", "🔧 Owner / Admin" if in_admin else "📦 Uncategorized")
+        cat = extras.get(
+            "category", "🔧 Owner / Admin" if in_admin else "📦 Uncategorized"
+        )
         perms = extras.get("perms", "Bot Owner" if in_admin else "None")
 
         if cat in _OWNER_CATEGORIES and not is_owner:
@@ -216,7 +218,9 @@ def _collect_categories(
             "usage": extras.get("usage", cmd.name),
             "desc": extras.get(
                 "desc",
-                getattr(cmd, "help", None) or cmd.description or "No description available.",
+                getattr(cmd, "help", None)
+                or cmd.description
+                or "No description available.",
             ),
             "args": extras.get("args", []),
             "perms": perms,
@@ -273,7 +277,9 @@ def _flat_lookup(bot: commands.Bot) -> dict[str, dict]:
             "usage": extras.get("usage", cmd.name),
             "desc": extras.get(
                 "desc",
-                getattr(cmd, "help", None) or cmd.description or "No description available.",
+                getattr(cmd, "help", None)
+                or cmd.description
+                or "No description available.",
             ),
             "args": extras.get("args", []),
             "perms": perms,
