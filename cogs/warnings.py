@@ -306,7 +306,7 @@ class Warnings(commands.Cog):
     @commands.command(
         name="warn",
         extras={
-            "category": "\U0001f6e1\ufe0f Moderation",
+            "category": "⚠️ Warnings",
             "short": "Warn a user",
             "usage": "warn <user> [reason]",
             "desc": "Issue a warning to a user. Configurable auto-kick/ban thresholds apply.",
@@ -341,7 +341,7 @@ class Warnings(commands.Cog):
     @commands.command(
         name="warnings",
         extras={
-            "category": "\U0001f6e1\ufe0f Moderation",
+            "category": "⚠️ Warnings",
             "short": "View warnings for a user",
             "usage": "warnings <user>",
             "desc": "View all warnings for a user on this server.",
@@ -358,7 +358,7 @@ class Warnings(commands.Cog):
     @commands.command(
         name="clearwarnings",
         extras={
-            "category": "\U0001f6e1\ufe0f Moderation",
+            "category": "⚠️ Warnings",
             "short": "Clear all warnings for a user",
             "usage": "clearwarnings <user>",
             "desc": "Wipe all warnings for a user. Admin only.",
@@ -375,7 +375,7 @@ class Warnings(commands.Cog):
     @commands.command(
         name="warnconfig",
         extras={
-            "category": "\U0001f6e1\ufe0f Moderation",
+            "category": "⚠️ Warnings",
             "short": "Configure warning auto-actions",
             "usage": "warnconfig [kick_at] [ban_at] [dm_user]",
             "desc": "Configure auto-kick/ban thresholds and DM behavior.",
