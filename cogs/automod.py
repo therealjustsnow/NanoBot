@@ -3,13 +3,14 @@ cogs/automod.py — v1.1.0
 Passive auto-moderation — watches every message and enforces configurable rules.
 
 Rules (all individually togglable, each with its own action):
-  spam      — X messages from the same user within Y seconds
-  invites   — Discord invite links (discord.gg / discord.com/invite)
-  links     — Any external URL
-  caps      — Messages above a configurable % uppercase (min length guard)
-  mentions  — Too many @mentions in a single message
-  badwords  — Configurable per-server word list
-  regex     — Configurable per-server regex pattern list
+  spam            — X messages from the same user within Y seconds
+  invites         — Discord invite links (discord.gg / discord.com/invite)
+  links           — Any external URL
+  caps            — Messages above a configurable % uppercase (min length guard)
+  mentions        — Too many @mentions in a single message
+  badwords        — Configurable per-server word list
+  regex           — Configurable per-server regex pattern list
+  attachment_word — Word from a list AND N+ attachments in the same message
 
 Actions (per rule):
   delete    — Silently delete the message
@@ -19,21 +20,25 @@ Actions (per rule):
 Exempt channels and roles are ignored for all rules.
 
 Commands (all /automod, require Manage Server):
-  /automod status            — Full config overview
-  /automod enable            — Master on switch
-  /automod disable           — Master off switch
-  /automod rule              — Toggle a rule on/off and set its action
-  /automod spam              — Set spam detection count + time window
-  /automod caps              — Set caps % threshold and minimum message length
-  /automod mentions          — Set per-message mention limit
-  /automod badword add       — Add a word to the filter
-  /automod badword remove    — Remove a word from the filter
-  /automod badword list      — List all filtered words (ephemeral)
-  /automod regex add         — Add a regex pattern to the filter
-  /automod regex remove      — Remove a regex pattern (autocomplete by label)
-  /automod regex list        — List all patterns with IDs and labels (ephemeral)
-  /automod regex test        — Test a string against all active patterns (ephemeral)
-  /automod ignore            — Add / remove exempt channels or roles
+  /automod status               — Full config overview
+  /automod enable               — Master on switch
+  /automod disable              — Master off switch
+  /automod rule                 — Toggle a rule on/off and set its action
+  /automod spam                 — Set spam detection count + time window
+  /automod caps                 — Set caps % threshold and minimum message length
+  /automod mentions             — Set per-message mention limit
+  /automod attachments          — Set min attachment count for the Word + Attachment rule
+  /automod badword add          — Add a word to the filter
+  /automod badword remove       — Remove a word from the filter
+  /automod badword list         — List all filtered words (ephemeral)
+  /automod attachword add       — Add a word to the attachment-word filter
+  /automod attachword remove    — Remove a word from the attachment-word filter
+  /automod attachword list      — List all attachment-word filter words (ephemeral)
+  /automod regex add            — Add a regex pattern to the filter
+  /automod regex remove         — Remove a regex pattern (autocomplete by label)
+  /automod regex list           — List all patterns with IDs and labels (ephemeral)
+  /automod regex test           — Test a string against all active patterns (ephemeral)
+  /automod ignore               — Add / remove exempt channels or roles
 """
 
 import asyncio
@@ -65,6 +70,7 @@ RULE_LABELS: dict[str, str] = {
     "mentions": "📣 Mass Mentions",
     "badwords": "🤬 Bad Words",
     "regex": "🔍 Regex Filter",
+    "attachment_word": "📎 Word + Attachment",
 }
 
 ACTION_LABELS: dict[str, str] = {
@@ -334,6 +340,9 @@ class AutoMod(commands.Cog):
             if cfg:
                 cfg["_badwords"] = await db.get_automod_badwords(guild_id)
                 cfg["_regex_patterns"] = await db.get_automod_regex_patterns(guild_id)
+                cfg["_attachment_words"] = await db.get_automod_attachment_words(
+                    guild_id
+                )
                 self._cache[guild_id] = cfg
         return self._cache.get(guild_id)
 
@@ -417,6 +426,10 @@ class AutoMod(commands.Cog):
                 elif key == "regex":
                     patterns = await db.get_automod_regex_patterns(interaction.guild_id)
                     extra = f" · {len(patterns)} pattern(s)"
+                elif key == "attachment_word":
+                    words = await db.get_automod_attachment_words(interaction.guild_id)
+                    min_att = r.get("min_attachments", 1)
+                    extra = f" · {len(words)} word(s), ≥{min_att} attachment(s)"
                 lines.append(f"✅ **{label}** — {action}{extra}")
             else:
                 lines.append(f"❌ ~~{label}~~")
@@ -661,6 +674,116 @@ class AutoMod(commands.Cog):
         listed = "\n".join(f"• `{w}`" for w in sorted(words))
         e = h.embed(
             "🤬 Bad Word Filter", f"**{len(words)} word(s):**\n\n{listed}", h.BLUE
+        )
+        await interaction.response.send_message(embed=e, ephemeral=True)
+
+    # ── /automod attachments ───────────────────────────────────────────────────
+    @automod_group.command(
+        name="attachments",
+        description="Set the minimum attachment count that triggers the Word + Attachment rule.",
+    )
+    @app_commands.describe(
+        min_attachments="Trigger if message has this many attachments or more (e.g. 4)"
+    )
+    @has_admin_perms()
+    async def am_attachments(
+        self,
+        interaction: discord.Interaction,
+        min_attachments: app_commands.Range[int, 1, 20] = 1,
+    ):
+        await db.set_automod_rule(
+            interaction.guild_id, "attachment_word", min_attachments=min_attachments
+        )
+        self._invalidate(interaction.guild_id)
+        await interaction.response.send_message(
+            embed=h.ok(
+                f"Word + Attachment rule triggers when a message contains a flagged word "
+                f"and has **{min_attachments}+** attachment(s).",
+                "📎 Attachment Threshold Updated",
+            ),
+            ephemeral=True,
+        )
+
+    # ── /automod attachword subgroup ───────────────────────────────────────────
+    attachword_group = app_commands.Group(
+        name="attachword",
+        description="Manage the word list for the Word + Attachment rule.",
+        parent=automod_group,
+    )
+
+    @attachword_group.command(
+        name="add", description="Add a word to the attachment-word filter."
+    )
+    @app_commands.describe(
+        word="Word or phrase to flag when sent with attachments (case-insensitive)"
+    )
+    @has_admin_perms()
+    async def aw_add(self, interaction: discord.Interaction, word: str):
+        word = word.lower().strip()
+        if not word:
+            await interaction.response.send_message(
+                embed=h.err("Word cannot be empty."), ephemeral=True
+            )
+            return
+        added = await db.add_automod_attachment_word(interaction.guild_id, word)
+        self._invalidate(interaction.guild_id)
+        if added:
+            await interaction.response.send_message(
+                embed=h.ok(
+                    f"Added `{word}` to the attachment-word filter.", "📎 Word Added"
+                ),
+                ephemeral=True,
+            )
+        else:
+            await interaction.response.send_message(
+                embed=h.warn(f"`{word}` is already in the filter.", "Already Exists"),
+                ephemeral=True,
+            )
+
+    @attachword_group.command(
+        name="remove", description="Remove a word from the attachment-word filter."
+    )
+    @app_commands.describe(word="Word or phrase to remove")
+    @has_admin_perms()
+    async def aw_remove(self, interaction: discord.Interaction, word: str):
+        word = word.lower().strip()
+        removed = await db.remove_automod_attachment_word(interaction.guild_id, word)
+        self._invalidate(interaction.guild_id)
+        if removed:
+            await interaction.response.send_message(
+                embed=h.ok(
+                    f"Removed `{word}` from the attachment-word filter.",
+                    "📎 Word Removed",
+                ),
+                ephemeral=True,
+            )
+        else:
+            await interaction.response.send_message(
+                embed=h.err(f"`{word}` was not in the filter."),
+                ephemeral=True,
+            )
+
+    @attachword_group.command(
+        name="list",
+        description="List all words in the attachment-word filter (shown only to you).",
+    )
+    @has_admin_perms()
+    async def aw_list(self, interaction: discord.Interaction):
+        words = await db.get_automod_attachment_words(interaction.guild_id)
+        if not words:
+            await interaction.response.send_message(
+                embed=h.info(
+                    "The attachment-word filter is empty.\nAdd words with `/automod attachword add`.",
+                    "📎 Attachment Words",
+                ),
+                ephemeral=True,
+            )
+            return
+        listed = "\n".join(f"• `{w}`" for w in sorted(words))
+        e = h.embed(
+            "📎 Attachment Word Filter",
+            f"**{len(words)} word(s):**\n\n{listed}",
+            h.BLUE,
         )
         await interaction.response.send_message(embed=e, ephemeral=True)
 
@@ -989,6 +1112,21 @@ class AutoMod(commands.Cog):
                     f"Matched: {match}",
                 )
                 return
+
+        # ── Word + Attachment ─────────────────────────────────────────────────
+        r = rules.get("attachment_word", {})
+        if r.get("enabled"):
+            min_att = r.get("min_attachments", 1)
+            if len(message.attachments) >= min_att:
+                match = _has_badword(content, cfg.get("_attachment_words", []))
+                if match:
+                    await _execute_action(
+                        message,
+                        r.get("action", "delete"),
+                        "attachment_word",
+                        f"Flagged word with {len(message.attachments)} attachment(s)",
+                    )
+                    return
 
 
 # ── Setup ──────────────────────────────────────────────────────────────────────
