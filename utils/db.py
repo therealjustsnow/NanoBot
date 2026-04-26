@@ -1461,6 +1461,13 @@ async def _ensure_automod_tables() -> None:
             UNIQUE(guild_id, pattern)
         );
         CREATE INDEX IF NOT EXISTS automod_regex_guild ON automod_regex_patterns (guild_id);
+
+        CREATE TABLE IF NOT EXISTS automod_attachment_words (
+            guild_id  TEXT NOT NULL,
+            word      TEXT NOT NULL,
+            PRIMARY KEY (guild_id, word)
+        );
+        CREATE INDEX IF NOT EXISTS aaw_guild ON automod_attachment_words (guild_id);
     """)
     await _conn().commit()
 
@@ -1642,3 +1649,37 @@ async def get_automod_regex_patterns(guild_id: int) -> list[dict]:
     ) as cur:
         rows = await cur.fetchall()
     return [{"id": r["id"], "pattern": r["pattern"], "label": r["label"]} for r in rows]
+
+
+async def add_automod_attachment_word(guild_id: int, word: str) -> bool:
+    """Add a word to the attachment-word filter. Returns False if already present."""
+    try:
+        await _conn().execute(
+            "INSERT INTO automod_attachment_words (guild_id, word) VALUES (?, ?)",
+            (str(guild_id), word),
+        )
+        await _conn().commit()
+        return True
+    except aiosqlite.IntegrityError:
+        return False
+
+
+async def remove_automod_attachment_word(guild_id: int, word: str) -> bool:
+    """Remove a word from the attachment-word filter. Returns False if not found."""
+    async with _conn().execute(
+        "DELETE FROM automod_attachment_words WHERE guild_id=? AND word=?",
+        (str(guild_id), word),
+    ) as cur:
+        changed = cur.rowcount
+    await _conn().commit()
+    return changed > 0
+
+
+async def get_automod_attachment_words(guild_id: int) -> list[str]:
+    """Return all attachment-trigger words for a guild, sorted alphabetically."""
+    async with _conn().execute(
+        "SELECT word FROM automod_attachment_words WHERE guild_id=? ORDER BY word ASC",
+        (str(guild_id),),
+    ) as cur:
+        rows = await cur.fetchall()
+    return [r["word"] for r in rows]
