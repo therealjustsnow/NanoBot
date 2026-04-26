@@ -461,10 +461,12 @@ def _build_help_pages(
             f"`{prefix}help <category>` — browse a category (e.g. `{prefix}help banning`)\n"
             f"`{prefix}help <number>` — jump to a page (e.g. `{prefix}help 3`)\n\n"
             + "\n".join(cover_lines)
+            + "\n\n[Support Server](https://discord.gg/M7fjxNg72s)  ·  [Documentation](https://snowbuilds.dev/nanobot-docs/)"
         ),
         color=h.BLUE,
     )
-    cover.set_footer(text=footer(1))
+    cover.set_footer(text="NanoBot")
+    cover.timestamp = discord.utils.utcnow()
     pages.append(cover)
 
     # One page per category
