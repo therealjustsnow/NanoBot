@@ -340,7 +340,9 @@ class AutoMod(commands.Cog):
             if cfg:
                 cfg["_badwords"] = await db.get_automod_badwords(guild_id)
                 cfg["_regex_patterns"] = await db.get_automod_regex_patterns(guild_id)
-                cfg["_attachment_words"] = await db.get_automod_attachment_words(guild_id)
+                cfg["_attachment_words"] = await db.get_automod_attachment_words(
+                    guild_id
+                )
                 self._cache[guild_id] = cfg
         return self._cache.get(guild_id)
 
@@ -709,8 +711,12 @@ class AutoMod(commands.Cog):
         parent=automod_group,
     )
 
-    @attachword_group.command(name="add", description="Add a word to the attachment-word filter.")
-    @app_commands.describe(word="Word or phrase to flag when sent with attachments (case-insensitive)")
+    @attachword_group.command(
+        name="add", description="Add a word to the attachment-word filter."
+    )
+    @app_commands.describe(
+        word="Word or phrase to flag when sent with attachments (case-insensitive)"
+    )
     @has_admin_perms()
     async def aw_add(self, interaction: discord.Interaction, word: str):
         word = word.lower().strip()
@@ -734,7 +740,9 @@ class AutoMod(commands.Cog):
                 ephemeral=True,
             )
 
-    @attachword_group.command(name="remove", description="Remove a word from the attachment-word filter.")
+    @attachword_group.command(
+        name="remove", description="Remove a word from the attachment-word filter."
+    )
     @app_commands.describe(word="Word or phrase to remove")
     @has_admin_perms()
     async def aw_remove(self, interaction: discord.Interaction, word: str):
@@ -744,7 +752,8 @@ class AutoMod(commands.Cog):
         if removed:
             await interaction.response.send_message(
                 embed=h.ok(
-                    f"Removed `{word}` from the attachment-word filter.", "📎 Word Removed"
+                    f"Removed `{word}` from the attachment-word filter.",
+                    "📎 Word Removed",
                 ),
                 ephemeral=True,
             )
@@ -754,7 +763,10 @@ class AutoMod(commands.Cog):
                 ephemeral=True,
             )
 
-    @attachword_group.command(name="list", description="List all words in the attachment-word filter (shown only to you).")
+    @attachword_group.command(
+        name="list",
+        description="List all words in the attachment-word filter (shown only to you).",
+    )
     @has_admin_perms()
     async def aw_list(self, interaction: discord.Interaction):
         words = await db.get_automod_attachment_words(interaction.guild_id)
