@@ -408,7 +408,9 @@ class AutoMod(commands.Cog):
         status = "🟢 Enabled" if cfg["enabled"] else "🔴 Disabled"
         rules = cfg["rules"]
         tmo_secs = cfg.get("timeout_seconds", TIMEOUT_SECONDS)
-        lines = [f"**Status:** {status} · **Timeout duration:** {h.fmt_duration(tmo_secs)}\n"]
+        lines = [
+            f"**Status:** {status} · **Timeout duration:** {h.fmt_duration(tmo_secs)}\n"
+        ]
 
         for key, label in RULE_LABELS.items():
             r = rules.get(key, {})
