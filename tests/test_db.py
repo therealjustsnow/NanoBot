@@ -668,6 +668,20 @@ async def test_set_automod_rule_merges():
     assert rule["enabled"] is True
 
 
+async def test_set_automod_rule_stores_dm_message():
+    await db.set_automod_rule(
+        1,
+        "invites",
+        enabled=True,
+        action="softban",
+        dm_message="No invite links here.",
+    )
+    cfg = await db.get_automod_config(1)
+    rule = cfg["rules"]["invites"]
+    assert rule["action"] == "softban"
+    assert rule["dm_message"] == "No invite links here."
+
+
 async def test_add_and_remove_automod_badword():
     assert await db.add_automod_badword(1, "badword") is True
     assert await db.add_automod_badword(1, "badword") is False

@@ -1,5 +1,5 @@
 """
-cogs/automod.py — v1.1.0
+cogs/automod.py — v1.2.0
 Passive auto-moderation — watches every message and enforces configurable rules.
 
 Rules (all individually togglable, each with its own action):
@@ -16,6 +16,8 @@ Actions (per rule):
   delete    — Silently delete the message
   warn      — Delete + add a formal warning (triggers warnconfig auto-kick/ban)
   timeout   — Delete + 10-minute Discord timeout
+  kick      — Delete + kick member (optional DM first)
+  softban   — Delete + ban/unban member (optional DM first; DM is sent before ban)
 
 Exempt channels and roles are ignored for all rules.
 
@@ -23,7 +25,7 @@ Commands (all /automod, require Manage Server):
   /automod status               — Full config overview
   /automod enable               — Master on switch
   /automod disable              — Master off switch
-  /automod rule                 — Toggle a rule on/off and set its action
+  /automod rule                 — Toggle a rule on/off, set its action, and optional action DM
   /automod spam                 — Set spam detection count + time window
   /automod caps                 — Set caps % threshold and minimum message length
   /automod mentions             — Set per-message mention limit
@@ -78,6 +80,8 @@ ACTION_LABELS: dict[str, str] = {
     "delete": "🗑️ Delete",
     "warn": "⚠️ Delete + Warn",
     "timeout": "🔇 Delete + Timeout",
+    "kick": "👢 Delete + Kick",
+    "softban": "🔨 Delete + Softban",
 }
 
 # Pre-compiled regex patterns
@@ -186,6 +190,7 @@ async def _execute_action(
     rule: str,
     detail: str,
     timeout_seconds: int = TIMEOUT_SECONDS,
+    dm_message: Optional[str] = None,
 ) -> None:
     """
     Delete the offending message and optionally warn/timeout the author.
@@ -263,6 +268,41 @@ async def _execute_action(
             pass
         except Exception as exc:
             log.error(f"AutoMod timeout failed: {exc}", exc_info=exc)
+        return
+
+    if action == "kick":
+        if dm_message:
+            try:
+                await member.send(dm_message)
+            except (discord.Forbidden, discord.HTTPException):
+                pass
+        try:
+            await guild.kick(member, reason=reason_text)
+            log.info(f"AutoMod kicked {member} ({member.id}) in {guild} — {rule}")
+        except discord.Forbidden:
+            pass
+        except Exception as exc:
+            log.error(f"AutoMod kick failed: {exc}", exc_info=exc)
+        return
+
+    if action == "softban":
+        if dm_message:
+            try:
+                await member.send(dm_message)
+            except (discord.Forbidden, discord.HTTPException):
+                pass
+        try:
+            await guild.ban(
+                member,
+                reason=f"{reason_text} (softban)",
+                delete_message_days=1,
+            )
+            await guild.unban(member, reason=f"{reason_text} (softban release)")
+            log.info(f"AutoMod softbanned {member} ({member.id}) in {guild} — {rule}")
+        except discord.Forbidden:
+            pass
+        except Exception as exc:
+            log.error(f"AutoMod softban failed: {exc}", exc_info=exc)
 
 
 async def _soft_delete_after(message: discord.Message, delay: float) -> None:
@@ -435,6 +475,8 @@ class AutoMod(commands.Cog):
                     words = await db.get_automod_attachment_words(interaction.guild_id)
                     min_att = r.get("min_attachments", 1)
                     extra = f" · {len(words)} word(s), ≥{min_att} attachment(s)"
+                if r.get("action") in ("kick", "softban") and r.get("dm_message"):
+                    extra += " · DM before action"
                 lines.append(f"✅ **{label}** — {action}{extra}")
             else:
                 lines.append(f"❌ ~~{label}~~")
@@ -489,6 +531,7 @@ class AutoMod(commands.Cog):
         rule="Which rule to configure",
         enabled="Turn this rule on or off",
         action="What to do when the rule triggers",
+        dm_message="Optional DM sent before kick/softban actions",
     )
     @app_commands.autocomplete(rule=_rule_autocomplete, action=_action_autocomplete)
     @has_admin_perms()
@@ -498,6 +541,7 @@ class AutoMod(commands.Cog):
         rule: str,
         enabled: bool,
         action: str = "delete",
+        dm_message: Optional[str] = None,
     ):
         if rule not in RULE_LABELS:
             await interaction.response.send_message(
@@ -516,16 +560,22 @@ class AutoMod(commands.Cog):
             )
             return
 
-        await db.set_automod_rule(
-            interaction.guild_id, rule, enabled=enabled, action=action
-        )
+        updates = {"enabled": enabled, "action": action}
+        if dm_message is not None:
+            updates["dm_message"] = dm_message.strip() or None
+        await db.set_automod_rule(interaction.guild_id, rule, **updates)
         self._invalidate(interaction.guild_id)
 
         state = "enabled" if enabled else "disabled"
         a_label = ACTION_LABELS[action]
+        dm_note = (
+            "\nDM: enabled (sent before action)"
+            if action in ("kick", "softban") and updates.get("dm_message")
+            else ""
+        )
         await interaction.response.send_message(
             embed=h.ok(
-                f"{RULE_LABELS[rule]} rule **{state}**.\nAction: {a_label}",
+                f"{RULE_LABELS[rule]} rule **{state}**.\nAction: {a_label}{dm_note}",
                 "🛡️ Rule Updated",
             ),
             ephemeral=True,
@@ -1059,6 +1109,7 @@ class AutoMod(commands.Cog):
                     "spam",
                     f"{count} messages in {seconds}s",
                     tmo,
+                    r.get("dm_message"),
                 )
                 return  # one action per message
 
@@ -1080,6 +1131,7 @@ class AutoMod(commands.Cog):
                 "invites",
                 "Discord invite link",
                 tmo,
+                _invites_rule.get("dm_message"),
             )
             return
 
@@ -1091,6 +1143,7 @@ class AutoMod(commands.Cog):
                 "links",
                 "External URL",
                 tmo,
+                _links_rule.get("dm_message"),
             )
             return
 
@@ -1106,6 +1159,7 @@ class AutoMod(commands.Cog):
                     "caps",
                     f">{threshold}% uppercase",
                     tmo,
+                    r.get("dm_message"),
                 )
                 return
 
@@ -1121,6 +1175,7 @@ class AutoMod(commands.Cog):
                     "mentions",
                     f"{mention_count} mentions",
                     tmo,
+                    r.get("dm_message"),
                 )
                 return
 
@@ -1135,6 +1190,7 @@ class AutoMod(commands.Cog):
                     "badwords",
                     "Filtered word",
                     tmo,
+                    r.get("dm_message"),
                 )
                 return
 
@@ -1149,6 +1205,7 @@ class AutoMod(commands.Cog):
                     "regex",
                     f"Matched: {match}",
                     tmo,
+                    r.get("dm_message"),
                 )
                 return
 
@@ -1165,6 +1222,7 @@ class AutoMod(commands.Cog):
                         "attachment_word",
                         f"Flagged word with {len(message.attachments)} attachment(s)",
                         tmo,
+                        r.get("dm_message"),
                     )
                     return
 

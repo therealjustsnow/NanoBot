@@ -16,7 +16,10 @@ Tables
   unban_schedules   (key) PK  e.g. "guild_id:user_id"
   slow_schedules    (channel_id) PK
   reminders         (id) PK  — 6-char alphanumeric
+  automod_config    (guild_id) PK  — global automod settings/rules JSON
+  automod_badwords  (guild_id, word) PK
   automod_regex_patterns  (id) PK  — per-guild regex patterns for automod
+  automod_attachment_words (guild_id, word) PK
 """
 
 import json
@@ -1540,6 +1543,7 @@ async def set_automod_rule(guild_id: int, rule: str, **kwargs: Any) -> None:
     Examples
     --------
     set_automod_rule(gid, "spam", enabled=True, action="warn", count=5, seconds=5)
+    set_automod_rule(gid, "invites", action="softban", dm_message="Please read the server rules.")
     set_automod_rule(gid, "caps", percent=70, min_length=10)
     set_automod_rule(gid, "mentions", limit=5)
     """
