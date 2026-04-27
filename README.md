@@ -4,7 +4,7 @@
 
 NanoBot is a lightweight Discord moderation and utility bot built for one specific goal: help moderators on their phone get things done fast. No bloated dashboards. No confusing panels. Just clean, fast commands that work.
 
-**[💬 Support Server](https://discord.gg/M7fjxNg72s)** · **[GitHub](https://github.com/therealjustsnow/NanoBot)**
+**[💬 Support Server](https://discord.gg/M7fjxNg72s)** 
 
 ---
 
