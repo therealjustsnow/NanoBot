@@ -1443,7 +1443,8 @@ async def _ensure_automod_tables() -> None:
             enabled          INTEGER NOT NULL DEFAULT 0,
             rules            TEXT NOT NULL DEFAULT '{}',
             ignore_channels  TEXT NOT NULL DEFAULT '[]',
-            ignore_roles     TEXT NOT NULL DEFAULT '[]'
+            ignore_roles     TEXT NOT NULL DEFAULT '[]',
+            timeout_seconds  INTEGER NOT NULL DEFAULT 600
         );
 
         CREATE TABLE IF NOT EXISTS automod_badwords (
@@ -1470,6 +1471,13 @@ async def _ensure_automod_tables() -> None:
         CREATE INDEX IF NOT EXISTS aaw_guild ON automod_attachment_words (guild_id);
     """)
     await _conn().commit()
+    try:
+        await _conn().execute(
+            "ALTER TABLE automod_config ADD COLUMN timeout_seconds INTEGER NOT NULL DEFAULT 600"
+        )
+        await _conn().commit()
+    except Exception:
+        pass  # column already exists
 
 
 def _automod_row(row: aiosqlite.Row) -> dict:
@@ -1478,6 +1486,7 @@ def _automod_row(row: aiosqlite.Row) -> dict:
         "rules": json.loads(row["rules"]),
         "ignore_channels": json.loads(row["ignore_channels"]),
         "ignore_roles": json.loads(row["ignore_roles"]),
+        "timeout_seconds": row["timeout_seconds"],
     }
 
 
@@ -1508,6 +1517,17 @@ async def set_automod_enabled(guild_id: int, enabled: bool) -> None:
            VALUES (?, ?)
            ON CONFLICT(guild_id) DO UPDATE SET enabled=excluded.enabled""",
         (str(guild_id), 1 if enabled else 0),
+    )
+    await _conn().commit()
+
+
+async def set_automod_timeout_seconds(guild_id: int, seconds: int) -> None:
+    """Set the timeout duration (in seconds) applied by the automod timeout action."""
+    await _conn().execute(
+        """INSERT INTO automod_config (guild_id, timeout_seconds)
+           VALUES (?, ?)
+           ON CONFLICT(guild_id) DO UPDATE SET timeout_seconds=excluded.timeout_seconds""",
+        (str(guild_id), seconds),
     )
     await _conn().commit()
 

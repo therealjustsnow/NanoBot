@@ -27,6 +27,7 @@ Commands (all /automod, require Manage Server):
   /automod spam                 — Set spam detection count + time window
   /automod caps                 — Set caps % threshold and minimum message length
   /automod mentions             — Set per-message mention limit
+  /automod timeout              — Set the timeout duration for the "timeout" action (default 10 min)
   /automod attachments          — Set min attachment count for the Word + Attachment rule
   /automod badword add          — Add a word to the filter
   /automod badword remove       — Remove a word from the filter
@@ -184,6 +185,7 @@ async def _execute_action(
     action: str,
     rule: str,
     detail: str,
+    timeout_seconds: int = TIMEOUT_SECONDS,
 ) -> None:
     """
     Delete the offending message and optionally warn/timeout the author.
@@ -254,7 +256,7 @@ async def _execute_action(
 
     if action == "timeout":
         try:
-            until = discord.utils.utcnow() + timedelta(seconds=TIMEOUT_SECONDS)
+            until = discord.utils.utcnow() + timedelta(seconds=timeout_seconds)
             await member.timeout(until, reason=reason_text)
             log.info(f"AutoMod timed out {member} ({member.id}) in {guild} — {rule}")
         except discord.Forbidden:
@@ -405,7 +407,10 @@ class AutoMod(commands.Cog):
 
         status = "🟢 Enabled" if cfg["enabled"] else "🔴 Disabled"
         rules = cfg["rules"]
-        lines = [f"**Status:** {status}\n"]
+        tmo_secs = cfg.get("timeout_seconds", TIMEOUT_SECONDS)
+        lines = [
+            f"**Status:** {status} · **Timeout duration:** {h.fmt_duration(tmo_secs)}\n"
+        ]
 
         for key, label in RULE_LABELS.items():
             r = rules.get(key, {})
@@ -605,6 +610,32 @@ class AutoMod(commands.Cog):
             embed=h.ok(
                 f"Mass-mention rule: triggers at **{limit}+** mentions in one message.",
                 "📣 Mentions Config Updated",
+            ),
+            ephemeral=True,
+        )
+
+    # ── /automod timeout ──────────────────────────────────────────────────────
+    @automod_group.command(
+        name="timeout",
+        description="Set how long the timeout action lasts (default: 10 minutes).",
+    )
+    @app_commands.describe(
+        minutes="Timeout duration in minutes (1–10080, i.e. up to 7 days)"
+    )
+    @has_admin_perms()
+    async def am_timeout(
+        self,
+        interaction: discord.Interaction,
+        minutes: app_commands.Range[int, 1, 10080],
+    ):
+        seconds = minutes * 60
+        await db.set_automod_timeout_seconds(interaction.guild_id, seconds)
+        self._invalidate(interaction.guild_id)
+        duration = h.fmt_duration(seconds)
+        await interaction.response.send_message(
+            embed=h.ok(
+                f"AutoMod timeout action will now last **{duration}**.",
+                "🔇 Timeout Duration Updated",
             ),
             ephemeral=True,
         )
@@ -1013,6 +1044,7 @@ class AutoMod(commands.Cog):
 
         rules = cfg["rules"]
         content = message.content or ""
+        tmo = cfg.get("timeout_seconds", TIMEOUT_SECONDS)
 
         # ── Spam ──────────────────────────────────────────────────────────────
         r = rules.get("spam", {})
@@ -1026,6 +1058,7 @@ class AutoMod(commands.Cog):
                     r.get("action", "warn"),
                     "spam",
                     f"{count} messages in {seconds}s",
+                    tmo,
                 )
                 return  # one action per message
 
@@ -1046,6 +1079,7 @@ class AutoMod(commands.Cog):
                 _invites_rule.get("action", "delete"),
                 "invites",
                 "Discord invite link",
+                tmo,
             )
             return
 
@@ -1056,6 +1090,7 @@ class AutoMod(commands.Cog):
                 _links_rule.get("action", "delete"),
                 "links",
                 "External URL",
+                tmo,
             )
             return
 
@@ -1070,6 +1105,7 @@ class AutoMod(commands.Cog):
                     r.get("action", "warn"),
                     "caps",
                     f">{threshold}% uppercase",
+                    tmo,
                 )
                 return
 
@@ -1084,6 +1120,7 @@ class AutoMod(commands.Cog):
                     r.get("action", "warn"),
                     "mentions",
                     f"{mention_count} mentions",
+                    tmo,
                 )
                 return
 
@@ -1097,6 +1134,7 @@ class AutoMod(commands.Cog):
                     r.get("action", "delete"),
                     "badwords",
                     "Filtered word",
+                    tmo,
                 )
                 return
 
@@ -1110,6 +1148,7 @@ class AutoMod(commands.Cog):
                     r.get("action", "delete"),
                     "regex",
                     f"Matched: {match}",
+                    tmo,
                 )
                 return
 
@@ -1125,6 +1164,7 @@ class AutoMod(commands.Cog):
                         r.get("action", "delete"),
                         "attachment_word",
                         f"Flagged word with {len(message.attachments)} attachment(s)",
+                        tmo,
                     )
                     return
 
