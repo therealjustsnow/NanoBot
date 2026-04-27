@@ -20,7 +20,6 @@ from utils.config import (
     set_value,
 )
 
-
 # ── load ──────────────────────────────────────────────────────────────────────
 
 
@@ -76,7 +75,9 @@ def test_load_triggers_json_migration(tmp_path, monkeypatch):
 
     ini_path = str(tmp_path / "config.ini")
     json_path = str(tmp_path / "config.json")
-    (tmp_path / "config.json").write_text(json.dumps({"token": "tok_migrated"}), encoding="utf-8")
+    (tmp_path / "config.json").write_text(
+        json.dumps({"token": "tok_migrated"}), encoding="utf-8"
+    )
 
     monkeypatch.setattr(config_module, "LEGACY_JSON_PATH", json_path)
 
@@ -96,7 +97,12 @@ def test_save_creates_ini_file(tmp_path):
 
 def test_save_round_trip(tmp_path):
     p = tmp_path / "rt.ini"
-    cfg = {"token": "abc", "default_prefix": "n!", "vote_webhook_port": 5001, "log_http": True}
+    cfg = {
+        "token": "abc",
+        "default_prefix": "n!",
+        "vote_webhook_port": 5001,
+        "log_http": True,
+    }
     save(cfg, str(p))
     loaded = load(str(p))
     assert loaded["token"] == "abc"
@@ -149,7 +155,9 @@ def test_migrate_from_json_creates_ini_and_renames(tmp_path):
 def test_migrate_from_json_content_preserved(tmp_path):
     json_file = tmp_path / "config.json"
     ini_file = tmp_path / "config.ini"
-    json_file.write_text(json.dumps({"token": "my_tok", "default_prefix": ">>"}), encoding="utf-8")
+    json_file.write_text(
+        json.dumps({"token": "my_tok", "default_prefix": ">>"}), encoding="utf-8"
+    )
 
     migrate_from_json(str(json_file), str(ini_file))
     cfg = load(str(ini_file))

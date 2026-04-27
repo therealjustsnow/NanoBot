@@ -58,7 +58,9 @@ async def cache_database(monkeypatch):
 
 
 async def test_add_fml_stories_returns_count():
-    added = await cache_db.add_fml_stories(["Today I tripped. FML", "I lost my keys. FML"])
+    added = await cache_db.add_fml_stories(
+        ["Today I tripped. FML", "I lost my keys. FML"]
+    )
     assert added == 2
 
 
@@ -136,7 +138,9 @@ def _img(url="https://example.com/img.gif", source_url=None, artist=None):
 
 
 async def test_add_images_returns_count():
-    added = await cache_db.add_images("nekos", "hug", [_img("https://a.com/1.gif"), _img("https://a.com/2.gif")])
+    added = await cache_db.add_images(
+        "nekos", "hug", [_img("https://a.com/1.gif"), _img("https://a.com/2.gif")]
+    )
     assert added == 2
 
 
@@ -175,7 +179,9 @@ async def test_get_random_image_empty():
 
 
 async def test_get_random_image_returns_dict():
-    await cache_db.add_images("nekos", "hug", [_img("https://cdn.example.com/img.gif", artist="artist1")])
+    await cache_db.add_images(
+        "nekos", "hug", [_img("https://cdn.example.com/img.gif", artist="artist1")]
+    )
     result = await cache_db.get_random_image("nekos", "hug")
     assert result is not None
     assert result["url"] == "https://cdn.example.com/img.gif"
@@ -203,7 +209,9 @@ async def test_count_images_by_source():
 
 
 async def test_count_images_by_source_and_endpoint():
-    await cache_db.add_images("nekos", "hug", [_img("https://a.com/5.gif"), _img("https://a.com/6.gif")])
+    await cache_db.add_images(
+        "nekos", "hug", [_img("https://a.com/5.gif"), _img("https://a.com/6.gif")]
+    )
     await cache_db.add_images("nekos", "pat", [_img("https://a.com/7.gif")])
     assert await cache_db.count_images(source="nekos", endpoint="hug") == 2
 
@@ -214,7 +222,16 @@ async def test_get_stale_images():
     await cache_db._conn().execute(
         "INSERT INTO image_cache (hash, source, endpoint, url, source_url, artist, added_at, verified_at) "
         "VALUES (?,?,?,?,?,?,?,?)",
-        (h, "nekos", "hug", "https://old.example.com/stale.gif", None, None, old_time, old_time),
+        (
+            h,
+            "nekos",
+            "hug",
+            "https://old.example.com/stale.gif",
+            None,
+            None,
+            old_time,
+            old_time,
+        ),
     )
     await cache_db._conn().commit()
 
@@ -223,7 +240,9 @@ async def test_get_stale_images():
 
 
 async def test_get_stale_images_excludes_fresh():
-    await cache_db.add_images("nekos", "hug", [_img("https://fresh.example.com/img.gif")])
+    await cache_db.add_images(
+        "nekos", "hug", [_img("https://fresh.example.com/img.gif")]
+    )
     stale = await cache_db.get_stale_images(max_age_seconds=7 * 86400)
     assert not any(s["url"] == "https://fresh.example.com/img.gif" for s in stale)
 
@@ -241,7 +260,9 @@ async def test_mark_verified():
 
     before = time.time()
     await cache_db.mark_verified(h)
-    async with cache_db._conn().execute("SELECT verified_at FROM image_cache WHERE hash=?", (h,)) as cur:
+    async with cache_db._conn().execute(
+        "SELECT verified_at FROM image_cache WHERE hash=?", (h,)
+    ) as cur:
         row = await cur.fetchone()
     assert row["verified_at"] >= before
 
@@ -255,7 +276,9 @@ async def test_remove_image():
 
 
 async def test_get_image_stats():
-    await cache_db.add_images("nekos", "hug", [_img("https://s.com/1.gif"), _img("https://s.com/2.gif")])
+    await cache_db.add_images(
+        "nekos", "hug", [_img("https://s.com/1.gif"), _img("https://s.com/2.gif")]
+    )
     await cache_db.add_images("nekosia", "pat", [_img("https://s.com/3.gif")])
     stats = await cache_db.get_image_stats()
     assert stats["nekos"]["hug"] == 2

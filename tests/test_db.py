@@ -269,7 +269,9 @@ async def test_remove_slow():
 # ── Reminders ─────────────────────────────────────────────────────────────────
 
 
-def _reminder(rid="abc123", target=1, setter=1, guild=1, channel=1, due=9999.0, dm=True):
+def _reminder(
+    rid="abc123", target=1, setter=1, guild=1, channel=1, due=9999.0, dm=True
+):
     return {
         "id": rid,
         "target_id": str(target),
@@ -397,7 +399,9 @@ async def test_get_leave_config_missing():
 
 
 async def test_set_and_get_leave_config():
-    await db.set_leave_config(1, enabled=True, channel_id="456", content="Goodbye {user}")
+    await db.set_leave_config(
+        1, enabled=True, channel_id="456", content="Goodbye {user}"
+    )
     cfg = await db.get_leave_config(1)
     assert cfg["enabled"] is True
     assert cfg["content"] == "Goodbye {user}"
@@ -494,7 +498,9 @@ async def test_get_recurring_missing():
 
 async def test_update_recurring():
     await db.set_recurring(_recurring("rec3"))
-    await db.update_recurring({"id": "rec3", "next_due": 12345.0, "fire_count": 3, "paused": False})
+    await db.update_recurring(
+        {"id": "rec3", "next_due": 12345.0, "fire_count": 3, "paused": False}
+    )
     r = await db.get_recurring("rec3")
     assert r["next_due"] == 12345.0
     assert r["fire_count"] == 3
@@ -551,7 +557,9 @@ async def test_get_role_panel_missing():
 
 async def test_add_and_remove_role_from_panel():
     await db.create_role_panel("p2", 1, "Roles", None, "toggle")
-    await db.add_role_to_panel("p2", {"role_id": 100, "label": "Red", "emoji": "🔴", "style": "danger"})
+    await db.add_role_to_panel(
+        "p2", {"role_id": 100, "label": "Red", "emoji": "🔴", "style": "danger"}
+    )
     panel = await db.get_role_panel("p2")
     assert len(panel["entries"]) == 1
     assert panel["entries"][0]["label"] == "Red"
