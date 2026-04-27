@@ -1502,7 +1502,7 @@ async def _ensure_automod_guild(guild_id: int) -> None:
 async def get_automod_config(guild_id: int) -> dict | None:
     """Return the full automod config for a guild, or None if not yet set up."""
     async with _conn().execute(
-        "SELECT enabled, rules, ignore_channels, ignore_roles "
+        "SELECT enabled, rules, ignore_channels, ignore_roles, timeout_seconds "
         "FROM automod_config WHERE guild_id=? LIMIT 1",
         (str(guild_id),),
     ) as cur:
