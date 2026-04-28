@@ -145,6 +145,11 @@ class NanoBot(commands.Bot):
             description="NanoBot — Small. Fast. Built for Mobile Mods.",
         )
 
+        # Route app command failures (including transformer errors) to our
+        # custom handler instead of discord.py's default "Ignoring exception"
+        # log spam.
+        self.tree.on_error = self.on_tree_error
+
         self.config: dict = dict(cfg)
         self._apply_config(cfg)
         self.prefixes: dict[str, str] = {}
@@ -249,22 +254,32 @@ class NanoBot(commands.Bot):
         log.info(f"➖ Left server: {guild.name} ({guild.id})")
 
     async def on_message(self, message: discord.Message):
-        if message.author.bot:
-            return
+        try:
+            if message.author.bot:
+                return
 
-        if message.guild:
-            self.last_senders[message.channel.id] = message.author
+            if message.guild:
+                self.last_senders[message.channel.id] = message.author
 
-        ctx = await self.get_context(message)
+            ctx = await self.get_context(message)
 
-        if ctx.valid:
-            await self.invoke(ctx)
-            return
+            if ctx.valid:
+                await self.invoke(ctx)
+                return
 
-        if message.guild and ctx.prefix is not None:
-            after = message.content[len(ctx.prefix) :].strip()
-            if after:
-                await _try_tag_shortcut(message, self, after.lower())
+            if message.guild and ctx.prefix is not None:
+                after = message.content[len(ctx.prefix) :].strip()
+                if after:
+                    await _try_tag_shortcut(message, self, after.lower())
+        except Exception as exc:
+            log.error(
+                "Unhandled error in on_message for guild=%s channel=%s author=%s: %s",
+                message.guild.id if message.guild else "DM",
+                getattr(message.channel, "id", "unknown"),
+                message.author.id,
+                exc,
+                exc_info=exc,
+            )
 
     # ── Slash command error handler ────────────────────────────────────────────
     async def on_tree_error(
