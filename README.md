@@ -1,3 +1,5 @@
+[![Tests](https://github.com/therealjustsnow/NanoBot/actions/workflows/tests.yml/badge.svg)](https://github.com/therealjustsnow/NanoBot/actions/workflows/tests.yml) [![Black Formatter](https://github.com/therealjustsnow/NanoBot/actions/workflows/black.yml/badge.svg)](https://github.com/therealjustsnow/NanoBot/actions/workflows/black.yml)
+
 # ⚡ NanoBot
 
 > **Small. Fast. Built for Mobile Mods.**
