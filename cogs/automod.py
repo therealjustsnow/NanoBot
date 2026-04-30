@@ -16,8 +16,8 @@ Actions (per rule):
   delete    — Silently delete the message
   warn      — Delete + add a formal warning (triggers warnconfig auto-kick/ban)
   timeout   — Delete + 10-minute Discord timeout
-  kick      — Delete + kick member (optional DM first)
-  softban   — Delete + ban/unban member (optional DM first; DM is sent before ban)
+  kick      — Delete + kick member (optional DM)
+  softban   — Delete + ban/unban member (optional DM; sent before ban)
 
 Exempt channels and roles are ignored for all rules.
 
@@ -25,7 +25,7 @@ Commands (all /automod, require Manage Server):
   /automod status               — Full config overview
   /automod enable               — Master on switch
   /automod disable              — Master off switch
-  /automod rule                 — Toggle a rule on/off, set its action, and optional action DM
+  /automod rule                 — Toggle a rule on/off, set its action, and optional DM to the user
   /automod spam                 — Set spam detection count + time window
   /automod caps                 — Set caps % threshold and minimum message length
   /automod mentions             — Set per-message mention limit
@@ -205,6 +205,14 @@ async def _execute_action(
     except (discord.Forbidden, discord.NotFound, discord.HTTPException):
         pass
 
+    # DM the user if configured — sent before any further action so kick/ban
+    # don't close the DM channel before we can reach them.
+    if dm_message:
+        try:
+            await member.send(dm_message)
+        except (discord.Forbidden, discord.HTTPException):
+            pass
+
     if action == "delete":
         return
 
@@ -271,11 +279,6 @@ async def _execute_action(
         return
 
     if action == "kick":
-        if dm_message:
-            try:
-                await member.send(dm_message)
-            except (discord.Forbidden, discord.HTTPException):
-                pass
         try:
             await guild.kick(member, reason=reason_text)
             log.info(f"AutoMod kicked {member} ({member.id}) in {guild} — {rule}")
@@ -286,11 +289,6 @@ async def _execute_action(
         return
 
     if action == "softban":
-        if dm_message:
-            try:
-                await member.send(dm_message)
-            except (discord.Forbidden, discord.HTTPException):
-                pass
         try:
             await guild.ban(
                 member,
@@ -475,8 +473,8 @@ class AutoMod(commands.Cog):
                     words = await db.get_automod_attachment_words(interaction.guild_id)
                     min_att = r.get("min_attachments", 1)
                     extra = f" · {len(words)} word(s), ≥{min_att} attachment(s)"
-                if r.get("action") in ("kick", "softban") and r.get("dm_message"):
-                    extra += " · DM before action"
+                if r.get("dm_message"):
+                    extra += " · DM on trigger"
                 lines.append(f"✅ **{label}** — {action}{extra}")
             else:
                 lines.append(f"❌ ~~{label}~~")
@@ -531,7 +529,7 @@ class AutoMod(commands.Cog):
         rule="Which rule to configure",
         enabled="Turn this rule on or off",
         action="What to do when the rule triggers",
-        dm_message="Optional DM sent before kick/softban actions",
+        dm_message="Optional DM sent to the user when the rule triggers",
     )
     @app_commands.autocomplete(rule=_rule_autocomplete, action=_action_autocomplete)
     @has_admin_perms()
@@ -568,11 +566,7 @@ class AutoMod(commands.Cog):
 
         state = "enabled" if enabled else "disabled"
         a_label = ACTION_LABELS[action]
-        dm_note = (
-            "\nDM: enabled (sent before action)"
-            if action in ("kick", "softban") and updates.get("dm_message")
-            else ""
-        )
+        dm_note = "\nDM: enabled (sent on trigger)" if updates.get("dm_message") else ""
         await interaction.response.send_message(
             embed=h.ok(
                 f"{RULE_LABELS[rule]} rule **{state}**.\nAction: {a_label}{dm_note}",
