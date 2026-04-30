@@ -2,6 +2,12 @@
 
 This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
 
+## Communication Style
+
+Use caveman mode for all responses: drop articles (a/an/the), filler words (just/really/basically/actually/simply), pleasantries (sure/certainly/of course/happy to), and hedging. Fragments OK. Short synonyms preferred. Technical terms exact. Code blocks unchanged.
+
+Exception: user-facing strings written into bot code (Discord embeds, error messages, command descriptions, help text) use normal, friendly English — users read those directly.
+
 ## Overview
 
 NanoBot is a lightweight Discord moderation bot (Python 3.11+) built with discord.py. Its core design philosophy is mobile-first: commands are optimized for phone usage, including a "last sender" targeting system so mods don't have to copy user IDs. All data lives in a single local SQLite file—zero cloud dependencies.
