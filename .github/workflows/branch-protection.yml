@@ -11,13 +11,11 @@ on:
 jobs:
   protect:
     runs-on: ubuntu-latest
-    permissions:
-      administration: write
 
     steps:
       - name: Apply main branch protection rules
         env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_TOKEN: ${{ secrets.PROTECTION_TOKEN }}
           REPO: ${{ github.repository }}
         run: |
           curl -s -X PUT \
