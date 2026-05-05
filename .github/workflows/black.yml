@@ -3,6 +3,7 @@ name: Black Formatter
 on:
   push:
     branches: ["**"]
+  pull_request:
   workflow_dispatch:
 
 concurrency:
@@ -12,15 +13,10 @@ concurrency:
 jobs:
   black:
     runs-on: ubuntu-latest
-    permissions:
-      contents: write
 
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
-        with:
-          token: ${{ secrets.GITHUB_TOKEN }}
-          ref: ${{ github.ref }}
 
       - name: Set up Python
         uses: actions/setup-python@v5
@@ -31,20 +27,4 @@ jobs:
         run: pip install black
 
       - name: Run Black
-        id: black_run
-        run: |
-          if black --check .; then
-            echo "changed=false" >> "$GITHUB_OUTPUT"
-          else
-            black .
-            echo "changed=true" >> "$GITHUB_OUTPUT"
-          fi
-
-      - name: Commit & push formatted changes
-        if: steps.black_run.outputs.changed == 'true'
-        run: |
-          git config user.name  "github-actions[bot]"
-          git config user.email "github-actions[bot]@users.noreply.github.com"
-          git add -A
-          git commit -m "style: auto-format with Black [skip ci]"
-          git push
+        run: black --check .
