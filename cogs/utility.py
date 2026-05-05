@@ -13,7 +13,6 @@ Commands:
 """
 
 import inspect
-import io
 import logging
 import os
 import platform
@@ -1767,16 +1766,9 @@ class Utility(commands.Cog):
         code_block = f"```python\n{source_code}```"
         if len(code_block) <= 4000:
             e.description = code_block
-            await ctx.reply(embed=e, ephemeral=True)
         else:
-            e.description = "Source too long for inline display — uploaded below."
-            await ctx.reply(
-                embed=e,
-                file=discord.File(
-                    io.BytesIO(source_code.encode()), filename=f"{name}.py"
-                ),
-                ephemeral=True,
-            )
+            e.description = "Source too long to display inline — click the title to view on GitHub."
+        await ctx.reply(embed=e, ephemeral=True)
 
     # ══════════════════════════════════════════════════════════════════════════
     #  firstmsg — link to oldest message in a channel
