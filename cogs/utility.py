@@ -12,9 +12,12 @@ Commands:
   stats   — NanoBots stats since uptime
 """
 
+import inspect
 import logging
+import os
 import platform
 import sys
+import textwrap
 import time
 from typing import Optional, Union
 
@@ -1691,6 +1694,82 @@ class Utility(commands.Cog):
         )
 
         e.set_footer(text="NanoBot — stats reset on restart")
+        await ctx.reply(embed=e, ephemeral=True)
+
+    # ══════════════════════════════════════════════════════════════════════════
+    #  source — show source code for a command
+    # ══════════════════════════════════════════════════════════════════════════
+    @commands.hybrid_command(
+        name="source",
+        description="Show the source code for a bot command.",
+        extras={
+            "category": "⚙️ Config & Info",
+            "short": "Show source code for a command",
+            "usage": "source <command>",
+            "desc": (
+                "Displays the source code for any bot command. "
+                "Short commands show inline; longer ones are uploaded as a file. "
+                "The embed title links directly to the line on GitHub."
+            ),
+            "args": [("command", "Name of the command to inspect")],
+            "perms": "None",
+            "example": "!source ship\n!source ban\n!source help",
+        },
+    )
+    @app_commands.describe(command="Command name to show source for")
+    @commands.cooldown(1, 5, commands.BucketType.user)
+    async def source(self, ctx: commands.Context, *, command: str):
+        name = command.strip().lower()
+
+        cmd = self.bot.get_command(name)
+        if cmd is None:
+            for tree_cmd in self.bot.tree.get_commands():
+                if tree_cmd.name == name:
+                    cmd = tree_cmd
+                    break
+
+        if cmd is None:
+            return await ctx.reply(
+                embed=h.err(f"No command named `{name}` found."),
+                ephemeral=True,
+            )
+
+        callback = getattr(cmd, "callback", None)
+        if callback is None:
+            return await ctx.reply(
+                embed=h.err("That command has no inspectable source."),
+                ephemeral=True,
+            )
+
+        try:
+            lines, start_line = inspect.getsourcelines(callback)
+            filepath = inspect.getfile(callback)
+        except (OSError, TypeError):
+            return await ctx.reply(
+                embed=h.err("Could not retrieve source for that command."),
+                ephemeral=True,
+            )
+
+        end_line = start_line + len(lines) - 1
+        source_code = textwrap.dedent("".join(lines))
+
+        repo_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+        rel_path = os.path.relpath(filepath, repo_root).replace(os.sep, "/")
+        github_url = (
+            f"https://github.com/therealjustsnow/nanobot/blob/main/"
+            f"{rel_path}#L{start_line}-L{end_line}"
+        )
+
+        e = h.embed(title=f"`{name}` — source", color=h.BLUE)
+        e.url = github_url
+
+        code_block = f"```python\n{source_code}```"
+        if len(code_block) <= 4000:
+            e.description = code_block
+        else:
+            e.description = (
+                "Source too long to display inline — click the title to view on GitHub."
+            )
         await ctx.reply(embed=e, ephemeral=True)
 
     # ══════════════════════════════════════════════════════════════════════════
