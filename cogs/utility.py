@@ -1767,7 +1767,9 @@ class Utility(commands.Cog):
         if len(code_block) <= 4000:
             e.description = code_block
         else:
-            e.description = "Source too long to display inline — click the title to view on GitHub."
+            e.description = (
+                "Source too long to display inline — click the title to view on GitHub."
+            )
         await ctx.reply(embed=e, ephemeral=True)
 
     # ══════════════════════════════════════════════════════════════════════════
