@@ -1772,7 +1772,9 @@ class Utility(commands.Cog):
             e.description = "Source too long for inline display — uploaded below."
             await ctx.reply(
                 embed=e,
-                file=discord.File(io.BytesIO(source_code.encode()), filename=f"{name}.py"),
+                file=discord.File(
+                    io.BytesIO(source_code.encode()), filename=f"{name}.py"
+                ),
                 ephemeral=True,
             )
 
