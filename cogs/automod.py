@@ -149,10 +149,9 @@ def _mention_count(message: discord.Message) -> int:
 
 
 def _has_badword(content: str, words: list[str]) -> str | None:
-    """Return the first matched bad word, or None."""
-    lower = content.lower()
+    """Return the first matched bad word (whole-word, case-insensitive), or None."""
     for word in words:
-        if word in lower:
+        if re.search(r"\b" + re.escape(word) + r"\b", content, re.IGNORECASE):
             return word
     return None
 
