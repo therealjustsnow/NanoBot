@@ -110,9 +110,7 @@ class Votes(commands.Cog):
 
     # ── Lifecycle ──────────────────────────────────────────────────────────────
     async def cog_load(self):
-        self._session = aiohttp.ClientSession(
-            timeout=aiohttp.ClientTimeout(total=10)
-        )
+        self._session = aiohttp.ClientSession(timeout=aiohttp.ClientTimeout(total=10))
         await self._start_webhook_server()
         self.post_stats.start()
         self.notify_loop.start()
