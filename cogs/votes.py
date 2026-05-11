@@ -106,16 +106,19 @@ class Votes(commands.Cog):
         self.webhook_secret: str | None = cfg.get("vote_webhook_secret")
         self._http_runner: aiohttp.web.AppRunner | None = None
         self._session: aiohttp.ClientSession | None = None
+        self._startup_tasks: list[asyncio.Task] = []
 
     # ── Lifecycle ──────────────────────────────────────────────────────────────
     async def cog_load(self):
-        self._session = aiohttp.ClientSession()
+        self._session = aiohttp.ClientSession(timeout=aiohttp.ClientTimeout(total=10))
         await self._start_webhook_server()
         self.post_stats.start()
         self.notify_loop.start()
         # Sync commands to applicable sites once the bot is ready — fire-and-forget
-        asyncio.create_task(self._sync_dbl_commands())
-        asyncio.create_task(self._sync_topgg_commands())
+        self._startup_tasks = [
+            asyncio.create_task(self._sync_dbl_commands()),
+            asyncio.create_task(self._sync_topgg_commands()),
+        ]
         log.info("Votes cog loaded — webhook server started, stat loop running")
 
     async def _fetch_discord_commands(self) -> list | None:
@@ -187,8 +190,14 @@ class Votes(commands.Cog):
     async def cog_unload(self):
         self.post_stats.cancel()
         self.notify_loop.cancel()
+        for task in self._startup_tasks:
+            task.cancel()
+        self._startup_tasks.clear()
         if self._http_runner:
-            await self._http_runner.cleanup()
+            try:
+                await asyncio.wait_for(self._http_runner.cleanup(), timeout=5.0)
+            except asyncio.TimeoutError:
+                log.warning("Votes webhook server cleanup timed out — forcing close")
         if self._session and not self._session.closed:
             await self._session.close()
         log.info("Votes cog unloaded")
