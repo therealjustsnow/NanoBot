@@ -22,7 +22,7 @@ from utils import helpers as h
 log = logging.getLogger("NanoBot.debug")
 
 _SHELL_TIMEOUT = 60  # seconds before a shell process is killed
-_OUTPUT_CAP = 900   # chars per section before truncation
+_OUTPUT_CAP = 900  # chars per section before truncation
 
 
 def _trim(text: str) -> str:
