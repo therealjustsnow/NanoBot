@@ -3,8 +3,8 @@ cogs/debug.py
 Owner-only shell and Python REPL commands for remote administration.
 
 Commands:
-  sh  <command>  — run a shell command, get stdout/stderr back
-  py  <code>     — evaluate Python in the bot process (supports await)
+  sh  [--disable-timeout] <command>  — run a shell command, get stdout/stderr back
+  py  [--disable-timeout] <code>     — evaluate Python in the bot process (supports await)
 """
 
 import asyncio
@@ -21,8 +21,9 @@ from utils import helpers as h
 
 log = logging.getLogger("NanoBot.debug")
 
-_SHELL_TIMEOUT = 60  # seconds before a shell process is killed
+_SHELL_TIMEOUT = 60  # seconds before a shell/py process is killed (default)
 _OUTPUT_CAP = 900  # chars per section before truncation
+_DISABLE_TIMEOUT_FLAG = "--disable-timeout"
 
 
 def _trim(text: str) -> str:
@@ -50,17 +51,30 @@ class Debug(commands.Cog):
         aliases=["shell", "exec"],
         help=(
             "Run a shell command and see stdout + stderr.\n\n"
-            "Owner-only. 60-second timeout. Both streams shown.\n\n"
+            "Owner-only. 60-second timeout by default. Both streams shown.\n\n"
+            "Flags:\n"
+            "  --disable-timeout  — no timeout (use for long downloads etc.)\n\n"
             "Examples:\n"
-            "  !sh yt-dlp <url>\n"
             "  !sh ls -la\n"
             "  !sh pip install yt-dlp\n"
-            "  !sh df -h"
+            "  !sh --disable-timeout yt-dlp <url>"
         ),
     )
     async def sh(self, ctx: commands.Context, *, command: str):
+        disable_timeout = False
+        if command.startswith(_DISABLE_TIMEOUT_FLAG):
+            disable_timeout = True
+            command = command[len(_DISABLE_TIMEOUT_FLAG):].lstrip()
+
+        timeout = None if disable_timeout else _SHELL_TIMEOUT
+
         await ctx.defer()
-        log.warning("sh: %s (%s) → %s", ctx.author, ctx.author.id, command)
+        log.warning(
+            "sh: %s (%s) timeout=%s → %s",
+            ctx.author, ctx.author.id,
+            "disabled" if disable_timeout else f"{timeout}s",
+            command,
+        )
 
         try:
             proc = await asyncio.create_subprocess_shell(
@@ -74,7 +88,7 @@ class Debug(commands.Cog):
 
         try:
             stdout_b, stderr_b = await asyncio.wait_for(
-                proc.communicate(), timeout=_SHELL_TIMEOUT
+                proc.communicate(), timeout=timeout
             )
         except asyncio.TimeoutError:
             proc.kill()
@@ -115,15 +129,25 @@ class Debug(commands.Cog):
         aliases=["eval", "python"],
         help=(
             "Evaluate Python code inside the running bot process.\n\n"
-            "Owner-only. Top-level `await` works. Code block backticks are stripped.\n\n"
+            "Owner-only. 60-second timeout by default. Top-level `await` works.\n"
+            "Code block backticks are stripped.\n\n"
+            "Flags:\n"
+            "  --disable-timeout  — no timeout (use for long-running async code)\n\n"
             "Locals: bot, ctx, guild, channel, author, discord, asyncio\n\n"
             "Examples:\n"
             "  !py len(bot.guilds)\n"
             "  !py [g.name for g in bot.guilds]\n"
-            "  !py await bot.fetch_user(123456789)"
+            "  !py --disable-timeout await bot.fetch_user(123456789)"
         ),
     )
     async def py(self, ctx: commands.Context, *, code: str):
+        disable_timeout = False
+        if code.lstrip().startswith(_DISABLE_TIMEOUT_FLAG):
+            disable_timeout = True
+            code = code.lstrip()[len(_DISABLE_TIMEOUT_FLAG):].lstrip()
+
+        timeout = None if disable_timeout else _SHELL_TIMEOUT
+
         # Strip fenced code block markers if the user pastes with backticks
         code = code.strip()
         if code.startswith("```") and code.endswith("```"):
@@ -131,7 +155,12 @@ class Debug(commands.Cog):
             if code.startswith("python\n") or code.startswith("py\n"):
                 code = code.split("\n", 1)[1]
 
-        log.warning("py: %s (%s) → %s", ctx.author, ctx.author.id, code[:120])
+        log.warning(
+            "py: %s (%s) timeout=%s → %s",
+            ctx.author, ctx.author.id,
+            "disabled" if disable_timeout else f"{timeout}s",
+            code[:120],
+        )
 
         env = {
             "bot": self.bot,
@@ -153,7 +182,9 @@ class Debug(commands.Cog):
         try:
             exec(compile(wrapped, "<discord>", "exec"), env)  # noqa: S102
             with contextlib.redirect_stdout(stdout_buf):
-                result = await env["_exec"]()
+                result = await asyncio.wait_for(env["_exec"](), timeout=timeout)
+        except asyncio.TimeoutError:
+            error = f"Timed out after {_SHELL_TIMEOUT}s."
         except Exception:
             error = traceback.format_exc()
 
