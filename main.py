@@ -110,7 +110,6 @@ _ALL_COGS = (
     "cogs.fun",
     "cogs.images",
     "cogs.eli5",
-    "cogs.debug",
 )
 
 
