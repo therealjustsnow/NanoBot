@@ -64,14 +64,15 @@ class Debug(commands.Cog):
         disable_timeout = False
         if command.startswith(_DISABLE_TIMEOUT_FLAG):
             disable_timeout = True
-            command = command[len(_DISABLE_TIMEOUT_FLAG):].lstrip()
+            command = command[len(_DISABLE_TIMEOUT_FLAG) :].lstrip()
 
         timeout = None if disable_timeout else _SHELL_TIMEOUT
 
         await ctx.defer()
         log.warning(
             "sh: %s (%s) timeout=%s → %s",
-            ctx.author, ctx.author.id,
+            ctx.author,
+            ctx.author.id,
             "disabled" if disable_timeout else f"{timeout}s",
             command,
         )
@@ -144,7 +145,7 @@ class Debug(commands.Cog):
         disable_timeout = False
         if code.lstrip().startswith(_DISABLE_TIMEOUT_FLAG):
             disable_timeout = True
-            code = code.lstrip()[len(_DISABLE_TIMEOUT_FLAG):].lstrip()
+            code = code.lstrip()[len(_DISABLE_TIMEOUT_FLAG) :].lstrip()
 
         timeout = None if disable_timeout else _SHELL_TIMEOUT
 
@@ -157,7 +158,8 @@ class Debug(commands.Cog):
 
         log.warning(
             "py: %s (%s) timeout=%s → %s",
-            ctx.author, ctx.author.id,
+            ctx.author,
+            ctx.author.id,
             "disabled" if disable_timeout else f"{timeout}s",
             code[:120],
         )
