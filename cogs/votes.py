@@ -108,9 +108,9 @@ class Votes(commands.Cog):
         self.botsgg_token: str | None = cfg.get("discordbotsgg_token")
         self.webhook_port: int = int(cfg.get("vote_webhook_port", 5000))
         self.webhook_secret: str | None = cfg.get("vote_webhook_secret")
-        self._allowed_networks: list[
-            ipaddress.IPv4Network | ipaddress.IPv6Network
-        ] = self._parse_allowed_ips(cfg.get("webhook_allowed_ips", ""))
+        self._allowed_networks: list[ipaddress.IPv4Network | ipaddress.IPv6Network] = (
+            self._parse_allowed_ips(cfg.get("webhook_allowed_ips", ""))
+        )
         self._http_runner: aiohttp.web.AppRunner | None = None
         self._session: aiohttp.ClientSession | None = None
         self._startup_tasks: list[asyncio.Task] = []
