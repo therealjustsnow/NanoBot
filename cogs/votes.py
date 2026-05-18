@@ -18,6 +18,9 @@ Config keys (config.ini → [votes]):
                          top.gg:             HMAC-SHA256 (x-topgg-signature header)
                          DBL:                plain Authorization header match
                          discord.bots.gg:    plain Authorization header match
+  webhook_allowed_ips  — comma-separated IPs or CIDR ranges allowed to POST webhooks
+                         e.g. 167.114.156.0/24,192.168.1.1
+                         If unset, all IPs are accepted (existing behaviour).
 
 Webhook URLs to register on each site:
   top.gg:             http://YOUR_IP:PORT/webhook/topgg
@@ -28,6 +31,7 @@ Webhook URLs to register on each site:
 import asyncio
 import hashlib
 import hmac
+import ipaddress
 import json
 import logging
 import time
@@ -104,6 +108,9 @@ class Votes(commands.Cog):
         self.botsgg_token: str | None = cfg.get("discordbotsgg_token")
         self.webhook_port: int = int(cfg.get("vote_webhook_port", 5000))
         self.webhook_secret: str | None = cfg.get("vote_webhook_secret")
+        self._allowed_networks: list[ipaddress.IPv4Network | ipaddress.IPv6Network] = (
+            self._parse_allowed_ips(cfg.get("webhook_allowed_ips", ""))
+        )
         self._http_runner: aiohttp.web.AppRunner | None = None
         self._session: aiohttp.ClientSession | None = None
         self._startup_tasks: list[asyncio.Task] = []
@@ -203,8 +210,39 @@ class Votes(commands.Cog):
         log.info("Votes cog unloaded")
 
     # ── Webhook HTTP server ────────────────────────────────────────────────────
+    @staticmethod
+    def _parse_allowed_ips(
+        raw: str,
+    ) -> list[ipaddress.IPv4Network | ipaddress.IPv6Network]:
+        networks = []
+        for entry in raw.split(","):
+            entry = entry.strip()
+            if not entry:
+                continue
+            try:
+                networks.append(ipaddress.ip_network(entry, strict=False))
+            except ValueError:
+                log.warning(f"webhook_allowed_ips: invalid entry ignored: {entry!r}")
+        return networks
+
     async def _start_webhook_server(self):
-        app = aiohttp.web.Application()
+        allowed = self._allowed_networks
+
+        @aiohttp.web.middleware
+        async def ip_filter(
+            request: aiohttp.web.Request, handler
+        ) -> aiohttp.web.StreamResponse:
+            if allowed:
+                try:
+                    addr = ipaddress.ip_address(request.remote)
+                except ValueError:
+                    return aiohttp.web.Response(status=403)
+                if not any(addr in net for net in allowed):
+                    log.debug(f"Webhook: blocked {request.remote} — not in allowlist")
+                    return aiohttp.web.Response(status=403)
+            return await handler(request)
+
+        app = aiohttp.web.Application(middlewares=[ip_filter])
         app.router.add_post("/webhook/topgg", self._handle_topgg)
         app.router.add_post("/webhook/dbl", self._handle_dbl)
         app.router.add_post("/webhook/botsgg", self._handle_botsgg)
@@ -214,7 +252,13 @@ class Votes(commands.Cog):
         site = aiohttp.web.TCPSite(runner, "0.0.0.0", self.webhook_port)
         await site.start()
         self._http_runner = runner
-        log.info(f"Vote webhook server listening on :{self.webhook_port}")
+        if allowed:
+            log.info(
+                f"Vote webhook server listening on :{self.webhook_port} "
+                f"(IP allowlist: {len(allowed)} network(s))"
+            )
+        else:
+            log.info(f"Vote webhook server listening on :{self.webhook_port}")
 
     def _check_auth(self, request: aiohttp.web.Request) -> bool:
         """Validate the Authorization header against the configured secret (DBL / discord.bots.gg)."""
