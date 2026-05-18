@@ -155,6 +155,7 @@ class NanoBot(commands.Bot):
         self._apply_config(cfg)
         self.prefixes: dict[str, str] = {}
         self.last_senders: dict[int, discord.Member] = {}
+        self.last_banned: dict[int, int] = {}  # guild_id → last banned user_id
         self.start_time = discord.utils.utcnow()
         self.commands_ran: int = 0  # incremented in on_command; resets on restart
 

@@ -6,7 +6,7 @@ Commands:
   cban / cleanban  — ban + purge history + optional timed unban + DM
   ban              — permanent ban + DM
   massban          — ban multiple IDs at once
-  unban            — unban by user ID
+  unban            — unban by user ID (or last banned if no ID given)
   tempban          — timed ban with auto-unban (simpler than cban)
   kick             — kick + DM
   slow             — toggle / set slowmode (optional timed auto-disable)
@@ -348,6 +348,7 @@ class Moderation(commands.Cog):
                 ephemeral=True,
             )
 
+        self.bot.last_banned[ctx.guild.id] = target.id
         log.info(
             f"cban: {target} ({target.id}) by {ctx.author} in #{ctx.channel} / {ctx.guild} | days={days} timed={is_timed}"
         )
@@ -448,6 +449,7 @@ class Moderation(commands.Cog):
                 ephemeral=True,
             )
 
+        self.bot.last_banned[ctx.guild.id] = target.id
         log.info(f"ban: {target} ({target.id}) by {ctx.author} in {ctx.guild}")
         await ctx.reply(
             embed=h.ok(
@@ -528,29 +530,37 @@ class Moderation(commands.Cog):
     # ══════════════════════════════════════════════════════════════════════════,
     @commands.hybrid_command(
         name="unban",
-        description="Unban a user by their User ID.",
+        description="Unban a user by their User ID. Omit ID to unban the last person you banned.",
         extras={
             "category": "🔨 Banning",
-            "short": "Unban a user by their ID",
-            "usage": "unban <user_id> [reason]",
-            "desc": "Unbans by User ID. Enable Developer Mode → right-click any user → Copy ID.",
+            "short": "Unban a user — omit ID to unban the last banned user",
+            "usage": "unban [user_id] [reason]",
+            "desc": "Unbans by User ID. Omit the ID to automatically unban the last user banned in this server. Enable Developer Mode → right-click any user → Copy ID.",
             "args": [
-                ("user_id", "The user's Discord ID"),
+                ("user_id", "The user's Discord ID (blank = last banned in this server)"),
                 ("reason", "Optional reason (shown in audit log)"),
             ],
             "perms": "Ban Members",
             "example": "!unban 123456789012345678",
         },
     )
-    @app_commands.describe(user_id="Discord User ID", reason="Optional reason")
+    @app_commands.describe(user_id="Discord User ID (blank = last banned)", reason="Optional reason")
     @has_ban_perms()
-    async def unban(self, ctx, user_id: str, *, reason: Optional[str] = None):
-        try:
-            uid = int(user_id.strip())
-        except ValueError:
-            return await ctx.reply(
-                embed=h.err("That doesn't look like a valid User ID."), ephemeral=True
-            )
+    async def unban(self, ctx, user_id: Optional[str] = None, *, reason: Optional[str] = None):
+        if user_id is None:
+            uid = self.bot.last_banned.get(ctx.guild.id)
+            if not uid:
+                return await ctx.reply(
+                    embed=h.err("No user ID provided and no recent ban tracked for this server."),
+                    ephemeral=True,
+                )
+        else:
+            try:
+                uid = int(user_id.strip())
+            except ValueError:
+                return await ctx.reply(
+                    embed=h.err("That doesn't look like a valid User ID."), ephemeral=True
+                )
 
         try:
             await ctx.guild.unban(
@@ -1603,6 +1613,7 @@ class Moderation(commands.Cog):
                 ephemeral=True,
             )
 
+        self.bot.last_banned[ctx.guild.id] = target.id
         await self._schedule_unban(ctx.guild.id, target.id, wait_secs)
         log.info(
             f"tempban: {target} ({target.id}) for {h.fmt_duration(wait_secs)} by {ctx.author} in {ctx.guild}"
