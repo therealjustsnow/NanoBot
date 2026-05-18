@@ -594,9 +594,7 @@ def _gh_url(repo_root: str, filepath: str, start: int, end: int) -> str:
     return f"{_GITHUB_BASE}{rel}#L{start}-L{end}"
 
 
-def _related_callables(
-    callback, repo_root: str
-) -> list[tuple[str, str, int, int]]:
+def _related_callables(callback, repo_root: str) -> list[tuple[str, str, int, int]]:
     """Return module-level functions/classes in same file that callback references."""
     try:
         cb_src = inspect.getsource(callback)
@@ -634,9 +632,7 @@ def _related_callables(
     return sorted(results, key=lambda x: x[2])
 
 
-def _symbol_search(
-    repo_root: str, symbol: str
-) -> list[tuple[str, int, int]]:
+def _symbol_search(repo_root: str, symbol: str) -> list[tuple[str, int, int]]:
     """Walk repo .py files, return (filepath, start, end) for each definition of symbol."""
     results = []
     for dirpath, dirnames, filenames in os.walk(repo_root):
@@ -1852,9 +1848,7 @@ class Utility(commands.Cog):
             if len(code_block) <= 3800:
                 e.description = code_block
             else:
-                e.description = (
-                    f"Source too long to display inline — [view on GitHub]({github_url})"
-                )
+                e.description = f"Source too long to display inline — [view on GitHub]({github_url})"
 
             related = _related_callables(callback, repo_root)
             if related:
