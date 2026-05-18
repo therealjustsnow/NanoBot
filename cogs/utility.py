@@ -12,10 +12,13 @@ Commands:
   stats   — NanoBots stats since uptime
 """
 
+import ast
 import inspect
+import io
 import logging
 import os
 import platform
+import re
 import sys
 import textwrap
 import time
@@ -576,6 +579,87 @@ class HelpView(discord.ui.View):
     ):
         self.index += 1
         await self._edit(interaction)
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+#  Source-command helpers
+# ══════════════════════════════════════════════════════════════════════════════
+
+_GITHUB_BASE = "https://github.com/therealjustsnow/nanobot/blob/main/"
+_SKIP_DIRS = {".git", "__pycache__", "venv", ".venv", "node_modules", ".mypy_cache"}
+
+
+def _gh_url(repo_root: str, filepath: str, start: int, end: int) -> str:
+    rel = os.path.relpath(filepath, repo_root).replace(os.sep, "/")
+    return f"{_GITHUB_BASE}{rel}#L{start}-L{end}"
+
+
+def _related_callables(callback, repo_root: str) -> list[tuple[str, str, int, int]]:
+    """Return module-level functions/classes in same file that callback references."""
+    try:
+        cb_src = inspect.getsource(callback)
+        cb_file = os.path.abspath(inspect.getfile(callback))
+    except (OSError, TypeError):
+        return []
+
+    module = inspect.getmodule(callback)
+    if module is None:
+        return []
+
+    results = []
+    for name, obj in vars(module).items():
+        if name.startswith("__"):
+            continue
+        if not (inspect.isfunction(obj) or inspect.isclass(obj)):
+            continue
+        if obj is callback:
+            continue
+        if not re.search(r"\b" + re.escape(name) + r"\b", cb_src):
+            continue
+        try:
+            obj_file = os.path.abspath(inspect.getfile(obj))
+        except TypeError:
+            continue
+        if obj_file != cb_file:
+            continue
+        try:
+            lines, start = inspect.getsourcelines(obj)
+            end = start + len(lines) - 1
+        except (OSError, TypeError):
+            continue
+        results.append((name, obj_file, start, end))
+
+    return sorted(results, key=lambda x: x[2])
+
+
+def _symbol_search(repo_root: str, symbol: str) -> list[tuple[str, int, int]]:
+    """Walk repo .py files, return (filepath, start, end) for each definition of symbol."""
+    results = []
+    for dirpath, dirnames, filenames in os.walk(repo_root):
+        dirnames[:] = [d for d in dirnames if d not in _SKIP_DIRS]
+        for fname in filenames:
+            if not fname.endswith(".py"):
+                continue
+            fpath = os.path.join(dirpath, fname)
+            try:
+                with open(fpath, encoding="utf-8") as f:
+                    src = f.read()
+                tree = ast.parse(src, filename=fpath)
+            except Exception:
+                continue
+            for node in ast.walk(tree):
+                if isinstance(
+                    node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)
+                ):
+                    if node.name == symbol:
+                        end = getattr(node, "end_lineno", node.lineno)
+                        results.append((fpath, node.lineno, end))
+                elif isinstance(node, ast.Assign):
+                    for tgt in node.targets:
+                        if isinstance(tgt, ast.Name) and tgt.id == symbol:
+                            end = getattr(node, "end_lineno", node.lineno)
+                            results.append((fpath, node.lineno, end))
+    return results
 
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -1697,79 +1781,148 @@ class Utility(commands.Cog):
         await ctx.reply(embed=e, ephemeral=True)
 
     # ══════════════════════════════════════════════════════════════════════════
-    #  source — show source code for a command
+    #  source — show source code for a command or any named symbol
     # ══════════════════════════════════════════════════════════════════════════
     @commands.hybrid_command(
         name="source",
-        description="Show the source code for a bot command.",
+        description="Show source code for a command or any named symbol in the bot.",
         extras={
             "category": "⚙️ Config & Info",
-            "short": "Show source code for a command",
-            "usage": "source <command>",
+            "short": "Show source for a command or symbol",
+            "usage": "source <command|symbol>",
             "desc": (
-                "Displays the source code for any bot command. "
-                "Short commands show inline; longer ones are uploaded as a file. "
-                "The embed title links directly to the line on GitHub."
+                "Shows source code for a bot command — including any helper functions "
+                "and variables it uses — or any named symbol in the codebase (function, "
+                "class, variable). The embed title links directly to the line on GitHub."
             ),
-            "args": [("command", "Name of the command to inspect")],
+            "args": [("command", "Command name or any symbol to look up")],
             "perms": "None",
-            "example": "!source ship\n!source ban\n!source help",
+            "example": "!source ship\n!source ban\n!source _ship_score\n!source WyrView",
         },
     )
-    @app_commands.describe(command="Command name to show source for")
+    @app_commands.describe(command="Command name or symbol to inspect")
     @commands.cooldown(1, 5, commands.BucketType.user)
     async def source(self, ctx: commands.Context, *, command: str):
-        name = command.strip().lower()
+        query = command.strip()
+        repo_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
-        cmd = self.bot.get_command(name)
+        # ── 1. Try as a bot command ───────────────────────────────────────────
+        cmd = self.bot.get_command(query.lower())
         if cmd is None:
             for tree_cmd in self.bot.tree.get_commands():
-                if tree_cmd.name == name:
+                if tree_cmd.name == query.lower():
                     cmd = tree_cmd
                     break
+                if hasattr(tree_cmd, "commands"):
+                    for sub in tree_cmd.commands:
+                        if sub.name == query.lower():
+                            cmd = sub
+                            break
 
-        if cmd is None:
+        if cmd is not None:
+            callback = getattr(cmd, "callback", None)
+            if callback is None:
+                return await ctx.reply(
+                    embed=h.err("That command has no inspectable source."),
+                    ephemeral=True,
+                )
+            try:
+                lines, start_line = inspect.getsourcelines(callback)
+                filepath = inspect.getfile(callback)
+            except (OSError, TypeError):
+                return await ctx.reply(
+                    embed=h.err("Could not retrieve source for that command."),
+                    ephemeral=True,
+                )
+
+            end_line = start_line + len(lines) - 1
+            source_code = textwrap.dedent("".join(lines))
+            github_url = _gh_url(repo_root, filepath, start_line, end_line)
+            rel_path = os.path.relpath(filepath, repo_root).replace(os.sep, "/")
+
+            e = h.embed(title=f"`{query}` — source", color=h.BLUE)
+            e.url = github_url
+            e.set_footer(text=f"{rel_path} · L{start_line}–L{end_line}")
+
+            code_block = f"```python\n{source_code}```"
+            if len(code_block) <= 3800:
+                e.description = code_block
+            else:
+                e.description = f"Source too long to display inline — [view on GitHub]({github_url})"
+
+            related = _related_callables(callback, repo_root)
+            if related:
+                field_lines = []
+                for sym_name, sym_file, sym_start, sym_end in related:
+                    sym_url = _gh_url(repo_root, sym_file, sym_start, sym_end)
+                    field_lines.append(
+                        f"[`{sym_name}`]({sym_url}) · L{sym_start}–L{sym_end}"
+                    )
+                value = "\n".join(field_lines)
+                if len(value) > 1024:
+                    value = value[:1021] + "…"
+                e.add_field(
+                    name=f"Related symbols ({len(related)})",
+                    value=value,
+                    inline=False,
+                )
+
+            return await ctx.reply(embed=e, ephemeral=True)
+
+        # ── 2. General symbol search across codebase ──────────────────────────
+        matches = _symbol_search(repo_root, query)
+
+        if not matches:
             return await ctx.reply(
-                embed=h.err(f"No command named `{name}` found."),
+                embed=h.err(
+                    f"No command or symbol named `{query}` found in the codebase."
+                ),
                 ephemeral=True,
             )
 
-        callback = getattr(cmd, "callback", None)
-        if callback is None:
-            return await ctx.reply(
-                embed=h.err("That command has no inspectable source."),
-                ephemeral=True,
-            )
+        if len(matches) == 1:
+            filepath, start_line, end_line = matches[0]
+            rel_path = os.path.relpath(filepath, repo_root).replace(os.sep, "/")
+            github_url = _gh_url(repo_root, filepath, start_line, end_line)
 
-        try:
-            lines, start_line = inspect.getsourcelines(callback)
-            filepath = inspect.getfile(callback)
-        except (OSError, TypeError):
-            return await ctx.reply(
-                embed=h.err("Could not retrieve source for that command."),
-                ephemeral=True,
-            )
+            try:
+                with open(filepath, encoding="utf-8") as f:
+                    all_lines = f.readlines()
+                source_code = textwrap.dedent(
+                    "".join(all_lines[start_line - 1 : end_line])
+                )
+            except OSError:
+                source_code = None
 
-        end_line = start_line + len(lines) - 1
-        source_code = textwrap.dedent("".join(lines))
+            e = h.embed(title=f"`{query}` — source", color=h.BLUE)
+            e.url = github_url
+            e.set_footer(text=f"{rel_path} · L{start_line}–L{end_line}")
 
-        repo_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-        rel_path = os.path.relpath(filepath, repo_root).replace(os.sep, "/")
-        github_url = (
-            f"https://github.com/therealjustsnow/nanobot/blob/main/"
-            f"{rel_path}#L{start_line}-L{end_line}"
+            if source_code:
+                code_block = f"```python\n{source_code}```"
+                if len(code_block) <= 3800:
+                    e.description = code_block
+                else:
+                    e.description = (
+                        f"Source too long to display inline — "
+                        f"[view on GitHub]({github_url})"
+                    )
+            else:
+                e.description = f"[View on GitHub]({github_url})"
+
+            return await ctx.reply(embed=e, ephemeral=True)
+
+        # Multiple matches — list them all
+        e = h.embed(
+            title=f"`{query}` — {len(matches)} matches found",
+            color=h.BLUE,
         )
-
-        e = h.embed(title=f"`{name}` — source", color=h.BLUE)
-        e.url = github_url
-
-        code_block = f"```python\n{source_code}```"
-        if len(code_block) <= 4000:
-            e.description = code_block
-        else:
-            e.description = (
-                "Source too long to display inline — click the title to view on GitHub."
-            )
+        field_lines = []
+        for filepath, start_line, end_line in matches:
+            rel_path = os.path.relpath(filepath, repo_root).replace(os.sep, "/")
+            url = _gh_url(repo_root, filepath, start_line, end_line)
+            field_lines.append(f"[`{rel_path}`]({url}) · L{start_line}–L{end_line}")
+        e.description = "\n".join(field_lines)
         await ctx.reply(embed=e, ephemeral=True)
 
     # ══════════════════════════════════════════════════════════════════════════
