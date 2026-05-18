@@ -537,21 +537,30 @@ class Moderation(commands.Cog):
             "usage": "unban [user_id] [reason]",
             "desc": "Unbans by User ID. Omit the ID to automatically unban the last user banned in this server. Enable Developer Mode → right-click any user → Copy ID.",
             "args": [
-                ("user_id", "The user's Discord ID (blank = last banned in this server)"),
+                (
+                    "user_id",
+                    "The user's Discord ID (blank = last banned in this server)",
+                ),
                 ("reason", "Optional reason (shown in audit log)"),
             ],
             "perms": "Ban Members",
             "example": "!unban 123456789012345678",
         },
     )
-    @app_commands.describe(user_id="Discord User ID (blank = last banned)", reason="Optional reason")
+    @app_commands.describe(
+        user_id="Discord User ID (blank = last banned)", reason="Optional reason"
+    )
     @has_ban_perms()
-    async def unban(self, ctx, user_id: Optional[str] = None, *, reason: Optional[str] = None):
+    async def unban(
+        self, ctx, user_id: Optional[str] = None, *, reason: Optional[str] = None
+    ):
         if user_id is None:
             uid = self.bot.last_banned.get(ctx.guild.id)
             if not uid:
                 return await ctx.reply(
-                    embed=h.err("No user ID provided and no recent ban tracked for this server."),
+                    embed=h.err(
+                        "No user ID provided and no recent ban tracked for this server."
+                    ),
                     ephemeral=True,
                 )
         else:
@@ -559,7 +568,8 @@ class Moderation(commands.Cog):
                 uid = int(user_id.strip())
             except ValueError:
                 return await ctx.reply(
-                    embed=h.err("That doesn't look like a valid User ID."), ephemeral=True
+                    embed=h.err("That doesn't look like a valid User ID."),
+                    ephemeral=True,
                 )
 
         try:
