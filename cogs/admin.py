@@ -103,14 +103,18 @@ class ServersView(discord.ui.View):
             except discord.HTTPException:
                 pass
 
-    @discord.ui.button(emoji=chr(11013) + chr(65039), style=discord.ButtonStyle.secondary)
+    @discord.ui.button(
+        emoji=chr(11013) + chr(65039), style=discord.ButtonStyle.secondary
+    )
     async def prev_btn(
         self, interaction: discord.Interaction, button: discord.ui.Button
     ):
         self.index -= 1
         await self._edit(interaction)
 
-    @discord.ui.button(emoji=chr(10145) + chr(65039), style=discord.ButtonStyle.secondary)
+    @discord.ui.button(
+        emoji=chr(10145) + chr(65039), style=discord.ButtonStyle.secondary
+    )
     async def next_btn(
         self, interaction: discord.Interaction, button: discord.ui.Button
     ):
