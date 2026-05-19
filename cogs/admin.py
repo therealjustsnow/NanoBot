@@ -60,6 +60,64 @@ _ALL_COGS = (
 _VALID_LEVELS = ("DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL")
 
 
+class ServersView(discord.ui.View):
+    """Paginated ◀ ▶ navigation for the servers command."""
+
+    def __init__(
+        self,
+        embeds: list[discord.Embed],
+        author: discord.Member,
+        index: int = 0,
+    ):
+        super().__init__(timeout=120)
+        self.embeds = embeds
+        self.author = author
+        self.index = index
+        self.message: discord.Message | None = None
+        self._update_buttons()
+
+    def _update_buttons(self):
+        self.prev_btn.disabled = self.index == 0
+        self.next_btn.disabled = self.index == len(self.embeds) - 1
+
+    async def _edit(self, interaction: discord.Interaction):
+        self._update_buttons()
+        await interaction.response.edit_message(
+            embed=self.embeds[self.index], view=self
+        )
+
+    async def interaction_check(self, interaction: discord.Interaction) -> bool:
+        if interaction.user != self.author:
+            await interaction.response.send_message(
+                "Only " + self.author.display_name + " can navigate this list.",
+                ephemeral=True,
+            )
+            return False
+        return True
+
+    async def on_timeout(self):
+        self.stop()
+        if self.message:
+            try:
+                await self.message.edit(view=None)
+            except discord.HTTPException:
+                pass
+
+    @discord.ui.button(emoji=chr(11013) + chr(65039), style=discord.ButtonStyle.secondary)
+    async def prev_btn(
+        self, interaction: discord.Interaction, button: discord.ui.Button
+    ):
+        self.index -= 1
+        await self._edit(interaction)
+
+    @discord.ui.button(emoji=chr(10145) + chr(65039), style=discord.ButtonStyle.secondary)
+    async def next_btn(
+        self, interaction: discord.Interaction, button: discord.ui.Button
+    ):
+        self.index += 1
+        await self._edit(interaction)
+
+
 # ══════════════════════════════════════════════════════════════════════════════
 class Admin(commands.Cog):
     """Owner-only bot management."""
@@ -1169,7 +1227,8 @@ class Admin(commands.Cog):
             "List every server NanoBot is currently in.\n\n"
             "Shows: name, ID, member count, owner.\n"
             "Sorted by member count descending.\n"
-            "Paginates automatically at 10 servers per embed."
+            "Paginates automatically at 10 servers per embed.\n"
+            "Use the ◀ ▶ buttons to navigate pages."
         ),
     )
     async def servers(self, ctx: commands.Context, page: int = 1):
@@ -1179,7 +1238,6 @@ class Admin(commands.Cog):
         total_guilds = len(guilds)
         total_members = sum(g.member_count or 0 for g in guilds)
 
-        # Build lines — compact for mobile readability
         lines = []
         for i, g in enumerate(guilds, start=1):
             if g.owner_id:
@@ -1197,27 +1255,34 @@ class Admin(commands.Cog):
                 f"    🆔 `{g.id}` · 👥 {g.member_count:,} · 👑 {owner_str}"
             )
 
-        # One page at a time — no more embed floods
         page_size = 10
-        pages = [lines[i : i + page_size] for i in range(0, len(lines), page_size)]
-        total_pages = len(pages)
-        page = max(1, min(page, total_pages))
+        chunks = [lines[i : i + page_size] for i in range(0, len(lines), page_size)]
+        total_pages = len(chunks)
+        start_index = max(0, min(page - 1, total_pages - 1))
 
-        e = h.embed(
-            title=f"🌐 Servers ({total_guilds})",
-            description="\n".join(pages[page - 1]),
-            color=h.BLUE,
-        )
-        footer = (
-            f"Page {page}/{total_pages}  ·  "
-            f"{total_guilds} server(s)  ·  {total_members:,} total members  ·  NanoBot"
-        )
-        if total_pages > 1:
-            footer += f"  ·  !servers {page + 1 if page < total_pages else 1} for next"
-        e.set_footer(text=footer)
-        await ctx.send(embed=e)
+        def _build_embed(idx: int) -> discord.Embed:
+            e = h.embed(
+                title=f"🌐 Servers ({total_guilds})",
+                description="\n".join(chunks[idx]),
+                color=h.BLUE,
+            )
+            e.set_footer(
+                text=(
+                    f"Page {idx + 1}/{total_pages}  ·  "
+                    f"{total_guilds} server(s)  ·  {total_members:,} total members  ·  NanoBot"
+                )
+            )
+            return e
 
-        log.info(f"servers: page {page}/{total_pages} for {ctx.author}")
+        embeds = [_build_embed(i) for i in range(total_pages)]
+
+        if total_pages == 1:
+            await ctx.send(embed=embeds[0])
+        else:
+            view = ServersView(embeds=embeds, author=ctx.author, index=start_index)
+            view.message = await ctx.send(embed=embeds[start_index], view=view)
+
+        log.info(f"servers: page {start_index + 1}/{total_pages} for {ctx.author}")
 
 
 # ── Registration ───────────────────────────────────────────────────────────────
