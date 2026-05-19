@@ -113,7 +113,7 @@ class ServersView(discord.ui.View):
         await self._edit(interaction)
 
     @discord.ui.button(
-        emoji=chr(10060), style=discord.ButtonStyle.danger, label="Close"
+        emoji=chr(10060), style=discord.ButtonStyle.secondary
     )
     async def close_btn(
         self, interaction: discord.Interaction, button: discord.ui.Button
