@@ -225,19 +225,27 @@ class Votes(commands.Cog):
                 log.warning(f"webhook_allowed_ips: invalid entry ignored: {entry!r}")
         return networks
 
-    async def _start_webhook_server(self):
-        allowed = self._allowed_networks
+    @commands.Cog.listener()
+    async def on_config_reloaded(self, cfg: dict):
+        self._allowed_networks = self._parse_allowed_ips(
+            cfg.get("webhook_allowed_ips", "")
+        )
+        log.info(
+            f"webhook_allowed_ips reloaded — {len(self._allowed_networks)} network(s)"
+        )
 
+    async def _start_webhook_server(self):
         @aiohttp.web.middleware
         async def ip_filter(
             request: aiohttp.web.Request, handler
         ) -> aiohttp.web.StreamResponse:
-            if allowed:
+            nets = self._allowed_networks
+            if nets:
                 try:
                     addr = ipaddress.ip_address(request.remote)
                 except ValueError:
                     return aiohttp.web.Response(status=403)
-                if not any(addr in net for net in allowed):
+                if not any(addr in net for net in nets):
                     log.debug(f"Webhook: blocked {request.remote} — not in allowlist")
                     return aiohttp.web.Response(status=403)
             return await handler(request)
@@ -252,10 +260,10 @@ class Votes(commands.Cog):
         site = aiohttp.web.TCPSite(runner, "0.0.0.0", self.webhook_port)
         await site.start()
         self._http_runner = runner
-        if allowed:
+        if self._allowed_networks:
             log.info(
                 f"Vote webhook server listening on :{self.webhook_port} "
-                f"(IP allowlist: {len(allowed)} network(s))"
+                f"(IP allowlist: {len(self._allowed_networks)} network(s))"
             )
         else:
             log.info(f"Vote webhook server listening on :{self.webhook_port}")

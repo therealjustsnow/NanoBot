@@ -185,6 +185,7 @@ class NanoBot(commands.Bot):
         http_level = logging.DEBUG if new_cfg.get("log_http") else logging.WARNING
         logging.getLogger("discord.http").setLevel(http_level)
 
+        self.dispatch("config_reloaded", self.config)
         return new_cfg
 
     # ── Startup ────────────────────────────────────────────────────────────────
