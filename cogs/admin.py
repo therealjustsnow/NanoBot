@@ -295,7 +295,7 @@ class Admin(commands.Cog):
     # ══════════════════════════════════════════════════════════════════════════
     @commands.command(
         name="shutdown",
-        aliases=["die", "stop"],
+        aliases=["die"],
         help="Gracefully shut NanoBot down.",
     )
     async def shutdown(self, ctx: commands.Context):
