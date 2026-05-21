@@ -3,8 +3,9 @@ cogs/debug.py
 Owner-only shell and Python REPL commands for remote administration.
 
 Commands:
-  sh  [--disable-timeout] <command>  — run a shell command, get stdout/stderr back
-  py  [--disable-timeout] <code>     — evaluate Python in the bot process (supports await)
+  sh      [--disable-timeout] <command>  — run a shell command, get stdout/stderr back
+  shkill                                 — kill the active --disable-timeout shell process
+  py      [--disable-timeout] <code>     — evaluate Python in the bot process (supports await)
 """
 
 import asyncio
@@ -37,6 +38,7 @@ class Debug(commands.Cog):
 
     def __init__(self, bot: commands.Bot):
         self.bot = bot
+        self._active_proc: asyncio.subprocess.Process | None = None
 
     async def cog_check(self, ctx: commands.Context) -> bool:
         if not await self.bot.is_owner(ctx.author):
@@ -87,6 +89,9 @@ class Debug(commands.Cog):
             log.error("sh: spawn failed: %s", exc, exc_info=exc)
             return await ctx.reply(embed=h.err(f"Failed to start process: {exc}"))
 
+        if disable_timeout:
+            self._active_proc = proc
+
         try:
             stdout_b, stderr_b = await asyncio.wait_for(
                 proc.communicate(), timeout=timeout
@@ -100,6 +105,9 @@ class Debug(commands.Cog):
                     "⏱️ Timed Out",
                 )
             )
+        finally:
+            if disable_timeout and self._active_proc is proc:
+                self._active_proc = None
 
         stdout = stdout_b.decode(errors="replace").strip()
         stderr = stderr_b.decode(errors="replace").strip()
@@ -121,6 +129,39 @@ class Debug(commands.Cog):
         )
         e.set_footer(text=f"exit {rc}  ·  NanoBot Debug")
         await ctx.reply(embed=e)
+
+    # ══════════════════════════════════════════════════════════════════════════
+    #  shkill
+    # ══════════════════════════════════════════════════════════════════════════
+    @commands.command(
+        name="shkill",
+        help=(
+            "Kill the currently running n!sh --disable-timeout process, if any.\n\n"
+            "Owner-only. Use this if you accidentally started a shell command without\n"
+            "a timeout and need to abort it.\n\n"
+            "Example:\n"
+            "  !shkill"
+        ),
+    )
+    async def shkill(self, ctx: commands.Context):
+        proc = self._active_proc
+        if proc is None:
+            return await ctx.reply(
+                embed=h.warn("No active no-timeout shell process to kill.")
+            )
+
+        if proc.returncode is not None:
+            self._active_proc = None
+            return await ctx.reply(embed=h.warn("Process already finished."))
+
+        proc.kill()
+        log.warning(
+            "shkill: %s (%s) killed active proc pid=%s",
+            ctx.author,
+            ctx.author.id,
+            proc.pid,
+        )
+        await ctx.reply(embed=h.ok(f"Killed process (pid {proc.pid})."))
 
     # ══════════════════════════════════════════════════════════════════════════
     #  py
