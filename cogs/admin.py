@@ -54,6 +54,7 @@ _ALL_COGS = (
     "cogs.eli5",
     "cogs.images",
     "cogs.fun",
+    "cogs.music",
     "cogs.debug",
 )
 

@@ -73,6 +73,7 @@ All features live in `cogs/` as discord.py cogs, hot-reloadable via `n!reload <c
 | `fun.py` | 26 social + 33 reaction GIF commands via nekos.best |
 | `votes.py` | top.gg / DBL / discord.bots.gg stat posting and vote webhooks |
 | `eli5.py` | Plain-English AI explanations via Groq (Llama 3.1 8B) |
+| `music.py` | Voice music player: yt-dlp streaming, per-guild in-memory queue, interactive Now Playing card (buttons), loop/shuffle/seek/volume, idle auto-disconnect. Requires FFmpeg binary + PyNaCl. State is in-memory only (not restart-safe). |
 
 ### Data Layer
 

@@ -72,6 +72,14 @@ NanoBot fixes that.
 - GIFs from nekos.best (no API key needed)
 - Random anime image commands: husbando, kitsune, neko, waifu
 
+**Music**
+- Stream from YouTube and 1000+ other sites via yt-dlp -- paste a URL or just search
+- Interactive Now Playing card: play/pause, skip, stop, loop, shuffle buttons (mobile-first)
+- Live progress bar that updates as the track plays
+- Per-server queue with playlist support, shuffle, remove, and clear
+- Loop modes (off / single track / whole queue), volume 0-200%, and seek
+- Auto-disconnect when idle or left alone in the channel
+
 **AI**
 - `/eli5` -- plain-English explanations via Groq (Llama 3.1 8B, free tier)
 
@@ -95,6 +103,7 @@ NanoBot fixes that.
 
 - Python 3.11+
 - A Discord bot application ([discord.com/developers](https://discord.com/developers/applications))
+- **FFmpeg** on the host's PATH (required only for the Music cog) -- e.g. `apt install ffmpeg` / `brew install ffmpeg`
 
 ### 2. Install
 
