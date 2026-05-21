@@ -3,41 +3,63 @@ cogs/music.py — Voice music player.
 
 Streams audio from YouTube (and the many other sites yt-dlp supports) into a
 voice channel. Designed mobile-first: a single "Now Playing" card carries
-interactive buttons (play/pause, skip, stop, loop, shuffle, queue) so mods and
-listeners can drive playback from a phone without typing commands.
+interactive buttons (play/pause, skip, stop, loop, shuffle, replay, autoplay,
+queue) so listeners can drive playback from a phone without typing commands.
 
 Runtime requirements (see requirements.txt):
   - yt-dlp        — source extraction / search
   - PyNaCl        — Discord voice encryption
   - FFmpeg binary — must be installed on the host and on PATH
 
+Config ([music] section, all optional — see example_config.ini):
+  music_cookie_file     — path to a yt-dlp cookies.txt (age/region/rate limits)
+  music_default_volume  — default volume 0-200 (default 50)
+  music_idle_timeout    — seconds idle/alone before disconnect (default 180)
+  music_skip_ratio      — percent of listeners needed to vote-skip (default 50)
+  music_max_queue       — max tracks per queue (default 500)
+
 Commands (hybrid — slash + prefix), category "🎵 Music":
-  play / p       — queue a song or playlist (URL or search terms)
-  skip / s       — skip the current track
-  stop           — stop, clear the queue, and leave the channel
-  pause / resume — toggle playback
-  nowplaying/np  — show the live Now Playing card
-  queue / q      — show the upcoming queue
-  volume / vol   — set playback volume (0-200)
-  loop           — cycle loop mode: off → track → queue
-  shuffle        — shuffle the queue
-  remove         — remove a track from the queue by position
-  clear          — empty the queue (keeps the current track)
-  seek           — jump to a position in the current track
-  join           — connect the bot to your voice channel
+  play / p          — queue a song or playlist (URL or search terms)
+  playnext / pn     — queue a track to play next
+  playnow           — skip the current track and play this immediately
+  search            — search and pick a result from a menu
+  skip / s          — vote-skip (requester / Manage Server force-skips)
+  forceskip / fs    — force-skip (Manage Server)
+  jump              — skip ahead to a queue position
+  stop              — stop, clear the queue, and leave the channel
+  pause / resume    — toggle playback
+  nowplaying / np   — show the live Now Playing card
+  queue / q         — show the upcoming queue
+  move              — reorder a track in the queue
+  remove / clear    — remove one / all queued tracks
+  shuffle           — shuffle the queue
+  volume / vol      — set playback volume (0-200)
+  speed             — set playback speed (0.5-3.0)
+  filter / fx       — apply an audio effect (bassboost, nightcore, …)
+  loop / repeat     — cycle loop mode: off → track → queue
+  seek / replay     — jump within / restart the current track
+  lyrics            — fetch lyrics for the current track
+  grab / save       — DM yourself the current track
+  autoplay          — keep playing from the autoplaylist when the queue empties
+  autoplaylist/apl  — manage the persistent server autoplaylist
+  join / summon     — connect the bot to your voice channel
 """
 
 import asyncio
 import logging
+import math
 import random
+import re
 import time
 from dataclasses import dataclass
 from typing import Optional
 
+import aiohttp
 import discord
 from discord import app_commands
 from discord.ext import commands
 
+from utils import db
 from utils import helpers as h
 
 log = logging.getLogger("NanoBot.music")
@@ -58,19 +80,24 @@ LOOP_OFF = "off"
 LOOP_TRACK = "track"
 LOOP_QUEUE = "queue"
 _LOOP_NEXT = {LOOP_OFF: LOOP_TRACK, LOOP_TRACK: LOOP_QUEUE, LOOP_QUEUE: LOOP_OFF}
-_LOOP_LABEL = {
-    LOOP_OFF: "Off",
-    LOOP_TRACK: "🔂 Track",
-    LOOP_QUEUE: "🔁 Queue",
+_LOOP_LABEL = {LOOP_OFF: "Off", LOOP_TRACK: "🔂 Track", LOOP_QUEUE: "🔁 Queue"}
+
+# ── Audio-effect presets (ffmpeg -af chains, comma-separated, no spaces) ────────
+FILTERS: dict[str, str] = {
+    "none": "",
+    "bassboost": "bass=g=15",
+    "treble": "treble=g=12",
+    "nightcore": "asetrate=48000*1.25,aresample=48000",
+    "vaporwave": "asetrate=48000*0.8,aresample=48000",
+    "8d": "apulsator=hz=0.09",
+    "muffle": "lowpass=f=600",
 }
 
-# ── Limits / timeouts ───────────────────────────────────────────────────────────
-IDLE_TIMEOUT = 180  # seconds alone/idle before auto-disconnect
-MAX_QUEUE = 500
 PLAYLIST_CAP = 50  # max tracks pulled from a single playlist
 NP_REFRESH = 15  # seconds between live progress-bar refreshes
+SEARCH_RESULTS = 5  # results shown by the search picker
 
-# ── yt-dlp options ──────────────────────────────────────────────────────────────
+# ── Base yt-dlp options (cookies/limits merged in per call) ─────────────────────
 _YTDL_BASE = {
     "format": "bestaudio/best",
     "noplaylist": False,
@@ -84,7 +111,18 @@ _YTDL_BASE = {
 }
 
 _FFMPEG_BEFORE = "-reconnect 1 -reconnect_streamed 1 -reconnect_delay_max 5"
-_FFMPEG_OPTS = "-vn"
+
+# ── Strip common noise from YouTube titles when looking up lyrics ───────────────
+_LYRICS_NOISE = re.compile(
+    r"\([^)]*\)"  # ( … )
+    r"|\[[^\]]*\]"  # [ … ]
+    r"|\s+(?:ft|feat)\.?\s+.*$"  # " ft. …" / " feat. …"
+    r"|\b(?:official\s+)?(?:music\s+)?video\b"
+    r"|\blyrics?\b"
+    r"|\baudio\b"
+    r"|\bhd\b|\b4k\b|\bm/?v\b",
+    re.IGNORECASE,
+)
 
 
 def _fmt_time(seconds: float | int | None) -> str:
@@ -92,11 +130,11 @@ def _fmt_time(seconds: float | int | None) -> str:
     if not seconds:
         return "🔴 LIVE"
     seconds = int(seconds)
-    h_, rem = divmod(seconds, 3600)
-    m_, s_ = divmod(rem, 60)
-    if h_:
-        return f"{h_}:{m_:02d}:{s_:02d}"
-    return f"{m_}:{s_:02d}"
+    hh, rem = divmod(seconds, 3600)
+    mm, ss = divmod(rem, 60)
+    if hh:
+        return f"{hh}:{mm:02d}:{ss:02d}"
+    return f"{mm}:{ss:02d}"
 
 
 def _progress_bar(elapsed: float, total: float | None, length: int = 18) -> str:
@@ -106,6 +144,22 @@ def _progress_bar(elapsed: float, total: float | None, length: int = 18) -> str:
     frac = max(0.0, min(1.0, elapsed / total))
     filled = int(frac * (length - 1))
     return "▬" * filled + "🔘" + "▬" * (length - 1 - filled)
+
+
+def _parse_timestamp(text: str) -> Optional[int]:
+    """Parse 'H:MM:SS', 'M:SS', or plain seconds into an int. None if invalid."""
+    text = text.strip()
+    try:
+        if ":" in text:
+            parts = [int(p) for p in text.split(":")]
+            if len(parts) == 2:
+                return parts[0] * 60 + parts[1]
+            if len(parts) == 3:
+                return parts[0] * 3600 + parts[1] * 60 + parts[2]
+            return None
+        return int(text)
+    except ValueError:
+        return None
 
 
 # ── Track ───────────────────────────────────────────────────────────────────────
@@ -123,7 +177,7 @@ class Track:
     requester_name: str
 
     @classmethod
-    def from_info(cls, info: dict, requester: discord.abc.User) -> "Track":
+    def from_info(cls, info: dict, requester_id: int, requester_name: str) -> "Track":
         vid = info.get("id")
         webpage = (
             info.get("webpage_url")
@@ -140,8 +194,8 @@ class Track:
             webpage_url=webpage,
             thumbnail=thumb,
             uploader=info.get("uploader") or info.get("channel"),
-            requester_id=requester.id,
-            requester_name=requester.display_name,
+            requester_id=requester_id,
+            requester_name=requester_name,
         )
 
 
@@ -165,6 +219,11 @@ class Controls(discord.ui.View):
             if self.player.loop != LOOP_OFF
             else discord.ButtonStyle.secondary
         )
+        self.autoplay_btn.style = (
+            discord.ButtonStyle.success
+            if self.player.autoplay
+            else discord.ButtonStyle.secondary
+        )
 
     async def interaction_check(self, interaction: discord.Interaction) -> bool:
         voice = self.player.voice
@@ -181,7 +240,7 @@ class Controls(discord.ui.View):
             return False
         return True
 
-    async def _refresh_message(self, interaction: discord.Interaction) -> None:
+    async def _refresh(self, interaction: discord.Interaction) -> None:
         self._sync()
         try:
             await interaction.response.edit_message(
@@ -190,38 +249,139 @@ class Controls(discord.ui.View):
         except discord.HTTPException:
             pass
 
-    @discord.ui.button(emoji="⏸️", label="Pause", style=discord.ButtonStyle.primary)
+    # Row 0 — transport
+    @discord.ui.button(
+        emoji="⏸️", label="Pause", style=discord.ButtonStyle.primary, row=0
+    )
     async def toggle(self, interaction: discord.Interaction, _: discord.ui.Button):
         voice = self.player.voice
         if voice and voice.is_paused():
             self.player.resume()
         elif voice and voice.is_playing():
             self.player.pause()
-        await self._refresh_message(interaction)
+        await self._refresh(interaction)
 
-    @discord.ui.button(emoji="⏭️", label="Skip", style=discord.ButtonStyle.secondary)
+    @discord.ui.button(
+        emoji="⏭️", label="Skip", style=discord.ButtonStyle.secondary, row=0
+    )
     async def skip(self, interaction: discord.Interaction, _: discord.ui.Button):
         self.player.skip()
         await interaction.response.send_message("⏭️ Skipped.", ephemeral=True)
 
-    @discord.ui.button(emoji="⏹️", label="Stop", style=discord.ButtonStyle.danger)
+    @discord.ui.button(
+        emoji="⏹️", label="Stop", style=discord.ButtonStyle.danger, row=0
+    )
     async def stop(self, interaction: discord.Interaction, _: discord.ui.Button):
         await interaction.response.send_message(
             "⏹️ Stopped and left the channel.", ephemeral=True
         )
         await self.player.destroy(reason="stop button")
 
-    @discord.ui.button(label="Off", emoji="🔁", style=discord.ButtonStyle.secondary)
+    @discord.ui.button(
+        label="Off", emoji="🔁", style=discord.ButtonStyle.secondary, row=0
+    )
     async def loop_btn(self, interaction: discord.Interaction, _: discord.ui.Button):
         self.player.loop = _LOOP_NEXT[self.player.loop]
-        await self._refresh_message(interaction)
+        await self._refresh(interaction)
 
-    @discord.ui.button(emoji="🔀", label="Shuffle", style=discord.ButtonStyle.secondary)
+    @discord.ui.button(
+        emoji="🔀", label="Shuffle", style=discord.ButtonStyle.secondary, row=0
+    )
     async def shuffle(self, interaction: discord.Interaction, _: discord.ui.Button):
         n = self.player.shuffle()
         await interaction.response.send_message(
             f"🔀 Shuffled **{n}** track(s).", ephemeral=True
         )
+
+    # Row 1 — extras
+    @discord.ui.button(
+        emoji="⏮️", label="Replay", style=discord.ButtonStyle.secondary, row=1
+    )
+    async def replay(self, interaction: discord.Interaction, _: discord.ui.Button):
+        await self.player.seek(0)
+        await interaction.response.send_message("⏮️ Replaying.", ephemeral=True)
+
+    @discord.ui.button(
+        emoji="📻", label="Autoplay", style=discord.ButtonStyle.secondary, row=1
+    )
+    async def autoplay_btn(
+        self, interaction: discord.Interaction, _: discord.ui.Button
+    ):
+        self.player.autoplay = not self.player.autoplay
+        self.player._added.set()
+        await self._refresh(interaction)
+
+    @discord.ui.button(
+        emoji="📜", label="Queue", style=discord.ButtonStyle.secondary, row=1
+    )
+    async def queue_btn(self, interaction: discord.Interaction, _: discord.ui.Button):
+        await interaction.response.send_message(
+            embed=self.player.queue_embed(), ephemeral=True
+        )
+
+
+# ── Search result picker ────────────────────────────────────────────────────────
+class SearchView(discord.ui.View):
+    """A dropdown of search results; the invoker picks one to queue."""
+
+    def __init__(self, cog: "Music", ctx: commands.Context, tracks: list[Track]):
+        super().__init__(timeout=60)
+        self.cog = cog
+        self.ctx = ctx
+        self.tracks = tracks
+        self.message: Optional[discord.Message] = None
+
+        options = []
+        for i, t in enumerate(tracks):
+            label = t.title if len(t.title) <= 90 else t.title[:87] + "…"
+            options.append(
+                discord.SelectOption(
+                    label=label,
+                    value=str(i),
+                    description=_fmt_time(t.duration),
+                    emoji="🎵",
+                )
+            )
+        self.select.options = options
+
+    async def interaction_check(self, interaction: discord.Interaction) -> bool:
+        if interaction.user.id != self.ctx.author.id:
+            await interaction.response.send_message(
+                "Only the person who searched can pick.", ephemeral=True
+            )
+            return False
+        return True
+
+    async def on_timeout(self):
+        if self.message:
+            try:
+                await self.message.edit(
+                    content="⌛ Search timed out.", view=None, embed=None
+                )
+            except discord.HTTPException:
+                pass
+
+    @discord.ui.select(placeholder="Pick a track to queue…")
+    async def select(self, interaction: discord.Interaction, select: discord.ui.Select):
+        track = self.tracks[int(select.values[0])]
+        player = await self.cog._ensure_voice(self.ctx, join=True)
+        if player is None:
+            await interaction.response.edit_message(
+                content="Couldn't join your voice channel.", view=None, embed=None
+            )
+            return
+        was_idle = player.current is None and not player.queue
+        player.add(track)
+        verb = "Now playing" if was_idle else "Queued"
+        await interaction.response.edit_message(
+            content=None,
+            embed=h.ok(
+                f"**[{track.title}]({track.webpage_url})**\n`{_fmt_time(track.duration)}`",
+                f"🎵 {verb}",
+            ),
+            view=None,
+        )
+        self.stop()
 
 
 # ── Per-guild player ────────────────────────────────────────────────────────────
@@ -236,7 +396,13 @@ class GuildPlayer:
         self.queue: list[Track] = []
         self.current: Optional[Track] = None
         self.loop: str = LOOP_OFF
-        self.volume: float = 0.5
+        self.volume: float = cog.default_volume()
+        self.speed: float = 1.0
+        self.audio_filter: str = "none"
+        self.autoplay: bool = False
+        self.skip_votes: set[int] = set()
+
+        self.idle_timeout: int = cog.idle_timeout()
 
         self.text_channel: Optional[discord.abc.Messageable] = None
         self.now_msg: Optional[discord.Message] = None
@@ -251,6 +417,10 @@ class GuildPlayer:
         self._paused_at: Optional[float] = None
         self._seek_to: Optional[float] = None
 
+        # restart-in-place control (seek / effect changes)
+        self._restart = False
+        self._force_current = False
+
         self._destroyed = False
         self._loop_task = self.bot.loop.create_task(self._player_loop())
         self._refresh_task = self.bot.loop.create_task(self._refresh_loop())
@@ -260,15 +430,26 @@ class GuildPlayer:
     def voice(self) -> Optional[discord.VoiceClient]:
         return self.guild.voice_client
 
+    def listeners(self) -> list[discord.Member]:
+        if not self.voice or not self.voice.channel:
+            return []
+        return [m for m in self.voice.channel.members if not m.bot]
+
     # ── queue helpers ────────────────────────────────────────────────────────
     def add(self, track: Track) -> None:
         self.queue.append(track)
         self._added.set()
 
+    def add_front(self, tracks: list[Track]) -> None:
+        for t in reversed(tracks):
+            self.queue.insert(0, t)
+        self._added.set()
+
     def add_many(self, tracks: list[Track]) -> int:
+        cap = self.cog.max_queue()
         added = 0
         for t in tracks:
-            if len(self.queue) >= MAX_QUEUE:
+            if len(self.queue) >= cap:
                 break
             self.queue.append(t)
             added += 1
@@ -315,17 +496,35 @@ class GuildPlayer:
         return self._base_offset + (ref - self._play_started)
 
     async def seek(self, seconds: float) -> bool:
+        """Restart the current track at a new offset without advancing the queue."""
         if not self.current or not self.voice:
             return False
         self._seek_to = max(0.0, seconds)
-        # Restart the current track at the new offset without advancing the queue.
-        if self.loop != LOOP_TRACK:
-            self.queue.insert(0, self.current)
-            self._added.set()
+        self._restart = True
         self.voice.stop()
         return True
 
+    async def reapply_effects(self) -> None:
+        """Re-stream the current track so speed/filter changes take effect."""
+        if (
+            self.current
+            and self.voice
+            and (self.voice.is_playing() or self.voice.is_paused())
+        ):
+            await self.seek(self.position())
+
     # ── source resolution ────────────────────────────────────────────────────
+    def _ffmpeg_options(self) -> str:
+        parts = []
+        preset = FILTERS.get(self.audio_filter, "")
+        if preset:
+            parts.append(preset)
+        if abs(self.speed - 1.0) > 0.01:
+            parts.append(f"atempo={self.speed:g}")
+        if parts:
+            return "-vn -af " + ",".join(parts)
+        return "-vn"
+
     async def _make_source(self, track: Track) -> discord.PCMVolumeTransformer:
         info = await self.cog.resolve_stream(track.query)
         stream_url = info["url"]
@@ -336,7 +535,7 @@ class GuildPlayer:
             before = f"{before} -ss {offset}"
             self._seek_to = None
         audio = discord.FFmpegPCMAudio(
-            stream_url, before_options=before, options=_FFMPEG_OPTS
+            stream_url, before_options=before, options=self._ffmpeg_options()
         )
         self._base_offset = offset
         return discord.PCMVolumeTransformer(audio, volume=self.volume)
@@ -348,15 +547,19 @@ class GuildPlayer:
             while not self._destroyed:
                 self._next.clear()
 
-                if self.loop == LOOP_TRACK and self.current is not None:
+                if self._force_current and self.current is not None:
+                    self._force_current = False
+                    track = self.current
+                elif self.loop == LOOP_TRACK and self.current is not None:
                     track = self.current
                 else:
-                    track = await self._wait_for_track()
+                    track = await self._next_track()
                     if track is None:
                         await self.destroy(reason="inactivity")
                         return
 
                 self.current = track
+                self.skip_votes.clear()
 
                 if not self.voice or not self.voice.is_connected():
                     await self.destroy(reason="disconnected")
@@ -385,6 +588,11 @@ class GuildPlayer:
                 if self._destroyed:
                     return
 
+                if self._restart:
+                    self._restart = False
+                    self._force_current = True
+                    continue
+
                 if self.loop == LOOP_QUEUE and track is not None:
                     self.queue.append(track)
                     self._added.set()
@@ -395,23 +603,46 @@ class GuildPlayer:
         except Exception as exc:  # pragma: no cover - safety net
             log.error("Player loop crashed in %s: %s", self.guild.id, exc, exc_info=exc)
 
-    async def _wait_for_track(self) -> Optional[Track]:
-        while not self.queue:
+    async def _next_track(self) -> Optional[Track]:
+        """Pop the queue, fall back to autoplay, or wait until something arrives."""
+        while not self._destroyed:
+            if self.queue:
+                return self.queue.pop(0)
+            if self.autoplay:
+                picked = await self._autoplay_pick()
+                if picked is not None:
+                    return picked
             self._added.clear()
             try:
-                await asyncio.wait_for(self._added.wait(), timeout=IDLE_TIMEOUT)
+                await asyncio.wait_for(self._added.wait(), timeout=self.idle_timeout)
             except asyncio.TimeoutError:
                 return None
-            if self._destroyed:
-                return None
-        return self.queue.pop(0)
+        return None
+
+    async def _autoplay_pick(self) -> Optional[Track]:
+        entries = await db.get_autoplaylist(self.guild.id)
+        if not entries:
+            return None
+        choice = random.choice(entries)
+        try:
+            tracks = await self.cog.search(
+                choice["url"], requester_id=self.bot.user.id, requester_name="Autoplay"
+            )
+        except Exception as exc:
+            log.debug("Autoplay resolve failed for %s: %s", choice["url"], exc)
+            return None
+        if not tracks:
+            return None
+        track = tracks[0]
+        track.requester_name = "📻 Autoplay"
+        return track
 
     def _after(self, error: Optional[Exception]) -> None:
         if error:
             log.warning("Voice playback error in %s: %s", self.guild.id, error)
         self.bot.loop.call_soon_threadsafe(self._next.set)
 
-    # ── Now Playing card ──────────────────────────────────────────────────────
+    # ── embeds ────────────────────────────────────────────────────────────────
     def now_playing_embed(self) -> discord.Embed:
         t = self.current
         if not t:
@@ -436,26 +667,59 @@ class GuildPlayer:
         e.add_field(name="Volume", value=f"{int(self.volume * 100)}%", inline=True)
         e.add_field(name="Loop", value=_LOOP_LABEL[self.loop], inline=True)
         e.add_field(name="Requested by", value=t.requester_name, inline=True)
+
+        fx = []
+        if self.audio_filter != "none":
+            fx.append(self.audio_filter)
+        if abs(self.speed - 1.0) > 0.01:
+            fx.append(f"{self.speed:g}×")
+        if fx:
+            e.add_field(name="Effects", value=" · ".join(fx), inline=True)
+
         if self.queue:
             nxt = self.queue[0]
-            up_next = nxt.title if len(nxt.title) <= 50 else nxt.title[:47] + "…"
+            up = nxt.title if len(nxt.title) <= 50 else nxt.title[:47] + "…"
             e.add_field(
-                name=f"Up Next ({len(self.queue)} in queue)",
-                value=up_next,
-                inline=False,
+                name=f"Up Next ({len(self.queue)} in queue)", value=up, inline=False
             )
-        e.set_footer(text="NanoBot Music")
+        e.set_footer(
+            text="NanoBot Music" + (" · 📻 Autoplay on" if self.autoplay else "")
+        )
+        return e
+
+    def queue_embed(self) -> discord.Embed:
+        if self.current is None and not self.queue:
+            return h.info("The queue is empty.", "🎶 Queue")
+        lines = []
+        if self.current:
+            lines.append(
+                f"**▶️ Now:** [{self.current.title}]({self.current.webpage_url}) "
+                f"`{_fmt_time(self.current.duration)}`"
+            )
+        if self.queue:
+            lines.append("")
+            for i, t in enumerate(self.queue[:15], start=1):
+                title = t.title if len(t.title) <= 55 else t.title[:52] + "…"
+                lines.append(f"`{i:>2}.` {title} `{_fmt_time(t.duration)}`")
+            if len(self.queue) > 15:
+                lines.append(f"_…and {len(self.queue) - 15} more._")
+        total = sum(t.duration or 0 for t in self.queue)
+        e = h.embed(f"🎶 Queue · {len(self.queue)} track(s)", "\n".join(lines), ACCENT)
+        e.set_footer(
+            text=f"Loop: {_LOOP_LABEL[self.loop]} · "
+            f"Total queued: {_fmt_time(total)} · NanoBot Music"
+        )
         return e
 
     async def _post_now_playing(self) -> None:
         if not self.text_channel:
             return
         self.now_view = Controls(self)
-        embed = self.now_playing_embed()
-        # Reuse the existing card if it's still the most recent message.
         await self._retire_now_playing(delete=True)
         try:
-            self.now_msg = await self.text_channel.send(embed=embed, view=self.now_view)
+            self.now_msg = await self.text_channel.send(
+                embed=self.now_playing_embed(), view=self.now_view
+            )
         except discord.HTTPException as exc:
             log.debug("Could not post Now Playing card: %s", exc)
             self.now_msg = None
@@ -542,10 +806,41 @@ class Music(commands.Cog):
         for player in list(self.players.values()):
             await player.destroy(reason="cog unload")
 
+    # ── config helpers (read live from bot.config so reloadconfig applies) ─────
+    def _cfg_int(self, key: str, default: int) -> int:
+        val = self.bot.config.get(key)
+        try:
+            return int(val) if val not in (None, "") else default
+        except (TypeError, ValueError):
+            return default
+
+    def default_volume(self) -> float:
+        return max(0, min(200, self._cfg_int("music_default_volume", 50))) / 100
+
+    def idle_timeout(self) -> int:
+        return max(30, self._cfg_int("music_idle_timeout", 180))
+
+    def skip_ratio(self) -> float:
+        return max(0, min(100, self._cfg_int("music_skip_ratio", 50))) / 100
+
+    def max_queue(self) -> int:
+        return max(1, self._cfg_int("music_max_queue", 500))
+
+    def _cookie_file(self) -> Optional[str]:
+        val = self.bot.config.get("music_cookie_file")
+        return val or None
+
+    def _ytdl_opts(self, **extra) -> dict:
+        opts = {**_YTDL_BASE, **extra}
+        cookie = self._cookie_file()
+        if cookie:
+            opts["cookiefile"] = cookie
+        return opts
+
     # ── extraction (runs in a thread to avoid blocking the loop) ───────────────
     async def resolve_stream(self, query: str) -> dict:
         """Resolve a single playable stream (used at play time)."""
-        opts = {**_YTDL_BASE, "noplaylist": True}
+        opts = self._ytdl_opts(noplaylist=True)
 
         def _work():
             with yt_dlp.YoutubeDL(opts) as ydl:
@@ -556,15 +851,21 @@ class Music(commands.Cog):
 
         return await self.bot.loop.run_in_executor(None, _work)
 
-    async def search(self, query: str, requester: discord.abc.User) -> list[Track]:
+    async def search(
+        self,
+        query: str,
+        *,
+        requester_id: int,
+        requester_name: str,
+        limit: int = 1,
+    ) -> list[Track]:
         """Resolve a query (URL, playlist, or search terms) into Track metadata."""
         is_url = query.startswith("http://") or query.startswith("https://")
-        opts = {**_YTDL_BASE, "playlistend": PLAYLIST_CAP}
+        opts = self._ytdl_opts(playlistend=PLAYLIST_CAP)
         if is_url:
-            # extract_flat keeps big playlists fast; single videos still resolve fully.
             opts["extract_flat"] = "in_playlist"
         else:
-            query = f"ytsearch1:{query}"
+            query = f"ytsearch{limit}:{query}"
 
         def _work():
             with yt_dlp.YoutubeDL(opts) as ydl:
@@ -573,13 +874,11 @@ class Music(commands.Cog):
         info = await self.bot.loop.run_in_executor(None, _work)
         if not info:
             return []
-
         entries = info["entries"] if "entries" in info else [info]
-        tracks: list[Track] = []
+        tracks = []
         for entry in entries:
-            if not entry:
-                continue
-            tracks.append(Track.from_info(entry, requester))
+            if entry:
+                tracks.append(Track.from_info(entry, requester_id, requester_name))
         return tracks
 
     # ── shared helpers ─────────────────────────────────────────────────────────
@@ -588,6 +887,12 @@ class Music(commands.Cog):
         if player is None or player._destroyed:
             player = GuildPlayer(self, guild)
             self.players[guild.id] = player
+        return player
+
+    def _active_player(self, ctx: commands.Context) -> Optional[GuildPlayer]:
+        player = self.players.get(ctx.guild.id)
+        if player is None or player._destroyed:
+            return None
         return player
 
     async def _ensure_voice(
@@ -643,11 +948,83 @@ class Music(commands.Cog):
 
         return player
 
-    def _active_player(self, ctx: commands.Context) -> Optional[GuildPlayer]:
-        player = self.players.get(ctx.guild.id)
-        if player is None or player._destroyed:
+    async def _resolve_for(
+        self, ctx: commands.Context, query: str
+    ) -> Optional[list[Track]]:
+        try:
+            tracks = await self.search(
+                query,
+                requester_id=ctx.author.id,
+                requester_name=ctx.author.display_name,
+            )
+        except Exception as exc:
+            log.warning("Search failed for %r: %s", query, exc)
+            await ctx.reply(
+                embed=h.err(f"Couldn't find anything for that.\n`{exc}`"),
+                ephemeral=True,
+            )
             return None
-        return player
+        if not tracks:
+            await ctx.reply(embed=h.err("No results found."), ephemeral=True)
+            return None
+        return tracks
+
+    async def _queue_query(
+        self, ctx: commands.Context, query: str, *, front: bool, then_skip: bool
+    ) -> None:
+        player = await self._ensure_voice(ctx, join=True)
+        if player is None:
+            return
+        await ctx.defer()
+        tracks = await self._resolve_for(ctx, query)
+        if tracks is None:
+            return
+
+        was_idle = player.current is None and not player.queue
+
+        if len(tracks) == 1:
+            t = tracks[0]
+            if front:
+                player.add_front([t])
+            else:
+                player.add(t)
+            if was_idle:
+                await ctx.reply(
+                    embed=h.ok(
+                        f"Now playing **[{t.title}]({t.webpage_url})**.",
+                        "🎵 Starting Playback",
+                    )
+                )
+            else:
+                pos = 1 if front else len(player.queue)
+                verb = "Playing Next" if front else "Added to Queue"
+                e = h.embed(
+                    f"➕ {verb}",
+                    f"**[{t.title}]({t.webpage_url})**\n"
+                    f"`{_fmt_time(t.duration)}` · position **#{pos}** · "
+                    f"requested by {t.requester_name}",
+                    ACCENT,
+                )
+                if t.thumbnail:
+                    e.set_thumbnail(url=t.thumbnail)
+                await ctx.reply(embed=e)
+        else:
+            if front:
+                player.add_front(tracks)
+                added = len(tracks)
+            else:
+                added = player.add_many(tracks)
+            total = sum(t.duration or 0 for t in tracks[:added])
+            await ctx.reply(
+                embed=h.embed(
+                    "➕ Playlist Queued",
+                    f"Added **{added}** track(s) · total `{_fmt_time(total)}`.",
+                    ACCENT,
+                )
+            )
+
+        if then_skip and not was_idle and player.current is not None:
+            player.skip()
 
     # ── auto-disconnect when left alone ─────────────────────────────────────────
     @commands.Cog.listener()
@@ -657,8 +1034,7 @@ class Music(commands.Cog):
         player = self.players.get(member.guild.id)
         if not player or not player.voice or not player.voice.is_connected():
             return
-        channel = player.voice.channel
-        humans = [m for m in channel.members if not m.bot]
+        humans = [m for m in player.voice.channel.members if not m.bot]
         if not humans:
             await asyncio.sleep(20)
             if player.voice and player.voice.is_connected():
@@ -682,8 +1058,7 @@ class Music(commands.Cog):
             "usage": "play <url | search terms>",
             "desc": (
                 "Joins your voice channel and queues the track. Accepts a YouTube "
-                "(or other site) URL, a playlist URL, or plain search terms. If "
-                "something is already playing it's added to the queue."
+                "(or other site) URL, a playlist URL, or plain search terms."
             ),
             "args": [("query", "A URL or search terms")],
             "perms": "None",
@@ -693,67 +1068,105 @@ class Music(commands.Cog):
     @app_commands.describe(query="A URL, playlist URL, or search terms")
     @commands.guild_only()
     async def play(self, ctx: commands.Context, *, query: str):
-        player = await self._ensure_voice(ctx, join=True)
-        if player is None:
-            return
+        await self._queue_query(ctx, query, front=False, then_skip=False)
 
+    @commands.hybrid_command(
+        name="playnext",
+        aliases=["pn", "playtop"],
+        description="Queue a track to play right after the current one.",
+        extras={
+            "category": "🎵 Music",
+            "short": "Queue a track to play next",
+            "usage": "playnext <url | search terms>",
+            "desc": "Adds the track to the front of the queue so it plays next.",
+            "args": [("query", "A URL or search terms")],
+            "perms": "None",
+            "example": "!playnext lofi beats",
+        },
+    )
+    @app_commands.describe(query="A URL or search terms")
+    @commands.guild_only()
+    async def playnext(self, ctx: commands.Context, *, query: str):
+        await self._queue_query(ctx, query, front=True, then_skip=False)
+
+    @commands.hybrid_command(
+        name="playnow",
+        aliases=["playskip", "ps"],
+        description="Skip whatever's playing and play this immediately.",
+        extras={
+            "category": "🎵 Music",
+            "short": "Play a track immediately",
+            "usage": "playnow <url | search terms>",
+            "desc": "Adds the track to the front of the queue and skips the current one.",
+            "args": [("query", "A URL or search terms")],
+            "perms": "None",
+            "example": "!playnow https://youtu.be/dQw4w9WgXcQ",
+        },
+    )
+    @app_commands.describe(query="A URL or search terms")
+    @commands.guild_only()
+    async def playnow(self, ctx: commands.Context, *, query: str):
+        await self._queue_query(ctx, query, front=True, then_skip=True)
+
+    @commands.hybrid_command(
+        name="search",
+        description="Search for a track and pick a result from a menu.",
+        extras={
+            "category": "🎵 Music",
+            "short": "Search and pick a result",
+            "usage": "search <terms>",
+            "desc": "Shows the top results in a dropdown so you can choose which to queue.",
+            "args": [("terms", "What to search for")],
+            "perms": "None",
+            "example": "!search daft punk one more time",
+        },
+    )
+    @app_commands.describe(terms="What to search for")
+    @commands.guild_only()
+    async def search_cmd(self, ctx: commands.Context, *, terms: str):
+        if not YTDLP_AVAILABLE:
+            return await ctx.reply(
+                embed=h.err("Music support isn't installed."), ephemeral=True
+            )
         await ctx.defer()
         try:
-            tracks = await self.search(query, ctx.author)
-        except Exception as exc:
-            log.warning("Search failed for %r: %s", query, exc)
-            return await ctx.reply(
-                embed=h.err(f"Couldn't find anything for that.\n`{exc}`"),
-                ephemeral=True,
+            tracks = await self.search(
+                terms,
+                requester_id=ctx.author.id,
+                requester_name=ctx.author.display_name,
+                limit=SEARCH_RESULTS,
             )
-
+        except Exception as exc:
+            return await ctx.reply(
+                embed=h.err(f"Search failed.\n`{exc}`"), ephemeral=True
+            )
         if not tracks:
             return await ctx.reply(embed=h.err("No results found."), ephemeral=True)
 
-        was_idle = player.current is None and not player.queue
-
-        if len(tracks) == 1:
-            player.add(tracks[0])
-            t = tracks[0]
-            if not was_idle:
-                pos = len(player.queue)
-                e = h.embed(
-                    "➕ Added to Queue",
-                    f"**[{t.title}]({t.webpage_url})**\n"
-                    f"`{_fmt_time(t.duration)}` · position **#{pos}** · "
-                    f"requested by {t.requester_name}",
-                    ACCENT,
-                )
-                if t.thumbnail:
-                    e.set_thumbnail(url=t.thumbnail)
-                await ctx.reply(embed=e)
-            else:
-                await ctx.reply(
-                    embed=h.ok(
-                        f"Now playing **[{t.title}]({t.webpage_url})**.",
-                        "🎵 Starting Playback",
-                    )
-                )
-        else:
-            added = player.add_many(tracks)
-            total = sum(t.duration or 0 for t in tracks[:added])
-            await ctx.reply(
-                embed=h.embed(
-                    "➕ Playlist Queued",
-                    f"Added **{added}** track(s) · total `{_fmt_time(total)}`.",
-                    ACCENT,
-                )
-            )
+        view = SearchView(self, ctx, tracks)
+        e = h.embed(
+            f"🔎 Results for “{terms}”",
+            "\n".join(
+                f"`{i + 1}.` {t.title} `{_fmt_time(t.duration)}`"
+                for i, t in enumerate(tracks)
+            ),
+            ACCENT,
+        )
+        msg = await ctx.reply(embed=e, view=view)
+        view.message = msg
 
     @commands.hybrid_command(
         name="skip",
-        aliases=["s"],
-        description="Skip the current track.",
+        aliases=["s", "voteskip"],
+        description="Vote to skip the current track.",
         extras={
             "category": "🎵 Music",
-            "short": "Skip the current track",
+            "short": "Vote-skip the current track",
             "usage": "skip",
-            "desc": "Stops the current track and advances to the next one in the queue.",
+            "desc": (
+                "Votes to skip. The track requester and members with Manage Server "
+                "always skip instantly; otherwise a majority of listeners is needed."
+            ),
             "args": [],
             "perms": "None",
             "example": "!skip",
@@ -764,9 +1177,91 @@ class Music(commands.Cog):
         player = self._active_player(ctx)
         if not player or player.current is None:
             return await ctx.reply(embed=h.err("Nothing is playing."), ephemeral=True)
+
+        title = player.current.title
+        listeners = player.listeners()
+        is_requester = player.current.requester_id == ctx.author.id
+        perms = ctx.author.guild_permissions
+        is_mod = perms.manage_guild or perms.manage_messages
+        alone = len(listeners) <= 1
+
+        if is_requester or is_mod or alone:
+            player.skip()
+            return await ctx.reply(embed=h.ok(f"Skipped **{title}**.", "⏭️ Skipped"))
+
+        needed = max(1, math.ceil(self.skip_ratio() * len(listeners)))
+        player.skip_votes.add(ctx.author.id)
+        present = {m.id for m in listeners}
+        votes = len(player.skip_votes & present)
+
+        if votes >= needed:
+            player.skip()
+            return await ctx.reply(
+                embed=h.ok(f"Vote passed — skipped **{title}**.", "⏭️ Skipped")
+            )
+        await ctx.reply(
+            embed=h.info(
+                f"Skip vote: **{votes}/{needed}**.\n"
+                "Need more listeners to vote, or ask a mod to `forceskip`.",
+                "🗳️ Vote to Skip",
+            )
+        )
+
+    @commands.hybrid_command(
+        name="forceskip",
+        aliases=["fs"],
+        description="Force-skip the current track (Manage Server).",
+        extras={
+            "category": "🎵 Music",
+            "short": "Force-skip a track",
+            "usage": "forceskip",
+            "desc": "Immediately skips the current track, bypassing the skip vote.",
+            "args": [],
+            "perms": "Manage Server",
+            "example": "!forceskip",
+        },
+    )
+    @commands.has_permissions(manage_guild=True)
+    @commands.guild_only()
+    async def forceskip(self, ctx: commands.Context):
+        player = self._active_player(ctx)
+        if not player or player.current is None:
+            return await ctx.reply(embed=h.err("Nothing is playing."), ephemeral=True)
         title = player.current.title
         player.skip()
-        await ctx.reply(embed=h.ok(f"Skipped **{title}**.", "⏭️ Skipped"))
+        await ctx.reply(embed=h.ok(f"Force-skipped **{title}**.", "⏭️ Skipped"))
+
+    @commands.hybrid_command(
+        name="jump",
+        aliases=["skipto"],
+        description="Skip ahead to a track at a given queue position.",
+        extras={
+            "category": "🎵 Music",
+            "short": "Jump to a queue position",
+            "usage": "jump <position>",
+            "desc": "Discards everything before the chosen position and plays it now.",
+            "args": [("position", "Queue position to jump to")],
+            "perms": "None",
+            "example": "!jump 4",
+        },
+    )
+    @app_commands.describe(position="Queue position to jump to")
+    @commands.guild_only()
+    async def jump(self, ctx: commands.Context, position: int):
+        player = self._active_player(ctx)
+        if not player or not player.queue:
+            return await ctx.reply(embed=h.err("The queue is empty."), ephemeral=True)
+        if not 1 <= position <= len(player.queue):
+            return await ctx.reply(
+                embed=h.err(
+                    f"Pick a position between **1** and **{len(player.queue)}**."
+                ),
+                ephemeral=True,
+            )
+        target = player.queue[position - 1]
+        del player.queue[: position - 1]
+        player.skip()
+        await ctx.reply(embed=h.ok(f"Jumping to **{target.title}**.", "⏩ Jump"))
 
     @commands.hybrid_command(
         name="stop",
@@ -884,123 +1379,40 @@ class Music(commands.Cog):
             return await ctx.reply(
                 embed=h.info("The queue is empty.", "🎶 Queue"), ephemeral=True
             )
-
-        lines = []
-        if player.current:
-            lines.append(
-                f"**▶️ Now:** [{player.current.title}]({player.current.webpage_url}) "
-                f"`{_fmt_time(player.current.duration)}`"
-            )
-        if player.queue:
-            lines.append("")
-            for i, t in enumerate(player.queue[:15], start=1):
-                title = t.title if len(t.title) <= 55 else t.title[:52] + "…"
-                lines.append(f"`{i:>2}.` {title} `{_fmt_time(t.duration)}`")
-            if len(player.queue) > 15:
-                lines.append(f"_…and {len(player.queue) - 15} more._")
-
-        total = sum(t.duration or 0 for t in player.queue)
-        e = h.embed(
-            f"🎶 Queue · {len(player.queue)} track(s)",
-            "\n".join(lines),
-            ACCENT,
-        )
-        e.set_footer(
-            text=f"Loop: {_LOOP_LABEL[player.loop]} · "
-            f"Total queued: {_fmt_time(total)} · NanoBot Music"
-        )
-        await ctx.reply(embed=e)
+        await ctx.reply(embed=player.queue_embed())
 
     @commands.hybrid_command(
-        name="volume",
-        aliases=["vol"],
-        description="Set the playback volume (0-200).",
+        name="move",
+        description="Move a queued track to a new position.",
         extras={
             "category": "🎵 Music",
-            "short": "Set playback volume",
-            "usage": "volume <0-200>",
-            "desc": "Sets playback volume as a percentage. 100 is the default.",
-            "args": [("level", "Volume percentage, 0-200")],
+            "short": "Reorder a queued track",
+            "usage": "move <from> <to>",
+            "desc": "Moves the track at one queue position to another.",
+            "args": [("from_pos", "Current position"), ("to_pos", "New position")],
             "perms": "None",
-            "example": "!volume 80",
+            "example": "!move 5 1",
         },
     )
-    @app_commands.describe(level="Volume percentage (0-200)")
+    @app_commands.describe(from_pos="Current position", to_pos="New position")
     @commands.guild_only()
-    async def volume(self, ctx: commands.Context, level: int):
-        player = self._active_player(ctx)
-        if not player:
-            return await ctx.reply(embed=h.err("Nothing is playing."), ephemeral=True)
-        if not 0 <= level <= 200:
-            return await ctx.reply(
-                embed=h.err("Volume must be between **0** and **200**."),
-                ephemeral=True,
-            )
-        player.set_volume(level / 100)
-        await ctx.reply(embed=h.ok(f"Volume set to **{level}%**.", "🔊 Volume"))
-
-    @commands.hybrid_command(
-        name="loop",
-        description="Cycle loop mode: off → track → queue.",
-        extras={
-            "category": "🎵 Music",
-            "short": "Change loop mode",
-            "usage": "loop [off|track|queue]",
-            "desc": (
-                "Sets the loop mode. With no argument it cycles to the next mode. "
-                "`track` repeats the current song; `queue` repeats the whole queue."
-            ),
-            "args": [("mode", "off, track, or queue (optional)")],
-            "perms": "None",
-            "example": "!loop\n!loop track",
-        },
-    )
-    @app_commands.describe(mode="off, track, or queue")
-    @app_commands.choices(
-        mode=[
-            app_commands.Choice(name="Off", value=LOOP_OFF),
-            app_commands.Choice(name="Track (repeat current)", value=LOOP_TRACK),
-            app_commands.Choice(name="Queue (repeat all)", value=LOOP_QUEUE),
-        ]
-    )
-    @commands.guild_only()
-    async def loop(self, ctx: commands.Context, mode: Optional[str] = None):
-        player = self._active_player(ctx)
-        if not player:
-            return await ctx.reply(embed=h.err("Nothing is playing."), ephemeral=True)
-        if mode is None:
-            player.loop = _LOOP_NEXT[player.loop]
-        elif mode in (LOOP_OFF, LOOP_TRACK, LOOP_QUEUE):
-            player.loop = mode
-        else:
-            return await ctx.reply(
-                embed=h.err("Mode must be `off`, `track`, or `queue`."),
-                ephemeral=True,
-            )
-        await ctx.reply(
-            embed=h.ok(f"Loop mode: **{_LOOP_LABEL[player.loop]}**.", "🔁 Loop")
-        )
-
-    @commands.hybrid_command(
-        name="shuffle",
-        description="Shuffle the queue.",
-        extras={
-            "category": "🎵 Music",
-            "short": "Shuffle the queue",
-            "usage": "shuffle",
-            "desc": "Randomly reorders the upcoming tracks in the queue.",
-            "args": [],
-            "perms": "None",
-            "example": "!shuffle",
-        },
-    )
-    @commands.guild_only()
-    async def shuffle(self, ctx: commands.Context):
+    async def move(self, ctx: commands.Context, from_pos: int, to_pos: int):
         player = self._active_player(ctx)
         if not player or not player.queue:
             return await ctx.reply(embed=h.err("The queue is empty."), ephemeral=True)
-        n = player.shuffle()
-        await ctx.reply(embed=h.ok(f"Shuffled **{n}** track(s).", "🔀 Shuffled"))
+        n = len(player.queue)
+        if not (1 <= from_pos <= n and 1 <= to_pos <= n):
+            return await ctx.reply(
+                embed=h.err(f"Positions must be between **1** and **{n}**."),
+                ephemeral=True,
+            )
+        track = player.queue.pop(from_pos - 1)
+        player.queue.insert(to_pos - 1, track)
+        await ctx.reply(
+            embed=h.ok(
+                f"Moved **{track.title}** to position **#{to_pos}**.", "↕️ Moved"
+            )
+        )
 
     @commands.hybrid_command(
         name="remove",
@@ -1058,6 +1470,161 @@ class Music(commands.Cog):
         await ctx.reply(embed=h.ok(f"Cleared **{n}** track(s).", "🧹 Queue Cleared"))
 
     @commands.hybrid_command(
+        name="shuffle",
+        description="Shuffle the queue.",
+        extras={
+            "category": "🎵 Music",
+            "short": "Shuffle the queue",
+            "usage": "shuffle",
+            "desc": "Randomly reorders the upcoming tracks in the queue.",
+            "args": [],
+            "perms": "None",
+            "example": "!shuffle",
+        },
+    )
+    @commands.guild_only()
+    async def shuffle(self, ctx: commands.Context):
+        player = self._active_player(ctx)
+        if not player or not player.queue:
+            return await ctx.reply(embed=h.err("The queue is empty."), ephemeral=True)
+        n = player.shuffle()
+        await ctx.reply(embed=h.ok(f"Shuffled **{n}** track(s).", "🔀 Shuffled"))
+
+    @commands.hybrid_command(
+        name="volume",
+        aliases=["vol"],
+        description="Set the playback volume (0-200).",
+        extras={
+            "category": "🎵 Music",
+            "short": "Set playback volume",
+            "usage": "volume <0-200>",
+            "desc": "Sets playback volume as a percentage. 100 is full source volume.",
+            "args": [("level", "Volume percentage, 0-200")],
+            "perms": "None",
+            "example": "!volume 80",
+        },
+    )
+    @app_commands.describe(level="Volume percentage (0-200)")
+    @commands.guild_only()
+    async def volume(self, ctx: commands.Context, level: int):
+        player = self._active_player(ctx)
+        if not player:
+            return await ctx.reply(embed=h.err("Nothing is playing."), ephemeral=True)
+        if not 0 <= level <= 200:
+            return await ctx.reply(
+                embed=h.err("Volume must be between **0** and **200**."),
+                ephemeral=True,
+            )
+        player.set_volume(level / 100)
+        await ctx.reply(embed=h.ok(f"Volume set to **{level}%**.", "🔊 Volume"))
+
+    @commands.hybrid_command(
+        name="speed",
+        description="Set playback speed (0.5-3.0).",
+        extras={
+            "category": "🎵 Music",
+            "short": "Set playback speed",
+            "usage": "speed <0.5-3.0>",
+            "desc": "Changes how fast the track plays. 1.0 is normal speed.",
+            "args": [("rate", "Speed multiplier, 0.5-3.0")],
+            "perms": "None",
+            "example": "!speed 1.25",
+        },
+    )
+    @app_commands.describe(rate="Speed multiplier (0.5-3.0)")
+    @commands.guild_only()
+    async def speed(self, ctx: commands.Context, rate: float):
+        player = self._active_player(ctx)
+        if not player or player.current is None:
+            return await ctx.reply(embed=h.err("Nothing is playing."), ephemeral=True)
+        if not 0.5 <= rate <= 3.0:
+            return await ctx.reply(
+                embed=h.err("Speed must be between **0.5** and **3.0**."),
+                ephemeral=True,
+            )
+        player.speed = rate
+        await ctx.reply(
+            embed=h.ok(f"Speed set to **{rate:g}×** — applying…", "⏩ Speed")
+        )
+        await player.reapply_effects()
+
+    @commands.hybrid_command(
+        name="filter",
+        aliases=["fx", "effect"],
+        description="Apply an audio effect (bassboost, nightcore, vaporwave…).",
+        extras={
+            "category": "🎵 Music",
+            "short": "Apply an audio effect",
+            "usage": "filter <none|bassboost|nightcore|vaporwave|treble|8d|muffle>",
+            "desc": "Applies a DSP effect to playback. Use `none` to clear it.",
+            "args": [("name", "Effect name")],
+            "perms": "None",
+            "example": "!filter bassboost",
+        },
+    )
+    @app_commands.describe(name="Effect to apply")
+    @app_commands.choices(name=[app_commands.Choice(name=k, value=k) for k in FILTERS])
+    @commands.guild_only()
+    async def filter_cmd(self, ctx: commands.Context, name: str):
+        player = self._active_player(ctx)
+        if not player or player.current is None:
+            return await ctx.reply(embed=h.err("Nothing is playing."), ephemeral=True)
+        if name not in FILTERS:
+            return await ctx.reply(
+                embed=h.err(
+                    "Unknown effect. Options: " + ", ".join(f"`{k}`" for k in FILTERS)
+                ),
+                ephemeral=True,
+            )
+        player.audio_filter = name
+        label = "cleared" if name == "none" else f"set to **{name}**"
+        await ctx.reply(embed=h.ok(f"Effect {label} — applying…", "🎚️ Filter"))
+        await player.reapply_effects()
+
+    @commands.hybrid_command(
+        name="loop",
+        aliases=["repeat"],
+        description="Cycle loop mode: off → track → queue.",
+        extras={
+            "category": "🎵 Music",
+            "short": "Change loop mode",
+            "usage": "loop [off|track|queue]",
+            "desc": (
+                "Sets the loop mode. With no argument it cycles to the next mode. "
+                "`track` repeats the current song; `queue` repeats the whole queue."
+            ),
+            "args": [("mode", "off, track, or queue (optional)")],
+            "perms": "None",
+            "example": "!loop\n!loop track",
+        },
+    )
+    @app_commands.describe(mode="off, track, or queue")
+    @app_commands.choices(
+        mode=[
+            app_commands.Choice(name="Off", value=LOOP_OFF),
+            app_commands.Choice(name="Track (repeat current)", value=LOOP_TRACK),
+            app_commands.Choice(name="Queue (repeat all)", value=LOOP_QUEUE),
+        ]
+    )
+    @commands.guild_only()
+    async def loop(self, ctx: commands.Context, mode: Optional[str] = None):
+        player = self._active_player(ctx)
+        if not player:
+            return await ctx.reply(embed=h.err("Nothing is playing."), ephemeral=True)
+        if mode is None:
+            player.loop = _LOOP_NEXT[player.loop]
+        elif mode in (LOOP_OFF, LOOP_TRACK, LOOP_QUEUE):
+            player.loop = mode
+        else:
+            return await ctx.reply(
+                embed=h.err("Mode must be `off`, `track`, or `queue`."),
+                ephemeral=True,
+            )
+        await ctx.reply(
+            embed=h.ok(f"Loop mode: **{_LOOP_LABEL[player.loop]}**.", "🔁 Loop")
+        )
+
+    @commands.hybrid_command(
         name="seek",
         description="Jump to a position in the current track (e.g. 1:30 or 90).",
         extras={
@@ -1091,12 +1658,281 @@ class Music(commands.Cog):
                 embed=h.err(f"That's past the end (`{_fmt_time(dur)}`)."),
                 ephemeral=True,
             )
-        ok_ = await player.seek(secs)
-        if not ok_:
+        if not await player.seek(secs):
             return await ctx.reply(
                 embed=h.err("Couldn't seek right now."), ephemeral=True
             )
         await ctx.reply(embed=h.ok(f"Seeking to `{_fmt_time(secs)}`.", "⏩ Seek"))
+
+    @commands.hybrid_command(
+        name="replay",
+        aliases=["restart"],
+        description="Restart the current track from the beginning.",
+        extras={
+            "category": "🎵 Music",
+            "short": "Restart the current track",
+            "usage": "replay",
+            "desc": "Seeks the current track back to 0:00.",
+            "args": [],
+            "perms": "None",
+            "example": "!replay",
+        },
+    )
+    @commands.guild_only()
+    async def replay(self, ctx: commands.Context):
+        player = self._active_player(ctx)
+        if not player or player.current is None:
+            return await ctx.reply(embed=h.err("Nothing is playing."), ephemeral=True)
+        await player.seek(0)
+        await ctx.reply(embed=h.ok("Restarting the track.", "⏮️ Replay"))
+
+    @commands.hybrid_command(
+        name="grab",
+        aliases=["save"],
+        description="DM yourself the track that's currently playing.",
+        extras={
+            "category": "🎵 Music",
+            "short": "Save the current track to DMs",
+            "usage": "grab",
+            "desc": "Sends you a DM with a link to the track that's playing now.",
+            "args": [],
+            "perms": "None",
+            "example": "!grab",
+        },
+    )
+    @commands.guild_only()
+    async def grab(self, ctx: commands.Context):
+        player = self._active_player(ctx)
+        if not player or player.current is None:
+            return await ctx.reply(embed=h.err("Nothing is playing."), ephemeral=True)
+        t = player.current
+        e = h.embed(
+            "🔖 Saved Track",
+            f"**[{t.title}]({t.webpage_url})**\n"
+            f"`{_fmt_time(t.duration)}`"
+            + (f" · {t.uploader}" if t.uploader else "")
+            + f"\nFrom **{ctx.guild.name}**",
+            ACCENT,
+        )
+        if t.thumbnail:
+            e.set_thumbnail(url=t.thumbnail)
+        try:
+            await ctx.author.send(embed=e)
+        except discord.Forbidden:
+            return await ctx.reply(
+                embed=h.err("I couldn't DM you — check your privacy settings."),
+                ephemeral=True,
+            )
+        await ctx.reply(
+            embed=h.ok("Sent it to your DMs.", "🔖 Grabbed"), ephemeral=True
+        )
+
+    @commands.hybrid_command(
+        name="lyrics",
+        description="Fetch lyrics for the current track (or a search).",
+        extras={
+            "category": "🎵 Music",
+            "short": "Look up song lyrics",
+            "usage": "lyrics [artist - title]",
+            "desc": (
+                "Fetches lyrics from lyrics.ovh. With no argument it uses the current "
+                "track's title; otherwise pass `Artist - Title` for best results."
+            ),
+            "args": [("query", "Artist - Title (optional)")],
+            "perms": "None",
+            "example": "!lyrics\n!lyrics daft punk - one more time",
+        },
+    )
+    @app_commands.describe(query="Artist - Title (optional)")
+    @commands.guild_only()
+    async def lyrics(self, ctx: commands.Context, *, query: Optional[str] = None):
+        player = self._active_player(ctx)
+        if not query:
+            if not player or player.current is None:
+                return await ctx.reply(
+                    embed=h.err("Nothing is playing — pass `Artist - Title`."),
+                    ephemeral=True,
+                )
+            query = player.current.title
+
+        artist, title = _split_artist_title(query)
+        if not title:
+            return await ctx.reply(
+                embed=h.err("Couldn't parse a song title from that."), ephemeral=True
+            )
+
+        await ctx.defer()
+        url = f"https://api.lyrics.ovh/v1/{artist}/{title}"
+        try:
+            async with aiohttp.ClientSession() as session:
+                async with session.get(
+                    url, timeout=aiohttp.ClientTimeout(total=15)
+                ) as r:
+                    if r.status != 200:
+                        raise ValueError(f"status {r.status}")
+                    data = await r.json()
+        except Exception:
+            return await ctx.reply(
+                embed=h.err(
+                    f"No lyrics found for **{title}**"
+                    + (f" by **{artist}**" if artist else "")
+                    + ".\nTry `lyrics Artist - Title`."
+                ),
+                ephemeral=True,
+            )
+
+        text = (data.get("lyrics") or "").strip()
+        if not text:
+            return await ctx.reply(
+                embed=h.err(f"No lyrics found for **{title}**."), ephemeral=True
+            )
+        if len(text) > 4000:
+            text = text[:3990] + "\n…(truncated)"
+        e = h.embed(f"🎤 {title}" + (f" — {artist}" if artist else ""), text, ACCENT)
+        e.set_footer(text="Lyrics via lyrics.ovh · NanoBot Music")
+        await ctx.reply(embed=e)
+
+    @commands.hybrid_command(
+        name="autoplay",
+        description="Toggle autoplay: keep playing from the autoplaylist when idle.",
+        extras={
+            "category": "🎵 Music",
+            "short": "Toggle autoplay",
+            "usage": "autoplay [on|off]",
+            "desc": (
+                "When on, the bot keeps playing random tracks from the server "
+                "autoplaylist once the queue empties. Manage the list with "
+                "`autoplaylist`."
+            ),
+            "args": [("state", "on or off (optional — toggles if omitted)")],
+            "perms": "None",
+            "example": "!autoplay on",
+        },
+    )
+    @app_commands.describe(state="on or off")
+    @app_commands.choices(
+        state=[
+            app_commands.Choice(name="On", value="on"),
+            app_commands.Choice(name="Off", value="off"),
+        ]
+    )
+    @commands.guild_only()
+    async def autoplay(self, ctx: commands.Context, state: Optional[str] = None):
+        player = self._active_player(ctx) or self.get_player(ctx.guild)
+        player.text_channel = ctx.channel
+        if state == "on":
+            player.autoplay = True
+        elif state == "off":
+            player.autoplay = False
+        else:
+            player.autoplay = not player.autoplay
+        player._added.set()  # wake the loop if it's idle
+        entries = await db.get_autoplaylist(ctx.guild.id)
+        note = ""
+        if player.autoplay and not entries:
+            note = "\n_The autoplaylist is empty — add tracks with `autoplaylist add`._"
+        await ctx.reply(
+            embed=h.ok(
+                f"Autoplay is now **{'on' if player.autoplay else 'off'}**.{note}",
+                "📻 Autoplay",
+            )
+        )
+
+    # ── /autoplaylist group ─────────────────────────────────────────────────────
+    apl_group = app_commands.Group(
+        name="autoplaylist",
+        description="Manage the persistent server autoplaylist.",
+        guild_only=True,
+    )
+
+    @apl_group.command(name="add", description="Add a track URL to the autoplaylist.")
+    @app_commands.describe(url="A track or video URL to add")
+    async def apl_add(self, interaction: discord.Interaction, url: str):
+        await interaction.response.defer(ephemeral=True)
+        title = None
+        if YTDLP_AVAILABLE:
+            try:
+                tracks = await self.search(
+                    url, requester_id=interaction.user.id, requester_name="apl"
+                )
+                if tracks:
+                    title = tracks[0].title
+                    url = tracks[0].webpage_url or url
+            except Exception:
+                pass
+        added = await db.add_autoplaylist_entry(
+            interaction.guild_id, url, title, interaction.user.id
+        )
+        if not added:
+            return await interaction.followup.send(
+                embed=h.warn("That URL is already in the autoplaylist."),
+                ephemeral=True,
+            )
+        await interaction.followup.send(
+            embed=h.ok(
+                f"Added **{title or url}** to the autoplaylist.", "📻 Autoplaylist"
+            ),
+            ephemeral=True,
+        )
+
+    @apl_group.command(
+        name="remove", description="Remove a track from the autoplaylist by position."
+    )
+    @app_commands.describe(position="Position shown in /autoplaylist list")
+    async def apl_remove(self, interaction: discord.Interaction, position: int):
+        entries = await db.get_autoplaylist(interaction.guild_id)
+        if not 1 <= position <= len(entries):
+            return await interaction.response.send_message(
+                embed=h.err(f"Pick a position between 1 and {len(entries)}."),
+                ephemeral=True,
+            )
+        entry = entries[position - 1]
+        await db.remove_autoplaylist_entry(interaction.guild_id, entry["url"])
+        await interaction.response.send_message(
+            embed=h.ok(
+                f"Removed **{entry['title'] or entry['url']}**.", "📻 Autoplaylist"
+            ),
+            ephemeral=True,
+        )
+
+    @apl_group.command(name="list", description="Show the server autoplaylist.")
+    async def apl_list(self, interaction: discord.Interaction):
+        entries = await db.get_autoplaylist(interaction.guild_id)
+        if not entries:
+            return await interaction.response.send_message(
+                embed=h.info(
+                    "The autoplaylist is empty.\nAdd tracks with `/autoplaylist add`.",
+                    "📻 Autoplaylist",
+                ),
+                ephemeral=True,
+            )
+        lines = []
+        for i, e in enumerate(entries[:25], start=1):
+            label = e["title"] or e["url"]
+            if len(label) > 60:
+                label = label[:57] + "…"
+            lines.append(f"`{i:>2}.` [{label}]({e['url']})")
+        if len(entries) > 25:
+            lines.append(f"_…and {len(entries) - 25} more._")
+        await interaction.response.send_message(
+            embed=h.embed(
+                f"📻 Autoplaylist · {len(entries)} track(s)", "\n".join(lines), ACCENT
+            ),
+            ephemeral=True,
+        )
+
+    @apl_group.command(
+        name="clear", description="Remove every track from the autoplaylist."
+    )
+    @app_commands.checks.has_permissions(manage_guild=True)
+    async def apl_clear(self, interaction: discord.Interaction):
+        n = await db.clear_autoplaylist(interaction.guild_id)
+        await interaction.response.send_message(
+            embed=h.ok(
+                f"Cleared **{n}** track(s) from the autoplaylist.", "📻 Cleared"
+            ),
+            ephemeral=True,
+        )
 
     @commands.hybrid_command(
         name="join",
@@ -1124,22 +1960,14 @@ class Music(commands.Cog):
         )
 
 
-def _parse_timestamp(text: str) -> Optional[int]:
-    """Parse 'H:MM:SS', 'M:SS', or plain seconds into an int. None if invalid."""
-    text = text.strip()
-    try:
-        if ":" in text:
-            parts = [int(p) for p in text.split(":")]
-            if len(parts) == 2:
-                m, s = parts
-                return m * 60 + s
-            if len(parts) == 3:
-                hh, mm, ss = parts
-                return hh * 3600 + mm * 60 + ss
-            return None
-        return int(text)
-    except ValueError:
-        return None
+def _split_artist_title(query: str) -> tuple[str, str]:
+    """Best-effort split of a query/title into (artist, title) for lyrics lookup."""
+    cleaned = _LYRICS_NOISE.sub("", query)
+    cleaned = re.sub(r"\s+", " ", cleaned).strip(" -·|")
+    if " - " in cleaned:
+        artist, title = cleaned.split(" - ", 1)
+        return artist.strip(), title.strip()
+    return "", cleaned.strip()
 
 
 # ── Setup ──────────────────────────────────────────────────────────────────────

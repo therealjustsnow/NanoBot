@@ -74,10 +74,15 @@ NanoBot fixes that.
 
 **Music**
 - Stream from YouTube and 1000+ other sites via yt-dlp -- paste a URL or just search
-- Interactive Now Playing card: play/pause, skip, stop, loop, shuffle buttons (mobile-first)
+- Interactive Now Playing card: play/pause, skip, stop, loop, shuffle, replay, autoplay, queue buttons (mobile-first)
 - Live progress bar that updates as the track plays
-- Per-server queue with playlist support, shuffle, remove, and clear
-- Loop modes (off / single track / whole queue), volume 0-200%, and seek
+- Search picker, `playnext`, and `playnow` for fast queue control
+- Per-server queue with playlist support, shuffle, move, jump, remove, and clear
+- Democratic vote-skip (requester / Manage Server force-skip) with a configurable ratio
+- Loop modes (off / track / queue), volume 0-200%, playback speed, and seek
+- Audio effects: bassboost, nightcore, vaporwave, treble, 8D, muffle
+- Lyrics lookup, grab-to-DM, and a persistent per-server autoplaylist with autoplay
+- Optional yt-dlp cookies support for age/region-locked or rate-limited sources
 - Auto-disconnect when idle or left alone in the channel
 
 **AI**

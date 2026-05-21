@@ -115,6 +115,7 @@ async def init() -> None:
     await _ensure_auditlog_tables()
     await _migrate_auditlog_null_events()
     await _ensure_automod_tables()
+    await _ensure_music_tables()
     log.info(f"Database ready: {_DB_PATH}")
 
 
@@ -1707,3 +1708,80 @@ async def get_automod_attachment_words(guild_id: int) -> list[str]:
     ) as cur:
         rows = await cur.fetchall()
     return [r["word"] for r in rows]
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+#  Music — persistent per-guild autoplaylist
+# ══════════════════════════════════════════════════════════════════════════════
+async def _ensure_music_tables() -> None:
+    await _conn().executescript("""
+        CREATE TABLE IF NOT EXISTS music_autoplaylist (
+            id        INTEGER PRIMARY KEY AUTOINCREMENT,
+            guild_id  TEXT NOT NULL,
+            url       TEXT NOT NULL,
+            title     TEXT,
+            added_by  TEXT,
+            added_at  INTEGER NOT NULL,
+            UNIQUE(guild_id, url)
+        );
+        CREATE INDEX IF NOT EXISTS music_apl_guild
+            ON music_autoplaylist (guild_id);
+    """)
+    await _conn().commit()
+
+
+async def add_autoplaylist_entry(
+    guild_id: int, url: str, title: str | None, added_by: int | None
+) -> bool:
+    """Add a track URL to a guild's autoplaylist. Returns False if already present."""
+    try:
+        await _conn().execute(
+            "INSERT INTO music_autoplaylist (guild_id, url, title, added_by, added_at) "
+            "VALUES (?, ?, ?, ?, ?)",
+            (
+                str(guild_id),
+                url,
+                title,
+                str(added_by) if added_by else None,
+                int(time.time()),
+            ),
+        )
+        await _conn().commit()
+        return True
+    except aiosqlite.IntegrityError:
+        return False
+
+
+async def remove_autoplaylist_entry(guild_id: int, url: str) -> bool:
+    """Remove a track URL from a guild's autoplaylist. Returns False if not found."""
+    async with _conn().execute(
+        "DELETE FROM music_autoplaylist WHERE guild_id=? AND url=?",
+        (str(guild_id), url),
+    ) as cur:
+        changed = cur.rowcount
+    await _conn().commit()
+    return changed > 0
+
+
+async def get_autoplaylist(guild_id: int) -> list[dict]:
+    """Return all autoplaylist entries for a guild, oldest first."""
+    async with _conn().execute(
+        "SELECT url, title, added_by FROM music_autoplaylist "
+        "WHERE guild_id=? ORDER BY added_at ASC",
+        (str(guild_id),),
+    ) as cur:
+        rows = await cur.fetchall()
+    return [
+        {"url": r["url"], "title": r["title"], "added_by": r["added_by"]} for r in rows
+    ]
+
+
+async def clear_autoplaylist(guild_id: int) -> int:
+    """Delete every autoplaylist entry for a guild. Returns the number removed."""
+    async with _conn().execute(
+        "DELETE FROM music_autoplaylist WHERE guild_id=?",
+        (str(guild_id),),
+    ) as cur:
+        changed = cur.rowcount
+    await _conn().commit()
+    return changed

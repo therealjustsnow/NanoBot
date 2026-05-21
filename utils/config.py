@@ -62,9 +62,15 @@ SECTION_MAP = {
     "revalidate_age": "scraper",
     "revalidate_batch": "scraper",
     "groq_wyr_system": "scraper",
+    # [music]
+    "music_cookie_file": "music",
+    "music_default_volume": "music",
+    "music_idle_timeout": "music",
+    "music_skip_ratio": "music",
+    "music_max_queue": "music",
 }
 
-SECTION_ORDER = ("bot", "logging", "votes", "groq", "scraper")
+SECTION_ORDER = ("bot", "logging", "votes", "groq", "scraper", "music")
 
 # Schema: key -> (type, required, description)
 _SCHEMA: dict[str, tuple[type | None, bool, str]] = {
@@ -88,6 +94,16 @@ _SCHEMA: dict[str, tuple[type | None, bool, str]] = {
     "revalidate_age": (int, False, "Seconds before a URL is rechecked (HEAD)"),
     "revalidate_batch": (int, False, "Max URLs checked per revalidation cycle"),
     "groq_wyr_system": (str, False, "System prompt for Groq WYR generation"),
+    # ── music ──
+    "music_cookie_file": (
+        str,
+        False,
+        "Path to a yt-dlp cookies.txt (for age/region-locked or rate-limited sources)",
+    ),
+    "music_default_volume": (int, False, "Default playback volume, 0-200"),
+    "music_idle_timeout": (int, False, "Seconds idle/alone before auto-disconnect"),
+    "music_skip_ratio": (int, False, "Percent of listeners needed to vote-skip, 0-100"),
+    "music_max_queue": (int, False, "Maximum tracks allowed in a queue"),
 }
 
 # Defaults used when writing a fresh example_config.ini and when keys are missing.
@@ -118,6 +134,11 @@ DEFAULTS: dict[str, object] = {
         "mix silly, deep, gross, impossible, and everyday scenarios. "
         "No numbered lists, no markdown, no explanation. Just the JSON array."
     ),
+    "music_cookie_file": None,
+    "music_default_volume": 50,
+    "music_idle_timeout": 180,
+    "music_skip_ratio": 50,
+    "music_max_queue": 500,
 }
 
 # Keys that must never be echoed back in Discord (logs, !config show, etc).
