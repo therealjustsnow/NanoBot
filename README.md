@@ -74,9 +74,11 @@ NanoBot fixes that.
 
 **Music**
 - Stream from YouTube and 1000+ other sites via yt-dlp -- paste a URL or just search
+- Spotify track / album / playlist links (no API key -- metadata is scraped, then matched on YouTube)
 - Interactive Now Playing card: play/pause, skip, stop, loop, shuffle, replay, autoplay, queue buttons (mobile-first)
 - Live progress bar that updates as the track plays
-- Search picker, `playnext`, and `playnow` for fast queue control
+- Search picker, `playnext`, `playnow`, `stream`, and `shuffleplay` for fast queue control
+- `follow` -- the bot tracks you between voice channels; `pldump` exports the queue
 - Per-server queue with playlist support, shuffle, move, jump, remove, and clear
 - Democratic vote-skip (requester / Manage Server force-skip) with a configurable ratio
 - Loop modes (off / track / queue), volume 0-200%, playback speed, and seek

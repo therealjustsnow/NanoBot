@@ -2,7 +2,10 @@
 cogs/music.py — Voice music player.
 
 Streams audio from YouTube (and the many other sites yt-dlp supports) into a
-voice channel. Designed mobile-first: a single "Now Playing" card carries
+voice channel. Spotify track/album/playlist links are supported without an API
+key: their metadata is scraped from the public embed page and each track is
+matched on YouTube at play time. Designed mobile-first: a single "Now Playing"
+card carries
 interactive buttons (play/pause, skip, stop, loop, shuffle, replay, autoplay,
 queue) so listeners can drive playback from a phone without typing commands.
 
@@ -19,10 +22,14 @@ Config ([music] section, all optional — see example_config.ini):
   music_max_queue       — max tracks per queue (default 500)
 
 Commands (hybrid — slash + prefix), category "🎵 Music":
-  play / p          — queue a song or playlist (URL or search terms)
+  play / p          — queue a song or playlist (URL, Spotify link, or search)
   playnext / pn     — queue a track to play next
   playnow           — skip the current track and play this immediately
+  stream            — queue a livestream / direct media URL
+  shuffleplay / sp  — queue a playlist with its tracks shuffled
   search            — search and pick a result from a menu
+  follow            — make the bot follow you between voice channels
+  pldump            — export the queue's URLs to a text file
   skip / s          — vote-skip (requester / Manage Server force-skips)
   forceskip / fs    — force-skip (Manage Server)
   jump              — skip ahead to a queue position
@@ -49,6 +56,8 @@ import asyncio
 import logging
 import math
 import random
+import io
+import json
 import re
 import time
 from dataclasses import dataclass
@@ -111,6 +120,20 @@ _YTDL_BASE = {
 }
 
 _FFMPEG_BEFORE = "-reconnect 1 -reconnect_streamed 1 -reconnect_delay_max 5"
+
+# ── Spotify (no API key — metadata is scraped, then searched on YouTube) ────────
+_SPOTIFY_RE = re.compile(
+    r"open\.spotify\.com/(?:intl-\w+/)?(track|album|playlist)/(\w+)"
+    r"|spotify:(track|album|playlist):(\w+)",
+    re.IGNORECASE,
+)
+_SPOTIFY_NEXT_DATA = re.compile(
+    r'<script id="__NEXT_DATA__"[^>]*>(.*?)</script>', re.DOTALL
+)
+_BROWSER_UA = (
+    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
+    "(KHTML, like Gecko) Chrome/124.0 Safari/537.36"
+)
 
 # ── Strip common noise from YouTube titles when looking up lyrics ───────────────
 _LYRICS_NOISE = re.compile(
@@ -401,6 +424,7 @@ class GuildPlayer:
         self.audio_filter: str = "none"
         self.autoplay: bool = False
         self.skip_votes: set[int] = set()
+        self.follow_target: Optional[int] = None  # user id the bot follows
 
         self.idle_timeout: int = cog.idle_timeout()
 
@@ -860,6 +884,9 @@ class Music(commands.Cog):
         limit: int = 1,
     ) -> list[Track]:
         """Resolve a query (URL, playlist, or search terms) into Track metadata."""
+        if _SPOTIFY_RE.search(query):
+            return await self._resolve_spotify(query, requester_id, requester_name)
+
         is_url = query.startswith("http://") or query.startswith("https://")
         opts = self._ytdl_opts(playlistend=PLAYLIST_CAP)
         if is_url:
@@ -880,6 +907,112 @@ class Music(commands.Cog):
             if entry:
                 tracks.append(Track.from_info(entry, requester_id, requester_name))
         return tracks
+
+    # ── Spotify (scrape metadata, search YouTube lazily at play time) ──────────
+    async def _resolve_spotify(
+        self, url: str, requester_id: int, requester_name: str
+    ) -> list[Track]:
+        """Turn a Spotify track/album/playlist link into search-backed Tracks.
+
+        No Spotify API key is used: the public embed page carries the track
+        names + artists. Each Track's ``query`` is an "artist title" string, so
+        the actual audio is resolved from YouTube at play time via
+        ``resolve_stream`` (default_search=ytsearch).
+        """
+        m = _SPOTIFY_RE.search(url)
+        if not m:
+            return []
+        kind = m.group(1) or m.group(3)
+        sid = m.group(2) or m.group(4)
+        embed_url = f"https://open.spotify.com/embed/{kind}/{sid}"
+
+        try:
+            async with aiohttp.ClientSession(
+                headers={"User-Agent": _BROWSER_UA}
+            ) as session:
+                async with session.get(
+                    embed_url, timeout=aiohttp.ClientTimeout(total=15)
+                ) as r:
+                    html = await r.text()
+            tracks = self._parse_spotify_embed(html, url, requester_id, requester_name)
+            if tracks:
+                return tracks[:PLAYLIST_CAP]
+        except Exception as exc:
+            log.debug("Spotify embed scrape failed for %s: %s", embed_url, exc)
+
+        # Fallback: oEmbed gives at least a title for a single resource.
+        return await self._spotify_oembed(url, requester_id, requester_name)
+
+    def _parse_spotify_embed(
+        self, html: str, url: str, requester_id: int, requester_name: str
+    ) -> list[Track]:
+        m = _SPOTIFY_NEXT_DATA.search(html)
+        if not m:
+            return []
+        data = json.loads(m.group(1))
+        entity = data["props"]["pageProps"]["state"]["data"]["entity"]
+        items = entity.get("trackList") or [entity]
+        default_cover = _spotify_cover(entity)
+
+        tracks: list[Track] = []
+        for item in items:
+            title = item.get("title") or item.get("name")
+            if not title:
+                continue
+            subtitle = item.get("subtitle")
+            if not subtitle:
+                artists = item.get("artists") or entity.get("artists") or []
+                subtitle = ", ".join(
+                    a.get("name", "") for a in artists if isinstance(a, dict)
+                ).strip(", ")
+            dur_ms = item.get("duration") or item.get("duration_ms")
+            query = f"{subtitle} {title}".strip() if subtitle else title
+            display = f"{title} — {subtitle}" if subtitle else title
+            tracks.append(
+                Track(
+                    query=query,
+                    title=display,
+                    duration=int(dur_ms / 1000) if dur_ms else None,
+                    webpage_url=url,
+                    thumbnail=_spotify_cover(item) or default_cover,
+                    uploader=subtitle or "Spotify",
+                    requester_id=requester_id,
+                    requester_name=requester_name,
+                )
+            )
+        return tracks
+
+    async def _spotify_oembed(
+        self, url: str, requester_id: int, requester_name: str
+    ) -> list[Track]:
+        api = "https://open.spotify.com/oembed?url=" + url
+        try:
+            async with aiohttp.ClientSession(
+                headers={"User-Agent": _BROWSER_UA}
+            ) as session:
+                async with session.get(
+                    api, timeout=aiohttp.ClientTimeout(total=15)
+                ) as r:
+                    if r.status != 200:
+                        return []
+                    data = await r.json()
+        except Exception:
+            return []
+        title = (data.get("title") or "").strip()
+        if not title:
+            return []
+        return [
+            Track(
+                query=title,
+                title=title,
+                duration=None,
+                webpage_url=url,
+                thumbnail=data.get("thumbnail_url"),
+                uploader="Spotify",
+                requester_id=requester_id,
+                requester_name=requester_name,
+            )
+        ]
 
     # ── shared helpers ─────────────────────────────────────────────────────────
     def get_player(self, guild: discord.Guild) -> GuildPlayer:
@@ -1026,7 +1159,7 @@ class Music(commands.Cog):
         if then_skip and not was_idle and player.current is not None:
             player.skip()
 
-    # ── auto-disconnect when left alone ─────────────────────────────────────────
+    # ── follow + auto-disconnect when left alone ────────────────────────────────
     @commands.Cog.listener()
     async def on_voice_state_update(self, member, before, after):
         if member.bot:
@@ -1034,6 +1167,19 @@ class Music(commands.Cog):
         player = self.players.get(member.guild.id)
         if not player or not player.voice or not player.voice.is_connected():
             return
+
+        # Follow the target member between voice channels.
+        if (
+            player.follow_target == member.id
+            and after.channel is not None
+            and after.channel != player.voice.channel
+        ):
+            try:
+                await player.voice.move_to(after.channel)
+            except Exception as exc:
+                log.debug("Follow move failed in %s: %s", member.guild.id, exc)
+            return
+
         humans = [m for m in player.voice.channel.members if not m.bot]
         if not humans:
             await asyncio.sleep(20)
@@ -1935,6 +2081,129 @@ class Music(commands.Cog):
         )
 
     @commands.hybrid_command(
+        name="stream",
+        description="Queue a live stream or direct media URL without downloading.",
+        extras={
+            "category": "🎵 Music",
+            "short": "Queue a live stream URL",
+            "usage": "stream <url>",
+            "desc": (
+                "Queues a livestream or direct audio URL. Works like `play` but is "
+                "intended for continuous live sources."
+            ),
+            "args": [("url", "A livestream or media URL")],
+            "perms": "None",
+            "example": "!stream https://example.com/radio.mp3",
+        },
+    )
+    @app_commands.describe(url="A livestream or media URL")
+    @commands.guild_only()
+    async def stream(self, ctx: commands.Context, *, url: str):
+        await self._queue_query(ctx, url, front=False, then_skip=False)
+
+    @commands.hybrid_command(
+        name="shuffleplay",
+        aliases=["sp"],
+        description="Queue a playlist with its tracks shuffled.",
+        extras={
+            "category": "🎵 Music",
+            "short": "Queue a playlist, shuffled",
+            "usage": "shuffleplay <playlist url | search>",
+            "desc": "Resolves a playlist, shuffles the tracks, then adds them all.",
+            "args": [("query", "A playlist URL or search terms")],
+            "perms": "None",
+            "example": "!shuffleplay https://open.spotify.com/playlist/...",
+        },
+    )
+    @app_commands.describe(query="A playlist URL or search terms")
+    @commands.guild_only()
+    async def shuffleplay(self, ctx: commands.Context, *, query: str):
+        player = await self._ensure_voice(ctx, join=True)
+        if player is None:
+            return
+        await ctx.defer()
+        tracks = await self._resolve_for(ctx, query)
+        if tracks is None:
+            return
+        random.shuffle(tracks)
+        added = player.add_many(tracks)
+        total = sum(t.duration or 0 for t in tracks[:added])
+        await ctx.reply(
+            embed=h.embed(
+                "🔀 Playlist Queued (shuffled)",
+                f"Added **{added}** track(s) · total `{_fmt_time(total)}`.",
+                ACCENT,
+            )
+        )
+
+    @commands.hybrid_command(
+        name="follow",
+        description="Make the bot follow you between voice channels.",
+        extras={
+            "category": "🎵 Music",
+            "short": "Follow you between channels",
+            "usage": "follow",
+            "desc": (
+                "The bot moves with you whenever you switch voice channels. "
+                "Run it again to stop following."
+            ),
+            "args": [],
+            "perms": "None",
+            "example": "!follow",
+        },
+    )
+    @commands.guild_only()
+    async def follow(self, ctx: commands.Context):
+        player = await self._ensure_voice(ctx, join=True)
+        if player is None:
+            return
+        if player.follow_target == ctx.author.id:
+            player.follow_target = None
+            return await ctx.reply(
+                embed=h.ok("Stopped following you.", "🚶 Follow Off")
+            )
+        player.follow_target = ctx.author.id
+        await ctx.reply(
+            embed=h.ok(
+                f"Now following **{ctx.author.display_name}** between channels.",
+                "🐾 Following",
+            )
+        )
+
+    @commands.hybrid_command(
+        name="pldump",
+        description="Dump the current queue's URLs to a text file.",
+        extras={
+            "category": "🎵 Music",
+            "short": "Export the queue to a file",
+            "usage": "pldump",
+            "desc": "Sends a .txt file listing the URLs of the current and queued tracks.",
+            "args": [],
+            "perms": "None",
+            "example": "!pldump",
+        },
+    )
+    @commands.guild_only()
+    async def pldump(self, ctx: commands.Context):
+        player = self._active_player(ctx)
+        if not player or (player.current is None and not player.queue):
+            return await ctx.reply(embed=h.err("The queue is empty."), ephemeral=True)
+        lines = []
+        if player.current and player.current.webpage_url:
+            lines.append(player.current.webpage_url)
+        lines.extend(t.webpage_url for t in player.queue if t.webpage_url)
+        if not lines:
+            return await ctx.reply(
+                embed=h.err("No exportable URLs in the queue."), ephemeral=True
+            )
+        buf = io.BytesIO("\n".join(lines).encode("utf-8"))
+        file = discord.File(buf, filename=f"queue-{ctx.guild.id}.txt")
+        await ctx.reply(
+            embed=h.ok(f"Exported **{len(lines)}** track URL(s).", "📄 Queue Dump"),
+            file=file,
+        )
+
+    @commands.hybrid_command(
         name="join",
         aliases=["connect", "summon"],
         description="Connect the bot to your voice channel.",
@@ -1958,6 +2227,17 @@ class Music(commands.Cog):
                 f"Connected to **{ctx.author.voice.channel.name}**.", "🎤 Joined"
             )
         )
+
+
+def _spotify_cover(obj: dict) -> Optional[str]:
+    """Pull the highest-resolution cover-art URL from a Spotify embed object."""
+    if not isinstance(obj, dict):
+        return None
+    art = obj.get("coverArt") or obj.get("visualIdentity") or {}
+    sources = art.get("sources") if isinstance(art, dict) else None
+    if sources:
+        return sources[-1].get("url")
+    return None
 
 
 def _split_artist_title(query: str) -> tuple[str, str]:

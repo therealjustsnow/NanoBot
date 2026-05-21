@@ -73,7 +73,7 @@ All features live in `cogs/` as discord.py cogs, hot-reloadable via `n!reload <c
 | `fun.py` | 26 social + 33 reaction GIF commands via nekos.best |
 | `votes.py` | top.gg / DBL / discord.bots.gg stat posting and vote webhooks |
 | `eli5.py` | Plain-English AI explanations via Groq (Llama 3.1 8B) |
-| `music.py` | Voice music player: yt-dlp streaming, per-guild queue, interactive Now Playing card (buttons), search picker, vote-skip, playnext/playnow, move/jump, loop/shuffle/seek/speed/audio-filters/volume, lyrics, grab, autoplay + persistent autoplaylist, idle auto-disconnect. Reads `[music]` config (incl. cookies). Requires FFmpeg + PyNaCl. Playback state is in-memory (not restart-safe); the autoplaylist persists in SQLite. |
+| `music.py` | Voice music player: yt-dlp streaming, Spotify link support (no API key — embed-page metadata scraped then matched on YouTube at play time), per-guild queue, interactive Now Playing card (buttons), search picker, vote-skip, playnext/playnow/stream/shuffleplay, follow, move/jump, loop/shuffle/seek/speed/audio-filters/volume, lyrics, grab, pldump, autoplay + persistent autoplaylist, idle auto-disconnect. Reads `[music]` config (incl. cookies). Requires FFmpeg + PyNaCl. Playback state is in-memory (not restart-safe); the autoplaylist persists in SQLite. |
 
 ### Data Layer
 
