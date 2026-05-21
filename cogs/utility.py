@@ -70,6 +70,7 @@ _CATEGORY_ORDER: list[str] = [
     "🛡️ Auto Mod",
     "🎛️ Role Panels",
     "🗳️ Voting",
+    "🎵 Music",
     "🎉 Fun",
     "😄 React",
     "🖼️ Images",

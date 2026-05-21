@@ -73,12 +73,13 @@ All features live in `cogs/` as discord.py cogs, hot-reloadable via `n!reload <c
 | `fun.py` | 26 social + 33 reaction GIF commands via nekos.best |
 | `votes.py` | top.gg / DBL / discord.bots.gg stat posting and vote webhooks |
 | `eli5.py` | Plain-English AI explanations via Groq (Llama 3.1 8B) |
+| `music.py` | Voice music player: yt-dlp streaming, Spotify link support (no API key — embed-page metadata scraped then matched on YouTube at play time), per-guild queue, interactive Now Playing card (buttons), search picker, vote-skip, playnext/playnow/stream/shuffleplay, follow, move/jump, loop/shuffle/seek/speed/audio-filters/volume, lyrics, grab, pldump, autoplay + persistent autoplaylist, idle auto-disconnect. Reads `[music]` config (incl. cookies). Requires FFmpeg + PyNaCl. Playback state is in-memory (not restart-safe); the autoplaylist persists in SQLite. |
 
 ### Data Layer
 
 Two SQLite databases, both opened once at startup via `setup_hook()` and shared as module-level connections:
 
-- **`data/nanobot.db`** — All persistent bot data. Managed by `utils/db.py`. Tables include: `tags`, `notes`, `prefixes`, `unban_schedules`, `slow_schedules`, `reminders`, `automod_regex_patterns`, warnings, automod config, auditlog settings, role panels, welcome config, recurring reminders, and vote history.
+- **`data/nanobot.db`** — All persistent bot data. Managed by `utils/db.py`. Tables include: `tags`, `notes`, `prefixes`, `unban_schedules`, `slow_schedules`, `reminders`, `automod_regex_patterns`, warnings, automod config, auditlog settings, role panels, welcome config, recurring reminders, vote history, and `music_autoplaylist` (persistent per-guild autoplay tracks).
 - **`data/cache.db`** — External content cache (anime images, stories). Managed by `utils/cache_db.py`.
 
 Both use WAL mode (`PRAGMA journal_mode=WAL`) for concurrent read/write. All queries are async via `aiosqlite`. Initialize with `await db.init()` and `await cache_db.init()` in `NanoBot.setup_hook()`.
@@ -103,13 +104,14 @@ Tag shortcuts are detected in `on_message`: if a message matches no command but 
 
 ### Configuration
 
-`config.ini` (gitignored) at the repo root, split into five sections:
+`config.ini` (gitignored) at the repo root, split into six sections:
 
 * **`[bot]`** — `token`, `default_prefix`, `owner_id`
 * **`[logging]`** — `log_level`, `log_http`
 * **`[votes]`** — top.gg / DBL / discord.bots.gg tokens, `vote_webhook_port`, `vote_webhook_secret`
 * **`[groq]`** — `groq_api_key`
 * **`[scraper]`** — `fml_pages_per_scrape`, `wyr_requests_per_scrape`, `nekos_per_endpoint`, `nekosia_per_tag`, `revalidate_age`, `revalidate_batch`, `groq_wyr_system`
+* **`[music]`** — `music_cookie_file` (yt-dlp cookies.txt path), `music_default_volume`, `music_idle_timeout`, `music_skip_ratio`, `music_max_queue`. Read live from `bot.config` so `!reloadconfig` applies without a cog reload.
 
 All keys are optional except `token` (or the `DISCORD_TOKEN` env var). An old `config.json` is auto-migrated to `config.ini` on first start (the legacy file is renamed to `config.json.bak`).
 
