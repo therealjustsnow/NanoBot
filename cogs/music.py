@@ -1411,7 +1411,7 @@ class Music(commands.Cog):
 
     @commands.hybrid_command(
         name="stop",
-        aliases=["leave", "disconnect", "dc"],
+        aliases=["disconnect", "dc"],
         description="Stop playback, clear the queue, and leave the channel.",
         extras={
             "category": "🎵 Music",
@@ -1562,7 +1562,7 @@ class Music(commands.Cog):
 
     @commands.hybrid_command(
         name="remove",
-        aliases=["rm"],
+        aliases=[],
         description="Remove a track from the queue by its position.",
         extras={
             "category": "🎵 Music",
@@ -1729,7 +1729,7 @@ class Music(commands.Cog):
 
     @commands.hybrid_command(
         name="loop",
-        aliases=["repeat"],
+        aliases=[],
         description="Cycle loop mode: off → track → queue.",
         extras={
             "category": "🎵 Music",
@@ -1812,7 +1812,7 @@ class Music(commands.Cog):
 
     @commands.hybrid_command(
         name="replay",
-        aliases=["restart"],
+        aliases=[],
         description="Restart the current track from the beginning.",
         extras={
             "category": "🎵 Music",
