@@ -108,7 +108,7 @@ FILTERS: dict[str, str] = {
     "muffle": "lowpass=f=600",
 }
 
-PLAYLIST_CAP = 50  # max tracks pulled from a single playlist
+PLAYLIST_CAP = 1000  # max tracks pulled from a single playlist
 NP_REFRESH = 15  # seconds between live progress-bar refreshes
 SEARCH_RESULTS = 5  # results shown by the search picker
 
