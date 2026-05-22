@@ -108,7 +108,6 @@ FILTERS: dict[str, str] = {
     "muffle": "lowpass=f=600",
 }
 
-PLAYLIST_CAP = 1000  # max tracks pulled from a single playlist
 NP_REFRESH = 15  # seconds between live progress-bar refreshes
 SEARCH_RESULTS = 5  # results shown by the search picker
 
@@ -1000,7 +999,7 @@ class Music(commands.Cog):
         requester_id: int,
         requester_name: str,
         limit: int = 1,
-        playlist_cap: int | None = PLAYLIST_CAP,
+        playlist_cap: int | None = None,
     ) -> list[Track]:
         """Resolve a query (URL, playlist, or search terms) into Track metadata."""
         if _SPOTIFY_RE.search(query):
@@ -1056,7 +1055,7 @@ class Music(commands.Cog):
                     html = await r.text()
             tracks = self._parse_spotify_embed(html, url, requester_id, requester_name)
             if tracks:
-                return tracks[:PLAYLIST_CAP]
+                return tracks
         except Exception as exc:
             log.debug("Spotify embed scrape failed for %s: %s", embed_url, exc)
 
