@@ -112,6 +112,7 @@ NP_REFRESH = 15  # seconds between live progress-bar refreshes
 SEARCH_RESULTS = 5  # results shown by the search picker
 PAGE_SIZE_QUEUE = 15  # tracks per page in queue display
 PAGE_SIZE_APL = 25  # entries per page in autoplaylist display
+NP_UP_NEXT = 5  # upcoming tracks shown on the Now Playing card
 
 # ── Base yt-dlp options (cookies/limits merged in per call) ─────────────────────
 _YTDL_BASE = {
@@ -916,10 +917,16 @@ class GuildPlayer:
             e.add_field(name="Effects", value=" · ".join(fx), inline=True)
 
         if self.queue:
-            nxt = self.queue[0]
-            up = nxt.title if len(nxt.title) <= 50 else nxt.title[:47] + "…"
+            preview_lines = []
+            for i, t in enumerate(self.queue[:NP_UP_NEXT], start=1):
+                title = t.title if len(t.title) <= 45 else t.title[:42] + "…"
+                preview_lines.append(f"`{i}.` {title} `{_fmt_time(t.duration)}`")
+            if len(self.queue) > NP_UP_NEXT:
+                preview_lines.append(f"_…and {len(self.queue) - NP_UP_NEXT} more_")
             e.add_field(
-                name=f"Up Next ({len(self.queue)} in queue)", value=up, inline=False
+                name=f"Up Next ({len(self.queue)} in queue)",
+                value="\n".join(preview_lines),
+                inline=False,
             )
         e.set_footer(
             text="NanoBot Music" + (" · 📻 Autoplay on" if self.autoplay else "")
