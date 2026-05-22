@@ -22,6 +22,12 @@ Config ([music] section, all optional — see example_config.ini):
   music_max_queue       — max tracks per queue (default 500)
   music_js_runtime_path — explicit path to deno/node/bun binary for yt-dlp JS
                           (auto-detected from PATH + common locations if omitted)
+  music_use_opus        — send Opus (true, default) or PCM (false). PCM gives
+                          live volume changes but costs more CPU
+  music_persist_queue   — save the queue to disk so it survives a restart
+                          (false by default)
+  music_predownload     — download the next queued track to disk while one
+                          plays for gapless playback (false by default)
 
 Commands (hybrid — slash + prefix), category "🎵 Music":
   play / p          — queue a song or playlist (URL, Spotify link, or search)
@@ -129,6 +135,9 @@ _YTDL_BASE = {
 
 _FFMPEG_BEFORE = "-reconnect 1 -reconnect_streamed 1 -reconnect_delay_max 5"
 
+# Where predownloaded tracks are cached (per-guild subdirs). Wiped on startup.
+_MUSIC_CACHE_DIR = os.path.join("data", "music_cache")
+
 # Upper bound for the Opus encode bitrate (kbps). The voice channel's own
 # bitrate is the real ceiling; this just caps absurd values. Discord allows up
 # to 384k on boosted servers, 512 covers any future bump.
@@ -228,6 +237,40 @@ class Track:
     uploader: Optional[str]
     requester_id: int
     requester_name: str
+
+    # Set when the track has been predownloaded to a local file (not persisted).
+    local_path: Optional[str] = None
+    acodec: Optional[str] = None
+
+    def to_dict(self) -> dict:
+        """Serialise the persistable fields (skips ephemeral download state)."""
+        return {
+            "query": self.query,
+            "title": self.title,
+            "duration": self.duration,
+            "webpage_url": self.webpage_url,
+            "thumbnail": self.thumbnail,
+            "uploader": self.uploader,
+            "requester_id": str(self.requester_id),
+            "requester_name": self.requester_name,
+        }
+
+    @classmethod
+    def from_dict(cls, d: dict) -> "Track":
+        try:
+            rid = int(d.get("requester_id") or 0)
+        except (TypeError, ValueError):
+            rid = 0
+        return cls(
+            query=d.get("query") or "",
+            title=d.get("title") or "Unknown title",
+            duration=d.get("duration"),
+            webpage_url=d.get("webpage_url") or "",
+            thumbnail=d.get("thumbnail"),
+            uploader=d.get("uploader"),
+            requester_id=rid,
+            requester_name=d.get("requester_name") or "Unknown",
+        )
 
     @classmethod
     def from_info(cls, info: dict, requester_id: int, requester_name: str) -> "Track":
@@ -335,6 +378,7 @@ class Controls(discord.ui.View):
     )
     async def loop_btn(self, interaction: discord.Interaction, _: discord.ui.Button):
         self.player.loop = _LOOP_NEXT[self.player.loop]
+        self.player._schedule_save()
         await self._refresh(interaction)
 
     @discord.ui.button(
@@ -614,6 +658,14 @@ class GuildPlayer:
         self._restart = False
         self._force_current = False
 
+        # currently playing audio source (kept for live PCM volume changes)
+        self._source: Optional[discord.AudioSource] = None
+
+        # persistence + predownload bookkeeping
+        self._save_handle = None  # debounce timer for save_state
+        self._predl_task: Optional[asyncio.Task] = None
+        self._dl_files: set[str] = set()  # predownloaded file paths to clean up
+
         self._destroyed = False
         self._loop_task = self.bot.loop.create_task(self._player_loop())
         self._refresh_task = self.bot.loop.create_task(self._refresh_loop())
@@ -632,11 +684,13 @@ class GuildPlayer:
     def add(self, track: Track) -> None:
         self.queue.append(track)
         self._added.set()
+        self._schedule_save()
 
     def add_front(self, tracks: list[Track]) -> None:
         for t in reversed(tracks):
             self.queue.insert(0, t)
         self._added.set()
+        self._schedule_save()
 
     def add_many(self, tracks: list[Track]) -> int:
         cap = self.cog.max_queue()
@@ -648,15 +702,18 @@ class GuildPlayer:
             added += 1
         if added:
             self._added.set()
+            self._schedule_save()
         return added
 
     def shuffle(self) -> int:
         random.shuffle(self.queue)
+        self._schedule_save()
         return len(self.queue)
 
     def clear(self) -> int:
         n = len(self.queue)
         self.queue.clear()
+        self._schedule_save()
         return n
 
     def skip(self) -> None:
@@ -676,9 +733,14 @@ class GuildPlayer:
                 self._paused_at = None
 
     async def set_volume(self, value: float) -> None:
-        # Opus output has no live PCM gain stage, so volume rides an ffmpeg
-        # filter baked into the source — changing it re-streams the track.
         self.volume = value
+        # PCM mode has a live gain stage, so volume applies instantly. Opus
+        # output bakes volume into an ffmpeg filter, so it re-streams the track.
+        if not self.cog.use_opus() and isinstance(
+            self._source, discord.PCMVolumeTransformer
+        ):
+            self._source.volume = value
+            return
         await self.reapply_effects()
 
     def position(self) -> float:
@@ -706,12 +768,110 @@ class GuildPlayer:
         ):
             await self.seek(self.position())
 
+    # ── persistent queue ──────────────────────────────────────────────────────
+    def _schedule_save(self) -> None:
+        """Debounced save of the queue snapshot (no-op unless persistence is on)."""
+        if self._destroyed or not self.cog.persist_queue():
+            return
+        if self._save_handle is not None:
+            self._save_handle.cancel()
+        self._save_handle = self.bot.loop.call_later(
+            1.5, lambda: self.bot.loop.create_task(self._save_state())
+        )
+
+    async def _save_state(self) -> None:
+        if self._destroyed or not self.cog.persist_queue():
+            return
+        voice_id = getattr(getattr(self.voice, "channel", None), "id", None)
+        text_id = getattr(self.text_channel, "id", None)
+        try:
+            await db.save_music_queue(
+                self.guild.id,
+                self.current.to_dict() if self.current else None,
+                [t.to_dict() for t in self.queue],
+                voice_id,
+                text_id,
+                self.loop,
+            )
+        except Exception as exc:
+            log.debug("Queue save failed for %s: %s", self.guild.id, exc)
+
+    async def _clear_saved_state(self) -> None:
+        if self._save_handle is not None:
+            self._save_handle.cancel()
+            self._save_handle = None
+        try:
+            await db.clear_music_queue(self.guild.id)
+        except Exception as exc:
+            log.debug("Queue clear failed for %s: %s", self.guild.id, exc)
+
+    # ── predownload (fetch the next track to disk while one plays) ──────────────
+    def _start_predownload(self) -> None:
+        """Kick off a background download of the next queued track."""
+        if not self.cog.predownload() or self.loop == LOOP_TRACK:
+            return
+        if self._predl_task and not self._predl_task.done():
+            return
+        if not self.queue:
+            return
+        nxt = self.queue[0]
+        if nxt.local_path:
+            return
+        self._predl_task = self.bot.loop.create_task(self._predownload(nxt))
+
+    async def _predownload(self, track: Track) -> None:
+        try:
+            result = await self.cog.download_track(track, self.guild.id)
+        except Exception as exc:
+            log.debug("Predownload failed for '%s': %s", track.title, exc)
+            return
+        if not result:
+            return
+        path, acodec = result
+        # The track may have been skipped/removed while downloading; if so the
+        # file is orphaned — track it for cleanup either way.
+        self._dl_files.add(path)
+        if not self._destroyed:
+            track.local_path = path
+            track.acodec = acodec
+
+    def _discard_download(self, track: Optional[Track]) -> None:
+        """Delete a finished track's predownloaded file, if any."""
+        if not track or not track.local_path:
+            return
+        path = track.local_path
+        track.local_path = None
+        self._dl_files.discard(path)
+        try:
+            if os.path.isfile(path):
+                os.remove(path)
+        except OSError:
+            pass
+
+    def _cleanup_downloads(self) -> None:
+        """Remove every predownloaded file for this guild."""
+        for path in list(self._dl_files):
+            try:
+                if os.path.isfile(path):
+                    os.remove(path)
+            except OSError:
+                pass
+        self._dl_files.clear()
+        guild_dir = os.path.join(_MUSIC_CACHE_DIR, str(self.guild.id))
+        try:
+            if os.path.isdir(guild_dir):
+                shutil.rmtree(guild_dir, ignore_errors=True)
+        except OSError:
+            pass
+
     # ── source resolution ────────────────────────────────────────────────────
-    def _filter_parts(self) -> list[str]:
+    def _filter_parts(self, include_volume: bool = True) -> list[str]:
         """Per-sample ffmpeg -af chain (preset + speed + volume).
 
         Any non-empty result forces an Opus re-encode (you can't stream-copy a
-        signal you're modifying), so keep it empty whenever possible.
+        signal you're modifying), so keep it empty whenever possible. In PCM
+        mode volume is applied live by a PCMVolumeTransformer instead, so it's
+        left out of the chain (include_volume=False).
         """
         parts = []
         preset = FILTERS.get(self.audio_filter, "")
@@ -719,7 +879,7 @@ class GuildPlayer:
             parts.append(preset)
         if abs(self.speed - 1.0) > 0.01:
             parts.append(f"atempo={self.speed:g}")
-        if abs(self.volume - 1.0) > 0.001:
+        if include_volume and abs(self.volume - 1.0) > 0.001:
             parts.append(f"volume={self.volume:g}")
         return parts
 
@@ -741,40 +901,68 @@ class GuildPlayer:
             kb = min(kb, int(abr))
         return max(_OPUS_MIN_KBITRATE, kb)
 
-    async def _make_source(self, track: Track) -> discord.FFmpegOpusAudio:
-        info = await self.cog.resolve_stream(track.query)
-        stream_url = info["url"]
-        before = _FFMPEG_BEFORE
-        # yt-dlp provides headers (User-Agent, etc.) required for the stream URL;
-        # without them YouTube returns 403 / throttles → silent playback failure.
-        http_headers = info.get("http_headers") or {}
-        if http_headers:
-            header_block = "".join(f"{k}: {v}\r\n" for k, v in http_headers.items())
-            before = f"{before} -headers {shlex.quote(header_block)}"
+    async def _make_source(self, track: Track) -> discord.AudioSource:
+        # A predownloaded local file plays directly — no stream resolution and
+        # no network headers/reconnect needed.
+        local = (
+            track.local_path
+            if track.local_path and os.path.isfile(track.local_path)
+            else None
+        )
+        if local:
+            source_url = local
+            before = ""
+            src_codec = (track.acodec or "").lower()
+            target_kb = self._target_kbitrate({})
+        else:
+            info = await self.cog.resolve_stream(track.query)
+            source_url = info["url"]
+            before = _FFMPEG_BEFORE
+            # yt-dlp provides headers (User-Agent, etc.) required for the stream
+            # URL; without them YouTube returns 403 / throttles → silent failure.
+            http_headers = info.get("http_headers") or {}
+            if http_headers:
+                header_block = "".join(f"{k}: {v}\r\n" for k, v in http_headers.items())
+                before = f"{before} -headers {shlex.quote(header_block)}"
+            src_codec = (info.get("acodec") or "").lower()
+            target_kb = self._target_kbitrate(info)
+
         offset = 0.0
         if self._seek_to is not None:
             offset = self._seek_to
-            before = f"{before} -ss {offset}"
+            before = f"{before} -ss {offset}".strip()
             self._seek_to = None
         self._base_offset = offset
 
-        parts = self._filter_parts()
-        options = "-vn -af " + ",".join(parts) if parts else "-vn"
+        use_opus = self.cog.use_opus()
 
-        # YouTube's bestaudio is already Opus. With no -af processing we hand the
-        # original Opus packets straight to Discord (codec="opus" → ffmpeg
-        # "-c:a copy"), avoiding a lossy decode→re-encode round-trip entirely.
-        # Otherwise re-encode with libopus at the channel-matched bitrate.
-        src_codec = (info.get("acodec") or "").lower()
-        passthrough = not parts and src_codec in ("opus", "libopus")
+        if use_opus:
+            parts = self._filter_parts(include_volume=True)
+            options = "-vn -af " + ",".join(parts) if parts else "-vn"
+            # An already-Opus source with no -af processing is handed straight to
+            # Discord (codec="opus" → ffmpeg "-c:a copy"), skipping a lossy
+            # decode→re-encode. Otherwise re-encode with libopus.
+            passthrough = not parts and src_codec in ("opus", "libopus")
+            self._source = discord.FFmpegOpusAudio(
+                source_url,
+                bitrate=target_kb,
+                codec="opus" if passthrough else None,
+                before_options=before or None,
+                options=options,
+            )
+        else:
+            # PCM path: discord.py encodes Opus itself; volume rides a live
+            # PCMVolumeTransformer so changing it doesn't re-stream the track.
+            parts = self._filter_parts(include_volume=False)
+            options = "-vn -af " + ",".join(parts) if parts else "-vn"
+            pcm = discord.FFmpegPCMAudio(
+                source_url,
+                before_options=before or None,
+                options=options,
+            )
+            self._source = discord.PCMVolumeTransformer(pcm, volume=self.volume)
 
-        return discord.FFmpegOpusAudio(
-            stream_url,
-            bitrate=self._target_kbitrate(info),
-            codec="opus" if passthrough else None,
-            before_options=before,
-            options=options,
-        )
+        return self._source
 
     # ── playback loop ────────────────────────────────────────────────────────
     async def _player_loop(self) -> None:
@@ -818,6 +1006,9 @@ class GuildPlayer:
                 self._paused_at = None
                 self.voice.play(source, after=self._after)
 
+                self._schedule_save()
+                self._start_predownload()
+
                 await self._post_now_playing()
                 await self._next.wait()
 
@@ -833,7 +1024,9 @@ class GuildPlayer:
                     self.queue.append(track)
                     self._added.set()
                 if self.loop != LOOP_TRACK:
+                    self._discard_download(track)
                     self.current = None
+                self._schedule_save()
         except asyncio.CancelledError:
             raise
         except Exception as exc:  # pragma: no cover - safety net
@@ -1015,16 +1208,33 @@ class GuildPlayer:
             raise
 
     # ── teardown ──────────────────────────────────────────────────────────────
-    async def destroy(self, reason: str = "") -> None:
+    async def destroy(self, reason: str = "", *, persist_clear: bool = True) -> None:
         if self._destroyed:
             return
         self._destroyed = True
         log.info("Destroying player for guild %s (%s)", self.guild.id, reason)
 
+        # Drop the saved queue on intentional ends (stop/idle/etc). On a bot
+        # restart the process just dies — cog_unload passes persist_clear=False
+        # so the queue is kept and resumed next launch.
+        if self.cog.persist_queue():
+            if persist_clear:
+                await self._clear_saved_state()
+            else:
+                # Reload/restart: flush the latest snapshot before tearing down.
+                if self._save_handle is not None:
+                    self._save_handle.cancel()
+                    self._save_handle = None
+                await self._save_state()
+
         self.queue.clear()
         self.current = None
         self._next.set()
         self._added.set()
+
+        if self._predl_task and not self._predl_task.done():
+            self._predl_task.cancel()
+        self._cleanup_downloads()
 
         for task in (self._loop_task, self._refresh_task):
             if task and task is not asyncio.current_task():
@@ -1060,10 +1270,17 @@ class Music(commands.Cog):
     def __init__(self, bot: commands.Bot):
         self.bot = bot
         self.players: dict[int, GuildPlayer] = {}
+        # Wipe any predownloaded files left over from a previous run.
+        try:
+            if os.path.isdir(_MUSIC_CACHE_DIR):
+                shutil.rmtree(_MUSIC_CACHE_DIR, ignore_errors=True)
+        except OSError:
+            pass
 
     async def cog_unload(self) -> None:
+        # persist_clear=False so a persisted queue survives a reload/restart.
         for player in list(self.players.values()):
-            await player.destroy(reason="cog unload")
+            await player.destroy(reason="cog unload", persist_clear=False)
 
     # ── config helpers (read live from bot.config so reloadconfig applies) ─────
     def _cfg_int(self, key: str, default: int) -> int:
@@ -1084,6 +1301,23 @@ class Music(commands.Cog):
 
     def max_queue(self) -> int:
         return max(1, self._cfg_int("music_max_queue", 500))
+
+    def _cfg_bool(self, key: str, default: bool) -> bool:
+        val = self.bot.config.get(key)
+        if val is None or val == "":
+            return default
+        if isinstance(val, bool):
+            return val
+        return str(val).strip().lower() in ("true", "1", "yes", "on")
+
+    def use_opus(self) -> bool:
+        return self._cfg_bool("music_use_opus", True)
+
+    def persist_queue(self) -> bool:
+        return self._cfg_bool("music_persist_queue", False)
+
+    def predownload(self) -> bool:
+        return self._cfg_bool("music_predownload", False)
 
     def _cookie_file(self) -> Optional[str]:
         val = self.bot.config.get("music_cookie_file")
@@ -1151,6 +1385,33 @@ class Music(commands.Cog):
                 return info
 
         return await self.bot.loop.run_in_executor(None, _work)
+
+    async def download_track(self, track: "Track", guild_id: int) -> Optional[tuple]:
+        """Download a track's audio into the per-guild cache dir.
+
+        Returns (file_path, acodec) or None on failure. Runs in a thread.
+        """
+        guild_dir = os.path.join(_MUSIC_CACHE_DIR, str(guild_id))
+        os.makedirs(guild_dir, exist_ok=True)
+        opts = self._ytdl_opts(
+            noplaylist=True,
+            skip_download=False,
+            paths={"home": guild_dir},
+            outtmpl={"default": "%(id)s.%(ext)s"},
+        )
+
+        def _work():
+            with yt_dlp.YoutubeDL(opts) as ydl:
+                info = ydl.extract_info(track.query, download=True)
+                if info and "entries" in info:
+                    info = next((e for e in info["entries"] if e), info)
+                path = ydl.prepare_filename(info)
+                return path, (info.get("acodec") or "")
+
+        path, acodec = await self.bot.loop.run_in_executor(None, _work)
+        if not path or not os.path.isfile(path):
+            return None
+        return path, acodec
 
     async def search(
         self,
@@ -1474,6 +1735,72 @@ class Music(commands.Cog):
                     )
                     await player.destroy(reason="alone")
 
+    # ── resume persisted queues on startup ─────────────────────────────────────
+    @commands.Cog.listener()
+    async def on_restore_schedules(self):
+        if not self.persist_queue() or not YTDLP_AVAILABLE:
+            return
+        try:
+            saved = await db.get_all_persisted_queues()
+        except Exception as exc:
+            log.warning("Could not load persisted music queues: %s", exc)
+            return
+        resumed = 0
+        for entry in saved:
+            try:
+                if await self._resume_guild(entry):
+                    resumed += 1
+            except Exception as exc:
+                log.warning(
+                    "Queue resume failed for guild %s: %s",
+                    entry.get("guild_id"),
+                    exc,
+                )
+        if resumed:
+            log.info("Music: resumed %d saved queue(s)", resumed)
+
+    async def _resume_guild(self, entry: dict) -> bool:
+        guild = self.bot.get_guild(int(entry["guild_id"]))
+        if not guild or guild.id in self.players:
+            return False
+
+        vc_id = entry.get("voice_channel_id")
+        voice_channel = guild.get_channel(int(vc_id)) if vc_id else None
+        tracks: list[Track] = []
+        if entry.get("current"):
+            tracks.append(Track.from_dict(entry["current"]))
+        tracks.extend(Track.from_dict(d) for d in entry.get("queue", []))
+
+        if (
+            not tracks
+            or not isinstance(
+                voice_channel, (discord.VoiceChannel, discord.StageChannel)
+            )
+            or not voice_channel.permissions_for(guild.me).connect
+            or not voice_channel.permissions_for(guild.me).speak
+        ):
+            await db.clear_music_queue(guild.id)
+            return False
+
+        try:
+            await voice_channel.connect()
+        except Exception as exc:
+            log.warning("Resume connect failed for guild %s: %s", guild.id, exc)
+            return False
+
+        player = self.get_player(guild)
+        text_id = entry.get("text_channel_id")
+        text_channel = guild.get_channel(int(text_id)) if text_id else None
+        if isinstance(text_channel, discord.abc.Messageable):
+            player.text_channel = text_channel
+        player.stay_connected = await db.get_music_stay(guild.id)
+        loop_mode = entry.get("loop_mode")
+        if loop_mode in (LOOP_OFF, LOOP_TRACK, LOOP_QUEUE):
+            player.loop = loop_mode
+        player.queue.extend(tracks)
+        player._added.set()
+        return True
+
     # ══════════════════════════════════════════════════════════════════════════
     # Commands
     # ══════════════════════════════════════════════════════════════════════════
@@ -1689,6 +2016,7 @@ class Music(commands.Cog):
             )
         target = player.queue[position - 1]
         del player.queue[: position - 1]
+        player._schedule_save()
         player.skip()
         await ctx.reply(embed=h.ok(f"Jumping to **{target.title}**.", "⏩ Jump"))
 
@@ -1841,6 +2169,7 @@ class Music(commands.Cog):
             )
         track = player.queue.pop(from_pos - 1)
         player.queue.insert(to_pos - 1, track)
+        player._schedule_save()
         await ctx.reply(
             embed=h.ok(
                 f"Moved **{track.title}** to position **#{to_pos}**.", "↕️ Moved"
@@ -1875,6 +2204,7 @@ class Music(commands.Cog):
                 ephemeral=True,
             )
         removed = player.queue.pop(position - 1)
+        player._schedule_save()
         await ctx.reply(
             embed=h.ok(f"Removed **{removed.title}** from the queue.", "🗑️ Removed")
         )
@@ -2068,6 +2398,7 @@ class Music(commands.Cog):
                 embed=h.err("Mode must be `off`, `track`, or `queue`."),
                 ephemeral=True,
             )
+        player._schedule_save()
         await ctx.reply(
             embed=h.ok(f"Loop mode: **{_LOOP_LABEL[player.loop]}**.", "🔁 Loop")
         )

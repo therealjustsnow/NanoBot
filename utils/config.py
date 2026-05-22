@@ -68,6 +68,9 @@ SECTION_MAP = {
     "music_idle_timeout": "music",
     "music_skip_ratio": "music",
     "music_max_queue": "music",
+    "music_use_opus": "music",
+    "music_persist_queue": "music",
+    "music_predownload": "music",
 }
 
 SECTION_ORDER = ("bot", "logging", "votes", "groq", "scraper", "music")
@@ -104,6 +107,21 @@ _SCHEMA: dict[str, tuple[type | None, bool, str]] = {
     "music_idle_timeout": (int, False, "Seconds idle/alone before auto-disconnect"),
     "music_skip_ratio": (int, False, "Percent of listeners needed to vote-skip, 0-100"),
     "music_max_queue": (int, False, "Maximum tracks allowed in a queue"),
+    "music_use_opus": (
+        bool,
+        False,
+        "Send audio as Opus (true) or PCM (false). PCM gives live volume but costs more CPU",
+    ),
+    "music_persist_queue": (
+        bool,
+        False,
+        "Save the queue to disk so it survives a restart (true/false)",
+    ),
+    "music_predownload": (
+        bool,
+        False,
+        "Download the next queued track while one plays for gapless playback (true/false)",
+    ),
 }
 
 # Defaults used when writing a fresh example_config.ini and when keys are missing.
@@ -139,6 +157,9 @@ DEFAULTS: dict[str, object] = {
     "music_idle_timeout": 180,
     "music_skip_ratio": 50,
     "music_max_queue": 500,
+    "music_use_opus": True,
+    "music_persist_queue": False,
+    "music_predownload": False,
 }
 
 # Keys that must never be echoed back in Discord (logs, !config show, etc).
