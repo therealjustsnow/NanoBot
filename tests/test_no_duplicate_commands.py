@@ -41,9 +41,7 @@ def _top_level_commands(filepath: str) -> list[tuple[str, list[str]]]:
                     name = kw.value.value
                 if kw.arg == "aliases" and isinstance(kw.value, ast.List):
                     aliases = [
-                        e.value
-                        for e in kw.value.elts
-                        if isinstance(e, ast.Constant)
+                        e.value for e in kw.value.elts if isinstance(e, ast.Constant)
                     ]
             results.append((name, aliases))
 
@@ -67,9 +65,7 @@ def _collect_all() -> dict[str, list[str]]:
 def test_no_duplicate_top_level_command_names():
     """Every top-level command name is unique across all cogs."""
     duplicates = {
-        token: cogs
-        for token, cogs in _collect_all().items()
-        if len(cogs) > 1
+        token: cogs for token, cogs in _collect_all().items() if len(cogs) > 1
     }
     assert not duplicates, (
         "Duplicate top-level command names / aliases found — discord.py will raise "
