@@ -108,7 +108,7 @@ SEARCH_RESULTS = 5  # results shown by the search picker
 
 # ── Base yt-dlp options (cookies/limits merged in per call) ─────────────────────
 _YTDL_BASE = {
-    "format": "bestaudio/best",
+    "format": "bestaudio[acodec!=none]/best[acodec!=none]/best",
     "noplaylist": False,
     "nocheckcertificate": True,
     "ignoreerrors": False,
@@ -117,6 +117,7 @@ _YTDL_BASE = {
     "default_search": "ytsearch",
     "source_address": "0.0.0.0",
     "skip_download": True,
+    "extractor_args": {"youtube": {"player_client": ["ios", "web"]}},
 }
 
 _FFMPEG_BEFORE = "-reconnect 1 -reconnect_streamed 1 -reconnect_delay_max 5"
