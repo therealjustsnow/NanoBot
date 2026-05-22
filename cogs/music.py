@@ -1000,13 +1000,15 @@ class Music(commands.Cog):
         requester_id: int,
         requester_name: str,
         limit: int = 1,
+        playlist_cap: int | None = PLAYLIST_CAP,
     ) -> list[Track]:
         """Resolve a query (URL, playlist, or search terms) into Track metadata."""
         if _SPOTIFY_RE.search(query):
             return await self._resolve_spotify(query, requester_id, requester_name)
 
         is_url = query.startswith("http://") or query.startswith("https://")
-        opts = self._ytdl_opts(playlistend=PLAYLIST_CAP)
+        extra = {} if playlist_cap is None else {"playlistend": playlist_cap}
+        opts = self._ytdl_opts(**extra)
         if is_url:
             opts["extract_flat"] = "in_playlist"
         else:
@@ -2196,7 +2198,10 @@ class Music(commands.Cog):
 
         try:
             tracks = await self.search(
-                url, requester_id=interaction.user.id, requester_name="apl"
+                url,
+                requester_id=interaction.user.id,
+                requester_name="apl",
+                playlist_cap=None,
             )
         except Exception as exc:
             return await interaction.followup.send(
