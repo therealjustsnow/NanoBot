@@ -20,6 +20,8 @@ Config ([music] section, all optional — see example_config.ini):
   music_idle_timeout    — seconds idle/alone before disconnect (default 180)
   music_skip_ratio      — percent of listeners needed to vote-skip (default 50)
   music_max_queue       — max tracks per queue (default 500)
+  music_js_runtime_path — explicit path to deno/node/bun binary for yt-dlp JS
+                          (auto-detected from PATH + common locations if omitted)
 
 Commands (hybrid — slash + prefix), category "🎵 Music":
   play / p          — queue a song or playlist (URL, Spotify link, or search)
@@ -55,10 +57,12 @@ Commands (hybrid — slash + prefix), category "🎵 Music":
 import asyncio
 import logging
 import math
+import os
 import random
 import io
 import json
 import re
+import shutil
 import time
 from dataclasses import dataclass
 from typing import Optional
@@ -108,7 +112,7 @@ SEARCH_RESULTS = 5  # results shown by the search picker
 
 # ── Base yt-dlp options (cookies/limits merged in per call) ─────────────────────
 _YTDL_BASE = {
-    "format": "bestaudio/best",
+    "format": "bestaudio[acodec!=none]/best[acodec!=none]/best",
     "noplaylist": False,
     "nocheckcertificate": True,
     "ignoreerrors": False,
@@ -117,6 +121,7 @@ _YTDL_BASE = {
     "default_search": "ytsearch",
     "source_address": "0.0.0.0",
     "skip_download": True,
+    "extractor_args": {"youtube": {"player_client": ["ios", "web"]}},
 }
 
 _FFMPEG_BEFORE = "-reconnect 1 -reconnect_streamed 1 -reconnect_delay_max 5"
@@ -854,11 +859,52 @@ class Music(commands.Cog):
         val = self.bot.config.get("music_cookie_file")
         return val or None
 
+    def _js_runtimes(self) -> dict:
+        # explicit path override via config
+        cfg_path = (self.bot.config.get("music_js_runtime_path") or "").strip()
+        if cfg_path and os.path.isfile(cfg_path):
+            name = os.path.basename(cfg_path).split(".")[0].lower()
+            if name not in ("deno", "node", "bun", "quickjs"):
+                name = "deno"
+            return {name: {"path": cfg_path}}
+
+        # auto-discover: deno preferred, node fallback
+        _CANDIDATES = [
+            (
+                "deno",
+                [
+                    shutil.which("deno"),
+                    os.path.expanduser("~/.deno/bin/deno"),
+                    "/usr/local/bin/deno",
+                    "/usr/bin/deno",
+                ],
+            ),
+            (
+                "node",
+                [
+                    shutil.which("node"),
+                    shutil.which("nodejs"),
+                    "/opt/node22/bin/node",
+                    "/opt/node21/bin/node",
+                    "/opt/node20/bin/node",
+                    "/usr/local/bin/node",
+                    "/usr/bin/node",
+                ],
+            ),
+        ]
+        for name, paths in _CANDIDATES:
+            for p in paths:
+                if p and os.path.isfile(p):
+                    return {name: {"path": p}}
+
+        return {"deno": {}}  # let yt-dlp try its own discovery
+
     def _ytdl_opts(self, **extra) -> dict:
         opts = {**_YTDL_BASE, **extra}
         cookie = self._cookie_file()
         if cookie:
             opts["cookiefile"] = cookie
+        opts["js_runtimes"] = self._js_runtimes()
         return opts
 
     # ── extraction (runs in a thread to avoid blocking the loop) ───────────────
