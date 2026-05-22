@@ -881,6 +881,7 @@ class Music(commands.Cog):
                 [
                     shutil.which("deno"),
                     os.path.expanduser("~/.deno/bin/deno"),
+                    "/home/container/.deno/bin/deno",
                     "/usr/local/bin/deno",
                     "/usr/bin/deno",
                 ],
