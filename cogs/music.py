@@ -62,6 +62,7 @@ import random
 import io
 import json
 import re
+import shlex
 import shutil
 import time
 from dataclasses import dataclass
@@ -558,6 +559,12 @@ class GuildPlayer:
         info = await self.cog.resolve_stream(track.query)
         stream_url = info["url"]
         before = _FFMPEG_BEFORE
+        # yt-dlp provides headers (User-Agent, etc.) required for the stream URL;
+        # without them YouTube returns 403 / throttles → silent playback failure.
+        http_headers = info.get("http_headers") or {}
+        if http_headers:
+            header_block = "".join(f"{k}: {v}\r\n" for k, v in http_headers.items())
+            before = f"{before} -headers {shlex.quote(header_block)}"
         offset = 0.0
         if self._seek_to is not None:
             offset = self._seek_to
