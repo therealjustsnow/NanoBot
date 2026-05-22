@@ -126,6 +126,12 @@ _YTDL_BASE = {
 
 _FFMPEG_BEFORE = "-reconnect 1 -reconnect_streamed 1 -reconnect_delay_max 5"
 
+# Upper bound for the Opus encode bitrate (kbps). The voice channel's own
+# bitrate is the real ceiling; this just caps absurd values. Discord allows up
+# to 384k on boosted servers, 512 covers any future bump.
+_OPUS_MAX_KBITRATE = 512
+_OPUS_MIN_KBITRATE = 48
+
 # ── Spotify (no API key — metadata is scraped, then searched on YouTube) ────────
 _SPOTIFY_RE = re.compile(
     r"open\.spotify\.com/(?:intl-\w+/)?(track|album|playlist)/(\w+)"
@@ -511,11 +517,11 @@ class GuildPlayer:
                 self._play_started += time.monotonic() - self._paused_at
                 self._paused_at = None
 
-    def set_volume(self, value: float) -> None:
+    async def set_volume(self, value: float) -> None:
+        # Opus output has no live PCM gain stage, so volume rides an ffmpeg
+        # filter baked into the source — changing it re-streams the track.
         self.volume = value
-        src = getattr(self.voice, "source", None)
-        if isinstance(src, discord.PCMVolumeTransformer):
-            src.volume = value
+        await self.reapply_effects()
 
     def position(self) -> float:
         """Elapsed seconds of the current track (pause-aware)."""
@@ -543,18 +549,41 @@ class GuildPlayer:
             await self.seek(self.position())
 
     # ── source resolution ────────────────────────────────────────────────────
-    def _ffmpeg_options(self) -> str:
+    def _filter_parts(self) -> list[str]:
+        """Per-sample ffmpeg -af chain (preset + speed + volume).
+
+        Any non-empty result forces an Opus re-encode (you can't stream-copy a
+        signal you're modifying), so keep it empty whenever possible.
+        """
         parts = []
         preset = FILTERS.get(self.audio_filter, "")
         if preset:
             parts.append(preset)
         if abs(self.speed - 1.0) > 0.01:
             parts.append(f"atempo={self.speed:g}")
-        if parts:
-            return "-vn -af " + ",".join(parts)
-        return "-vn"
+        if abs(self.volume - 1.0) > 0.001:
+            parts.append(f"volume={self.volume:g}")
+        return parts
 
-    async def _make_source(self, track: Track) -> discord.PCMVolumeTransformer:
+    def _target_kbitrate(self, info: dict) -> int:
+        """Opus encode bitrate (kbps), matched to the voice channel.
+
+        Discord relays at most the channel's own bitrate, so encoding higher is
+        wasted; encoding at it (vs discord.py's fixed 128k + FEC overhead) is
+        what keeps music from sounding thin. Capped at the source bitrate too —
+        no point inventing bits the original stream never had.
+        """
+        kb = _OPUS_MAX_KBITRATE
+        channel = getattr(self.voice, "channel", None)
+        ch_bitrate = getattr(channel, "bitrate", None)
+        if ch_bitrate:
+            kb = min(kb, int(ch_bitrate) // 1000)
+        abr = info.get("abr")
+        if abr:
+            kb = min(kb, int(abr))
+        return max(_OPUS_MIN_KBITRATE, kb)
+
+    async def _make_source(self, track: Track) -> discord.FFmpegOpusAudio:
         info = await self.cog.resolve_stream(track.query)
         stream_url = info["url"]
         before = _FFMPEG_BEFORE
@@ -569,11 +598,25 @@ class GuildPlayer:
             offset = self._seek_to
             before = f"{before} -ss {offset}"
             self._seek_to = None
-        audio = discord.FFmpegPCMAudio(
-            stream_url, before_options=before, options=self._ffmpeg_options()
-        )
         self._base_offset = offset
-        return discord.PCMVolumeTransformer(audio, volume=self.volume)
+
+        parts = self._filter_parts()
+        options = "-vn -af " + ",".join(parts) if parts else "-vn"
+
+        # YouTube's bestaudio is already Opus. With no -af processing we hand the
+        # original Opus packets straight to Discord (codec="opus" → ffmpeg
+        # "-c:a copy"), avoiding a lossy decode→re-encode round-trip entirely.
+        # Otherwise re-encode with libopus at the channel-matched bitrate.
+        src_codec = (info.get("acodec") or "").lower()
+        passthrough = not parts and src_codec in ("opus", "libopus")
+
+        return discord.FFmpegOpusAudio(
+            stream_url,
+            bitrate=self._target_kbitrate(info),
+            codec="opus" if passthrough else None,
+            before_options=before,
+            options=options,
+        )
 
     # ── playback loop ────────────────────────────────────────────────────────
     async def _player_loop(self) -> None:
@@ -1714,7 +1757,7 @@ class Music(commands.Cog):
                 embed=h.err("Volume must be between **0** and **200**."),
                 ephemeral=True,
             )
-        player.set_volume(level / 100)
+        await player.set_volume(level / 100)
         await ctx.reply(embed=h.ok(f"Volume set to **{level}%**.", "🔊 Volume"))
 
     @commands.hybrid_command(
