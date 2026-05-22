@@ -50,7 +50,8 @@ Commands (hybrid — slash + prefix), category "🎵 Music":
   lyrics            — fetch lyrics for the current track
   grab / save       — DM yourself the current track
   autoplay          — keep playing from the autoplaylist when the queue empties
-  autoplaylist/apl  — manage the persistent server autoplaylist
+  autoplaylist/apl  — manage the persistent server autoplaylist (add takes playlists)
+  247 / radio       — toggle 24/7 mode: stay in voice even when empty (Manage Server)
   join / summon     — connect the bot to your voice channel
 """
 
@@ -434,6 +435,7 @@ class GuildPlayer:
         self.speed: float = 1.0
         self.audio_filter: str = "none"
         self.autoplay: bool = False
+        self.stay_connected: bool = False  # 24/7 mode: don't leave when empty/idle
         self.skip_votes: set[int] = set()
         self.follow_target: Optional[int] = None  # user id the bot follows
 
@@ -691,6 +693,10 @@ class GuildPlayer:
                 if picked is not None:
                     return picked
             self._added.clear()
+            if self.stay_connected:
+                # 24/7 mode: block indefinitely instead of timing out and leaving.
+                await self._added.wait()
+                continue
             try:
                 await asyncio.wait_for(self._added.wait(), timeout=self.idle_timeout)
             except asyncio.TimeoutError:
@@ -1156,6 +1162,7 @@ class Music(commands.Cog):
 
         player = self.get_player(ctx.guild)
         player.text_channel = ctx.channel
+        player.stay_connected = await db.get_music_stay(ctx.guild.id)
 
         voice = ctx.guild.voice_client
         if voice is None:
@@ -1275,6 +1282,9 @@ class Music(commands.Cog):
             except Exception as exc:
                 log.debug("Follow move failed in %s: %s", member.guild.id, exc)
             return
+
+        if player.stay_connected:
+            return  # 24/7 mode — stay put even with an empty channel
 
         humans = [m for m in player.voice.channel.members if not m.bot]
         if not humans:
@@ -2080,6 +2090,61 @@ class Music(commands.Cog):
             )
         )
 
+    @commands.hybrid_command(
+        name="247",
+        aliases=["radio", "stay"],
+        description="Toggle 24/7 mode: stay in voice even when the channel is empty.",
+        extras={
+            "category": "🎵 Music",
+            "short": "Toggle 24/7 stay-connected mode",
+            "usage": "247 [on|off]",
+            "desc": (
+                "When on, the bot stays connected to its voice channel even when "
+                "everyone leaves and the queue runs dry — overriding the normal "
+                "leave-when-empty/idle behavior. Pair with `autoplay` for a "
+                "non-stop radio. Off by default; the setting is saved per server."
+            ),
+            "args": [("state", "on or off (optional — toggles if omitted)")],
+            "perms": "Manage Server",
+            "example": "!247 on",
+        },
+    )
+    @app_commands.describe(state="on or off")
+    @app_commands.choices(
+        state=[
+            app_commands.Choice(name="On", value="on"),
+            app_commands.Choice(name="Off", value="off"),
+        ]
+    )
+    @commands.guild_only()
+    @commands.has_permissions(manage_guild=True)
+    async def stay_247(self, ctx: commands.Context, state: Optional[str] = None):
+        current = await db.get_music_stay(ctx.guild.id)
+        if state == "on":
+            new_value = True
+        elif state == "off":
+            new_value = False
+        else:
+            new_value = not current
+
+        await db.set_music_stay(ctx.guild.id, new_value)
+        player = self._active_player(ctx) or self.players.get(ctx.guild.id)
+        if player:
+            player.stay_connected = new_value
+            player._added.set()  # wake the loop so the new idle behavior applies
+
+        if new_value:
+            msg = (
+                "**24/7 mode is on.** I'll stay in the voice channel even when it's "
+                "empty and the queue is done. Turn on `autoplay` for non-stop music."
+            )
+        else:
+            msg = (
+                "**24/7 mode is off.** I'll leave when the channel empties or after "
+                "being idle."
+            )
+        await ctx.reply(embed=h.ok(msg, "📻 24/7 Mode"))
+
     # ── /autoplaylist group ─────────────────────────────────────────────────────
     apl_group = app_commands.Group(
         name="autoplaylist",
@@ -2087,34 +2152,58 @@ class Music(commands.Cog):
         guild_only=True,
     )
 
-    @apl_group.command(name="add", description="Add a track URL to the autoplaylist.")
-    @app_commands.describe(url="A track or video URL to add")
+    @apl_group.command(
+        name="add", description="Add a track or whole playlist to the autoplaylist."
+    )
+    @app_commands.describe(url="A track, video, or playlist URL (or search terms)")
     async def apl_add(self, interaction: discord.Interaction, url: str):
         await interaction.response.defer(ephemeral=True)
-        title = None
-        if YTDLP_AVAILABLE:
-            try:
-                tracks = await self.search(
-                    url, requester_id=interaction.user.id, requester_name="apl"
-                )
-                if tracks:
-                    title = tracks[0].title
-                    url = tracks[0].webpage_url or url
-            except Exception:
-                pass
-        added = await db.add_autoplaylist_entry(
-            interaction.guild_id, url, title, interaction.user.id
-        )
-        if not added:
+        if not YTDLP_AVAILABLE:
             return await interaction.followup.send(
-                embed=h.warn("That URL is already in the autoplaylist."),
+                embed=h.err("Music support isn't installed."), ephemeral=True
+            )
+
+        try:
+            tracks = await self.search(
+                url, requester_id=interaction.user.id, requester_name="apl"
+            )
+        except Exception as exc:
+            return await interaction.followup.send(
+                embed=h.err(f"Couldn't resolve that.\n`{exc}`"), ephemeral=True
+            )
+        if not tracks:
+            return await interaction.followup.send(
+                embed=h.err("Nothing found for that link or search."), ephemeral=True
+            )
+
+        added = 0
+        skipped = 0
+        for t in tracks:
+            entry_url = t.webpage_url or t.query
+            if not entry_url:
+                continue
+            if await db.add_autoplaylist_entry(
+                interaction.guild_id, entry_url, t.title, interaction.user.id
+            ):
+                added += 1
+            else:
+                skipped += 1
+
+        if added == 0:
+            return await interaction.followup.send(
+                embed=h.warn("Everything in that link is already in the autoplaylist."),
                 ephemeral=True,
             )
+
+        # Single track vs. playlist gets a tailored confirmation.
+        if len(tracks) == 1:
+            msg = f"Added **{tracks[0].title}** to the autoplaylist."
+        else:
+            msg = f"Added **{added}** track(s) to the autoplaylist."
+            if skipped:
+                msg += f" ({skipped} already present, skipped.)"
         await interaction.followup.send(
-            embed=h.ok(
-                f"Added **{title or url}** to the autoplaylist.", "📻 Autoplaylist"
-            ),
-            ephemeral=True,
+            embed=h.ok(msg, "📻 Autoplaylist"), ephemeral=True
         )
 
     @apl_group.command(
