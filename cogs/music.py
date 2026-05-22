@@ -51,7 +51,7 @@ Commands (hybrid — slash + prefix), category "🎵 Music":
   grab / save       — DM yourself the current track
   autoplay          — keep playing from the autoplaylist when the queue empties
   autoplaylist/apl  — manage the persistent server autoplaylist (add takes playlists)
-  247 / radio       — toggle 24/7 mode: stay in voice even when empty (Manage Server)
+  radio / 247       — toggle 24/7 mode: stay in voice even when empty (Manage Server)
   join / summon     — connect the bot to your voice channel
 """
 
@@ -158,6 +158,22 @@ _LYRICS_NOISE = re.compile(
     r"|\bhd\b|\b4k\b|\bm/?v\b",
     re.IGNORECASE,
 )
+
+
+def _apply_delta(arg: str, current: float) -> Optional[float]:
+    """Parse a numeric command arg as absolute ("80") or relative ("+10"/"-10").
+
+    A leading +/- adds to the current value; anything else is absolute.
+    Returns None when the arg isn't a number.
+    """
+    arg = arg.strip().lstrip("=")
+    if not arg:
+        return None
+    try:
+        value = float(arg)
+    except ValueError:
+        return None
+    return current + value if arg[0] in "+-" else value
 
 
 def _fmt_time(seconds: float | int | None) -> str:
@@ -1745,58 +1761,73 @@ class Music(commands.Cog):
     @commands.hybrid_command(
         name="volume",
         aliases=["vol"],
-        description="Set the playback volume (0-200).",
+        description="Set or adjust the playback volume (0-200).",
         extras={
             "category": "🎵 Music",
             "short": "Set playback volume",
-            "usage": "volume <0-200>",
-            "desc": "Sets playback volume as a percentage. 100 is full source volume.",
-            "args": [("level", "Volume percentage, 0-200")],
+            "usage": "volume <0-200 | +N | -N>",
+            "desc": (
+                "Sets playback volume as a percentage (100 is full source volume). "
+                "Use a leading + or - to adjust relative to the current volume, "
+                "e.g. `volume +10` or `volume -10`."
+            ),
+            "args": [("amount", "0-200, or +N / -N to adjust")],
             "perms": "None",
-            "example": "!volume 80",
+            "example": "!volume +10",
         },
     )
-    @app_commands.describe(level="Volume percentage (0-200)")
+    @app_commands.describe(amount="0-200, or +N / -N to adjust")
     @commands.guild_only()
-    async def volume(self, ctx: commands.Context, level: int):
+    async def volume(self, ctx: commands.Context, amount: str):
         player = self._active_player(ctx)
         if not player:
             return await ctx.reply(embed=h.err("Nothing is playing."), ephemeral=True)
-        if not 0 <= level <= 200:
+        target = _apply_delta(amount, player.volume * 100)
+        if target is None:
             return await ctx.reply(
-                embed=h.err("Volume must be between **0** and **200**."),
+                embed=h.err("Give a number like **80**, **+10**, or **-10**."),
                 ephemeral=True,
             )
+        level = max(0, min(200, round(target)))
         await player.set_volume(level / 100)
         await ctx.reply(embed=h.ok(f"Volume set to **{level}%**.", "🔊 Volume"))
 
     @commands.hybrid_command(
         name="speed",
-        description="Set playback speed (0.5-3.0).",
+        description="Set or adjust playback speed (0.5-3.0).",
         extras={
             "category": "🎵 Music",
             "short": "Set playback speed",
-            "usage": "speed <0.5-3.0>",
-            "desc": "Changes how fast the track plays. 1.0 is normal speed.",
-            "args": [("rate", "Speed multiplier, 0.5-3.0")],
+            "usage": "speed <0.5-3.0 | +N | -N>",
+            "desc": (
+                "Changes how fast the track plays (1.0 is normal). Use a leading "
+                "+ or - to adjust relative to the current speed, e.g. `speed +0.25`."
+            ),
+            "args": [("rate", "0.5-3.0, or +N / -N to adjust")],
             "perms": "None",
-            "example": "!speed 1.25",
+            "example": "!speed +0.25",
         },
     )
-    @app_commands.describe(rate="Speed multiplier (0.5-3.0)")
+    @app_commands.describe(rate="0.5-3.0, or +N / -N to adjust")
     @commands.guild_only()
-    async def speed(self, ctx: commands.Context, rate: float):
+    async def speed(self, ctx: commands.Context, rate: str):
         player = self._active_player(ctx)
         if not player or player.current is None:
             return await ctx.reply(embed=h.err("Nothing is playing."), ephemeral=True)
-        if not 0.5 <= rate <= 3.0:
+        target = _apply_delta(rate, player.speed)
+        if target is None:
+            return await ctx.reply(
+                embed=h.err("Give a number like **1.25**, **+0.25**, or **-0.25**."),
+                ephemeral=True,
+            )
+        if not 0.5 <= target <= 3.0:
             return await ctx.reply(
                 embed=h.err("Speed must be between **0.5** and **3.0**."),
                 ephemeral=True,
             )
-        player.speed = rate
+        player.speed = round(target, 2)
         await ctx.reply(
-            embed=h.ok(f"Speed set to **{rate:g}×** — applying…", "⏩ Speed")
+            embed=h.ok(f"Speed set to **{player.speed:g}×** — applying…", "⏩ Speed")
         )
         await player.reapply_effects()
 
@@ -2091,13 +2122,13 @@ class Music(commands.Cog):
         )
 
     @commands.hybrid_command(
-        name="247",
-        aliases=["radio", "stay"],
+        name="radio",
+        aliases=["247", "stay"],
         description="Toggle 24/7 mode: stay in voice even when the channel is empty.",
         extras={
             "category": "🎵 Music",
             "short": "Toggle 24/7 stay-connected mode",
-            "usage": "247 [on|off]",
+            "usage": "radio [on|off]",
             "desc": (
                 "When on, the bot stays connected to its voice channel even when "
                 "everyone leaves and the queue runs dry — overriding the normal "
@@ -2106,7 +2137,7 @@ class Music(commands.Cog):
             ),
             "args": [("state", "on or off (optional — toggles if omitted)")],
             "perms": "Manage Server",
-            "example": "!247 on",
+            "example": "!radio on",
         },
     )
     @app_commands.describe(state="on or off")
