@@ -50,7 +50,8 @@ Commands (hybrid — slash + prefix), category "🎵 Music":
   lyrics            — fetch lyrics for the current track
   grab / save       — DM yourself the current track
   autoplay          — keep playing from the autoplaylist when the queue empties
-  autoplaylist/apl  — manage the persistent server autoplaylist
+  autoplaylist/apl  — manage the persistent server autoplaylist (add takes playlists)
+  radio / 247       — toggle 24/7 mode: stay in voice even when empty (Manage Server)
   join / summon     — connect the bot to your voice channel
 """
 
@@ -126,6 +127,12 @@ _YTDL_BASE = {
 
 _FFMPEG_BEFORE = "-reconnect 1 -reconnect_streamed 1 -reconnect_delay_max 5"
 
+# Upper bound for the Opus encode bitrate (kbps). The voice channel's own
+# bitrate is the real ceiling; this just caps absurd values. Discord allows up
+# to 384k on boosted servers, 512 covers any future bump.
+_OPUS_MAX_KBITRATE = 512
+_OPUS_MIN_KBITRATE = 48
+
 # ── Spotify (no API key — metadata is scraped, then searched on YouTube) ────────
 _SPOTIFY_RE = re.compile(
     r"open\.spotify\.com/(?:intl-\w+/)?(track|album|playlist)/(\w+)"
@@ -151,6 +158,22 @@ _LYRICS_NOISE = re.compile(
     r"|\bhd\b|\b4k\b|\bm/?v\b",
     re.IGNORECASE,
 )
+
+
+def _apply_delta(arg: str, current: float) -> Optional[float]:
+    """Parse a numeric command arg as absolute ("80") or relative ("+10"/"-10").
+
+    A leading +/- adds to the current value; anything else is absolute.
+    Returns None when the arg isn't a number.
+    """
+    arg = arg.strip().lstrip("=")
+    if not arg:
+        return None
+    try:
+        value = float(arg)
+    except ValueError:
+        return None
+    return current + value if arg[0] in "+-" else value
 
 
 def _fmt_time(seconds: float | int | None) -> str:
@@ -428,6 +451,7 @@ class GuildPlayer:
         self.speed: float = 1.0
         self.audio_filter: str = "none"
         self.autoplay: bool = False
+        self.stay_connected: bool = False  # 24/7 mode: don't leave when empty/idle
         self.skip_votes: set[int] = set()
         self.follow_target: Optional[int] = None  # user id the bot follows
 
@@ -511,11 +535,11 @@ class GuildPlayer:
                 self._play_started += time.monotonic() - self._paused_at
                 self._paused_at = None
 
-    def set_volume(self, value: float) -> None:
+    async def set_volume(self, value: float) -> None:
+        # Opus output has no live PCM gain stage, so volume rides an ffmpeg
+        # filter baked into the source — changing it re-streams the track.
         self.volume = value
-        src = getattr(self.voice, "source", None)
-        if isinstance(src, discord.PCMVolumeTransformer):
-            src.volume = value
+        await self.reapply_effects()
 
     def position(self) -> float:
         """Elapsed seconds of the current track (pause-aware)."""
@@ -543,18 +567,41 @@ class GuildPlayer:
             await self.seek(self.position())
 
     # ── source resolution ────────────────────────────────────────────────────
-    def _ffmpeg_options(self) -> str:
+    def _filter_parts(self) -> list[str]:
+        """Per-sample ffmpeg -af chain (preset + speed + volume).
+
+        Any non-empty result forces an Opus re-encode (you can't stream-copy a
+        signal you're modifying), so keep it empty whenever possible.
+        """
         parts = []
         preset = FILTERS.get(self.audio_filter, "")
         if preset:
             parts.append(preset)
         if abs(self.speed - 1.0) > 0.01:
             parts.append(f"atempo={self.speed:g}")
-        if parts:
-            return "-vn -af " + ",".join(parts)
-        return "-vn"
+        if abs(self.volume - 1.0) > 0.001:
+            parts.append(f"volume={self.volume:g}")
+        return parts
 
-    async def _make_source(self, track: Track) -> discord.PCMVolumeTransformer:
+    def _target_kbitrate(self, info: dict) -> int:
+        """Opus encode bitrate (kbps), matched to the voice channel.
+
+        Discord relays at most the channel's own bitrate, so encoding higher is
+        wasted; encoding at it (vs discord.py's fixed 128k + FEC overhead) is
+        what keeps music from sounding thin. Capped at the source bitrate too —
+        no point inventing bits the original stream never had.
+        """
+        kb = _OPUS_MAX_KBITRATE
+        channel = getattr(self.voice, "channel", None)
+        ch_bitrate = getattr(channel, "bitrate", None)
+        if ch_bitrate:
+            kb = min(kb, int(ch_bitrate) // 1000)
+        abr = info.get("abr")
+        if abr:
+            kb = min(kb, int(abr))
+        return max(_OPUS_MIN_KBITRATE, kb)
+
+    async def _make_source(self, track: Track) -> discord.FFmpegOpusAudio:
         info = await self.cog.resolve_stream(track.query)
         stream_url = info["url"]
         before = _FFMPEG_BEFORE
@@ -569,11 +616,25 @@ class GuildPlayer:
             offset = self._seek_to
             before = f"{before} -ss {offset}"
             self._seek_to = None
-        audio = discord.FFmpegPCMAudio(
-            stream_url, before_options=before, options=self._ffmpeg_options()
-        )
         self._base_offset = offset
-        return discord.PCMVolumeTransformer(audio, volume=self.volume)
+
+        parts = self._filter_parts()
+        options = "-vn -af " + ",".join(parts) if parts else "-vn"
+
+        # YouTube's bestaudio is already Opus. With no -af processing we hand the
+        # original Opus packets straight to Discord (codec="opus" → ffmpeg
+        # "-c:a copy"), avoiding a lossy decode→re-encode round-trip entirely.
+        # Otherwise re-encode with libopus at the channel-matched bitrate.
+        src_codec = (info.get("acodec") or "").lower()
+        passthrough = not parts and src_codec in ("opus", "libopus")
+
+        return discord.FFmpegOpusAudio(
+            stream_url,
+            bitrate=self._target_kbitrate(info),
+            codec="opus" if passthrough else None,
+            before_options=before,
+            options=options,
+        )
 
     # ── playback loop ────────────────────────────────────────────────────────
     async def _player_loop(self) -> None:
@@ -648,6 +709,10 @@ class GuildPlayer:
                 if picked is not None:
                     return picked
             self._added.clear()
+            if self.stay_connected:
+                # 24/7 mode: block indefinitely instead of timing out and leaving.
+                await self._added.wait()
+                continue
             try:
                 await asyncio.wait_for(self._added.wait(), timeout=self.idle_timeout)
             except asyncio.TimeoutError:
@@ -1113,6 +1178,7 @@ class Music(commands.Cog):
 
         player = self.get_player(ctx.guild)
         player.text_channel = ctx.channel
+        player.stay_connected = await db.get_music_stay(ctx.guild.id)
 
         voice = ctx.guild.voice_client
         if voice is None:
@@ -1232,6 +1298,9 @@ class Music(commands.Cog):
             except Exception as exc:
                 log.debug("Follow move failed in %s: %s", member.guild.id, exc)
             return
+
+        if player.stay_connected:
+            return  # 24/7 mode — stay put even with an empty channel
 
         humans = [m for m in player.voice.channel.members if not m.bot]
         if not humans:
@@ -1692,58 +1761,73 @@ class Music(commands.Cog):
     @commands.hybrid_command(
         name="volume",
         aliases=["vol"],
-        description="Set the playback volume (0-200).",
+        description="Set or adjust the playback volume (0-200).",
         extras={
             "category": "🎵 Music",
             "short": "Set playback volume",
-            "usage": "volume <0-200>",
-            "desc": "Sets playback volume as a percentage. 100 is full source volume.",
-            "args": [("level", "Volume percentage, 0-200")],
+            "usage": "volume <0-200 | +N | -N>",
+            "desc": (
+                "Sets playback volume as a percentage (100 is full source volume). "
+                "Use a leading + or - to adjust relative to the current volume, "
+                "e.g. `volume +10` or `volume -10`."
+            ),
+            "args": [("amount", "0-200, or +N / -N to adjust")],
             "perms": "None",
-            "example": "!volume 80",
+            "example": "!volume +10",
         },
     )
-    @app_commands.describe(level="Volume percentage (0-200)")
+    @app_commands.describe(amount="0-200, or +N / -N to adjust")
     @commands.guild_only()
-    async def volume(self, ctx: commands.Context, level: int):
+    async def volume(self, ctx: commands.Context, amount: str):
         player = self._active_player(ctx)
         if not player:
             return await ctx.reply(embed=h.err("Nothing is playing."), ephemeral=True)
-        if not 0 <= level <= 200:
+        target = _apply_delta(amount, player.volume * 100)
+        if target is None:
             return await ctx.reply(
-                embed=h.err("Volume must be between **0** and **200**."),
+                embed=h.err("Give a number like **80**, **+10**, or **-10**."),
                 ephemeral=True,
             )
-        player.set_volume(level / 100)
+        level = max(0, min(200, round(target)))
+        await player.set_volume(level / 100)
         await ctx.reply(embed=h.ok(f"Volume set to **{level}%**.", "🔊 Volume"))
 
     @commands.hybrid_command(
         name="speed",
-        description="Set playback speed (0.5-3.0).",
+        description="Set or adjust playback speed (0.5-3.0).",
         extras={
             "category": "🎵 Music",
             "short": "Set playback speed",
-            "usage": "speed <0.5-3.0>",
-            "desc": "Changes how fast the track plays. 1.0 is normal speed.",
-            "args": [("rate", "Speed multiplier, 0.5-3.0")],
+            "usage": "speed <0.5-3.0 | +N | -N>",
+            "desc": (
+                "Changes how fast the track plays (1.0 is normal). Use a leading "
+                "+ or - to adjust relative to the current speed, e.g. `speed +0.25`."
+            ),
+            "args": [("rate", "0.5-3.0, or +N / -N to adjust")],
             "perms": "None",
-            "example": "!speed 1.25",
+            "example": "!speed +0.25",
         },
     )
-    @app_commands.describe(rate="Speed multiplier (0.5-3.0)")
+    @app_commands.describe(rate="0.5-3.0, or +N / -N to adjust")
     @commands.guild_only()
-    async def speed(self, ctx: commands.Context, rate: float):
+    async def speed(self, ctx: commands.Context, rate: str):
         player = self._active_player(ctx)
         if not player or player.current is None:
             return await ctx.reply(embed=h.err("Nothing is playing."), ephemeral=True)
-        if not 0.5 <= rate <= 3.0:
+        target = _apply_delta(rate, player.speed)
+        if target is None:
+            return await ctx.reply(
+                embed=h.err("Give a number like **1.25**, **+0.25**, or **-0.25**."),
+                ephemeral=True,
+            )
+        if not 0.5 <= target <= 3.0:
             return await ctx.reply(
                 embed=h.err("Speed must be between **0.5** and **3.0**."),
                 ephemeral=True,
             )
-        player.speed = rate
+        player.speed = round(target, 2)
         await ctx.reply(
-            embed=h.ok(f"Speed set to **{rate:g}×** — applying…", "⏩ Speed")
+            embed=h.ok(f"Speed set to **{player.speed:g}×** — applying…", "⏩ Speed")
         )
         await player.reapply_effects()
 
@@ -2037,6 +2121,61 @@ class Music(commands.Cog):
             )
         )
 
+    @commands.hybrid_command(
+        name="radio",
+        aliases=["247", "stay"],
+        description="Toggle 24/7 mode: stay in voice even when the channel is empty.",
+        extras={
+            "category": "🎵 Music",
+            "short": "Toggle 24/7 stay-connected mode",
+            "usage": "radio [on|off]",
+            "desc": (
+                "When on, the bot stays connected to its voice channel even when "
+                "everyone leaves and the queue runs dry — overriding the normal "
+                "leave-when-empty/idle behavior. Pair with `autoplay` for a "
+                "non-stop radio. Off by default; the setting is saved per server."
+            ),
+            "args": [("state", "on or off (optional — toggles if omitted)")],
+            "perms": "Manage Server",
+            "example": "!radio on",
+        },
+    )
+    @app_commands.describe(state="on or off")
+    @app_commands.choices(
+        state=[
+            app_commands.Choice(name="On", value="on"),
+            app_commands.Choice(name="Off", value="off"),
+        ]
+    )
+    @commands.guild_only()
+    @commands.has_permissions(manage_guild=True)
+    async def stay_247(self, ctx: commands.Context, state: Optional[str] = None):
+        current = await db.get_music_stay(ctx.guild.id)
+        if state == "on":
+            new_value = True
+        elif state == "off":
+            new_value = False
+        else:
+            new_value = not current
+
+        await db.set_music_stay(ctx.guild.id, new_value)
+        player = self._active_player(ctx) or self.players.get(ctx.guild.id)
+        if player:
+            player.stay_connected = new_value
+            player._added.set()  # wake the loop so the new idle behavior applies
+
+        if new_value:
+            msg = (
+                "**24/7 mode is on.** I'll stay in the voice channel even when it's "
+                "empty and the queue is done. Turn on `autoplay` for non-stop music."
+            )
+        else:
+            msg = (
+                "**24/7 mode is off.** I'll leave when the channel empties or after "
+                "being idle."
+            )
+        await ctx.reply(embed=h.ok(msg, "📻 24/7 Mode"))
+
     # ── /autoplaylist group ─────────────────────────────────────────────────────
     apl_group = app_commands.Group(
         name="autoplaylist",
@@ -2044,34 +2183,58 @@ class Music(commands.Cog):
         guild_only=True,
     )
 
-    @apl_group.command(name="add", description="Add a track URL to the autoplaylist.")
-    @app_commands.describe(url="A track or video URL to add")
+    @apl_group.command(
+        name="add", description="Add a track or whole playlist to the autoplaylist."
+    )
+    @app_commands.describe(url="A track, video, or playlist URL (or search terms)")
     async def apl_add(self, interaction: discord.Interaction, url: str):
         await interaction.response.defer(ephemeral=True)
-        title = None
-        if YTDLP_AVAILABLE:
-            try:
-                tracks = await self.search(
-                    url, requester_id=interaction.user.id, requester_name="apl"
-                )
-                if tracks:
-                    title = tracks[0].title
-                    url = tracks[0].webpage_url or url
-            except Exception:
-                pass
-        added = await db.add_autoplaylist_entry(
-            interaction.guild_id, url, title, interaction.user.id
-        )
-        if not added:
+        if not YTDLP_AVAILABLE:
             return await interaction.followup.send(
-                embed=h.warn("That URL is already in the autoplaylist."),
+                embed=h.err("Music support isn't installed."), ephemeral=True
+            )
+
+        try:
+            tracks = await self.search(
+                url, requester_id=interaction.user.id, requester_name="apl"
+            )
+        except Exception as exc:
+            return await interaction.followup.send(
+                embed=h.err(f"Couldn't resolve that.\n`{exc}`"), ephemeral=True
+            )
+        if not tracks:
+            return await interaction.followup.send(
+                embed=h.err("Nothing found for that link or search."), ephemeral=True
+            )
+
+        added = 0
+        skipped = 0
+        for t in tracks:
+            entry_url = t.webpage_url or t.query
+            if not entry_url:
+                continue
+            if await db.add_autoplaylist_entry(
+                interaction.guild_id, entry_url, t.title, interaction.user.id
+            ):
+                added += 1
+            else:
+                skipped += 1
+
+        if added == 0:
+            return await interaction.followup.send(
+                embed=h.warn("Everything in that link is already in the autoplaylist."),
                 ephemeral=True,
             )
+
+        # Single track vs. playlist gets a tailored confirmation.
+        if len(tracks) == 1:
+            msg = f"Added **{tracks[0].title}** to the autoplaylist."
+        else:
+            msg = f"Added **{added}** track(s) to the autoplaylist."
+            if skipped:
+                msg += f" ({skipped} already present, skipped.)"
         await interaction.followup.send(
-            embed=h.ok(
-                f"Added **{title or url}** to the autoplaylist.", "📻 Autoplaylist"
-            ),
-            ephemeral=True,
+            embed=h.ok(msg, "📻 Autoplaylist"), ephemeral=True
         )
 
     @apl_group.command(

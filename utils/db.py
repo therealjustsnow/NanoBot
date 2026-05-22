@@ -1726,7 +1726,30 @@ async def _ensure_music_tables() -> None:
         );
         CREATE INDEX IF NOT EXISTS music_apl_guild
             ON music_autoplaylist (guild_id);
+        CREATE TABLE IF NOT EXISTS music_settings (
+            guild_id        TEXT PRIMARY KEY,
+            stay_connected  INTEGER NOT NULL DEFAULT 0
+        );
     """)
+    await _conn().commit()
+
+
+async def get_music_stay(guild_id: int) -> bool:
+    """Whether 24/7 mode is on — bot stays in voice even when the channel empties."""
+    async with _conn().execute(
+        "SELECT stay_connected FROM music_settings WHERE guild_id=?",
+        (str(guild_id),),
+    ) as cur:
+        row = await cur.fetchone()
+    return bool(row and row[0])
+
+
+async def set_music_stay(guild_id: int, value: bool) -> None:
+    await _conn().execute(
+        "INSERT INTO music_settings (guild_id, stay_connected) VALUES (?, ?) "
+        "ON CONFLICT(guild_id) DO UPDATE SET stay_connected=excluded.stay_connected",
+        (str(guild_id), 1 if value else 0),
+    )
     await _conn().commit()
 
 
