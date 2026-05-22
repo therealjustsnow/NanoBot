@@ -110,6 +110,9 @@ FILTERS: dict[str, str] = {
 
 NP_REFRESH = 15  # seconds between live progress-bar refreshes
 SEARCH_RESULTS = 5  # results shown by the search picker
+PAGE_SIZE_QUEUE = 15  # tracks per page in queue display
+PAGE_SIZE_APL = 25  # entries per page in autoplaylist display
+NP_UP_NEXT = 5  # upcoming tracks shown on the Now Playing card
 
 # ── Base yt-dlp options (cookies/limits merged in per call) ─────────────────────
 _YTDL_BASE = {
@@ -365,9 +368,147 @@ class Controls(discord.ui.View):
         emoji="📜", label="Queue", style=discord.ButtonStyle.secondary, row=1
     )
     async def queue_btn(self, interaction: discord.Interaction, _: discord.ui.Button):
+        needs_pages = len(self.player.queue) > PAGE_SIZE_QUEUE
+        view = QueuePageView(self.player) if needs_pages else None
         await interaction.response.send_message(
-            embed=self.player.queue_embed(), ephemeral=True
+            embed=self.player.queue_embed(0), view=view, ephemeral=True
         )
+        if needs_pages:
+            view.message = await interaction.original_response()
+
+
+# ── Paginated queue view ────────────────────────────────────────────────────────
+class QueuePageView(discord.ui.View):
+    """Scrollable queue display; reads live from the player on each page turn."""
+
+    def __init__(self, player: "GuildPlayer"):
+        super().__init__(timeout=120)
+        self.player = player
+        self.page = 0
+        self.message: Optional[discord.Message] = None
+        self._sync_buttons()
+
+    def _total_pages(self) -> int:
+        return max(1, math.ceil(len(self.player.queue) / PAGE_SIZE_QUEUE))
+
+    def _sync_buttons(self) -> None:
+        tp = self._total_pages()
+        self.prev_btn.disabled = self.page == 0
+        self.next_btn.disabled = self.page >= tp - 1
+        self.page_indicator.label = f"{self.page + 1}/{tp}"
+
+    async def on_timeout(self) -> None:
+        if self.message:
+            try:
+                for item in self.children:
+                    item.disabled = True
+                await self.message.edit(view=self)
+            except discord.HTTPException:
+                pass
+
+    @discord.ui.button(emoji="◀️", style=discord.ButtonStyle.secondary, disabled=True)
+    async def prev_btn(
+        self, interaction: discord.Interaction, _: discord.ui.Button
+    ) -> None:
+        self.page -= 1
+        self._sync_buttons()
+        await interaction.response.edit_message(
+            embed=self.player.queue_embed(self.page), view=self
+        )
+
+    @discord.ui.button(label="1/1", style=discord.ButtonStyle.secondary, disabled=True)
+    async def page_indicator(
+        self, interaction: discord.Interaction, _: discord.ui.Button
+    ) -> None:
+        await interaction.response.defer()
+
+    @discord.ui.button(emoji="▶️", style=discord.ButtonStyle.secondary)
+    async def next_btn(
+        self, interaction: discord.Interaction, _: discord.ui.Button
+    ) -> None:
+        self.page += 1
+        self._sync_buttons()
+        await interaction.response.edit_message(
+            embed=self.player.queue_embed(self.page), view=self
+        )
+
+
+# ── Paginated autoplaylist view ─────────────────────────────────────────────────
+class AplPageView(discord.ui.View):
+    """Scrollable autoplaylist display; snapshot of entries at creation time."""
+
+    def __init__(self, entries: list, invoker_id: int):
+        super().__init__(timeout=120)
+        self.entries = entries
+        self.invoker_id = invoker_id
+        self.page = 0
+        self.message: Optional[discord.Message] = None
+        self._sync_buttons()
+
+    def _total_pages(self) -> int:
+        return max(1, math.ceil(len(self.entries) / PAGE_SIZE_APL))
+
+    def build_embed(self) -> discord.Embed:
+        start = self.page * PAGE_SIZE_APL
+        end = start + PAGE_SIZE_APL
+        lines = []
+        for i, e in enumerate(self.entries[start:end], start=start + 1):
+            label = e["title"] or e["url"]
+            if len(label) > 60:
+                label = label[:57] + "…"
+            lines.append(f"`{i:>2}.` [{label}]({e['url']})")
+        tp = self._total_pages()
+        embed = h.embed(
+            f"📻 Autoplaylist · {len(self.entries)} track(s)", "\n".join(lines), ACCENT
+        )
+        if tp > 1:
+            embed.set_footer(text=f"Page {self.page + 1}/{tp}")
+        return embed
+
+    def _sync_buttons(self) -> None:
+        tp = self._total_pages()
+        self.prev_btn.disabled = self.page == 0
+        self.next_btn.disabled = self.page >= tp - 1
+        self.page_indicator.label = f"{self.page + 1}/{tp}"
+
+    async def interaction_check(self, interaction: discord.Interaction) -> bool:
+        if interaction.user.id != self.invoker_id:
+            await interaction.response.send_message(
+                "Only the person who ran this command can scroll.", ephemeral=True
+            )
+            return False
+        return True
+
+    async def on_timeout(self) -> None:
+        if self.message:
+            try:
+                for item in self.children:
+                    item.disabled = True
+                await self.message.edit(view=self)
+            except discord.HTTPException:
+                pass
+
+    @discord.ui.button(emoji="◀️", style=discord.ButtonStyle.secondary, disabled=True)
+    async def prev_btn(
+        self, interaction: discord.Interaction, _: discord.ui.Button
+    ) -> None:
+        self.page -= 1
+        self._sync_buttons()
+        await interaction.response.edit_message(embed=self.build_embed(), view=self)
+
+    @discord.ui.button(label="1/1", style=discord.ButtonStyle.secondary, disabled=True)
+    async def page_indicator(
+        self, interaction: discord.Interaction, _: discord.ui.Button
+    ) -> None:
+        await interaction.response.defer()
+
+    @discord.ui.button(emoji="▶️", style=discord.ButtonStyle.secondary)
+    async def next_btn(
+        self, interaction: discord.Interaction, _: discord.ui.Button
+    ) -> None:
+        self.page += 1
+        self._sync_buttons()
+        await interaction.response.edit_message(embed=self.build_embed(), view=self)
 
 
 # ── Search result picker ────────────────────────────────────────────────────────
@@ -776,17 +917,23 @@ class GuildPlayer:
             e.add_field(name="Effects", value=" · ".join(fx), inline=True)
 
         if self.queue:
-            nxt = self.queue[0]
-            up = nxt.title if len(nxt.title) <= 50 else nxt.title[:47] + "…"
+            preview_lines = []
+            for i, t in enumerate(self.queue[:NP_UP_NEXT], start=1):
+                title = t.title if len(t.title) <= 45 else t.title[:42] + "…"
+                preview_lines.append(f"`{i}.` {title} `{_fmt_time(t.duration)}`")
+            if len(self.queue) > NP_UP_NEXT:
+                preview_lines.append(f"_…and {len(self.queue) - NP_UP_NEXT} more_")
             e.add_field(
-                name=f"Up Next ({len(self.queue)} in queue)", value=up, inline=False
+                name=f"Up Next ({len(self.queue)} in queue)",
+                value="\n".join(preview_lines),
+                inline=False,
             )
         e.set_footer(
             text="NanoBot Music" + (" · 📻 Autoplay on" if self.autoplay else "")
         )
         return e
 
-    def queue_embed(self) -> discord.Embed:
+    def queue_embed(self, page: int = 0) -> discord.Embed:
         if self.current is None and not self.queue:
             return h.info("The queue is empty.", "🎶 Queue")
         lines = []
@@ -797,17 +944,18 @@ class GuildPlayer:
             )
         if self.queue:
             lines.append("")
-            for i, t in enumerate(self.queue[:15], start=1):
+            start = page * PAGE_SIZE_QUEUE
+            end = start + PAGE_SIZE_QUEUE
+            for i, t in enumerate(self.queue[start:end], start=start + 1):
                 title = t.title if len(t.title) <= 55 else t.title[:52] + "…"
                 lines.append(f"`{i:>2}.` {title} `{_fmt_time(t.duration)}`")
-            if len(self.queue) > 15:
-                lines.append(f"_…and {len(self.queue) - 15} more._")
         total = sum(t.duration or 0 for t in self.queue)
+        total_pages = max(1, math.ceil(len(self.queue) / PAGE_SIZE_QUEUE))
         e = h.embed(f"🎶 Queue · {len(self.queue)} track(s)", "\n".join(lines), ACCENT)
-        e.set_footer(
-            text=f"Loop: {_LOOP_LABEL[self.loop]} · "
-            f"Total queued: {_fmt_time(total)} · NanoBot Music"
-        )
+        footer = f"Loop: {_LOOP_LABEL[self.loop]} · Total queued: {_fmt_time(total)}"
+        if total_pages > 1:
+            footer = f"Page {page + 1}/{total_pages} · " + footer
+        e.set_footer(text=footer + " · NanoBot Music")
         return e
 
     async def _post_now_playing(self) -> None:
@@ -891,6 +1039,18 @@ class GuildPlayer:
                 pass
 
         self.cog.players.pop(self.guild.id, None)
+
+
+def _apl_single_embed(entries: list) -> discord.Embed:
+    lines = []
+    for i, e in enumerate(entries, start=1):
+        label = e["title"] or e["url"]
+        if len(label) > 60:
+            label = label[:57] + "…"
+        lines.append(f"`{i:>2}.` [{label}]({e['url']})")
+    return h.embed(
+        f"📻 Autoplaylist · {len(entries)} track(s)", "\n".join(lines), ACCENT
+    )
 
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -1648,7 +1808,11 @@ class Music(commands.Cog):
             return await ctx.reply(
                 embed=h.info("The queue is empty.", "🎶 Queue"), ephemeral=True
             )
-        await ctx.reply(embed=player.queue_embed())
+        needs_pages = len(player.queue) > PAGE_SIZE_QUEUE
+        view = QueuePageView(player) if needs_pages else None
+        msg = await ctx.reply(embed=player.queue_embed(0), view=view)
+        if needs_pages:
+            view.message = msg
 
     @commands.hybrid_command(
         name="move",
@@ -2272,20 +2436,12 @@ class Music(commands.Cog):
                 ),
                 ephemeral=True,
             )
-        lines = []
-        for i, e in enumerate(entries[:25], start=1):
-            label = e["title"] or e["url"]
-            if len(label) > 60:
-                label = label[:57] + "…"
-            lines.append(f"`{i:>2}.` [{label}]({e['url']})")
-        if len(entries) > 25:
-            lines.append(f"_…and {len(entries) - 25} more._")
-        await interaction.response.send_message(
-            embed=h.embed(
-                f"📻 Autoplaylist · {len(entries)} track(s)", "\n".join(lines), ACCENT
-            ),
-            ephemeral=True,
-        )
+        needs_pages = len(entries) > PAGE_SIZE_APL
+        view = AplPageView(entries, interaction.user.id) if needs_pages else None
+        embed = view.build_embed() if needs_pages else _apl_single_embed(entries)
+        await interaction.response.send_message(embed=embed, view=view, ephemeral=True)
+        if needs_pages:
+            view.message = await interaction.original_response()
 
     @apl_group.command(
         name="clear", description="Remove every track from the autoplaylist."
