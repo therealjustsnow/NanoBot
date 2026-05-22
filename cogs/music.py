@@ -870,21 +870,27 @@ class Music(commands.Cog):
 
         # auto-discover: deno preferred, node fallback
         _CANDIDATES = [
-            ("deno", [
-                shutil.which("deno"),
-                os.path.expanduser("~/.deno/bin/deno"),
-                "/usr/local/bin/deno",
-                "/usr/bin/deno",
-            ]),
-            ("node", [
-                shutil.which("node"),
-                shutil.which("nodejs"),
-                "/opt/node22/bin/node",
-                "/opt/node21/bin/node",
-                "/opt/node20/bin/node",
-                "/usr/local/bin/node",
-                "/usr/bin/node",
-            ]),
+            (
+                "deno",
+                [
+                    shutil.which("deno"),
+                    os.path.expanduser("~/.deno/bin/deno"),
+                    "/usr/local/bin/deno",
+                    "/usr/bin/deno",
+                ],
+            ),
+            (
+                "node",
+                [
+                    shutil.which("node"),
+                    shutil.which("nodejs"),
+                    "/opt/node22/bin/node",
+                    "/opt/node21/bin/node",
+                    "/opt/node20/bin/node",
+                    "/usr/local/bin/node",
+                    "/usr/bin/node",
+                ],
+            ),
         ]
         for name, paths in _CANDIDATES:
             for p in paths:
