@@ -25,9 +25,10 @@ Config ([music] section, all optional — see example_config.ini):
   music_use_opus        — send Opus (true, default) or PCM (false). PCM gives
                           live volume changes but costs more CPU
   music_persist_queue   — save the queue to disk so it survives a restart
-                          (false by default)
+                          (true by default)
   music_predownload     — download the next queued track to disk while one
-                          plays for gapless playback (false by default)
+                          plays for gapless playback; live streams skipped
+                          (true by default)
 
 Commands (hybrid — slash + prefix), category "🎵 Music":
   play / p          — queue a song or playlist (URL, Spotify link, or search)
@@ -817,6 +818,11 @@ class GuildPlayer:
         nxt = self.queue[0]
         if nxt.local_path:
             return
+        if not nxt.duration:
+            # No duration → livestream or unknown length. A live stream never
+            # finishes downloading, so skip it silently and let it stream at
+            # play time. The user already saw the normal "added" confirmation.
+            return
         self._predl_task = self.bot.loop.create_task(self._predownload(nxt))
 
     async def _predownload(self, track: Track) -> None:
@@ -1314,10 +1320,10 @@ class Music(commands.Cog):
         return self._cfg_bool("music_use_opus", True)
 
     def persist_queue(self) -> bool:
-        return self._cfg_bool("music_persist_queue", False)
+        return self._cfg_bool("music_persist_queue", True)
 
     def predownload(self) -> bool:
-        return self._cfg_bool("music_predownload", False)
+        return self._cfg_bool("music_predownload", True)
 
     def _cookie_file(self) -> Optional[str]:
         val = self.bot.config.get("music_cookie_file")
@@ -1402,13 +1408,21 @@ class Music(commands.Cog):
 
         def _work():
             with yt_dlp.YoutubeDL(opts) as ydl:
-                info = ydl.extract_info(track.query, download=True)
+                # Resolve metadata first: a live stream never finishes
+                # downloading, so bail before pulling any bytes.
+                info = ydl.extract_info(track.query, download=False)
                 if info and "entries" in info:
                     info = next((e for e in info["entries"] if e), info)
+                if not info or info.get("is_live") or not info.get("duration"):
+                    return None
+                info = ydl.process_ie_result(info, download=True)
                 path = ydl.prepare_filename(info)
                 return path, (info.get("acodec") or "")
 
-        path, acodec = await self.bot.loop.run_in_executor(None, _work)
+        result = await self.bot.loop.run_in_executor(None, _work)
+        if not result:
+            return None
+        path, acodec = result
         if not path or not os.path.isfile(path):
             return None
         return path, acodec

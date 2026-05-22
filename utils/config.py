@@ -158,8 +158,8 @@ DEFAULTS: dict[str, object] = {
     "music_skip_ratio": 50,
     "music_max_queue": 500,
     "music_use_opus": True,
-    "music_persist_queue": False,
-    "music_predownload": False,
+    "music_persist_queue": True,
+    "music_predownload": True,
 }
 
 # Keys that must never be echoed back in Discord (logs, !config show, etc).
