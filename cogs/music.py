@@ -122,7 +122,6 @@ _YTDL_BASE = {
     "default_search": "ytsearch",
     "source_address": "0.0.0.0",
     "skip_download": True,
-    "extractor_args": {"youtube": {"player_client": ["ios", "web"]}},
 }
 
 _FFMPEG_BEFORE = "-reconnect 1 -reconnect_streamed 1 -reconnect_delay_max 5"
