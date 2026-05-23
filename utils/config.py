@@ -68,6 +68,24 @@ SECTION_MAP = {
     "music_idle_timeout": "music",
     "music_skip_ratio": "music",
     "music_max_queue": "music",
+    "music_use_opus": "music",
+    "music_persist_queue": "music",
+    "music_predownload": "music",
+    "music_self_deafen": "music",
+    "music_default_speed": "music",
+    "music_search_service": "music",
+    "music_status_message": "music",
+    "music_proxy": "music",
+    "music_user_agent": "music",
+    "music_source_address": "music",
+    "music_autoplay_autoskip": "music",
+    "music_save_videos": "music",
+    "music_cache_max_mb": "music",
+    "music_cache_max_age_days": "music",
+    "music_ratelimit_cooldown": "music",
+    "music_ratelimit_leave": "music",
+    "music_apl_prune_on_error": "music",
+    "music_save_history": "music",
 }
 
 SECTION_ORDER = ("bot", "logging", "votes", "groq", "scraper", "music")
@@ -104,6 +122,88 @@ _SCHEMA: dict[str, tuple[type | None, bool, str]] = {
     "music_idle_timeout": (int, False, "Seconds idle/alone before auto-disconnect"),
     "music_skip_ratio": (int, False, "Percent of listeners needed to vote-skip, 0-100"),
     "music_max_queue": (int, False, "Maximum tracks allowed in a queue"),
+    "music_use_opus": (
+        bool,
+        False,
+        "Send audio as Opus (true) or PCM (false). PCM gives live volume but costs more CPU",
+    ),
+    "music_persist_queue": (
+        bool,
+        False,
+        "Save the queue to disk so it survives a restart (true/false)",
+    ),
+    "music_predownload": (
+        bool,
+        False,
+        "Download the next queued track while one plays for gapless playback (true/false)",
+    ),
+    "music_self_deafen": (
+        bool,
+        False,
+        "Self-deafen when joining voice to save bandwidth (true/false)",
+    ),
+    "music_default_speed": (str, False, "Default playback speed, 0.5-3.0"),
+    "music_search_service": (
+        str,
+        False,
+        "yt-dlp search service: ytsearch / ytmsearch / scsearch",
+    ),
+    "music_status_message": (
+        str,
+        False,
+        "Presence text while playing; {title} = song. YT/Twitch show a Watch button (blank = song title)",
+    ),
+    "music_proxy": (str, False, "HTTP/HTTPS proxy URL for yt-dlp (blank = none)"),
+    "music_user_agent": (
+        str,
+        False,
+        "Static User-Agent header for yt-dlp (blank = default)",
+    ),
+    "music_source_address": (
+        str,
+        False,
+        "Local IP yt-dlp binds to (default 0.0.0.0)",
+    ),
+    "music_autoplay_autoskip": (
+        bool,
+        False,
+        "Skip the current autoplay track when a user queues a real song (true/false)",
+    ),
+    "music_save_videos": (
+        bool,
+        False,
+        "Keep downloaded audio in the cache for instant replays (true/false)",
+    ),
+    "music_cache_max_mb": (
+        int,
+        False,
+        "Max audio cache size in MB when music_save_videos is on (0 = unlimited)",
+    ),
+    "music_cache_max_age_days": (
+        int,
+        False,
+        "Delete cached audio older than this many days (0 = never)",
+    ),
+    "music_ratelimit_cooldown": (
+        int,
+        False,
+        "Seconds to back off after a YouTube rate-limit (HTTP 429)",
+    ),
+    "music_ratelimit_leave": (
+        bool,
+        False,
+        "Leave voice channels when YouTube rate-limits the bot (true/false)",
+    ),
+    "music_apl_prune_on_error": (
+        bool,
+        False,
+        "Remove autoplaylist entries that fail to play (true/false)",
+    ),
+    "music_save_history": (
+        bool,
+        False,
+        "Save per-server played-track history for the history command (true/false)",
+    ),
 }
 
 # Defaults used when writing a fresh example_config.ini and when keys are missing.
@@ -139,6 +239,24 @@ DEFAULTS: dict[str, object] = {
     "music_idle_timeout": 180,
     "music_skip_ratio": 50,
     "music_max_queue": 500,
+    "music_use_opus": True,
+    "music_persist_queue": True,
+    "music_predownload": True,
+    "music_self_deafen": True,
+    "music_default_speed": "1.0",
+    "music_search_service": "ytsearch",
+    "music_status_message": None,
+    "music_proxy": None,
+    "music_user_agent": None,
+    "music_source_address": "0.0.0.0",
+    "music_autoplay_autoskip": True,
+    "music_save_videos": False,
+    "music_cache_max_mb": 0,
+    "music_cache_max_age_days": 0,
+    "music_ratelimit_cooldown": 600,
+    "music_ratelimit_leave": False,
+    "music_apl_prune_on_error": True,
+    "music_save_history": True,
 }
 
 # Keys that must never be echoed back in Discord (logs, !config show, etc).
