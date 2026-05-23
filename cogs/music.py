@@ -355,7 +355,7 @@ class Controls(discord.ui.View):
             return False
         return True
 
-    async def _refresh(self, interaction: discord.Interaction) -> None:
+    async def _update_controls(self, interaction: discord.Interaction) -> None:
         self._sync()
         try:
             await interaction.response.edit_message(
@@ -374,7 +374,7 @@ class Controls(discord.ui.View):
             self.player.resume()
         elif voice and voice.is_playing():
             self.player.pause()
-        await self._refresh(interaction)
+        await self._update_controls(interaction)
 
     @discord.ui.button(
         emoji="⏭️", label="Skip", style=discord.ButtonStyle.secondary, row=0
@@ -398,7 +398,7 @@ class Controls(discord.ui.View):
     async def loop_btn(self, interaction: discord.Interaction, _: discord.ui.Button):
         self.player.loop = _LOOP_NEXT[self.player.loop]
         self.player._schedule_save()
-        await self._refresh(interaction)
+        await self._update_controls(interaction)
 
     @discord.ui.button(
         emoji="🔀", label="Shuffle", style=discord.ButtonStyle.secondary, row=0
@@ -425,7 +425,7 @@ class Controls(discord.ui.View):
     ):
         self.player.autoplay = not self.player.autoplay
         self.player._added.set()
-        await self._refresh(interaction)
+        await self._update_controls(interaction)
 
     @discord.ui.button(
         emoji="📜", label="Queue", style=discord.ButtonStyle.secondary, row=1

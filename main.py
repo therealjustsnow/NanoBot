@@ -14,6 +14,8 @@ import asyncio
 import logging
 import logging.handlers
 import os
+import traceback
+import warnings
 
 import discord
 from discord import app_commands
@@ -222,6 +224,54 @@ class NanoBot(commands.Bot):
         self.prefixes[str(guild_id)] = prefix
         await db.set_prefix(guild_id, prefix)
 
+    # ── Error channel ──────────────────────────────────────────────────────────
+    async def _post_error(self, title: str, body: str) -> None:
+        """Send a warning/error embed to the configured error channel."""
+        raw = self.config.get("error_channel_id")
+        if not raw:
+            return
+        try:
+            ch = self.get_channel(int(raw))
+            if ch is None:
+                return
+            embed = discord.Embed(
+                title=title,
+                description=f"```\n{body[:3900]}\n```",
+                color=0xED4245,
+                timestamp=discord.utils.utcnow(),
+            )
+            embed.set_footer(text="NanoBot error log")
+            await ch.send(embed=embed)
+        except Exception:
+            pass
+
+    def _install_error_hooks(self) -> None:
+        """Hook Python warnings and asyncio unhandled exceptions into _post_error."""
+        bot_ref = self
+        orig_showwarning = warnings.showwarning
+
+        def _warn_hook(message, category, filename, lineno, file=None, line=None):
+            orig_showwarning(message, category, filename, lineno, file, line)
+            text = warnings.formatwarning(message, category, filename, lineno, line)
+            asyncio.create_task(bot_ref._post_error(f"⚠️ {category.__name__}", text))
+
+        warnings.showwarning = _warn_hook
+
+        def _asyncio_exc_handler(loop, context):
+            msg = context.get("message", "Unhandled exception in event loop")
+            exc = context.get("exception")
+            if exc:
+                tb = "".join(
+                    traceback.format_exception(type(exc), exc, exc.__traceback__)
+                )
+                body = f"{msg}\n\n{tb}"
+            else:
+                body = msg
+            log.error("asyncio unhandled: %s", msg, exc_info=exc)
+            asyncio.create_task(bot_ref._post_error("🔴 asyncio exception", body))
+
+        self.loop.set_exception_handler(_asyncio_exc_handler)
+
     # ── Events ─────────────────────────────────────────────────────────────────
     async def on_ready(self):
         log.info(f"🤖 Online as {self.user} (ID: {self.user.id})")
@@ -236,6 +286,7 @@ class NanoBot(commands.Bot):
             )
         )
         self.dispatch("restore_schedules")
+        self._install_error_hooks()
 
     async def on_command(self, ctx: commands.Context):
         self.commands_ran += 1

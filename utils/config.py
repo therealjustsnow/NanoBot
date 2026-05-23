@@ -42,6 +42,7 @@ SECTION_MAP = {
     "token": "bot",
     "default_prefix": "bot",
     "owner_id": "bot",
+    "error_channel_id": "bot",
     # [logging]
     "log_level": "logging",
     "log_http": "logging",
@@ -97,6 +98,11 @@ _SCHEMA: dict[str, tuple[type | None, bool, str]] = {
     "token": (str, True, "Bot token from the Discord Developer Portal"),
     "default_prefix": (str, False, "Command prefix (max 5 chars, no spaces)"),
     "owner_id": (None, False, "Your Discord user ID (int or blank)"),
+    "error_channel_id": (
+        None,
+        False,
+        "Channel ID to receive Python warnings and unhandled asyncio errors (int or blank)",
+    ),
     "log_level": (str, False, "DEBUG / INFO / WARNING / ERROR / CRITICAL"),
     "log_http": (bool, False, "Log raw HTTP requests (true/false)"),
     "topgg_token": (str, False, "top.gg AUTH token"),
@@ -223,6 +229,7 @@ DEFAULTS: dict[str, object] = {
     "token": "YOUR_BOT_TOKEN_HERE",
     "default_prefix": "n!",
     "owner_id": None,
+    "error_channel_id": None,
     "log_level": "INFO",
     "log_http": False,
     "topgg_token": None,
@@ -547,6 +554,18 @@ def validate(cfg: dict) -> list[ConfigIssue]:
                 ConfigIssue(
                     field="owner_id",
                     message=f"'{owner_id}' looks too small to be a real Discord user ID",
+                    fatal=False,
+                )
+            )
+
+    # ── error_channel_id ──────────────────────────────────────────────────────
+    error_ch = cfg.get("error_channel_id")
+    if error_ch is not None:
+        if not isinstance(error_ch, int) and not str(error_ch).isdigit():
+            issues.append(
+                ConfigIssue(
+                    field="error_channel_id",
+                    message=f"'{error_ch}' is not a valid Discord channel ID (must be an integer or blank)",
                     fatal=False,
                 )
             )
