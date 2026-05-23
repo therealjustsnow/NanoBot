@@ -52,6 +52,7 @@ SECTION_MAP = {
     "discordbotsgg_token": "votes",
     "vote_webhook_port": "votes",
     "vote_webhook_secret": "votes",
+    "webhook_allowed_ips": "votes",
     # [groq]
     "groq_api_key": "groq",
     # [scraper]
@@ -86,6 +87,7 @@ SECTION_MAP = {
     "music_ratelimit_leave": "music",
     "music_apl_prune_on_error": "music",
     "music_save_history": "music",
+    "music_js_runtime_path": "music",
 }
 
 SECTION_ORDER = ("bot", "logging", "votes", "groq", "scraper", "music")
@@ -103,6 +105,11 @@ _SCHEMA: dict[str, tuple[type | None, bool, str]] = {
     "discordbotsgg_token": (str, False, "discord.bots.gg bot token"),
     "vote_webhook_port": (int, False, "Open port for the vote webhook"),
     "vote_webhook_secret": (str, False, "Secret used by bot lists to verify webhooks"),
+    "webhook_allowed_ips": (
+        str,
+        False,
+        "Comma-separated IPs or CIDR ranges allowed to POST vote webhooks (blank = allow all)",
+    ),
     "groq_api_key": (str, False, "Groq API key (or set GROQ_API_KEY env var)"),
     # ── scraper ──
     "fml_pages_per_scrape": (int, False, "FML pages per daily scrape"),
@@ -203,6 +210,11 @@ _SCHEMA: dict[str, tuple[type | None, bool, str]] = {
         bool,
         False,
         "Save per-server played-track history for the history command (true/false)",
+    ),
+    "music_js_runtime_path": (
+        str,
+        False,
+        "Explicit path to deno/node/bun binary for yt-dlp JS (blank = auto-detect)",
     ),
 }
 
