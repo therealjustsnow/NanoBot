@@ -151,7 +151,7 @@ _SCHEMA: dict[str, tuple[type | None, bool, str]] = {
     "music_status_message": (
         str,
         False,
-        "Bot presence template while playing; use {title} (blank = default presence)",
+        "Custom 'Watching ...' presence while playing; {title} = song (blank = song title)",
     ),
     "music_proxy": (str, False, "HTTP/HTTPS proxy URL for yt-dlp (blank = none)"),
     "music_user_agent": (

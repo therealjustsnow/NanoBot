@@ -32,7 +32,8 @@ Config ([music] section, all optional — see example_config.ini):
   music_self_deafen     — self-deafen on join (true by default)
   music_default_speed   — default playback speed 0.5-3.0 (default 1.0)
   music_search_service  — ytsearch / ytmsearch / scsearch (default ytsearch)
-  music_status_message  — presence template with {title} while playing (blank)
+  music_status_message  — "Watching ..." text while playing; {title} = song
+                          (blank = song title; idle = watching the server)
   music_proxy           — HTTP/HTTPS proxy for yt-dlp (blank)
   music_user_agent      — static yt-dlp User-Agent (blank)
   music_source_address  — local bind IP for yt-dlp (default 0.0.0.0)
@@ -1448,19 +1449,23 @@ class Music(commands.Cog):
                     self.bot.loop.create_task(player.destroy(reason="rate-limited"))
         return True
 
-    # ── presence (now-playing in status when music_status_message set) ──────────
+    # ── presence: "Watching <song>" while playing, else watching the server ─────
+    # Discord bot presence is account-global (there's no per-guild activity API),
+    # so with multiple servers playing at once this shows the first one found.
     async def _refresh_presence(self) -> None:
-        tmpl = self.status_template()
-        if not tmpl:
-            return
-        title = None
+        track = None
         for player in self.players.values():
             if player.current:
-                title = player.current.title
+                track = player.current
                 break
-        if title:
-            text = tmpl.replace("{title}", title)[:128]
-            activity = discord.Activity(type=discord.ActivityType.listening, name=text)
+        if track:
+            tmpl = self.status_template()
+            text = tmpl.replace("{title}", track.title) if tmpl else track.title
+            activity = discord.Activity(
+                type=discord.ActivityType.watching,
+                name=text[:128],
+                url=track.webpage_url or None,
+            )
         else:
             activity = discord.Activity(
                 type=discord.ActivityType.watching, name="over the server 👁️"
