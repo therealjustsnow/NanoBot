@@ -2113,52 +2113,89 @@ class Music(commands.Cog):
             "usage": "play <url | search terms>",
             "desc": (
                 "Joins your voice channel and queues the track. Accepts a YouTube "
-                "(or other site) URL, a playlist URL, or plain search terms."
+                "(or other site) URL, a playlist URL, or plain search terms.\n"
+                "Slash only: `mode` — normal (end of queue), next (play after "
+                "current), now (skip current), shuffle (playlist in random order)."
             ),
-            "args": [("query", "A URL or search terms")],
+            "args": [
+                ("query", "A URL or search terms"),
+                ("mode", "(slash) normal / next / now / shuffle"),
+            ],
             "perms": "None",
             "example": "!play never gonna give you up\n!play https://youtu.be/dQw4w9WgXcQ",
         },
     )
-    @app_commands.describe(query="A URL, playlist URL, or search terms")
+    @app_commands.describe(
+        query="A URL, playlist URL, or search terms",
+        mode="How to queue the track (default: normal)",
+    )
+    @app_commands.choices(
+        mode=[
+            app_commands.Choice(name="Normal — add to end of queue", value="normal"),
+            app_commands.Choice(name="Next — play right after current", value="next"),
+            app_commands.Choice(
+                name="Now — skip current and play immediately", value="now"
+            ),
+            app_commands.Choice(
+                name="Shuffle — queue playlist in random order", value="shuffle"
+            ),
+        ]
+    )
     @commands.guild_only()
-    async def play(self, ctx: commands.Context, *, query: str):
-        await self._queue_query(ctx, query, front=False, then_skip=False)
+    async def play(self, ctx: commands.Context, *, query: str, mode: str = "normal"):
+        if mode == "shuffle":
+            player = await self._ensure_voice(ctx, join=True)
+            if player is None:
+                return
+            await ctx.defer()
+            tracks = await self._resolve_for(ctx, query)
+            if tracks is None:
+                return
+            random.shuffle(tracks)
+            added = player.add_many(tracks)
+            total = sum(t.duration or 0 for t in tracks[:added])
+            await ctx.reply(
+                embed=h.embed(
+                    "🔀 Playlist Queued (shuffled)",
+                    f"Added **{added}** track(s) · total `{_fmt_time(total)}`.",
+                    ACCENT,
+                )
+            )
+        else:
+            front = mode in ("next", "now")
+            then_skip = mode == "now"
+            await self._queue_query(ctx, query, front=front, then_skip=then_skip)
 
-    @commands.hybrid_command(
+    @commands.command(
         name="playnext",
         aliases=["pn", "playtop"],
-        description="Queue a track to play right after the current one.",
         extras={
             "category": "🎵 Music",
             "short": "Queue a track to play next",
             "usage": "playnext <url | search terms>",
-            "desc": "Adds the track to the front of the queue so it plays next.",
+            "desc": "Adds the track to the front of the queue so it plays next. Slash: use /play with mode: Next.",
             "args": [("query", "A URL or search terms")],
             "perms": "None",
             "example": "!playnext lofi beats",
         },
     )
-    @app_commands.describe(query="A URL or search terms")
     @commands.guild_only()
     async def playnext(self, ctx: commands.Context, *, query: str):
         await self._queue_query(ctx, query, front=True, then_skip=False)
 
-    @commands.hybrid_command(
+    @commands.command(
         name="playnow",
         aliases=["playskip", "ps"],
-        description="Skip whatever's playing and play this immediately.",
         extras={
             "category": "🎵 Music",
             "short": "Play a track immediately",
             "usage": "playnow <url | search terms>",
-            "desc": "Adds the track to the front of the queue and skips the current one.",
+            "desc": "Adds the track to the front of the queue and skips the current one. Slash: use /play with mode: Now.",
             "args": [("query", "A URL or search terms")],
             "perms": "None",
             "example": "!playnow https://youtu.be/dQw4w9WgXcQ",
         },
     )
-    @app_commands.describe(query="A URL or search terms")
     @commands.guild_only()
     async def playnow(self, ctx: commands.Context, *, query: str):
         await self._queue_query(ctx, query, front=True, then_skip=True)
@@ -3107,21 +3144,19 @@ class Music(commands.Cog):
     async def stream(self, ctx: commands.Context, *, url: str):
         await self._queue_query(ctx, url, front=False, then_skip=False)
 
-    @commands.hybrid_command(
+    @commands.command(
         name="shuffleplay",
         aliases=["sp"],
-        description="Queue a playlist with its tracks shuffled.",
         extras={
             "category": "🎵 Music",
             "short": "Queue a playlist, shuffled",
             "usage": "shuffleplay <playlist url | search>",
-            "desc": "Resolves a playlist, shuffles the tracks, then adds them all.",
+            "desc": "Resolves a playlist, shuffles the tracks, then adds them all. Slash: use /play with mode: Shuffle.",
             "args": [("query", "A playlist URL or search terms")],
             "perms": "None",
             "example": "!shuffleplay https://open.spotify.com/playlist/...",
         },
     )
-    @app_commands.describe(query="A playlist URL or search terms")
     @commands.guild_only()
     async def shuffleplay(self, ctx: commands.Context, *, query: str):
         player = await self._ensure_voice(ctx, join=True)
