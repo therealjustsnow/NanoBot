@@ -221,7 +221,9 @@ def test_webhook_allowed_ips_partial_invalid_warns():
 def test_music_volume_valid():
     for v in (0, 50, 100, 200):
         issues = validate({"token": _VALID_TOKEN, "music_default_volume": v})
-        assert not [i for i in issues if i.field == "music_default_volume"], f"unexpected issue for volume {v}"
+        assert not [
+            i for i in issues if i.field == "music_default_volume"
+        ], f"unexpected issue for volume {v}"
 
 
 def test_music_volume_too_high_warns():
@@ -247,7 +249,9 @@ def test_music_volume_non_int_warns():
 def test_music_skip_ratio_valid():
     for v in (0, 50, 100):
         issues = validate({"token": _VALID_TOKEN, "music_skip_ratio": v})
-        assert not [i for i in issues if i.field == "music_skip_ratio"], f"unexpected issue for ratio {v}"
+        assert not [
+            i for i in issues if i.field == "music_skip_ratio"
+        ], f"unexpected issue for ratio {v}"
 
 
 def test_music_skip_ratio_over_100_warns():
@@ -288,7 +292,9 @@ def test_music_max_queue_negative_warns():
 def test_music_speed_valid():
     for v in ("0.5", "1.0", "2.0", "3.0"):
         issues = validate({"token": _VALID_TOKEN, "music_default_speed": v})
-        assert not [i for i in issues if i.field == "music_default_speed"], f"unexpected issue for speed {v}"
+        assert not [
+            i for i in issues if i.field == "music_default_speed"
+        ], f"unexpected issue for speed {v}"
 
 
 def test_music_speed_too_slow_warns():
@@ -319,7 +325,9 @@ def test_music_speed_none_no_issue():
 def test_music_search_service_valid():
     for svc in ("ytsearch", "ytmsearch", "scsearch"):
         issues = validate({"token": _VALID_TOKEN, "music_search_service": svc})
-        assert not [i for i in issues if i.field == "music_search_service"], f"unexpected issue for {svc}"
+        assert not [
+            i for i in issues if i.field == "music_search_service"
+        ], f"unexpected issue for {svc}"
 
 
 def test_music_search_service_invalid_warns():
@@ -352,7 +360,9 @@ def test_music_boolean_keys_valid():
     for key in bool_keys:
         for val in (True, False):
             issues = validate({"token": _VALID_TOKEN, key: val})
-            assert not [i for i in issues if i.field == key], f"unexpected issue for {key}={val}"
+            assert not [
+                i for i in issues if i.field == key
+            ], f"unexpected issue for {key}={val}"
 
 
 def test_music_boolean_non_bool_warns():
@@ -366,11 +376,20 @@ def test_music_boolean_non_bool_warns():
 
 
 def test_music_nonneg_ints_valid():
-    for key in ("music_cache_max_mb", "music_cache_max_age_days", "music_ratelimit_cooldown", "music_idle_timeout"):
+    for key in (
+        "music_cache_max_mb",
+        "music_cache_max_age_days",
+        "music_ratelimit_cooldown",
+        "music_idle_timeout",
+    ):
         issues = validate({"token": _VALID_TOKEN, key: 0})
-        assert not [i for i in issues if i.field == key], f"unexpected issue for {key}=0"
+        assert not [
+            i for i in issues if i.field == key
+        ], f"unexpected issue for {key}=0"
         issues = validate({"token": _VALID_TOKEN, key: 60})
-        assert not [i for i in issues if i.field == key], f"unexpected issue for {key}=60"
+        assert not [
+            i for i in issues if i.field == key
+        ], f"unexpected issue for {key}=60"
 
 
 def test_music_nonneg_int_negative_warns():
@@ -389,7 +408,9 @@ def test_music_nonneg_int_non_integer_warns():
 
 
 def test_music_cookie_file_missing_path_warns():
-    issues = validate({"token": _VALID_TOKEN, "music_cookie_file": "/nonexistent/cookies.txt"})
+    issues = validate(
+        {"token": _VALID_TOKEN, "music_cookie_file": "/nonexistent/cookies.txt"}
+    )
     assert _warnings(issues, "music_cookie_file")
 
 
@@ -416,7 +437,9 @@ def test_music_cookie_file_existing_path_no_issue(tmp_path):
 
 
 def test_music_js_runtime_path_missing_warns():
-    issues = validate({"token": _VALID_TOKEN, "music_js_runtime_path": "/nonexistent/deno"})
+    issues = validate(
+        {"token": _VALID_TOKEN, "music_js_runtime_path": "/nonexistent/deno"}
+    )
     assert _warnings(issues, "music_js_runtime_path")
 
 
