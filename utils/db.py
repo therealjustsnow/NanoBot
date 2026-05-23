@@ -1749,6 +1749,32 @@ async def _ensure_music_tables() -> None:
         );
         CREATE INDEX IF NOT EXISTS music_queue_guild
             ON music_queue (guild_id);
+        CREATE TABLE IF NOT EXISTS music_song_blocklist (
+            guild_id  TEXT NOT NULL,
+            pattern   TEXT NOT NULL,
+            added_by  TEXT,
+            PRIMARY KEY (guild_id, pattern)
+        );
+        CREATE INDEX IF NOT EXISTS music_songblock_guild
+            ON music_song_blocklist (guild_id);
+        CREATE TABLE IF NOT EXISTS music_user_blocklist (
+            guild_id  TEXT NOT NULL,
+            user_id   TEXT NOT NULL,
+            added_by  TEXT,
+            PRIMARY KEY (guild_id, user_id)
+        );
+        CREATE INDEX IF NOT EXISTS music_userblock_guild
+            ON music_user_blocklist (guild_id);
+        CREATE TABLE IF NOT EXISTS music_history (
+            id            INTEGER PRIMARY KEY AUTOINCREMENT,
+            guild_id      TEXT NOT NULL,
+            title         TEXT,
+            url           TEXT,
+            requester_id  TEXT,
+            played_at     INTEGER NOT NULL
+        );
+        CREATE INDEX IF NOT EXISTS music_history_guild
+            ON music_history (guild_id, id);
     """)
     await _conn().commit()
 
@@ -1970,3 +1996,141 @@ async def get_all_persisted_queues() -> list[dict]:
             }
         )
     return result
+
+
+# ── Song blocklist (block URLs / words / phrases from being queued) ─────────────
+async def add_music_song_block(
+    guild_id: int, pattern: str, added_by: int | None = None
+) -> bool:
+    """Add a blocked pattern (lowercased). Returns False if already present."""
+    try:
+        await _conn().execute(
+            "INSERT INTO music_song_blocklist (guild_id, pattern, added_by) "
+            "VALUES (?,?,?)",
+            (
+                str(guild_id),
+                pattern.lower().strip(),
+                str(added_by) if added_by else None,
+            ),
+        )
+        await _conn().commit()
+        return True
+    except aiosqlite.IntegrityError:
+        return False
+
+
+async def remove_music_song_block(guild_id: int, pattern: str) -> bool:
+    cur = await _conn().execute(
+        "DELETE FROM music_song_blocklist WHERE guild_id=? AND pattern=?",
+        (str(guild_id), pattern.lower().strip()),
+    )
+    await _conn().commit()
+    return cur.rowcount > 0
+
+
+async def get_music_song_blocks(guild_id: int) -> list[str]:
+    async with _conn().execute(
+        "SELECT pattern FROM music_song_blocklist WHERE guild_id=? ORDER BY pattern ASC",
+        (str(guild_id),),
+    ) as cur:
+        rows = await cur.fetchall()
+    return [r["pattern"] for r in rows]
+
+
+# ── User blocklist (bar members from using music commands) ──────────────────────
+async def add_music_user_block(
+    guild_id: int, user_id: int, added_by: int | None = None
+) -> bool:
+    try:
+        await _conn().execute(
+            "INSERT INTO music_user_blocklist (guild_id, user_id, added_by) "
+            "VALUES (?,?,?)",
+            (str(guild_id), str(user_id), str(added_by) if added_by else None),
+        )
+        await _conn().commit()
+        return True
+    except aiosqlite.IntegrityError:
+        return False
+
+
+async def remove_music_user_block(guild_id: int, user_id: int) -> bool:
+    cur = await _conn().execute(
+        "DELETE FROM music_user_blocklist WHERE guild_id=? AND user_id=?",
+        (str(guild_id), str(user_id)),
+    )
+    await _conn().commit()
+    return cur.rowcount > 0
+
+
+async def is_music_user_blocked(guild_id: int, user_id: int) -> bool:
+    async with _conn().execute(
+        "SELECT 1 FROM music_user_blocklist WHERE guild_id=? AND user_id=? LIMIT 1",
+        (str(guild_id), str(user_id)),
+    ) as cur:
+        return await cur.fetchone() is not None
+
+
+async def get_music_user_blocks(guild_id: int) -> list[str]:
+    async with _conn().execute(
+        "SELECT user_id FROM music_user_blocklist WHERE guild_id=?",
+        (str(guild_id),),
+    ) as cur:
+        rows = await cur.fetchall()
+    return [r["user_id"] for r in rows]
+
+
+# ── Played-track history ────────────────────────────────────────────────────────
+async def add_music_history(
+    guild_id: int,
+    title: str | None,
+    url: str | None,
+    requester_id: int | None,
+    keep: int = 200,
+) -> None:
+    """Append a played track and trim the guild's history to the newest `keep`."""
+    gid = str(guild_id)
+    await _conn().execute(
+        "INSERT INTO music_history (guild_id, title, url, requester_id, played_at) "
+        "VALUES (?,?,?,?,?)",
+        (
+            gid,
+            title,
+            url,
+            str(requester_id) if requester_id else None,
+            int(time.time()),
+        ),
+    )
+    await _conn().execute(
+        "DELETE FROM music_history WHERE guild_id=? AND id NOT IN "
+        "(SELECT id FROM music_history WHERE guild_id=? ORDER BY id DESC LIMIT ?)",
+        (gid, gid, keep),
+    )
+    await _conn().commit()
+
+
+async def get_music_history(guild_id: int, limit: int = 25) -> list[dict]:
+    """Return recently played tracks, newest first."""
+    async with _conn().execute(
+        "SELECT title, url, requester_id, played_at FROM music_history "
+        "WHERE guild_id=? ORDER BY id DESC LIMIT ?",
+        (str(guild_id), limit),
+    ) as cur:
+        rows = await cur.fetchall()
+    return [
+        {
+            "title": r["title"],
+            "url": r["url"],
+            "requester_id": r["requester_id"],
+            "played_at": r["played_at"],
+        }
+        for r in rows
+    ]
+
+
+async def clear_music_history(guild_id: int) -> int:
+    async with _conn().execute(
+        "DELETE FROM music_history WHERE guild_id=?", (str(guild_id),)
+    ) as cur:
+        changed = cur.rowcount
+    await _conn().commit()
+    return changed

@@ -29,6 +29,19 @@ Config ([music] section, all optional — see example_config.ini):
   music_predownload     — download the next queued track to disk while one
                           plays for gapless playback; live streams skipped
                           (true by default)
+  music_self_deafen     — self-deafen on join (true by default)
+  music_default_speed   — default playback speed 0.5-3.0 (default 1.0)
+  music_search_service  — ytsearch / ytmsearch / scsearch (default ytsearch)
+  music_status_message  — presence template with {title} while playing (blank)
+  music_proxy           — HTTP/HTTPS proxy for yt-dlp (blank)
+  music_user_agent      — static yt-dlp User-Agent (blank)
+  music_source_address  — local bind IP for yt-dlp (default 0.0.0.0)
+  music_autoplay_autoskip — skip autoplay filler when a user queues (true)
+  music_save_videos     — keep downloads cached for replays (false)
+  music_cache_max_mb / music_cache_max_age_days — cache caps (0 = off)
+  music_ratelimit_cooldown / music_ratelimit_leave — 429 back-off behavior
+  music_apl_prune_on_error — drop dead autoplaylist entries (true)
+  music_save_history    — keep per-guild played history (true)
 
 Commands (hybrid — slash + prefix), category "🎵 Music":
   play / p          — queue a song or playlist (URL, Spotify link, or search)
@@ -59,6 +72,9 @@ Commands (hybrid — slash + prefix), category "🎵 Music":
   autoplay          — keep playing from the autoplaylist when the queue empties
   autoplaylist/apl  — manage the persistent server autoplaylist (add takes playlists)
   radio / 247       — toggle 24/7 mode: stay in voice even when empty (Manage Server)
+  history / played  — show recently played tracks (clearhistory: Manage Server)
+  blocksong / unblocksong / blockedsongs — song block list (Manage Server)
+  blockuser / unblockuser — bar a member from music (Manage Server)
   join / summon     — connect the bot to your voice channel
 """
 
@@ -633,7 +649,7 @@ class GuildPlayer:
         self.current: Optional[Track] = None
         self.loop: str = LOOP_OFF
         self.volume: float = cog.default_volume()
-        self.speed: float = 1.0
+        self.speed: float = cog.default_speed()
         self.audio_filter: str = "none"
         self.autoplay: bool = False
         self.stay_connected: bool = False  # 24/7 mode: don't leave when empty/idle
@@ -842,12 +858,18 @@ class GuildPlayer:
             track.acodec = acodec
 
     def _discard_download(self, track: Optional[Track]) -> None:
-        """Delete a finished track's predownloaded file, if any."""
+        """Release a finished track's predownloaded file.
+
+        With music_save_videos on, the file is kept in the cache for replays
+        (cache-size/age limits prune it later); otherwise it's deleted now.
+        """
         if not track or not track.local_path:
             return
         path = track.local_path
         track.local_path = None
         self._dl_files.discard(path)
+        if self.cog.save_videos():
+            return
         try:
             if os.path.isfile(path):
                 os.remove(path)
@@ -855,7 +877,10 @@ class GuildPlayer:
             pass
 
     def _cleanup_downloads(self) -> None:
-        """Remove every predownloaded file for this guild."""
+        """Drop this guild's predownloaded files (kept when music_save_videos)."""
+        if self.cog.save_videos():
+            self._dl_files.clear()
+            return
         for path in list(self._dl_files):
             try:
                 if os.path.isfile(path):
@@ -999,6 +1024,8 @@ class GuildPlayer:
                     source = await self._make_source(track)
                 except Exception as exc:
                     log.warning("Failed to start '%s': %s", track.title, exc)
+                    self.cog._note_ratelimit(exc)
+                    await self._handle_play_error(track)
                     await self._announce(
                         h.err(
                             f"Couldn't play **{track.title}** — skipping.\n`{exc}`",
@@ -1014,6 +1041,8 @@ class GuildPlayer:
 
                 self._schedule_save()
                 self._start_predownload()
+                self._record_history(track)
+                self.bot.loop.create_task(self.cog._refresh_presence())
 
                 await self._post_now_playing()
                 await self._next.wait()
@@ -1069,12 +1098,39 @@ class GuildPlayer:
             )
         except Exception as exc:
             log.debug("Autoplay resolve failed for %s: %s", choice["url"], exc)
+            if not self.cog._note_ratelimit(exc) and self.cog.apl_prune_on_error():
+                await db.remove_autoplaylist_entry(self.guild.id, choice["url"])
             return None
         if not tracks:
+            if self.cog.apl_prune_on_error():
+                await db.remove_autoplaylist_entry(self.guild.id, choice["url"])
             return None
         track = tracks[0]
+        kept, _removed = await self.cog._filter_blocked_songs(self.guild.id, [track])
+        if not kept:
+            return None
         track.requester_name = "📻 Autoplay"
         return track
+
+    def _is_autoplay_track(self, track: Optional[Track]) -> bool:
+        return bool(track and self.bot.user and track.requester_id == self.bot.user.id)
+
+    async def _handle_play_error(self, track: Track) -> None:
+        """Prune a dead autoplaylist entry when its track fails to play."""
+        if not self._is_autoplay_track(track) or not self.cog.apl_prune_on_error():
+            return
+        for url in (track.webpage_url, track.query):
+            if url:
+                await db.remove_autoplaylist_entry(self.guild.id, url)
+
+    def _record_history(self, track: Track) -> None:
+        if not self.cog.save_history():
+            return
+        self.bot.loop.create_task(
+            db.add_music_history(
+                self.guild.id, track.title, track.webpage_url, track.requester_id
+            )
+        )
 
     def _after(self, error: Optional[Exception]) -> None:
         if error:
@@ -1255,6 +1311,7 @@ class GuildPlayer:
                 pass
 
         self.cog.players.pop(self.guild.id, None)
+        await self.cog._refresh_presence()
 
 
 def _apl_single_embed(entries: list) -> discord.Embed:
@@ -1276,12 +1333,15 @@ class Music(commands.Cog):
     def __init__(self, bot: commands.Bot):
         self.bot = bot
         self.players: dict[int, GuildPlayer] = {}
-        # Wipe any predownloaded files left over from a previous run.
-        try:
-            if os.path.isdir(_MUSIC_CACHE_DIR):
-                shutil.rmtree(_MUSIC_CACHE_DIR, ignore_errors=True)
-        except OSError:
-            pass
+        self._ratelimit_until: float = 0.0  # yt-dlp 429 back-off (monotonic-ish)
+        # Wipe leftover predownloads from a previous run — unless the cache is
+        # being kept on purpose (music_save_videos).
+        if not self.save_videos():
+            try:
+                if os.path.isdir(_MUSIC_CACHE_DIR):
+                    shutil.rmtree(_MUSIC_CACHE_DIR, ignore_errors=True)
+            except OSError:
+                pass
 
     async def cog_unload(self) -> None:
         # persist_clear=False so a persisted queue survives a reload/restart.
@@ -1324,6 +1384,157 @@ class Music(commands.Cog):
 
     def predownload(self) -> bool:
         return self._cfg_bool("music_predownload", True)
+
+    def self_deafen(self) -> bool:
+        return self._cfg_bool("music_self_deafen", True)
+
+    def default_speed(self) -> float:
+        val = self.bot.config.get("music_default_speed")
+        try:
+            speed = float(val) if val not in (None, "") else 1.0
+        except (TypeError, ValueError):
+            speed = 1.0
+        return max(0.5, min(3.0, speed))
+
+    def search_service(self) -> str:
+        val = (self.bot.config.get("music_search_service") or "").strip()
+        return val if val in ("ytsearch", "ytmsearch", "scsearch") else "ytsearch"
+
+    def status_template(self) -> str:
+        return (self.bot.config.get("music_status_message") or "").strip()
+
+    def autoplay_autoskip(self) -> bool:
+        return self._cfg_bool("music_autoplay_autoskip", True)
+
+    def save_videos(self) -> bool:
+        return self._cfg_bool("music_save_videos", False)
+
+    def cache_max_mb(self) -> int:
+        return max(0, self._cfg_int("music_cache_max_mb", 0))
+
+    def cache_max_age_days(self) -> int:
+        return max(0, self._cfg_int("music_cache_max_age_days", 0))
+
+    def ratelimit_cooldown(self) -> int:
+        return max(0, self._cfg_int("music_ratelimit_cooldown", 600))
+
+    def ratelimit_leave(self) -> bool:
+        return self._cfg_bool("music_ratelimit_leave", False)
+
+    def apl_prune_on_error(self) -> bool:
+        return self._cfg_bool("music_apl_prune_on_error", True)
+
+    def save_history(self) -> bool:
+        return self._cfg_bool("music_save_history", True)
+
+    # ── rate-limit back-off ────────────────────────────────────────────────────
+    def _ratelimited(self) -> bool:
+        return time.time() < self._ratelimit_until
+
+    def _ratelimit_remaining(self) -> int:
+        return max(0, int(self._ratelimit_until - time.time()))
+
+    def _note_ratelimit(self, exc: Exception) -> bool:
+        """If `exc` looks like a YouTube rate-limit, start a cooldown. Returns True."""
+        text = str(exc).lower()
+        if "429" not in text and "too many requests" not in text and "rate" not in text:
+            return False
+        cooldown = self.ratelimit_cooldown()
+        if cooldown:
+            self._ratelimit_until = time.time() + cooldown
+            log.warning("yt-dlp rate-limited — backing off %ds", cooldown)
+            if self.ratelimit_leave():
+                for player in list(self.players.values()):
+                    self.bot.loop.create_task(player.destroy(reason="rate-limited"))
+        return True
+
+    # ── presence (now-playing in status when music_status_message set) ──────────
+    async def _refresh_presence(self) -> None:
+        tmpl = self.status_template()
+        if not tmpl:
+            return
+        title = None
+        for player in self.players.values():
+            if player.current:
+                title = player.current.title
+                break
+        if title:
+            text = tmpl.replace("{title}", title)[:128]
+            activity = discord.Activity(type=discord.ActivityType.listening, name=text)
+        else:
+            activity = discord.Activity(
+                type=discord.ActivityType.watching, name="over the server 👁️"
+            )
+        try:
+            await self.bot.change_presence(activity=activity)
+        except Exception:
+            pass
+
+    # ── song blocklist ──────────────────────────────────────────────────────────
+    async def _filter_blocked_songs(
+        self, guild_id: int, tracks: list[Track]
+    ) -> tuple[list[Track], int]:
+        """Drop tracks matching any blocked pattern. Returns (kept, removed)."""
+        patterns = await db.get_music_song_blocks(guild_id)
+        if not patterns:
+            return tracks, 0
+        kept = []
+        removed = 0
+        for t in tracks:
+            haystack = f"{t.title} {t.query} {t.webpage_url}".lower()
+            if any(p in haystack for p in patterns):
+                removed += 1
+            else:
+                kept.append(t)
+        return kept, removed
+
+    # ── cache limits (music_save_videos) ────────────────────────────────────────
+    def _in_use_files(self) -> set[str]:
+        in_use: set[str] = set()
+        for player in self.players.values():
+            if player.current and player.current.local_path:
+                in_use.add(player.current.local_path)
+            in_use |= player._dl_files
+        return in_use
+
+    def _enforce_cache_limits(self) -> None:
+        max_mb = self.cache_max_mb()
+        max_age = self.cache_max_age_days()
+        if (not max_mb and not max_age) or not os.path.isdir(_MUSIC_CACHE_DIR):
+            return
+        in_use = self._in_use_files()
+        files = []
+        for root, _dirs, names in os.walk(_MUSIC_CACHE_DIR):
+            for n in names:
+                fp = os.path.join(root, n)
+                try:
+                    st = os.stat(fp)
+                except OSError:
+                    continue
+                files.append((fp, st.st_mtime, st.st_size))
+        now = time.time()
+        if max_age:
+            cutoff = now - max_age * 86400
+            for fp, mt, _sz in files:
+                if mt < cutoff and fp not in in_use:
+                    try:
+                        os.remove(fp)
+                    except OSError:
+                        pass
+            files = [(fp, mt, sz) for fp, mt, sz in files if os.path.isfile(fp)]
+        if max_mb:
+            cap = max_mb * 1024 * 1024
+            total = sum(sz for _fp, _mt, sz in files)
+            for fp, _mt, sz in sorted(files, key=lambda x: x[1]):
+                if total <= cap:
+                    break
+                if fp in in_use:
+                    continue
+                try:
+                    os.remove(fp)
+                    total -= sz
+                except OSError:
+                    pass
 
     def _cookie_file(self) -> Optional[str]:
         val = self.bot.config.get("music_cookie_file")
@@ -1376,6 +1587,18 @@ class Music(commands.Cog):
         if cookie:
             opts["cookiefile"] = cookie
         opts["js_runtimes"] = self._js_runtimes()
+        opts["source_address"] = (
+            self.bot.config.get("music_source_address") or "0.0.0.0"
+        )
+        opts["default_search"] = self.search_service()
+        proxy = (self.bot.config.get("music_proxy") or "").strip()
+        if proxy:
+            opts["proxy"] = proxy
+        ua = (self.bot.config.get("music_user_agent") or "").strip()
+        if ua:
+            headers = dict(opts.get("http_headers") or {})
+            headers["User-Agent"] = ua
+            opts["http_headers"] = headers
         return opts
 
     # ── extraction (runs in a thread to avoid blocking the loop) ───────────────
@@ -1415,16 +1638,26 @@ class Music(commands.Cog):
                     info = next((e for e in info["entries"] if e), info)
                 if not info or info.get("is_live") or not info.get("duration"):
                     return None
+                acodec = info.get("acodec") or ""
+                # Reuse an already-cached file (music_save_videos keeps them).
+                candidate = ydl.prepare_filename(info)
+                if os.path.isfile(candidate):
+                    return candidate, acodec
                 info = ydl.process_ie_result(info, download=True)
-                path = ydl.prepare_filename(info)
-                return path, (info.get("acodec") or "")
+                return ydl.prepare_filename(info), (info.get("acodec") or "")
 
-        result = await self.bot.loop.run_in_executor(None, _work)
+        try:
+            result = await self.bot.loop.run_in_executor(None, _work)
+        except Exception as exc:
+            self._note_ratelimit(exc)
+            raise
         if not result:
             return None
         path, acodec = result
         if not path or not os.path.isfile(path):
             return None
+        if self.save_videos() and (self.cache_max_mb() or self.cache_max_age_days()):
+            await self.bot.loop.run_in_executor(None, self._enforce_cache_limits)
         return path, acodec
 
     async def search(
@@ -1446,7 +1679,7 @@ class Music(commands.Cog):
         if is_url:
             opts["extract_flat"] = "in_playlist"
         else:
-            query = f"ytsearch{limit}:{query}"
+            query = f"{self.search_service()}{limit}:{query}"
 
         def _work():
             with yt_dlp.YoutubeDL(opts) as ydl:
@@ -1597,6 +1830,13 @@ class Music(commands.Cog):
             )
             return None
 
+        if await db.is_music_user_blocked(ctx.guild.id, ctx.author.id):
+            await ctx.reply(
+                embed=h.err("You're blocked from using music commands on this server."),
+                ephemeral=True,
+            )
+            return None
+
         author_vc = getattr(ctx.author.voice, "channel", None)
         if author_vc is None:
             await ctx.reply(embed=h.err("Join a voice channel first."), ephemeral=True)
@@ -1624,7 +1864,7 @@ class Music(commands.Cog):
                 )
                 return None
             try:
-                await author_vc.connect()
+                await author_vc.connect(self_deaf=self.self_deafen())
             except Exception as exc:
                 log.warning("Connect failed in %s: %s", ctx.guild.id, exc)
                 await ctx.reply(
@@ -1639,6 +1879,16 @@ class Music(commands.Cog):
     async def _resolve_for(
         self, ctx: commands.Context, query: str
     ) -> Optional[list[Track]]:
+        if self._ratelimited():
+            await ctx.reply(
+                embed=h.warn(
+                    f"YouTube is rate-limiting me. Try again in "
+                    f"~{self._ratelimit_remaining() // 60 + 1} min.",
+                    "⏳ Rate-limited",
+                ),
+                ephemeral=True,
+            )
+            return None
         try:
             tracks = await self.search(
                 query,
@@ -1647,6 +1897,7 @@ class Music(commands.Cog):
             )
         except Exception as exc:
             log.warning("Search failed for %r: %s", query, exc)
+            self._note_ratelimit(exc)
             await ctx.reply(
                 embed=h.err(f"Couldn't find anything for that.\n`{exc}`"),
                 ephemeral=True,
@@ -1655,6 +1906,22 @@ class Music(commands.Cog):
         if not tracks:
             await ctx.reply(embed=h.err("No results found."), ephemeral=True)
             return None
+
+        tracks, removed = await self._filter_blocked_songs(ctx.guild.id, tracks)
+        if not tracks:
+            await ctx.reply(
+                embed=h.err("That track is on this server's music block list."),
+                ephemeral=True,
+            )
+            return None
+        if removed:
+            await ctx.reply(
+                embed=h.warn(
+                    f"Skipped **{removed}** blocked track(s) from that request.",
+                    "🚫 Blocked",
+                ),
+                ephemeral=True,
+            )
         return tracks
 
     async def _queue_query(
@@ -1712,6 +1979,13 @@ class Music(commands.Cog):
             )
 
         if then_skip and not was_idle and player.current is not None:
+            player.skip()
+        elif (
+            not was_idle
+            and self.autoplay_autoskip()
+            and player._is_autoplay_track(player.current)
+        ):
+            # A real request interrupts autoplay filler immediately.
             player.skip()
 
     # ── follow + auto-disconnect when left alone ────────────────────────────────
@@ -1797,7 +2071,7 @@ class Music(commands.Cog):
             return False
 
         try:
-            await voice_channel.connect()
+            await voice_channel.connect(self_deaf=self.self_deafen())
         except Exception as exc:
             log.warning("Resume connect failed for guild %s: %s", guild.id, exc)
             return False
@@ -2922,6 +3196,215 @@ class Music(commands.Cog):
         await ctx.reply(
             embed=h.ok(f"Exported **{len(lines)}** track URL(s).", "📄 Queue Dump"),
             file=file,
+        )
+
+    @commands.hybrid_command(
+        name="blocksong",
+        description="Block a song URL, word, or phrase from being queued.",
+        extras={
+            "category": "🎵 Music",
+            "short": "Block a song from the queue",
+            "usage": "blocksong <url | word | phrase>",
+            "desc": (
+                "Adds a URL, word, or phrase to this server's music block list. "
+                "Any track whose title, search query, or URL contains it can't be "
+                "queued."
+            ),
+            "args": [("pattern", "A URL, word, or phrase to block")],
+            "perms": "Manage Server",
+            "example": "!blocksong rickroll",
+        },
+    )
+    @app_commands.describe(pattern="A URL, word, or phrase to block")
+    @commands.has_permissions(manage_guild=True)
+    @commands.guild_only()
+    async def blocksong(self, ctx: commands.Context, *, pattern: str):
+        pattern = pattern.strip()
+        if len(pattern) < 2:
+            return await ctx.reply(
+                embed=h.err("Give at least 2 characters to block."), ephemeral=True
+            )
+        added = await db.add_music_song_block(ctx.guild.id, pattern, ctx.author.id)
+        if not added:
+            return await ctx.reply(
+                embed=h.warn(f"**{pattern}** is already blocked."), ephemeral=True
+            )
+        await ctx.reply(
+            embed=h.ok(f"Blocked **{pattern}** from the queue.", "🚫 Song Blocked")
+        )
+
+    @commands.hybrid_command(
+        name="unblocksong",
+        description="Remove a pattern from the music block list.",
+        extras={
+            "category": "🎵 Music",
+            "short": "Unblock a song pattern",
+            "usage": "unblocksong <pattern>",
+            "desc": "Removes a previously blocked URL, word, or phrase.",
+            "args": [("pattern", "The exact blocked pattern to remove")],
+            "perms": "Manage Server",
+            "example": "!unblocksong rickroll",
+        },
+    )
+    @app_commands.describe(pattern="The exact blocked pattern to remove")
+    @commands.has_permissions(manage_guild=True)
+    @commands.guild_only()
+    async def unblocksong(self, ctx: commands.Context, *, pattern: str):
+        removed = await db.remove_music_song_block(ctx.guild.id, pattern.strip())
+        if not removed:
+            return await ctx.reply(
+                embed=h.err(f"**{pattern}** isn't on the block list."), ephemeral=True
+            )
+        await ctx.reply(embed=h.ok(f"Unblocked **{pattern}**.", "✅ Unblocked"))
+
+    @commands.hybrid_command(
+        name="blockedsongs",
+        description="Show the server's music block list.",
+        extras={
+            "category": "🎵 Music",
+            "short": "List blocked song patterns",
+            "usage": "blockedsongs",
+            "desc": "Lists every URL, word, or phrase blocked from the queue.",
+            "args": [],
+            "perms": "Manage Server",
+            "example": "!blockedsongs",
+        },
+    )
+    @commands.has_permissions(manage_guild=True)
+    @commands.guild_only()
+    async def blockedsongs(self, ctx: commands.Context):
+        patterns = await db.get_music_song_blocks(ctx.guild.id)
+        if not patterns:
+            return await ctx.reply(
+                embed=h.info("Nothing is blocked.", "🚫 Song Block List"),
+                ephemeral=True,
+            )
+        body = "\n".join(f"`{i}.` {p}" for i, p in enumerate(patterns, 1))
+        await ctx.reply(
+            embed=h.embed(f"🚫 Song Block List · {len(patterns)}", body[:4000], ACCENT),
+            ephemeral=True,
+        )
+
+    @commands.hybrid_command(
+        name="blockuser",
+        description="Bar a member from using music commands here.",
+        extras={
+            "category": "🎵 Music",
+            "short": "Block a member from music",
+            "usage": "blockuser <member>",
+            "desc": "Stops a member from using any music command on this server.",
+            "args": [("member", "The member to block")],
+            "perms": "Manage Server",
+            "example": "!blockuser @spammer",
+        },
+    )
+    @app_commands.describe(member="The member to block from music")
+    @commands.has_permissions(manage_guild=True)
+    @commands.guild_only()
+    async def blockuser(self, ctx: commands.Context, member: discord.Member):
+        added = await db.add_music_user_block(ctx.guild.id, member.id, ctx.author.id)
+        if not added:
+            return await ctx.reply(
+                embed=h.warn(f"**{member.display_name}** is already blocked."),
+                ephemeral=True,
+            )
+        await ctx.reply(
+            embed=h.ok(
+                f"**{member.display_name}** can no longer use music commands.",
+                "🚫 User Blocked",
+            )
+        )
+
+    @commands.hybrid_command(
+        name="unblockuser",
+        description="Let a blocked member use music commands again.",
+        extras={
+            "category": "🎵 Music",
+            "short": "Unblock a member",
+            "usage": "unblockuser <member>",
+            "desc": "Removes a member from the music block list.",
+            "args": [("member", "The member to unblock")],
+            "perms": "Manage Server",
+            "example": "!unblockuser @user",
+        },
+    )
+    @app_commands.describe(member="The member to unblock")
+    @commands.has_permissions(manage_guild=True)
+    @commands.guild_only()
+    async def unblockuser(self, ctx: commands.Context, member: discord.Member):
+        removed = await db.remove_music_user_block(ctx.guild.id, member.id)
+        if not removed:
+            return await ctx.reply(
+                embed=h.err(f"**{member.display_name}** isn't blocked."),
+                ephemeral=True,
+            )
+        await ctx.reply(
+            embed=h.ok(
+                f"**{member.display_name}** can use music commands again.",
+                "✅ Unblocked",
+            )
+        )
+
+    @commands.hybrid_command(
+        name="history",
+        aliases=["played"],
+        description="Show recently played tracks on this server.",
+        extras={
+            "category": "🎵 Music",
+            "short": "Show recently played tracks",
+            "usage": "history",
+            "desc": "Lists the most recently played tracks (newest first).",
+            "args": [],
+            "perms": "None",
+            "example": "!history",
+        },
+    )
+    @commands.guild_only()
+    async def history(self, ctx: commands.Context):
+        if not self.save_history():
+            return await ctx.reply(
+                embed=h.info(
+                    "History tracking is disabled (`music_save_history`).",
+                    "🕘 History",
+                ),
+                ephemeral=True,
+            )
+        rows = await db.get_music_history(ctx.guild.id, limit=20)
+        if not rows:
+            return await ctx.reply(
+                embed=h.info("Nothing has played yet.", "🕘 History"), ephemeral=True
+            )
+        lines = []
+        for i, r in enumerate(rows, 1):
+            title = r["title"] or "Unknown"
+            if len(title) > 55:
+                title = title[:52] + "…"
+            stamp = f"<t:{int(r['played_at'])}:R>"
+            if r["url"]:
+                lines.append(f"`{i:>2}.` [{title}]({r['url']}) · {stamp}")
+            else:
+                lines.append(f"`{i:>2}.` {title} · {stamp}")
+        await ctx.reply(embed=h.embed("🕘 Recently Played", "\n".join(lines), ACCENT))
+
+    @commands.hybrid_command(
+        name="clearhistory",
+        description="Clear this server's played-track history.",
+        extras={
+            "category": "🎵 Music",
+            "short": "Clear played history",
+            "usage": "clearhistory",
+            "desc": "Deletes every entry from this server's played-track history.",
+            "args": [],
+            "perms": "Manage Server",
+            "example": "!clearhistory",
+        },
+    )
+    @commands.has_permissions(manage_guild=True)
+    @commands.guild_only()
+    async def clearhistory(self, ctx: commands.Context):
+        n = await db.clear_music_history(ctx.guild.id)
+        await ctx.reply(
+            embed=h.ok(f"Cleared **{n}** history entry/entries.", "🧹 History Cleared")
         )
 
     @commands.hybrid_command(
