@@ -592,6 +592,178 @@ def validate(cfg: dict) -> list[ConfigIssue]:
                 )
             )
 
+    # ── webhook_allowed_ips ───────────────────────────────────────────────────
+    allowed_ips = cfg.get("webhook_allowed_ips")
+    if allowed_ips:
+        import ipaddress
+
+        for entry in str(allowed_ips).split(","):
+            entry = entry.strip()
+            if not entry:
+                continue
+            try:
+                ipaddress.ip_network(entry, strict=False)
+            except ValueError:
+                issues.append(
+                    ConfigIssue(
+                        field="webhook_allowed_ips",
+                        message=f"'{entry}' is not a valid IP address or CIDR range",
+                        fatal=False,
+                    )
+                )
+
+    # ── music booleans ────────────────────────────────────────────────────────
+    for key in (
+        "music_use_opus",
+        "music_persist_queue",
+        "music_predownload",
+        "music_self_deafen",
+        "music_autoplay_autoskip",
+        "music_save_videos",
+        "music_ratelimit_leave",
+        "music_apl_prune_on_error",
+        "music_save_history",
+    ):
+        v = cfg.get(key)
+        if v is not None and not isinstance(v, bool):
+            issues.append(
+                ConfigIssue(
+                    field=key,
+                    message=f"Expected true or false, got '{v}'",
+                    fatal=False,
+                )
+            )
+
+    # ── music non-negative integers ───────────────────────────────────────────
+    for key in (
+        "music_cache_max_mb",
+        "music_cache_max_age_days",
+        "music_ratelimit_cooldown",
+        "music_idle_timeout",
+    ):
+        v = cfg.get(key)
+        if v is None:
+            continue
+        if not isinstance(v, int) or isinstance(v, bool) or v < 0:
+            issues.append(
+                ConfigIssue(
+                    field=key,
+                    message=f"Expected non-negative integer, got '{v}'",
+                    fatal=False,
+                )
+            )
+
+    # ── music_default_volume (0–200) ──────────────────────────────────────────
+    vol = cfg.get("music_default_volume")
+    if vol is not None:
+        if not isinstance(vol, int) or isinstance(vol, bool):
+            issues.append(
+                ConfigIssue(
+                    "music_default_volume",
+                    f"Expected integer 0–200, got '{vol}'",
+                    False,
+                )
+            )
+        elif not (0 <= vol <= 200):
+            issues.append(
+                ConfigIssue(
+                    "music_default_volume",
+                    f"{vol} is out of range — must be 0–200",
+                    False,
+                )
+            )
+
+    # ── music_skip_ratio (0–100) ──────────────────────────────────────────────
+    ratio = cfg.get("music_skip_ratio")
+    if ratio is not None:
+        if not isinstance(ratio, int) or isinstance(ratio, bool):
+            issues.append(
+                ConfigIssue(
+                    "music_skip_ratio",
+                    f"Expected integer 0–100, got '{ratio}'",
+                    False,
+                )
+            )
+        elif not (0 <= ratio <= 100):
+            issues.append(
+                ConfigIssue(
+                    "music_skip_ratio",
+                    f"{ratio} is out of range — must be 0–100",
+                    False,
+                )
+            )
+
+    # ── music_max_queue (≥1) ──────────────────────────────────────────────────
+    max_q = cfg.get("music_max_queue")
+    if max_q is not None:
+        if not isinstance(max_q, int) or isinstance(max_q, bool) or max_q < 1:
+            issues.append(
+                ConfigIssue(
+                    "music_max_queue",
+                    f"Expected integer ≥ 1, got '{max_q}'",
+                    False,
+                )
+            )
+
+    # ── music_default_speed (0.5–3.0) ────────────────────────────────────────
+    speed_raw = cfg.get("music_default_speed")
+    if speed_raw not in (None, ""):
+        try:
+            speed = float(speed_raw)
+            if not (0.5 <= speed <= 3.0):
+                issues.append(
+                    ConfigIssue(
+                        "music_default_speed",
+                        f"{speed_raw} is out of range — must be 0.5–3.0",
+                        False,
+                    )
+                )
+        except (TypeError, ValueError):
+            issues.append(
+                ConfigIssue(
+                    "music_default_speed",
+                    f"'{speed_raw}' is not a valid number — must be 0.5–3.0",
+                    False,
+                )
+            )
+
+    # ── music_search_service ──────────────────────────────────────────────────
+    svc = cfg.get("music_search_service")
+    if svc not in (None, ""):
+        _VALID_SERVICES = ("ytsearch", "ytmsearch", "scsearch")
+        if svc not in _VALID_SERVICES:
+            issues.append(
+                ConfigIssue(
+                    "music_search_service",
+                    f"'{svc}' is not valid — choose from: {', '.join(_VALID_SERVICES)}",
+                    False,
+                )
+            )
+
+    # ── music_cookie_file ─────────────────────────────────────────────────────
+    cookie = cfg.get("music_cookie_file")
+    if cookie:
+        if not os.path.isfile(cookie):
+            issues.append(
+                ConfigIssue(
+                    "music_cookie_file",
+                    f"File not found: '{cookie}'",
+                    False,
+                )
+            )
+
+    # ── music_js_runtime_path ─────────────────────────────────────────────────
+    js_path = cfg.get("music_js_runtime_path")
+    if js_path:
+        if not os.path.isfile(js_path):
+            issues.append(
+                ConfigIssue(
+                    "music_js_runtime_path",
+                    f"File not found: '{js_path}'",
+                    False,
+                )
+            )
+
     return issues
 
 
