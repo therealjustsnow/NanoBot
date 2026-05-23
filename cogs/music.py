@@ -32,8 +32,9 @@ Config ([music] section, all optional — see example_config.ini):
   music_self_deafen     — self-deafen on join (true by default)
   music_default_speed   — default playback speed 0.5-3.0 (default 1.0)
   music_search_service  — ytsearch / ytmsearch / scsearch (default ytsearch)
-  music_status_message  — "Watching ..." text while playing; {title} = song
-                          (blank = song title; idle = watching the server)
+  music_status_message  — presence text while playing; {title} = song. YouTube/
+                          Twitch tracks show a Streaming "Watch" button; idle =
+                          watching the server (blank = bare song title)
   music_proxy           — HTTP/HTTPS proxy for yt-dlp (blank)
   music_user_agent      — static yt-dlp User-Agent (blank)
   music_source_address  — local bind IP for yt-dlp (default 0.0.0.0)
@@ -1461,11 +1462,16 @@ class Music(commands.Cog):
         if track:
             tmpl = self.status_template()
             text = tmpl.replace("{title}", track.title) if tmpl else track.title
-            activity = discord.Activity(
-                type=discord.ActivityType.watching,
-                name=text[:128],
-                url=track.webpage_url or None,
-            )
+            # Streaming activity renders a clickable "Watch" button when the URL
+            # is a youtube.com/twitch.tv link (as MusicBot does). Fall back to a
+            # plain "Watching" activity when there's no usable URL.
+            url = track.webpage_url or ""
+            if "youtube.com" in url or "youtu.be" in url or "twitch.tv" in url:
+                activity = discord.Streaming(name=text[:128], url=url)
+            else:
+                activity = discord.Activity(
+                    type=discord.ActivityType.watching, name=text[:128]
+                )
         else:
             activity = discord.Activity(
                 type=discord.ActivityType.watching, name="over the server 👁️"
