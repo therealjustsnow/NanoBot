@@ -2113,52 +2113,89 @@ class Music(commands.Cog):
             "usage": "play <url | search terms>",
             "desc": (
                 "Joins your voice channel and queues the track. Accepts a YouTube "
-                "(or other site) URL, a playlist URL, or plain search terms."
+                "(or other site) URL, a playlist URL, or plain search terms.\n"
+                "Slash only: `mode` — normal (end of queue), next (play after "
+                "current), now (skip current), shuffle (playlist in random order)."
             ),
-            "args": [("query", "A URL or search terms")],
+            "args": [
+                ("query", "A URL or search terms"),
+                ("mode", "(slash) normal / next / now / shuffle"),
+            ],
             "perms": "None",
             "example": "!play never gonna give you up\n!play https://youtu.be/dQw4w9WgXcQ",
         },
     )
-    @app_commands.describe(query="A URL, playlist URL, or search terms")
+    @app_commands.describe(
+        query="A URL, playlist URL, or search terms",
+        mode="How to queue the track (default: normal)",
+    )
+    @app_commands.choices(
+        mode=[
+            app_commands.Choice(name="Normal — add to end of queue", value="normal"),
+            app_commands.Choice(name="Next — play right after current", value="next"),
+            app_commands.Choice(
+                name="Now — skip current and play immediately", value="now"
+            ),
+            app_commands.Choice(
+                name="Shuffle — queue playlist in random order", value="shuffle"
+            ),
+        ]
+    )
     @commands.guild_only()
-    async def play(self, ctx: commands.Context, *, query: str):
-        await self._queue_query(ctx, query, front=False, then_skip=False)
+    async def play(self, ctx: commands.Context, *, query: str, mode: str = "normal"):
+        if mode == "shuffle":
+            player = await self._ensure_voice(ctx, join=True)
+            if player is None:
+                return
+            await ctx.defer()
+            tracks = await self._resolve_for(ctx, query)
+            if tracks is None:
+                return
+            random.shuffle(tracks)
+            added = player.add_many(tracks)
+            total = sum(t.duration or 0 for t in tracks[:added])
+            await ctx.reply(
+                embed=h.embed(
+                    "🔀 Playlist Queued (shuffled)",
+                    f"Added **{added}** track(s) · total `{_fmt_time(total)}`.",
+                    ACCENT,
+                )
+            )
+        else:
+            front = mode in ("next", "now")
+            then_skip = mode == "now"
+            await self._queue_query(ctx, query, front=front, then_skip=then_skip)
 
-    @commands.hybrid_command(
+    @commands.command(
         name="playnext",
         aliases=["pn", "playtop"],
-        description="Queue a track to play right after the current one.",
         extras={
             "category": "🎵 Music",
             "short": "Queue a track to play next",
             "usage": "playnext <url | search terms>",
-            "desc": "Adds the track to the front of the queue so it plays next.",
+            "desc": "Adds the track to the front of the queue so it plays next. Slash: use /play with mode: Next.",
             "args": [("query", "A URL or search terms")],
             "perms": "None",
             "example": "!playnext lofi beats",
         },
     )
-    @app_commands.describe(query="A URL or search terms")
     @commands.guild_only()
     async def playnext(self, ctx: commands.Context, *, query: str):
         await self._queue_query(ctx, query, front=True, then_skip=False)
 
-    @commands.hybrid_command(
+    @commands.command(
         name="playnow",
         aliases=["playskip", "ps"],
-        description="Skip whatever's playing and play this immediately.",
         extras={
             "category": "🎵 Music",
             "short": "Play a track immediately",
             "usage": "playnow <url | search terms>",
-            "desc": "Adds the track to the front of the queue and skips the current one.",
+            "desc": "Adds the track to the front of the queue and skips the current one. Slash: use /play with mode: Now.",
             "args": [("query", "A URL or search terms")],
             "perms": "None",
             "example": "!playnow https://youtu.be/dQw4w9WgXcQ",
         },
     )
-    @app_commands.describe(query="A URL or search terms")
     @commands.guild_only()
     async def playnow(self, ctx: commands.Context, *, query: str):
         await self._queue_query(ctx, query, front=True, then_skip=True)
@@ -3107,21 +3144,19 @@ class Music(commands.Cog):
     async def stream(self, ctx: commands.Context, *, url: str):
         await self._queue_query(ctx, url, front=False, then_skip=False)
 
-    @commands.hybrid_command(
+    @commands.command(
         name="shuffleplay",
         aliases=["sp"],
-        description="Queue a playlist with its tracks shuffled.",
         extras={
             "category": "🎵 Music",
             "short": "Queue a playlist, shuffled",
             "usage": "shuffleplay <playlist url | search>",
-            "desc": "Resolves a playlist, shuffles the tracks, then adds them all.",
+            "desc": "Resolves a playlist, shuffles the tracks, then adds them all. Slash: use /play with mode: Shuffle.",
             "args": [("query", "A playlist URL or search terms")],
             "perms": "None",
             "example": "!shuffleplay https://open.spotify.com/playlist/...",
         },
     )
-    @app_commands.describe(query="A playlist URL or search terms")
     @commands.guild_only()
     async def shuffleplay(self, ctx: commands.Context, *, query: str):
         player = await self._ensure_voice(ctx, join=True)
@@ -3209,9 +3244,8 @@ class Music(commands.Cog):
             file=file,
         )
 
-    @commands.hybrid_command(
+    @commands.command(
         name="blocksong",
-        description="Block a song URL, word, or phrase from being queued.",
         extras={
             "category": "🎵 Music",
             "short": "Block a song from the queue",
@@ -3226,7 +3260,6 @@ class Music(commands.Cog):
             "example": "!blocksong rickroll",
         },
     )
-    @app_commands.describe(pattern="A URL, word, or phrase to block")
     @commands.has_permissions(manage_guild=True)
     @commands.guild_only()
     async def blocksong(self, ctx: commands.Context, *, pattern: str):
@@ -3244,9 +3277,8 @@ class Music(commands.Cog):
             embed=h.ok(f"Blocked **{pattern}** from the queue.", "🚫 Song Blocked")
         )
 
-    @commands.hybrid_command(
+    @commands.command(
         name="unblocksong",
-        description="Remove a pattern from the music block list.",
         extras={
             "category": "🎵 Music",
             "short": "Unblock a song pattern",
@@ -3257,7 +3289,6 @@ class Music(commands.Cog):
             "example": "!unblocksong rickroll",
         },
     )
-    @app_commands.describe(pattern="The exact blocked pattern to remove")
     @commands.has_permissions(manage_guild=True)
     @commands.guild_only()
     async def unblocksong(self, ctx: commands.Context, *, pattern: str):
@@ -3268,9 +3299,8 @@ class Music(commands.Cog):
             )
         await ctx.reply(embed=h.ok(f"Unblocked **{pattern}**.", "✅ Unblocked"))
 
-    @commands.hybrid_command(
+    @commands.command(
         name="blockedsongs",
-        description="Show the server's music block list.",
         extras={
             "category": "🎵 Music",
             "short": "List blocked song patterns",
@@ -3296,9 +3326,8 @@ class Music(commands.Cog):
             ephemeral=True,
         )
 
-    @commands.hybrid_command(
+    @commands.command(
         name="blockuser",
-        description="Bar a member from using music commands here.",
         extras={
             "category": "🎵 Music",
             "short": "Block a member from music",
@@ -3309,7 +3338,6 @@ class Music(commands.Cog):
             "example": "!blockuser @spammer",
         },
     )
-    @app_commands.describe(member="The member to block from music")
     @commands.has_permissions(manage_guild=True)
     @commands.guild_only()
     async def blockuser(self, ctx: commands.Context, member: discord.Member):
@@ -3326,9 +3354,8 @@ class Music(commands.Cog):
             )
         )
 
-    @commands.hybrid_command(
+    @commands.command(
         name="unblockuser",
-        description="Let a blocked member use music commands again.",
         extras={
             "category": "🎵 Music",
             "short": "Unblock a member",
@@ -3339,7 +3366,6 @@ class Music(commands.Cog):
             "example": "!unblockuser @user",
         },
     )
-    @app_commands.describe(member="The member to unblock")
     @commands.has_permissions(manage_guild=True)
     @commands.guild_only()
     async def unblockuser(self, ctx: commands.Context, member: discord.Member):
@@ -3350,6 +3376,122 @@ class Music(commands.Cog):
                 ephemeral=True,
             )
         await ctx.reply(
+            embed=h.ok(
+                f"**{member.display_name}** can use music commands again.",
+                "✅ Unblocked",
+            )
+        )
+
+    # ── /blocksong group (slash interface for song block list) ─────────────────
+    blocksong_group = app_commands.Group(
+        name="blocksong",
+        description="Manage the server's song block list.",
+        guild_only=True,
+    )
+
+    @blocksong_group.command(
+        name="add", description="Block a song URL, word, or phrase from being queued."
+    )
+    @app_commands.describe(pattern="A URL, word, or phrase to block")
+    @app_commands.checks.has_permissions(manage_guild=True)
+    async def blocksong_slash_add(self, interaction: discord.Interaction, pattern: str):
+        pattern = pattern.strip()
+        if len(pattern) < 2:
+            return await interaction.response.send_message(
+                embed=h.err("Give at least 2 characters to block."), ephemeral=True
+            )
+        added = await db.add_music_song_block(
+            interaction.guild_id, pattern, interaction.user.id
+        )
+        if not added:
+            return await interaction.response.send_message(
+                embed=h.warn(f"**{pattern}** is already blocked."), ephemeral=True
+            )
+        await interaction.response.send_message(
+            embed=h.ok(f"Blocked **{pattern}** from the queue.", "🚫 Song Blocked")
+        )
+
+    @blocksong_group.command(
+        name="remove", description="Remove a pattern from the music block list."
+    )
+    @app_commands.describe(pattern="The exact blocked pattern to remove")
+    @app_commands.checks.has_permissions(manage_guild=True)
+    async def blocksong_slash_remove(
+        self, interaction: discord.Interaction, pattern: str
+    ):
+        removed = await db.remove_music_song_block(
+            interaction.guild_id, pattern.strip()
+        )
+        if not removed:
+            return await interaction.response.send_message(
+                embed=h.err(f"**{pattern}** isn't on the block list."), ephemeral=True
+            )
+        await interaction.response.send_message(
+            embed=h.ok(f"Unblocked **{pattern}**.", "✅ Unblocked")
+        )
+
+    @blocksong_group.command(
+        name="list", description="Show the server's music block list."
+    )
+    @app_commands.checks.has_permissions(manage_guild=True)
+    async def blocksong_slash_list(self, interaction: discord.Interaction):
+        patterns = await db.get_music_song_blocks(interaction.guild_id)
+        if not patterns:
+            return await interaction.response.send_message(
+                embed=h.info("Nothing is blocked.", "🚫 Song Block List"),
+                ephemeral=True,
+            )
+        body = "\n".join(f"`{i}.` {p}" for i, p in enumerate(patterns, 1))
+        await interaction.response.send_message(
+            embed=h.embed(f"🚫 Song Block List · {len(patterns)}", body[:4000], ACCENT),
+            ephemeral=True,
+        )
+
+    # ── /blockuser group (slash interface for music user block list) ───────────
+    blockuser_group = app_commands.Group(
+        name="blockuser",
+        description="Manage the server's music user block list.",
+        guild_only=True,
+    )
+
+    @blockuser_group.command(
+        name="add", description="Bar a member from using music commands here."
+    )
+    @app_commands.describe(member="The member to block from music")
+    @app_commands.checks.has_permissions(manage_guild=True)
+    async def blockuser_slash_add(
+        self, interaction: discord.Interaction, member: discord.Member
+    ):
+        added = await db.add_music_user_block(
+            interaction.guild_id, member.id, interaction.user.id
+        )
+        if not added:
+            return await interaction.response.send_message(
+                embed=h.warn(f"**{member.display_name}** is already blocked."),
+                ephemeral=True,
+            )
+        await interaction.response.send_message(
+            embed=h.ok(
+                f"**{member.display_name}** can no longer use music commands.",
+                "🚫 User Blocked",
+            )
+        )
+
+    @blockuser_group.command(
+        name="remove", description="Let a blocked member use music commands again."
+    )
+    @app_commands.describe(member="The member to unblock from music")
+    @app_commands.checks.has_permissions(manage_guild=True)
+    async def blockuser_slash_remove(
+        self, interaction: discord.Interaction, member: discord.Member
+    ):
+        removed = await db.remove_music_user_block(interaction.guild_id, member.id)
+        if not removed:
+            return await interaction.response.send_message(
+                embed=h.err(f"**{member.display_name}** isn't blocked."),
+                ephemeral=True,
+            )
+        await interaction.response.send_message(
             embed=h.ok(
                 f"**{member.display_name}** can use music commands again.",
                 "✅ Unblocked",
