@@ -3209,9 +3209,8 @@ class Music(commands.Cog):
             file=file,
         )
 
-    @commands.hybrid_command(
+    @commands.command(
         name="blocksong",
-        description="Block a song URL, word, or phrase from being queued.",
         extras={
             "category": "🎵 Music",
             "short": "Block a song from the queue",
@@ -3226,7 +3225,6 @@ class Music(commands.Cog):
             "example": "!blocksong rickroll",
         },
     )
-    @app_commands.describe(pattern="A URL, word, or phrase to block")
     @commands.has_permissions(manage_guild=True)
     @commands.guild_only()
     async def blocksong(self, ctx: commands.Context, *, pattern: str):
@@ -3244,9 +3242,8 @@ class Music(commands.Cog):
             embed=h.ok(f"Blocked **{pattern}** from the queue.", "🚫 Song Blocked")
         )
 
-    @commands.hybrid_command(
+    @commands.command(
         name="unblocksong",
-        description="Remove a pattern from the music block list.",
         extras={
             "category": "🎵 Music",
             "short": "Unblock a song pattern",
@@ -3257,7 +3254,6 @@ class Music(commands.Cog):
             "example": "!unblocksong rickroll",
         },
     )
-    @app_commands.describe(pattern="The exact blocked pattern to remove")
     @commands.has_permissions(manage_guild=True)
     @commands.guild_only()
     async def unblocksong(self, ctx: commands.Context, *, pattern: str):
@@ -3268,9 +3264,8 @@ class Music(commands.Cog):
             )
         await ctx.reply(embed=h.ok(f"Unblocked **{pattern}**.", "✅ Unblocked"))
 
-    @commands.hybrid_command(
+    @commands.command(
         name="blockedsongs",
-        description="Show the server's music block list.",
         extras={
             "category": "🎵 Music",
             "short": "List blocked song patterns",
@@ -3296,9 +3291,8 @@ class Music(commands.Cog):
             ephemeral=True,
         )
 
-    @commands.hybrid_command(
+    @commands.command(
         name="blockuser",
-        description="Bar a member from using music commands here.",
         extras={
             "category": "🎵 Music",
             "short": "Block a member from music",
@@ -3309,7 +3303,6 @@ class Music(commands.Cog):
             "example": "!blockuser @spammer",
         },
     )
-    @app_commands.describe(member="The member to block from music")
     @commands.has_permissions(manage_guild=True)
     @commands.guild_only()
     async def blockuser(self, ctx: commands.Context, member: discord.Member):
@@ -3326,9 +3319,8 @@ class Music(commands.Cog):
             )
         )
 
-    @commands.hybrid_command(
+    @commands.command(
         name="unblockuser",
-        description="Let a blocked member use music commands again.",
         extras={
             "category": "🎵 Music",
             "short": "Unblock a member",
@@ -3339,7 +3331,6 @@ class Music(commands.Cog):
             "example": "!unblockuser @user",
         },
     )
-    @app_commands.describe(member="The member to unblock")
     @commands.has_permissions(manage_guild=True)
     @commands.guild_only()
     async def unblockuser(self, ctx: commands.Context, member: discord.Member):
@@ -3350,6 +3341,122 @@ class Music(commands.Cog):
                 ephemeral=True,
             )
         await ctx.reply(
+            embed=h.ok(
+                f"**{member.display_name}** can use music commands again.",
+                "✅ Unblocked",
+            )
+        )
+
+    # ── /blocksong group (slash interface for song block list) ─────────────────
+    blocksong_group = app_commands.Group(
+        name="blocksong",
+        description="Manage the server's song block list.",
+        guild_only=True,
+    )
+
+    @blocksong_group.command(
+        name="add", description="Block a song URL, word, or phrase from being queued."
+    )
+    @app_commands.describe(pattern="A URL, word, or phrase to block")
+    @app_commands.checks.has_permissions(manage_guild=True)
+    async def blocksong_slash_add(self, interaction: discord.Interaction, pattern: str):
+        pattern = pattern.strip()
+        if len(pattern) < 2:
+            return await interaction.response.send_message(
+                embed=h.err("Give at least 2 characters to block."), ephemeral=True
+            )
+        added = await db.add_music_song_block(
+            interaction.guild_id, pattern, interaction.user.id
+        )
+        if not added:
+            return await interaction.response.send_message(
+                embed=h.warn(f"**{pattern}** is already blocked."), ephemeral=True
+            )
+        await interaction.response.send_message(
+            embed=h.ok(f"Blocked **{pattern}** from the queue.", "🚫 Song Blocked")
+        )
+
+    @blocksong_group.command(
+        name="remove", description="Remove a pattern from the music block list."
+    )
+    @app_commands.describe(pattern="The exact blocked pattern to remove")
+    @app_commands.checks.has_permissions(manage_guild=True)
+    async def blocksong_slash_remove(
+        self, interaction: discord.Interaction, pattern: str
+    ):
+        removed = await db.remove_music_song_block(
+            interaction.guild_id, pattern.strip()
+        )
+        if not removed:
+            return await interaction.response.send_message(
+                embed=h.err(f"**{pattern}** isn't on the block list."), ephemeral=True
+            )
+        await interaction.response.send_message(
+            embed=h.ok(f"Unblocked **{pattern}**.", "✅ Unblocked")
+        )
+
+    @blocksong_group.command(
+        name="list", description="Show the server's music block list."
+    )
+    @app_commands.checks.has_permissions(manage_guild=True)
+    async def blocksong_slash_list(self, interaction: discord.Interaction):
+        patterns = await db.get_music_song_blocks(interaction.guild_id)
+        if not patterns:
+            return await interaction.response.send_message(
+                embed=h.info("Nothing is blocked.", "🚫 Song Block List"),
+                ephemeral=True,
+            )
+        body = "\n".join(f"`{i}.` {p}" for i, p in enumerate(patterns, 1))
+        await interaction.response.send_message(
+            embed=h.embed(f"🚫 Song Block List · {len(patterns)}", body[:4000], ACCENT),
+            ephemeral=True,
+        )
+
+    # ── /blockuser group (slash interface for music user block list) ───────────
+    blockuser_group = app_commands.Group(
+        name="blockuser",
+        description="Manage the server's music user block list.",
+        guild_only=True,
+    )
+
+    @blockuser_group.command(
+        name="add", description="Bar a member from using music commands here."
+    )
+    @app_commands.describe(member="The member to block from music")
+    @app_commands.checks.has_permissions(manage_guild=True)
+    async def blockuser_slash_add(
+        self, interaction: discord.Interaction, member: discord.Member
+    ):
+        added = await db.add_music_user_block(
+            interaction.guild_id, member.id, interaction.user.id
+        )
+        if not added:
+            return await interaction.response.send_message(
+                embed=h.warn(f"**{member.display_name}** is already blocked."),
+                ephemeral=True,
+            )
+        await interaction.response.send_message(
+            embed=h.ok(
+                f"**{member.display_name}** can no longer use music commands.",
+                "🚫 User Blocked",
+            )
+        )
+
+    @blockuser_group.command(
+        name="remove", description="Let a blocked member use music commands again."
+    )
+    @app_commands.describe(member="The member to unblock from music")
+    @app_commands.checks.has_permissions(manage_guild=True)
+    async def blockuser_slash_remove(
+        self, interaction: discord.Interaction, member: discord.Member
+    ):
+        removed = await db.remove_music_user_block(interaction.guild_id, member.id)
+        if not removed:
+            return await interaction.response.send_message(
+                embed=h.err(f"**{member.display_name}** isn't blocked."),
+                ephemeral=True,
+            )
+        await interaction.response.send_message(
             embed=h.ok(
                 f"**{member.display_name}** can use music commands again.",
                 "✅ Unblocked",
