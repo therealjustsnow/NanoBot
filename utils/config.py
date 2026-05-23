@@ -98,7 +98,11 @@ _SCHEMA: dict[str, tuple[type | None, bool, str]] = {
     "token": (str, True, "Bot token from the Discord Developer Portal"),
     "default_prefix": (str, False, "Command prefix (max 5 chars, no spaces)"),
     "owner_id": (None, False, "Your Discord user ID (int or blank)"),
-    "error_channel_id": (None, False, "Channel ID to receive Python warnings and unhandled asyncio errors (int or blank)"),
+    "error_channel_id": (
+        None,
+        False,
+        "Channel ID to receive Python warnings and unhandled asyncio errors (int or blank)",
+    ),
     "log_level": (str, False, "DEBUG / INFO / WARNING / ERROR / CRITICAL"),
     "log_http": (bool, False, "Log raw HTTP requests (true/false)"),
     "topgg_token": (str, False, "top.gg AUTH token"),

@@ -253,9 +253,7 @@ class NanoBot(commands.Bot):
         def _warn_hook(message, category, filename, lineno, file=None, line=None):
             orig_showwarning(message, category, filename, lineno, file, line)
             text = warnings.formatwarning(message, category, filename, lineno, line)
-            asyncio.create_task(
-                bot_ref._post_error(f"⚠️ {category.__name__}", text)
-            )
+            asyncio.create_task(bot_ref._post_error(f"⚠️ {category.__name__}", text))
 
         warnings.showwarning = _warn_hook
 
