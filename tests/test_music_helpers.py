@@ -67,6 +67,7 @@ _split_artist_title = _ns["_split_artist_title"]
 # _apply_delta
 # ---------------------------------------------------------------------------
 
+
 class TestApplyDelta:
     def test_absolute_int(self):
         assert _apply_delta("80", 50.0) == 80.0
@@ -103,6 +104,7 @@ class TestApplyDelta:
 # _fmt_time
 # ---------------------------------------------------------------------------
 
+
 class TestFmtTime:
     def test_none_returns_live(self):
         assert _fmt_time(None) == "🔴 LIVE"
@@ -132,6 +134,7 @@ class TestFmtTime:
 # ---------------------------------------------------------------------------
 # _progress_bar
 # ---------------------------------------------------------------------------
+
 
 class TestProgressBar:
     def test_no_total_live_bar_starts_with_slider(self):
@@ -172,6 +175,7 @@ class TestProgressBar:
 # _parse_timestamp
 # ---------------------------------------------------------------------------
 
+
 class TestParseTimestamp:
     def test_plain_seconds(self):
         assert _parse_timestamp("90") == 90
@@ -205,6 +209,7 @@ class TestParseTimestamp:
 # ---------------------------------------------------------------------------
 # _spotify_cover
 # ---------------------------------------------------------------------------
+
 
 class TestSpotifyCover:
     def test_non_dict_string_returns_none(self):
@@ -245,6 +250,7 @@ class TestSpotifyCover:
 # ---------------------------------------------------------------------------
 # _split_artist_title
 # ---------------------------------------------------------------------------
+
 
 class TestSplitArtistTitle:
     def test_simple_split(self):
