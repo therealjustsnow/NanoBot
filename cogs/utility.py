@@ -114,11 +114,11 @@ _SLASH_GROUPS: list[dict] = [
         "aliases": [],
         "category": "🛡️ Auto Mod",
         "short": "Passive rule-based message moderation",
-        "usage": "/automod <enable|disable|rule|spam|caps|mentions|badword|regex|ignore|status>",
+        "usage": "/automod <enable|disable|rule|spam|caps|mentions|badword|regex|timeout|attachments|attachword|ignore|status>",
         "desc": (
             "Watches every message and enforces configurable rules automatically.\n\n"
-            "**Rules:** spam, invites, links, caps, mentions, badwords, regex\n"
-            "**Actions per rule:** delete (silent) · warn (delete + warning) · timeout (delete + 10-min timeout)\n\n"
+            "**Rules:** spam, invites, links, caps, mentions, badwords, regex, word+attachment\n"
+            "**Actions per rule:** delete (silent) · warn (delete + warning) · timeout (delete + Discord timeout) · kick · softban\n\n"
             "Exempt channels and roles are ignored for all rules."
         ),
         "args": [
@@ -129,6 +129,15 @@ _SLASH_GROUPS: list[dict] = [
             ("mentions <limit>", "Set per-message mention limit"),
             ("badword add|remove|list [word]", "Manage the custom word filter"),
             ("regex add|remove|list|test", "Manage regex patterns"),
+            ("timeout <minutes>", "Set how long the timeout action lasts (1–10080)"),
+            (
+                "attachments <count>",
+                "Min attachments that trigger the word+attachment rule",
+            ),
+            (
+                "attachword add|remove|list [word]",
+                "Manage the word+attachment filter list",
+            ),
             (
                 "ignore add|remove <channel or role>",
                 "Exempt a channel or role from all rules",
@@ -143,7 +152,7 @@ _SLASH_GROUPS: list[dict] = [
         "aliases": [],
         "category": "🎛️ Role Panels",
         "short": "Button-based self-assignable role panels",
-        "usage": "/roles panel <create|post|edit|delete|list> | /roles <add|remove|autogen>",
+        "usage": "/roles panel <create|post|edit|delete|list|reload> | /roles <add|remove|autogen>",
         "desc": (
             "Create persistent button panels that let members assign their own roles. "
             "Panels survive bot restarts.\n\n"

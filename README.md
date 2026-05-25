@@ -37,9 +37,9 @@ NanoBot fixes that.
 - Bulk message purge with filters (bots, user, contains, starts/ends with)
 
 **AutoMod**
-- Six passive rules: spam, invites, links, caps, mentions, bad words
+- Eight passive rules: spam, invites, links, caps, mentions, bad words, regex, word + attachment
 - Regex pattern matching with test-before-you-save
-- Three actions per rule: delete, warn, timeout
+- Five actions per rule: delete, warn, timeout, kick, softban
 - Per-server exempt channels and roles
 
 **Audit Log**
@@ -100,7 +100,7 @@ NanoBot fixes that.
 - Owner-only admin: hot-reload, restart, git pull update, slash sync
 - Per-server custom prefix
 - Configurable log level (no restart needed)
-- GitHub Actions CI with Black auto-formatting
+- GitHub Actions CI: Black auto-formatting, pytest suite, branch protection
 
 ---
 
@@ -222,7 +222,7 @@ python run.py
 python main.py
 ```
 
-Logs are written to `logs/nanobot.log` (rotating, max 5 MB x 3 files).
+Logs are written to `logs/nanobot.log` (rotating, max 50 KB x 5 files).
 
 ---
 
@@ -340,7 +340,7 @@ Slash commands use the `/warn` group. Prefix commands stay flat.
 
 Passive rule enforcement. Watches every message and acts without manual intervention. All commands require **Manage Server**.
 
-**Seven individually toggleable rules:**
+**Eight individually toggleable rules:**
 
 | Rule | What it catches |
 |------|----------------|
@@ -351,8 +351,9 @@ Passive rule enforcement. Watches every message and acts without manual interven
 | `mentions` | Too many @mentions in a single message |
 | `badwords` | Per-server word list (case-insensitive substring match) |
 | `regex` | Custom regex patterns with test-before-you-save |
+| `attachment_word` | A filtered word plus N+ attachments in the same message |
 
-**Three actions per rule (set independently):** `delete`, `warn` (adds a formal warning), `timeout` (10-minute Discord timeout).
+**Five actions per rule (set independently):** `delete`, `warn` (adds a formal warning), `timeout` (10-minute Discord timeout), `kick`, `softban`.
 
 Members with Manage Messages are always exempt. Additional exempt channels and roles can be configured.
 
@@ -627,8 +628,15 @@ All data lives in a single `data/nanobot.db` SQLite file. No external database, 
 | `automod_config` | Per-guild AutoMod master switch, rule states, actions, thresholds, exemptions |
 | `automod_badwords` | Per-guild bad word filter list |
 | `automod_regex_patterns` | Per-guild regex filter patterns |
+| `automod_attachment_words` | Per-guild word + attachment filter list |
+| `music_settings` | Per-guild 24/7 mode, volume, and other music toggles |
+| `music_queue` | Persisted per-guild queue for resume on restart |
+| `music_history` | Recently played tracks per guild |
+| `music_autoplaylist` | Per-guild autoplay seed tracks |
+| `music_song_blocklist` | Per-guild blocked songs |
+| `music_user_blocklist` | Per-guild blocked requesters |
 
-Logs: `logs/nanobot.log` (5 MB rotating, 3 files kept).
+Logs: `logs/nanobot.log` (50 KB rotating, 5 files kept).
 
 ---
 
@@ -670,7 +678,9 @@ NanoBot/
 │   ├── fun.py             ← 26 social + 33 reaction commands, ship, 8-ball (nekos.best)
 │   ├── images.py          ← husbando / kitsune / neko / waifu (nekos.best)
 │   ├── eli5.py            ← AI explanations via Groq (Llama 3.1 8B)
-│   └── votes.py           ← Bot list integrations (top.gg, DBL, discord.bots.gg)
+│   ├── music.py           ← Voice player: yt-dlp streaming, queue, autoplay, 24/7
+│   ├── votes.py           ← Bot list integrations (top.gg, DBL, discord.bots.gg)
+│   └── debug.py           ← Owner-only debug REPL / shell
 └── utils/
     ├── checks.py          ← Combined user + bot permission decorators
     ├── config.py          ← Config loader and validation
