@@ -95,10 +95,16 @@ _RE_URL = re.compile(
 )
 
 # Cache for user-defined per-guild regex patterns (keyed by raw pattern string).
-# Avoids recompiling the same pattern on every incoming message.
-# Entries are never explicitly evicted — patterns are short strings and guilds
-# tend to have at most a handful, so memory growth is negligible.
+# Avoids recompiling the same pattern on every incoming message. Bounded so a
+# guild that churns through many patterns can't grow it without limit.
 _user_regex_cache: dict[str, re.Pattern] = {}
+_REGEX_CACHE_MAX = 512
+
+# Guard against catastrophic backtracking (ReDoS) from admin-supplied patterns:
+# matching runs in a worker thread with a hard wall-clock timeout, and we only
+# scan a bounded slice of the message so the event loop can never freeze.
+_REGEX_TIMEOUT = 0.5
+_MAX_REGEX_INPUT = 2000
 
 
 # ── In-memory spam tracker ─────────────────────────────────────────────────────
@@ -172,12 +178,50 @@ def _matches_regex(content: str, patterns: list[dict]) -> str | None:
             compiled = _user_regex_cache.get(raw)
             if compiled is None:
                 compiled = re.compile(raw, re.IGNORECASE)
+                if len(_user_regex_cache) >= _REGEX_CACHE_MAX:
+                    _user_regex_cache.clear()
                 _user_regex_cache[raw] = compiled
             if compiled.search(content):
                 return p["label"] or p["pattern"]
         except re.error:
             pass
     return None
+
+
+# Catches the most common catastrophic-backtracking shape: a quantifier applied
+# to a group that itself ends in a quantifier, e.g. (a+)+ , (a*)* , ([a-z]+)* .
+# Not exhaustive, but blocks the easy footguns at add-time.
+_REDOS_RE = re.compile(r"\([^)]*[+*}]\s*\)\s*[+*{]")
+_MAX_PATTERN_LEN = 400
+
+
+def _is_risky_regex(pattern: str) -> bool:
+    """Heuristic: True if the pattern looks prone to catastrophic backtracking."""
+    return len(pattern) > _MAX_PATTERN_LEN or bool(_REDOS_RE.search(pattern))
+
+
+async def _matches_regex_safe(content: str, patterns: list[dict]) -> str | None:
+    """Run _matches_regex in a worker thread under a wall-clock timeout.
+
+    A malicious or accidental catastrophic-backtracking pattern can hang the
+    regex engine; offloading to a thread keeps the event loop responsive, and
+    the timeout bounds how long any single check can run.
+    """
+    if not patterns:
+        return None
+    snippet = content[:_MAX_REGEX_INPUT]
+    loop = asyncio.get_running_loop()
+    try:
+        return await asyncio.wait_for(
+            loop.run_in_executor(None, _matches_regex, snippet, patterns),
+            timeout=_REGEX_TIMEOUT,
+        )
+    except asyncio.TimeoutError:
+        log.warning(
+            "automod: regex match exceeded %.1fs — skipping (possible ReDoS pattern)",
+            _REGEX_TIMEOUT,
+        )
+        return None
 
 
 # ── Action executor ────────────────────────────────────────────────────────────
@@ -890,6 +934,17 @@ class AutoMod(commands.Cog):
             )
             return
 
+        if _is_risky_regex(pattern):
+            await interaction.response.send_message(
+                embed=h.err(
+                    "That pattern looks prone to catastrophic backtracking "
+                    "(nested quantifiers like `(a+)+`) or is too long. Please "
+                    "simplify it — such patterns can stall message processing."
+                ),
+                ephemeral=True,
+            )
+            return
+
         added = await db.add_automod_regex(interaction.guild_id, pattern, label)
         self._invalidate(interaction.guild_id)
         if added:
@@ -1190,7 +1245,7 @@ class AutoMod(commands.Cog):
         # ── Regex filter ──────────────────────────────────────────────────────
         r = rules.get("regex", {})
         if r.get("enabled"):
-            match = _matches_regex(content, cfg.get("_regex_patterns", []))
+            match = await _matches_regex_safe(content, cfg.get("_regex_patterns", []))
             if match:
                 await _execute_action(
                     message,

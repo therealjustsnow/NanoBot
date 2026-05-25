@@ -686,8 +686,25 @@ class GuildPlayer:
         self._dl_files: set[str] = set()  # predownloaded file paths to clean up
 
         self._destroyed = False
+        # Strong refs to fire-and-forget tasks (history, presence, etc.) so they
+        # aren't garbage-collected mid-flight, with their exceptions logged.
+        self._bg_tasks: set[asyncio.Task] = set()
         self._loop_task = self.bot.loop.create_task(self._player_loop())
         self._refresh_task = self.bot.loop.create_task(self._refresh_loop())
+
+    def _spawn_bg(self, coro) -> None:
+        """Track a background task and log any exception it raises."""
+
+        def _done(task: asyncio.Task) -> None:
+            self._bg_tasks.discard(task)
+            if not task.cancelled():
+                exc = task.exception()
+                if exc:
+                    log.warning("music background task failed: %s", exc)
+
+        task = self.bot.loop.create_task(coro)
+        self._bg_tasks.add(task)
+        task.add_done_callback(_done)
 
     # ── voice helpers ────────────────────────────────────────────────────────
     @property
@@ -795,7 +812,7 @@ class GuildPlayer:
         if self._save_handle is not None:
             self._save_handle.cancel()
         self._save_handle = self.bot.loop.call_later(
-            1.5, lambda: self.bot.loop.create_task(self._save_state())
+            1.5, lambda: self._spawn_bg(self._save_state())
         )
 
     async def _save_state(self) -> None:
@@ -1044,7 +1061,7 @@ class GuildPlayer:
                 self._schedule_save()
                 self._start_predownload()
                 self._record_history(track)
-                self.bot.loop.create_task(self.cog._refresh_presence())
+                self._spawn_bg(self.cog._refresh_presence())
 
                 await self._post_now_playing()
                 await self._next.wait()
@@ -1128,7 +1145,7 @@ class GuildPlayer:
     def _record_history(self, track: Track) -> None:
         if not self.cog.save_history():
             return
-        self.bot.loop.create_task(
+        self._spawn_bg(
             db.add_music_history(
                 self.guild.id, track.title, track.webpage_url, track.requester_id
             )
@@ -1304,6 +1321,10 @@ class GuildPlayer:
             if task and task is not asyncio.current_task():
                 task.cancel()
 
+        for task in list(self._bg_tasks):
+            if task is not asyncio.current_task():
+                task.cancel()
+
         await self._retire_now_playing(delete=False)
 
         if self.voice and self.voice.is_connected():
@@ -1336,6 +1357,7 @@ class Music(commands.Cog):
         self.bot = bot
         self.players: dict[int, GuildPlayer] = {}
         self._ratelimit_until: float = 0.0  # yt-dlp 429 back-off (monotonic-ish)
+        self._bg_tasks: set[asyncio.Task] = set()
         # Wipe leftover predownloads from a previous run — unless the cache is
         # being kept on purpose (music_save_videos).
         if not self.save_videos():
@@ -1344,6 +1366,20 @@ class Music(commands.Cog):
                     shutil.rmtree(_MUSIC_CACHE_DIR, ignore_errors=True)
             except OSError:
                 pass
+
+    def _spawn_bg(self, coro) -> None:
+        """Track a fire-and-forget task and log any exception it raises."""
+
+        def _done(task: asyncio.Task) -> None:
+            self._bg_tasks.discard(task)
+            if not task.cancelled():
+                exc = task.exception()
+                if exc:
+                    log.warning("music cog background task failed: %s", exc)
+
+        task = self.bot.loop.create_task(coro)
+        self._bg_tasks.add(task)
+        task.add_done_callback(_done)
 
     async def cog_unload(self) -> None:
         # persist_clear=False so a persisted queue survives a reload/restart.
@@ -1447,7 +1483,7 @@ class Music(commands.Cog):
             log.warning("yt-dlp rate-limited — backing off %ds", cooldown)
             if self.ratelimit_leave():
                 for player in list(self.players.values()):
-                    self.bot.loop.create_task(player.destroy(reason="rate-limited"))
+                    self._spawn_bg(player.destroy(reason="rate-limited"))
         return True
 
     # ── presence: "Watching <song>" while playing, else watching the server ─────
@@ -1863,10 +1899,10 @@ class Music(commands.Cog):
             )
             return None
 
-        player = self.get_player(ctx.guild)
-        player.text_channel = ctx.channel
-        player.stay_connected = await db.get_music_stay(ctx.guild.id)
-
+        # Establish the voice connection BEFORE creating the player. get_player
+        # spins up background loop/refresh tasks; if we created it first and the
+        # connect failed, that player would linger with live tasks and no voice
+        # client until the idle timeout reaped it.
         voice = ctx.guild.voice_client
         if voice is None:
             if not join:
@@ -1883,8 +1919,19 @@ class Music(commands.Cog):
                 )
                 return None
         elif voice.channel != author_vc:
-            await voice.move_to(author_vc)
+            try:
+                await voice.move_to(author_vc)
+            except Exception as exc:
+                log.warning("Move failed in %s: %s", ctx.guild.id, exc)
+                await ctx.reply(
+                    embed=h.err(f"Couldn't move to your channel.\n`{exc}`"),
+                    ephemeral=True,
+                )
+                return None
 
+        player = self.get_player(ctx.guild)
+        player.text_channel = ctx.channel
+        player.stay_connected = await db.get_music_stay(ctx.guild.id)
         return player
 
     async def _resolve_for(

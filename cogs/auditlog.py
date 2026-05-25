@@ -69,6 +69,24 @@ EVENT_LABELS: dict[str, str] = {
 }
 
 
+# In-memory cache of per-guild auditlog config. Every server event listener
+# calls _get_log_channel, so hitting the DB each time would mean a query per
+# message edit/delete/etc. Invalidated on any config mutation.
+_config_cache: dict[int, dict | None] = {}
+
+
+def _invalidate_auditlog_cache(guild_id: int) -> None:
+    _config_cache.pop(guild_id, None)
+
+
+async def _get_config_cached(guild_id: int) -> dict | None:
+    if guild_id in _config_cache:
+        return _config_cache[guild_id]
+    cfg = await db.get_auditlog_config(guild_id)
+    _config_cache[guild_id] = cfg
+    return cfg
+
+
 # ── Helper: fetch log channel for a guild ─────────────────────────────────────
 async def _get_log_channel(
     bot: commands.Bot,
@@ -79,7 +97,7 @@ async def _get_log_channel(
     Return the audit log channel for this guild if logging is enabled
     and the given event is toggled on. Returns None otherwise.
     """
-    cfg = await db.get_auditlog_config(guild.id)
+    cfg = await _get_config_cached(guild.id)
     if not cfg or not cfg["enabled"]:
         return None
     if event_key not in cfg["events"]:
@@ -121,6 +139,7 @@ class EventToggleSelect(discord.ui.Select):
     async def callback(self, interaction: discord.Interaction):
         chosen = set(self.values)
         await db.set_auditlog_events(interaction.guild_id, chosen)
+        _invalidate_auditlog_cache(interaction.guild_id)
 
         if chosen:
             lines = "\n".join(f"• {EVENT_LABELS[k]}" for k in ALL_EVENTS if k in chosen)
@@ -179,6 +198,7 @@ class AuditLog(commands.Cog):
         channel: discord.TextChannel,
     ):
         await db.set_auditlog_channel(interaction.guild_id, channel.id)
+        _invalidate_auditlog_cache(interaction.guild_id)
         await interaction.response.send_message(
             embed=h.ok(
                 f"Audit log channel set to {channel.mention}.\n"
@@ -202,6 +222,7 @@ class AuditLog(commands.Cog):
             )
             return
         await db.set_auditlog_enabled(interaction.guild_id, True)
+        _invalidate_auditlog_cache(interaction.guild_id)
         ch = interaction.guild.get_channel(int(cfg["channel_id"]))
         mention = ch.mention if ch else f"`{cfg['channel_id']}`"
         await interaction.response.send_message(
@@ -213,6 +234,7 @@ class AuditLog(commands.Cog):
     @has_admin_perms()
     async def al_disable(self, interaction: discord.Interaction):
         await db.set_auditlog_enabled(interaction.guild_id, False)
+        _invalidate_auditlog_cache(interaction.guild_id)
         await interaction.response.send_message(
             embed=h.ok(
                 "Audit log **disabled**. No events will be logged.", "🔕 Audit Log Off"

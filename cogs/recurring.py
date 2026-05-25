@@ -136,36 +136,53 @@ class Recurring(commands.Cog):
                 log.debug(f"Recurring {rid} is paused — skipping restore")
                 continue
 
-            remaining = info["next_due"] - now
-
-            if remaining <= 0:
-                # Fire immediately; _fire will advance next_due past now
-                asyncio.create_task(self._fire(info, delay=0))
-                log.info(f"Overdue recurring {rid} — firing immediately")
+            if info["next_due"] - now <= 0:
                 overdue += 1
             else:
-                self._tasks[rid] = asyncio.create_task(
-                    self._fire(info, delay=remaining)
-                )
-                log.debug(f"Restored recurring {rid} — fires in {remaining:.0f}s")
                 restored += 1
+            self._spawn(info)
 
         log.info(f"Recurring: restored {restored} active, fired {overdue} overdue")
 
+    def _spawn(self, info: dict) -> None:
+        """Create and track the fire task for a recurring reminder."""
+        self._tasks[info["id"]] = asyncio.create_task(self._fire(info))
+
+    @staticmethod
+    async def _sleep_until(due: float) -> None:
+        """Sleep until wall-clock `due` in <=1h chunks, re-anchoring each time.
+        Avoids a single fragile multi-month sleep."""
+        chunk = 3600
+        while True:
+            remaining = due - _now()
+            if remaining <= 0:
+                return
+            await asyncio.sleep(min(remaining, chunk))
+
     # ── Background fire ────────────────────────────────────────────────────────
 
-    async def _fire(self, info: dict, *, delay: float):
-        """Sleep, deliver the reminder, advance next_due, then self-reschedule."""
-        if delay > 0:
-            await asyncio.sleep(delay)
+    async def _fire(self, info: dict):
+        """Sleep until due, deliver, advance next_due, then self-reschedule."""
+        rid = info["id"]
+        try:
+            await self._sleep_until(info["next_due"])
 
-        # Re-fetch from DB — ensures we see any pause/cancel that happened
-        # while we were sleeping
-        fresh = await db.get_recurring(info["id"])
-        if fresh is None or fresh["paused"]:
-            self._tasks.pop(info["id"], None)
-            return
+            # Re-fetch from DB — ensures we see any pause/cancel that happened
+            # while we were sleeping
+            fresh = await db.get_recurring(rid)
+            if fresh is None or fresh["paused"]:
+                self._tasks.pop(rid, None)
+                return
 
+            await self._deliver(fresh)
+            await self._reschedule(fresh)
+        except asyncio.CancelledError:
+            raise
+        except Exception:
+            log.exception(f"Recurring {rid}: fire failed")
+            self._tasks.pop(rid, None)
+
+    async def _deliver(self, fresh: dict) -> None:
         rid = fresh["id"]
         target_id = int(fresh["target_id"])
         set_by_id = int(fresh["set_by_id"])
@@ -174,7 +191,6 @@ class Recurring(commands.Cog):
         use_dm = fresh.get("dm", True)
         label = fresh.get("label")
         interval = fresh["interval"]
-        fire_count = fresh["fire_count"] + 1
 
         e = discord.Embed(
             title=f"🔁 {label}" if label else "🔁 Recurring Reminder",
@@ -193,13 +209,20 @@ class Recurring(commands.Cog):
 
         # ── DM attempt ────────────────────────────────────────────────────────
         if use_dm:
-            user = self.bot.get_user(target_id) or await self.bot.fetch_user(target_id)
+            user = self.bot.get_user(target_id)
+            if user is None:
+                try:
+                    user = await self.bot.fetch_user(target_id)
+                except discord.HTTPException:
+                    user = None
             if user:
                 try:
                     await user.send(embed=e)
                     delivered = True
                 except discord.Forbidden:
                     pass  # DMs closed — fall through to channel
+                except discord.HTTPException as exc:
+                    log.warning(f"Recurring {rid}: DM send failed: {exc}")
 
         # ── Channel fallback ──────────────────────────────────────────────────
         if not delivered:
@@ -216,26 +239,29 @@ class Recurring(commands.Cog):
                 f"Recurring {rid} for {target_id} could not be delivered anywhere"
             )
 
-        # ── Advance next_due ──────────────────────────────────────────────────
+    async def _reschedule(self, fresh: dict) -> None:
         # Advance by one interval, then skip ahead if multiple cycles were
-        # missed (e.g. bot was down for several days). This ensures the next
-        # fire is always in the future without rapid catch-up spam.
+        # missed (e.g. bot was down for several days). Always lands in the
+        # future without rapid catch-up spam.
+        rid = fresh["id"]
+        interval = fresh["interval"]
+        if interval <= 0:
+            log.error(f"Recurring {rid}: non-positive interval {interval} — dropping")
+            self._tasks.pop(rid, None)
+            return
+
         now = _now()
         next_due = fresh["next_due"] + interval
         while next_due <= now:
             next_due += interval
 
         fresh["next_due"] = next_due
-        fresh["fire_count"] = fire_count
+        fresh["fire_count"] = fresh["fire_count"] + 1
         await db.update_recurring(fresh)
-
-        # ── Schedule next fire ────────────────────────────────────────────────
-        self._tasks[rid] = asyncio.create_task(
-            self._fire(fresh, delay=next_due - _now())
-        )
+        self._spawn(fresh)
         log.debug(
-            f"Recurring {rid} fired (×{fire_count}), "
-            f"next in {h.fmt_interval(int(next_due - now))}"
+            f"Recurring {rid} fired (×{fresh['fire_count']}), "
+            f"next in {h.fmt_interval(int(next_due - _now()))}"
         )
 
     # ── Scheduling ─────────────────────────────────────────────────────────────
@@ -243,9 +269,7 @@ class Recurring(commands.Cog):
     async def _schedule(self, info: dict):
         """Persist a new recurring reminder and start its asyncio task."""
         await db.set_recurring(info)
-        self._tasks[info["id"]] = asyncio.create_task(
-            self._fire(info, delay=max(0.0, info["next_due"] - _now()))
-        )
+        self._spawn(info)
 
     # ══════════════════════════════════════════════════════════════════════════
     #  /every  — create a recurring reminder
@@ -577,9 +601,7 @@ class Recurring(commands.Cog):
         info["paused"] = False
         await db.update_recurring(info)
 
-        self._tasks[rid] = asyncio.create_task(
-            self._fire(info, delay=next_due - _now())
-        )
+        self._spawn(info)
 
         due_dt = datetime.fromtimestamp(next_due, tz=timezone.utc)
         label = info.get("label") or info["message"][:60]

@@ -136,7 +136,15 @@ def _wrap_text(draw: "ImageDraw.ImageDraw", text: str, font, max_width: int) -> 
     return "\n".join(lines)
 
 
-async def _make_overlay_image(image_url: str, text: str) -> discord.File | None:
+# Cap on the welcome-banner source image. The URL is admin-configured but
+# fetched server-side, so bound how many bytes we'll pull to avoid a huge
+# download stalling memory.
+_MAX_IMAGE_BYTES = 8 * 1024 * 1024  # 8 MB
+
+
+async def _make_overlay_image(
+    session: aiohttp.ClientSession, image_url: str, text: str
+) -> discord.File | None:
     """
     Download *image_url*, render *text* on it, and return a discord.File.
     Returns None on any error (network, decode, draw) so the caller can
@@ -146,16 +154,20 @@ async def _make_overlay_image(image_url: str, text: str) -> discord.File | None:
         return None
 
     try:
-        async with aiohttp.ClientSession() as session:
-            async with session.get(
-                image_url, timeout=aiohttp.ClientTimeout(total=10)
-            ) as resp:
-                if resp.status != 200:
-                    log.warning(
-                        f"Image overlay: HTTP {resp.status} fetching {image_url}"
-                    )
-                    return None
-                raw = await resp.read()
+        async with session.get(
+            image_url, timeout=aiohttp.ClientTimeout(total=10)
+        ) as resp:
+            if resp.status != 200:
+                log.warning(f"Image overlay: HTTP {resp.status} fetching {image_url}")
+                return None
+            length = resp.headers.get("Content-Length")
+            if length and length.isdigit() and int(length) > _MAX_IMAGE_BYTES:
+                log.warning(f"Image overlay: {image_url} too large ({length} bytes)")
+                return None
+            raw = await resp.content.read(_MAX_IMAGE_BYTES + 1)
+            if len(raw) > _MAX_IMAGE_BYTES:
+                log.warning(f"Image overlay: {image_url} exceeded {_MAX_IMAGE_BYTES} B")
+                return None
 
         img = Image.open(io.BytesIO(raw)).convert("RGBA")
         w, h_px = img.size
@@ -212,6 +224,7 @@ async def _send_event(
     member: discord.Member,
     cfg: dict,
     event: str,  # "welcome" | "leave"
+    session: aiohttp.ClientSession | None = None,
 ):
     """Build and deliver a welcome or leave embed."""
     default_title = "👋 Welcome!" if event == "welcome" else "👋 Goodbye!"
@@ -243,8 +256,10 @@ async def _send_event(
     if cfg.get("image_url"):
         raw_image_text = cfg.get("image_text") or ""
         image_text = _fill(raw_image_text.replace("\\n", "\n"), member)
-        if image_text:
-            image_file = await _make_overlay_image(cfg["image_url"], image_text)
+        if image_text and session is not None:
+            image_file = await _make_overlay_image(
+                session, cfg["image_url"], image_text
+            )
 
         if image_file:
             e.set_image(url="attachment://welcome_banner.png")
@@ -268,6 +283,8 @@ async def _send_event(
             return
         except discord.Forbidden:
             log.debug(f"{event} DM failed for {member} ({member.id}) — closed DMs")
+        except discord.HTTPException as exc:
+            log.warning(f"{event} DM to {member} ({member.id}) failed: {exc}")
 
     # Channel delivery
     channel: discord.TextChannel | None = None
@@ -282,6 +299,10 @@ async def _send_event(
             log.info(f"{event} message sent to #{channel} in {member.guild}")
         except discord.Forbidden:
             log.warning(f"Can't send {event} message to #{channel} in {member.guild}")
+        except discord.HTTPException as exc:
+            log.warning(
+                f"{event} message to #{channel} in {member.guild} failed: {exc}"
+            )
 
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -290,6 +311,14 @@ class Welcome(commands.Cog):
 
     def __init__(self, bot: commands.Bot):
         self.bot = bot
+        self._session: aiohttp.ClientSession | None = None
+
+    async def cog_load(self):
+        self._session = aiohttp.ClientSession()
+
+    async def cog_unload(self):
+        if self._session and not self._session.closed:
+            await self._session.close()
 
     # ── Events ─────────────────────────────────────────────────────────────────
     @commands.Cog.listener()
@@ -298,7 +327,7 @@ class Welcome(commands.Cog):
             return
         cfg = await db.get_welcome_config(member.guild.id)
         if cfg and cfg["enabled"]:
-            await _send_event(self.bot, member, cfg, "welcome")
+            await _send_event(self.bot, member, cfg, "welcome", self._session)
 
     @commands.Cog.listener()
     async def on_member_remove(self, member: discord.Member):
@@ -306,7 +335,7 @@ class Welcome(commands.Cog):
             return
         cfg = await db.get_leave_config(member.guild.id)
         if cfg and cfg["enabled"]:
-            await _send_event(self.bot, member, cfg, "leave")
+            await _send_event(self.bot, member, cfg, "leave", self._session)
 
     # ══════════════════════════════════════════════════════════════════════════
     #  /welcome group
@@ -395,7 +424,7 @@ class Welcome(commands.Cog):
         await ctx.reply(
             embed=h.info("Sending test welcome message...", "🧪 Test"), ephemeral=True
         )
-        await _send_event(self.bot, ctx.author, cfg, "welcome")  # type: ignore
+        await _send_event(self.bot, ctx.author, cfg, "welcome", self._session)  # type: ignore
 
     # ══════════════════════════════════════════════════════════════════════════
     #  /leave group
@@ -484,7 +513,7 @@ class Welcome(commands.Cog):
         await ctx.reply(
             embed=h.info("Sending test leave message...", "🧪 Test"), ephemeral=True
         )
-        await _send_event(self.bot, ctx.author, cfg, "leave")  # type: ignore
+        await _send_event(self.bot, ctx.author, cfg, "leave", self._session)  # type: ignore
 
     # ── Shared implementation ──────────────────────────────────────────────────
     async def _show_config(self, ctx: commands.Context, event: str):

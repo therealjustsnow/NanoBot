@@ -85,6 +85,9 @@ class Warnings(commands.Cog):
                 )
             except discord.Forbidden:
                 action_taken = "\u26a0\ufe0f Auto-ban threshold reached but I lack Ban Members permission."
+            except discord.HTTPException as exc:
+                action_taken = "\u26a0\ufe0f Auto-ban threshold reached but the action failed (try again)."
+                log.error(f"Auto-ban failed for {user} ({user.id}) in {guild}: {exc}")
 
         elif cfg["kick_at"] and count >= cfg["kick_at"]:
             try:
@@ -97,6 +100,9 @@ class Warnings(commands.Cog):
                 )
             except discord.Forbidden:
                 action_taken = "\u26a0\ufe0f Auto-kick threshold reached but I lack Kick Members permission."
+            except discord.HTTPException as exc:
+                action_taken = "\u26a0\ufe0f Auto-kick threshold reached but the action failed (try again)."
+                log.error(f"Auto-kick failed for {user} ({user.id}) in {guild}: {exc}")
 
         if action_taken:
             lines.append(action_taken)
