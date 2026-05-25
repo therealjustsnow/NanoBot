@@ -3,13 +3,23 @@ cogs/utility.py
 Bot utility & configuration commands.
 
 Commands:
-  help    — !help (overview) or !help <cmd> (detailed)
-  prefix  — view / change the guild prefix
-  ping    — latency check
-  info    — runtime stats
-  invite  — bot invite link with correct permissions
-  about   — what NanoBot is and why it exists
-  stats   — NanoBots stats since uptime
+  help     — !help (overview) or !help <cmd> (detailed)
+  prefix   — view / change the guild prefix
+  ping     — latency check
+  support  — link to the support server
+  mc       — quick member count for this server
+  id       — get the ID of a user, role, or channel
+  invite   — bot invite link with correct permissions
+  about    — what NanoBot is and why it exists
+  server   — info card for this server
+  user     — public info card for a user
+  avatar   — show a user's avatar
+  banner   — show a user's profile banner
+  roleinfo — info card for a server role
+  uptime   — how long NanoBot has been running
+  stats    — bot statistics
+  source   — show source code for a command or symbol
+  firstmsg — link to the first message in a channel
 """
 
 import ast

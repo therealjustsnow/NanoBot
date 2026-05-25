@@ -8,8 +8,9 @@ Run ONCE before starting NanoBot for the first time after upgrading:
 
     python migrate.py
 
-Safe to run multiple times — uses INSERT OR IGNORE / ON CONFLICT DO NOTHING
-so nothing is duplicated if you run it twice.
+Safe to run multiple times — idempotent. Most tables use INSERT OR IGNORE /
+ON CONFLICT DO NOTHING; the notes table (no natural unique key) guards with
+INSERT ... WHERE NOT EXISTS. Either way nothing is duplicated on re-run.
 """
 
 import json

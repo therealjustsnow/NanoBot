@@ -28,6 +28,7 @@ Commands:
   notes            — view mod notes for a user
   clearnotes       — wipe all notes for a user
   last             — show who last sent a message here
+  modcheck         — combined user info + warnings + notes in one embed
 """
 
 import asyncio

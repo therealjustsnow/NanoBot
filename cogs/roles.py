@@ -14,12 +14,13 @@ Commands (all /roles, require Manage Roles):
   /roles panel edit            — Edit the title / description / mode
   /roles panel delete          — Delete a panel and its message
   /roles panel list            — List all panels in this server
+  /roles panel reload          — Re-post all panels to refresh their messages
 
   /roles add                   — Add a role to a panel
   /roles remove                — Remove a role from a panel
 
   /roles autogen colors        — Generate 18 cosmetic colour roles + panel
-  /roles autogen pronouns      — Generate She/Her, He/Him, They/Them + panel
+  /roles autogen pronouns      — Generate She/Her, He/Him, They/Them, It/Its, Any/All + panel
   /roles autogen age           — Generate age-range roles + panel
   /roles autogen region        — Generate 7 world-region roles + panel
 

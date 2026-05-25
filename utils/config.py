@@ -275,6 +275,7 @@ DEFAULTS: dict[str, object] = {
     "music_ratelimit_leave": False,
     "music_apl_prune_on_error": True,
     "music_save_history": True,
+    "music_js_runtime_path": None,
 }
 
 # Keys that must never be echoed back in Discord (logs, !config show, etc).

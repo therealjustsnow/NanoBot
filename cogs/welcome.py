@@ -14,10 +14,10 @@ Variables supported everywhere (title, content, footer_text, image_text):
   {username} — full username (user#0000 style)
 
 Commands:
-  welcome        — configure or view welcome settings
-  leave          — configure or view leave settings
-  testwelcome    — preview the welcome message
-  testleave      — preview the leave message
+  welcome set     — configure the welcome message
+  welcome test    — preview the welcome message
+  leave set       — configure the leave message
+  leave test      — preview the leave message
 """
 
 import io

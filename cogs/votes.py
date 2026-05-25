@@ -61,7 +61,7 @@ _BOTSGG_VOTE = "https://discord.bots.gg/bots/{bot_id}/vote"
 # Cooldowns in seconds
 _COOLDOWNS = {
     "topgg": 12 * 3600,  # 12 hours
-    "dbl": 12 * 3600,  # 24 hours
+    "dbl": 12 * 3600,  # 12 hours
     "botsgg": 12 * 3600,  # 12 hours
 }
 

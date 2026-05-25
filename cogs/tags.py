@@ -22,10 +22,11 @@ Full subcommands (work as slash AND prefix)
   /tag global   <name> <content> [image] [image_url]   (mods only)
   /tag use      <name> [dm_user]
   /tag preview  <name>
-  /tag image    <name> [image] [image_url]
   /tag edit     <name> <new_content>
   /tag delete   <name>
   /tag list
+  /tag export                                          (download your tags as JSON)
+  /tag import   <file>                                 (restore tags from a /tag export file)
 
 Tag data shape:
   { "content": str, "image_url": str|null, "by_id": str, "by_name": str }
