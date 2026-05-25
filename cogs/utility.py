@@ -3,13 +3,23 @@ cogs/utility.py
 Bot utility & configuration commands.
 
 Commands:
-  help    — !help (overview) or !help <cmd> (detailed)
-  prefix  — view / change the guild prefix
-  ping    — latency check
-  info    — runtime stats
-  invite  — bot invite link with correct permissions
-  about   — what NanoBot is and why it exists
-  stats   — NanoBots stats since uptime
+  help     — !help (overview) or !help <cmd> (detailed)
+  prefix   — view / change the guild prefix
+  ping     — latency check
+  support  — link to the support server
+  mc       — quick member count for this server
+  id       — get the ID of a user, role, or channel
+  invite   — bot invite link with correct permissions
+  about    — what NanoBot is and why it exists
+  server   — info card for this server
+  user     — public info card for a user
+  avatar   — show a user's avatar
+  banner   — show a user's profile banner
+  roleinfo — info card for a server role
+  uptime   — how long NanoBot has been running
+  stats    — bot statistics
+  source   — show source code for a command or symbol
+  firstmsg — link to the first message in a channel
 """
 
 import ast
@@ -114,11 +124,11 @@ _SLASH_GROUPS: list[dict] = [
         "aliases": [],
         "category": "🛡️ Auto Mod",
         "short": "Passive rule-based message moderation",
-        "usage": "/automod <enable|disable|rule|spam|caps|mentions|badword|regex|ignore|status>",
+        "usage": "/automod <enable|disable|rule|spam|caps|mentions|badword|regex|timeout|attachments|attachword|ignore|status>",
         "desc": (
             "Watches every message and enforces configurable rules automatically.\n\n"
-            "**Rules:** spam, invites, links, caps, mentions, badwords, regex\n"
-            "**Actions per rule:** delete (silent) · warn (delete + warning) · timeout (delete + 10-min timeout)\n\n"
+            "**Rules:** spam, invites, links, caps, mentions, badwords, regex, word+attachment\n"
+            "**Actions per rule:** delete (silent) · warn (delete + warning) · timeout (delete + Discord timeout) · kick · softban\n\n"
             "Exempt channels and roles are ignored for all rules."
         ),
         "args": [
@@ -129,6 +139,15 @@ _SLASH_GROUPS: list[dict] = [
             ("mentions <limit>", "Set per-message mention limit"),
             ("badword add|remove|list [word]", "Manage the custom word filter"),
             ("regex add|remove|list|test", "Manage regex patterns"),
+            ("timeout <minutes>", "Set how long the timeout action lasts (1–10080)"),
+            (
+                "attachments <count>",
+                "Min attachments that trigger the word+attachment rule",
+            ),
+            (
+                "attachword add|remove|list [word]",
+                "Manage the word+attachment filter list",
+            ),
             (
                 "ignore add|remove <channel or role>",
                 "Exempt a channel or role from all rules",
@@ -143,7 +162,7 @@ _SLASH_GROUPS: list[dict] = [
         "aliases": [],
         "category": "🎛️ Role Panels",
         "short": "Button-based self-assignable role panels",
-        "usage": "/roles panel <create|post|edit|delete|list> | /roles <add|remove|autogen>",
+        "usage": "/roles panel <create|post|edit|delete|list|reload> | /roles <add|remove|autogen>",
         "desc": (
             "Create persistent button panels that let members assign their own roles. "
             "Panels survive bot restarts.\n\n"

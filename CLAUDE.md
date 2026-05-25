@@ -35,9 +35,15 @@ pip install -r requirements-dev.txt
 pytest tests/ -v
 ```
 
-Tests cover pure-Python utilities with no Discord dependency:
+Tests cover pure-Python utilities and the SQLite layer (in-memory), no live Discord dependency:
 - `tests/test_helpers.py` — `parse_duration`, `parse_duration_from_end`, `fmt_duration`, `parse_interval`, `fmt_interval`
 - `tests/test_config.py` — `validate()` from `utils/config.py`
+- `tests/test_config_io.py` — load, save, migrate, `set_value`, `_coerce`, `_format`, `assert_no_fatal`, `example_ini` from `utils/config.py`
+- `tests/test_db.py` — `utils/db.py` against an in-memory SQLite database
+- `tests/test_cache_db.py` — `utils/cache_db.py` against an in-memory SQLite database
+- `tests/test_storage.py` — sync and async JSON helpers in `utils/storage.py`
+- `tests/test_music_helpers.py` — pure helper functions extracted from `cogs/music.py` (no yt-dlp/FFmpeg needed)
+- `tests/test_no_duplicate_commands.py` — static check that no two cogs register the same top-level command name or alias
 
 CI runs `pytest tests/ -v` on every push and pull request (`.github/workflows/tests.yml`).
 Manual end-to-end testing against a Discord test server is still required for cog-level features.
@@ -62,24 +68,26 @@ All features live in `cogs/` as discord.py cogs, hot-reloadable via `n!reload <c
 |---|---|
 | `moderation.py` | Ban/kick/mute/purge/lock/slowmode, timed actions, last-sender targeting |
 | `warnings.py` | Warning tracking with configurable auto-kick/ban thresholds |
-| `automod.py` | Passive rule enforcement (spam, invites, links, caps, mentions, badwords, regex) |
+| `automod.py` | Passive rule enforcement (spam, invites, links, caps, mentions, badwords, regex, word+attachment); actions: delete/warn/timeout/kick/softban |
 | `auditlog.py` | 12 server event types logged to a configurable channel |
 | `roles.py` | Persistent button-based self-assign role panels |
 | `tags.py` | Personal and global text snippets; `n!tagname` shortcut fires any tag |
 | `admin.py` | Owner-only: reload cogs, restart, git pull update, full upgrade (pull+pip+restart), sync slash commands |
 | `reminders.py` / `recurring.py` | One-time and repeating reminders, restart-safe via SQLite |
 | `welcome.py` | Per-guild join/leave messages with template variables |
-| `utility.py` | Info commands (`/serverinfo`, `/userinfo`, `/help`) |
+| `utility.py` | Info commands (`/server`, `/user`, `/help`; `serverinfo`/`userinfo` aliases) |
 | `fun.py` | 26 social + 33 reaction GIF commands via nekos.best |
 | `votes.py` | top.gg / DBL / discord.bots.gg stat posting and vote webhooks |
 | `eli5.py` | Plain-English AI explanations via Groq (Llama 3.1 8B) |
+| `images.py` | Anime image commands (husbando, kitsune, neko, waifu) via nekos.best |
+| `debug.py` | Owner-only debug REPL / shell evaluation |
 | `music.py` | Voice music player: yt-dlp streaming, Spotify link support (no API key — embed-page metadata scraped then matched on YouTube at play time), per-guild queue, interactive Now Playing card (buttons), search picker, vote-skip, playnext/playnow/stream/shuffleplay, follow, move/jump, loop/shuffle/seek/speed/audio-filters/volume, lyrics, grab, pldump, autoplay + persistent autoplaylist (add accepts whole playlists, dead entries auto-pruned on error), 24/7 stay-connected mode (`radio`/`247`, per-guild, off by default), idle auto-disconnect, per-guild song/user block lists (`blocksong`/`blockuser`, Manage Server), played-track `history`, self-deafen on join, now-playing bot presence (Streaming status with a clickable Watch button for YouTube/Twitch tracks, reverts to "watching over the server" when idle; account-global since Discord has no per-guild activity; `music_status_message` customizes the text), configurable yt-dlp search service/proxy/user-agent/source-address, and YouTube rate-limit (429) back-off. Audio output is configurable via `music_use_opus`: Opus (default) is stream-copied from the source when unprocessed, else re-encoded with libopus at the voice channel's bitrate; PCM mode decodes every track and lets discord.py encode, trading CPU for instant (re-stream-free) volume changes. `music_persist_queue` (on by default) saves the queue to SQLite and resumes it (rejoins the last voice channel, current track restarts from 0:00, rest of queue intact) on restart; `music_predownload` (on by default) fetches the next queued track to `data/music_cache/` while one plays for gapless playback (live streams are skipped — they'd never finish downloading). Reads `[music]` config (incl. cookies). Requires FFmpeg + PyNaCl. Live playback position is in-memory; the autoplaylist, 24/7 setting, and (when enabled) the queue persist in SQLite. |
 
 ### Data Layer
 
 Two SQLite databases, both opened once at startup via `setup_hook()` and shared as module-level connections:
 
-- **`data/nanobot.db`** — All persistent bot data. Managed by `utils/db.py`. Tables include: `tags`, `notes`, `prefixes`, `unban_schedules`, `slow_schedules`, `reminders`, `automod_regex_patterns`, warnings, automod config, auditlog settings, role panels, welcome config, recurring reminders, vote history, and `music_autoplaylist` (persistent per-guild autoplay tracks).
+- **`data/nanobot.db`** — All persistent bot data. Managed by `utils/db.py`. Tables include: `tags`, `notes`, `prefixes`, `unban_schedules`, `slow_schedules`, `reminders`, `automod_config`, `automod_badwords`, `automod_regex_patterns`, `automod_attachment_words`, warnings, auditlog settings, role panels, welcome/leave config, recurring reminders, vote history, and the music tables (`music_settings`, `music_queue`, `music_history`, `music_autoplaylist`, `music_song_blocklist`, `music_user_blocklist`).
 - **`data/cache.db`** — External content cache (anime images, stories). Managed by `utils/cache_db.py`.
 
 Both use WAL mode (`PRAGMA journal_mode=WAL`) for concurrent read/write. All queries are async via `aiosqlite`. Initialize with `await db.init()` and `await cache_db.init()` in `NanoBot.setup_hook()`.
@@ -106,12 +114,12 @@ Tag shortcuts are detected in `on_message`: if a message matches no command but 
 
 `config.ini` (gitignored) at the repo root, split into six sections:
 
-* **`[bot]`** — `token`, `default_prefix`, `owner_id`
+* **`[bot]`** — `token`, `default_prefix`, `owner_id`, `error_channel_id`
 * **`[logging]`** — `log_level`, `log_http`
-* **`[votes]`** — top.gg / DBL / discord.bots.gg tokens, `vote_webhook_port`, `vote_webhook_secret`
+* **`[votes]`** — `topgg_v1_token`, `dbl_token`, `discordbotsgg_token`, `vote_webhook_port`, `vote_webhook_secret`, `webhook_allowed_ips`
 * **`[groq]`** — `groq_api_key`
 * **`[scraper]`** — `fml_pages_per_scrape`, `wyr_requests_per_scrape`, `nekos_per_endpoint`, `nekosia_per_tag`, `revalidate_age`, `revalidate_batch`, `groq_wyr_system`
-* **`[music]`** — playback/queue knobs read live from `bot.config` so `!reloadconfig` applies without a cog reload: `music_cookie_file`, `music_default_volume`, `music_idle_timeout`, `music_skip_ratio`, `music_max_queue`, `music_use_opus`, `music_persist_queue`, `music_predownload`, `music_self_deafen`, `music_default_speed`, `music_search_service` (ytsearch/ytmsearch/scsearch), `music_status_message` ({title} presence template), `music_proxy`, `music_user_agent`, `music_source_address`, `music_autoplay_autoskip`, `music_save_videos` + `music_cache_max_mb`/`music_cache_max_age_days` (cache caps), `music_ratelimit_cooldown`/`music_ratelimit_leave` (429 back-off), `music_apl_prune_on_error`, `music_save_history`.
+* **`[music]`** — playback/queue knobs read live from `bot.config` so `!reloadconfig` applies without a cog reload: `music_cookie_file`, `music_default_volume`, `music_idle_timeout`, `music_skip_ratio`, `music_max_queue`, `music_use_opus`, `music_persist_queue`, `music_predownload`, `music_self_deafen`, `music_default_speed`, `music_search_service` (ytsearch/ytmsearch/scsearch), `music_status_message` ({title} presence template), `music_proxy`, `music_user_agent`, `music_source_address`, `music_js_runtime_path` (deno/node/bun binary for yt-dlp JS challenges), `music_autoplay_autoskip`, `music_save_videos` + `music_cache_max_mb`/`music_cache_max_age_days` (cache caps), `music_ratelimit_cooldown`/`music_ratelimit_leave` (429 back-off), `music_apl_prune_on_error`, `music_save_history`.
 
 All keys are optional except `token` (or the `DISCORD_TOKEN` env var). An old `config.json` is auto-migrated to `config.ini` on first start (the legacy file is renamed to `config.json.bak`).
 
@@ -129,3 +137,5 @@ Logs rotate at 50 KB, 5 backups, written to `logs/nanobot.log`.
 GitHub Actions runs two workflows on every push:
 - **`black.yml`** — Auto-formats code with Black. If formatting is needed, it auto-commits with `[skip ci]`. Run `black .` locally before pushing to avoid the auto-commit noise.
 - **`tests.yml`** — Runs the pytest suite (`pytest tests/ -v`). Installs `requirements.txt` then `requirements-dev.txt` before running.
+
+A third workflow, **`branch-protection.yml`**, is not part of the per-push CI: it runs only via `workflow_dispatch` or when pushed to `main` touching that file, applying `main` branch protection (required `test` + `black` checks, 1 review, no force-push) via the GitHub API.

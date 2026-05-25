@@ -37,9 +37,9 @@ NanoBot fixes that.
 - Bulk message purge with filters (bots, user, contains, starts/ends with)
 
 **AutoMod**
-- Six passive rules: spam, invites, links, caps, mentions, bad words
+- Eight passive rules: spam, invites, links, caps, mentions, bad words, regex, word + attachment
 - Regex pattern matching with test-before-you-save
-- Three actions per rule: delete, warn, timeout
+- Five actions per rule: delete, warn, timeout, kick, softban
 - Per-server exempt channels and roles
 
 **Audit Log**
@@ -100,7 +100,7 @@ NanoBot fixes that.
 - Owner-only admin: hot-reload, restart, git pull update, slash sync
 - Per-server custom prefix
 - Configurable log level (no restart needed)
-- GitHub Actions CI with Black auto-formatting
+- GitHub Actions CI: Black auto-formatting, pytest suite, branch protection
 
 ---
 
@@ -222,7 +222,7 @@ python run.py
 python main.py
 ```
 
-Logs are written to `logs/nanobot.log` (rotating, max 5 MB x 3 files).
+Logs are written to `logs/nanobot.log` (rotating, max 50 KB x 5 files).
 
 ---
 
@@ -243,13 +243,20 @@ Restricted to the bot owner. These are **prefix-only by design** -- slash comman
 | Command | Description |
 |---------|-------------|
 | `!reload [cog\|all]` | Hot-reload a cog without restarting |
+| `!unload <cog>` | Unload a single cog without restarting |
 | `!restart` | Gracefully close and re-execute the process |
 | `!shutdown` | Flush logs and close cleanly |
 | `!update` | `git pull` + reload all cogs. Does NOT sync slash commands |
+| `!upgrade` | `git pull` + `pip install` + spawn new process + close |
 | `!sync [guild_id]` | Push slash commands to Discord (global or one guild) |
 | `!setloglevel <level>` | Change log verbosity live (`DEBUG` / `INFO` / `WARNING` / `ERROR`) |
+| `!reloadconfig` | Re-read `config.ini` from disk without restarting |
+| `!config show\|get\|set\|unset` | DM-only: inspect / edit config values (secrets masked) |
 | `!logs [lines]` | Tail `logs/nanobot.log` in Discord -- default 20, max 50 lines |
 | `!servers` | List all servers the bot is in |
+| `!scrape` | Manually trigger the daily content-cache scrape |
+| `!cachestats` | Show cache DB statistics (FML, WYR, images) |
+| `!fmlpurge` | Wipe all cached FML stories (forces re-scrape) |
 
 ---
 
@@ -340,7 +347,7 @@ Slash commands use the `/warn` group. Prefix commands stay flat.
 
 Passive rule enforcement. Watches every message and acts without manual intervention. All commands require **Manage Server**.
 
-**Seven individually toggleable rules:**
+**Eight individually toggleable rules:**
 
 | Rule | What it catches |
 |------|----------------|
@@ -351,8 +358,9 @@ Passive rule enforcement. Watches every message and acts without manual interven
 | `mentions` | Too many @mentions in a single message |
 | `badwords` | Per-server word list (case-insensitive substring match) |
 | `regex` | Custom regex patterns with test-before-you-save |
+| `attachment_word` | A filtered word plus N+ attachments in the same message |
 
-**Three actions per rule (set independently):** `delete`, `warn` (adds a formal warning), `timeout` (10-minute Discord timeout).
+**Five actions per rule (set independently):** `delete`, `warn` (adds a formal warning), `timeout` (10-minute Discord timeout), `kick`, `softban`.
 
 Members with Manage Messages are always exempt. Additional exempt channels and roles can be configured.
 
@@ -365,6 +373,8 @@ Members with Manage Messages are always exempt. Additional exempt channels and r
 | `/automod spam <count> <seconds>` | Set spam detection threshold |
 | `/automod caps [percent] [min_length]` | Set uppercase % threshold and minimum message length |
 | `/automod mentions <limit>` | Set per-message @mention limit |
+| `/automod timeout <minutes>` | Set how long the timeout action lasts (1–10080) |
+| `/automod attachments <count>` | Min attachments that trigger the word + attachment rule |
 | `/automod badword add <word>` | Add a word to the filter |
 | `/automod badword remove <word>` | Remove a word from the filter |
 | `/automod badword list` | List all filtered words (ephemeral) |
@@ -372,6 +382,9 @@ Members with Manage Messages are always exempt. Additional exempt channels and r
 | `/automod regex remove <pattern>` | Remove a regex pattern |
 | `/automod regex list` | List all regex patterns |
 | `/automod regex test <pattern> <text>` | Test a pattern against sample text before saving |
+| `/automod attachword add <word>` | Add a word to the word + attachment filter |
+| `/automod attachword remove <word>` | Remove a word from the word + attachment filter |
+| `/automod attachword list` | List all word + attachment filter words (ephemeral) |
 | `/automod ignore channel <channel>` | Toggle a channel exemption |
 | `/automod ignore role <role>` | Toggle a role exemption |
 
@@ -455,7 +468,7 @@ Saved text snippets (up to 2000 chars) with optional images. Post in channel in 
 | `/tag list` | List your personal tags and all global tags |
 | `/tag create <n> [content] [image]` | Create a personal tag |
 | `/tag global <n> [content] [image]` | Create a server-wide global tag *(Manage Messages)* |
-| `/tag use <n> [user]` | Post in channel, or DM to a specific user |
+| `/tag use <n> [dm_user]` | Post in channel, or DM to a specific user |
 | `/tag preview <n>` | Preview a tag -- only you see the response |
 | `/tag edit <n> [content] [image]` | Update a tag's content or image |
 | `/tag delete <n>` | Delete a tag |
@@ -505,7 +518,7 @@ n!tag - rules               → deletes it
 | `/remindme <message with duration>` | Set a reminder for yourself. Duration goes at the end. |
 | `/remind <@user> <message with duration>` | Set a reminder for someone else |
 | `/reminders list` | List your active reminders |
-| `/reminders cancel <id>` | Cancel a reminder by its 6-character ID |
+| `/reminders cancel <number>` | Cancel a reminder by its list number |
 
 ```
 !remindme stand up 1h
@@ -605,7 +618,7 @@ Server count is posted to all configured bot lists automatically every 12 hours.
 
 ## Data Storage
 
-All data lives in a single `data/nanobot.db` SQLite file. No external database, no cloud setup -- back it up with one `cp`.
+All persistent data lives in a single `data/nanobot.db` SQLite file (a second file, `data/cache.db`, holds regenerable external-content cache — anime images, stories). No external database, no cloud setup -- back up `nanobot.db` with one `cp`.
 
 | Table | Contents |
 |-------|----------|
@@ -627,8 +640,15 @@ All data lives in a single `data/nanobot.db` SQLite file. No external database, 
 | `automod_config` | Per-guild AutoMod master switch, rule states, actions, thresholds, exemptions |
 | `automod_badwords` | Per-guild bad word filter list |
 | `automod_regex_patterns` | Per-guild regex filter patterns |
+| `automod_attachment_words` | Per-guild word + attachment filter list |
+| `music_settings` | Per-guild 24/7 mode, volume, and other music toggles |
+| `music_queue` | Persisted per-guild queue for resume on restart |
+| `music_history` | Recently played tracks per guild |
+| `music_autoplaylist` | Per-guild autoplay seed tracks |
+| `music_song_blocklist` | Per-guild blocked songs |
+| `music_user_blocklist` | Per-guild blocked requesters |
 
-Logs: `logs/nanobot.log` (5 MB rotating, 3 files kept).
+Logs: `logs/nanobot.log` (50 KB rotating, 5 files kept).
 
 ---
 
@@ -670,7 +690,9 @@ NanoBot/
 │   ├── fun.py             ← 26 social + 33 reaction commands, ship, 8-ball (nekos.best)
 │   ├── images.py          ← husbando / kitsune / neko / waifu (nekos.best)
 │   ├── eli5.py            ← AI explanations via Groq (Llama 3.1 8B)
-│   └── votes.py           ← Bot list integrations (top.gg, DBL, discord.bots.gg)
+│   ├── music.py           ← Voice player: yt-dlp streaming, queue, autoplay, 24/7
+│   ├── votes.py           ← Bot list integrations (top.gg, DBL, discord.bots.gg)
+│   └── debug.py           ← Owner-only debug REPL / shell
 └── utils/
     ├── checks.py          ← Combined user + bot permission decorators
     ├── config.py          ← Config loader and validation

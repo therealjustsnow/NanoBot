@@ -2,8 +2,10 @@
 utils/helpers.py
 Shared utilities:
   - Embed factory (consistently styled, mobile-optimized)
-  - Duration parsing  ("30s", "5m", "2h", "1d" → seconds)
+  - Duration parsing  ("30s", "5m", "2h", "1d" → seconds), incl. parse_duration_from_end
   - Duration formatting (seconds → "5m 30s")
+  - Interval parsing / formatting (parse_interval, fmt_interval)
+  - user_display() for consistent user references
 """
 
 import re

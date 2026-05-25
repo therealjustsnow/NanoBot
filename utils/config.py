@@ -8,13 +8,15 @@ For backwards compatibility a legacy `config.json` is auto-migrated on first
 load — the old file is renamed to `config.json.bak` after migration.
 
 Sections:
-    [bot]      token, default_prefix, owner_id
+    [bot]      token, default_prefix, owner_id, error_channel_id
     [logging]  log_level, log_http
-    [votes]    top.gg / DBL / discord.bots.gg tokens, webhook port/secret
+    [votes]    top.gg / DBL / discord.bots.gg tokens, webhook port/secret,
+               webhook_allowed_ips
     [groq]     groq_api_key
     [scraper]  fml_pages_per_scrape, wyr_requests_per_scrape,
                nekos_per_endpoint, nekosia_per_tag, revalidate_age,
                revalidate_batch, groq_wyr_system
+    [music]    playback/queue knobs (music_* keys — see example_config.ini)
 
 Usage:
     from utils import config
@@ -47,7 +49,6 @@ SECTION_MAP = {
     "log_level": "logging",
     "log_http": "logging",
     # [votes]
-    "topgg_token": "votes",
     "topgg_v1_token": "votes",
     "dbl_token": "votes",
     "discordbotsgg_token": "votes",
@@ -105,7 +106,6 @@ _SCHEMA: dict[str, tuple[type | None, bool, str]] = {
     ),
     "log_level": (str, False, "DEBUG / INFO / WARNING / ERROR / CRITICAL"),
     "log_http": (bool, False, "Log raw HTTP requests (true/false)"),
-    "topgg_token": (str, False, "top.gg AUTH token"),
     "topgg_v1_token": (str, False, "top.gg v1 API token for commands sync"),
     "dbl_token": (str, False, "discordbotlist.com bot token"),
     "discordbotsgg_token": (str, False, "discord.bots.gg bot token"),
@@ -232,7 +232,6 @@ DEFAULTS: dict[str, object] = {
     "error_channel_id": None,
     "log_level": "INFO",
     "log_http": False,
-    "topgg_token": None,
     "topgg_v1_token": None,
     "dbl_token": None,
     "discordbotsgg_token": None,
@@ -276,12 +275,12 @@ DEFAULTS: dict[str, object] = {
     "music_ratelimit_leave": False,
     "music_apl_prune_on_error": True,
     "music_save_history": True,
+    "music_js_runtime_path": None,
 }
 
 # Keys that must never be echoed back in Discord (logs, !config show, etc).
 SENSITIVE_KEYS = {
     "token",
-    "topgg_token",
     "topgg_v1_token",
     "dbl_token",
     "discordbotsgg_token",

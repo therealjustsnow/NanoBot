@@ -20,6 +20,7 @@ Commands:
   fmlpurge           — wipe all cached FML stories (forces re-scrape)
   reloadconfig       — re-read config.ini without restarting
   config             — DM-only: show/get/set config values
+  servers            — list every server NanoBot is in (paginated)
 """
 
 import asyncio

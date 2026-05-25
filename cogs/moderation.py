@@ -28,6 +28,7 @@ Commands:
   notes            — view mod notes for a user
   clearnotes       — wipe all notes for a user
   last             — show who last sent a message here
+  modcheck         — combined user info + warnings + notes in one embed
 """
 
 import asyncio
@@ -866,7 +867,7 @@ class Moderation(commands.Cog):
                 ("ends_with", "Only messages ending with this text"),
             ],
             "perms": "Manage Messages",
-            "example": "!purge 50 user:@spammer",
+            "example": "!purge 50\n/purge amount:50 user:@spammer",
         },
     )
     @app_commands.describe(
@@ -1436,7 +1437,7 @@ class Moderation(commands.Cog):
             "category": "🔎 Info & Notes",
             "short": "View mod notes for a user",
             "usage": "notes <user>",
-            "desc": "Shows up to 8 of the most recent mod notes. Only visible to you (ephemeral).",
+            "desc": "Shows up to 5 of the most recent mod notes. Only visible to you (ephemeral).",
             "args": [
                 ("user", "User to look up"),
             ],

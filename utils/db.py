@@ -20,6 +20,24 @@ Tables
   automod_badwords  (guild_id, word) PK
   automod_regex_patterns  (id) PK  — per-guild regex patterns for automod
   automod_attachment_words (guild_id, word) PK
+  warnings          (id) PK  — one row per warning
+  warn_config       (guild_id) PK  — thresholds + DM settings
+  welcome_config    (guild_id) PK
+  leave_config      (guild_id) PK
+  votes             — vote records per user per bot-list site
+  recurring_reminders (id) PK  — interval, status, next-fire time
+  role_panels       (id) PK
+  role_panel_entries — one row per role on a panel
+  auditlog_config   (guild_id) PK  — channel, enabled state, event toggles
+  music_settings    (guild_id) PK  — 24/7, volume, per-guild music toggles
+  music_queue       — persisted per-guild queue (resume on restart)
+  music_history     — recently played tracks per guild
+  music_autoplaylist (guild_id, ...) — per-guild autoplay seed tracks
+  music_song_blocklist  — per-guild blocked songs
+  music_user_blocklist  — per-guild blocked requesters
+
+Note: role_panels_new is a transient table used only during the one-time
+role-panel migration (table swap to drop a column); it is not a real table.
 """
 
 import asyncio
