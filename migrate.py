@@ -171,19 +171,31 @@ def migrate(db: sqlite3.Connection):
     for guild_id, users in notes_data.items():
         for user_id, notes in users.items():
             for n in notes:
+                content = n.get("note", "")
+                created_at = n.get("at", datetime.now(timezone.utc).isoformat())
+                # notes has an autoincrement PK with no natural unique key, so a
+                # plain INSERT would duplicate every note on a second run. Guard
+                # on (guild_id, user_id, content, created_at) to stay idempotent.
                 cur.execute(
                     "INSERT INTO notes (guild_id, user_id, content, by_id, by_name, created_at) "
-                    "VALUES (?,?,?,?,?,?)",
+                    "SELECT ?,?,?,?,?,? WHERE NOT EXISTS ("
+                    "  SELECT 1 FROM notes "
+                    "  WHERE guild_id=? AND user_id=? AND content=? AND created_at=?"
+                    ")",
                     (
                         guild_id,
                         user_id,
-                        n.get("note", ""),
+                        content,
                         n.get("by_id", ""),
                         n.get("by_name", ""),
-                        n.get("at", datetime.now(timezone.utc).isoformat()),
+                        created_at,
+                        guild_id,
+                        user_id,
+                        content,
+                        created_at,
                     ),
                 )
-                note_count += 1
+                note_count += cur.rowcount
     db.commit()
     ok(f"Notes: {note_count} imported")
 

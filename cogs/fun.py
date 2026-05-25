@@ -823,16 +823,30 @@ async def _scrape_fml_page(session: aiohttp.ClientSession) -> list[str]:
     return stories
 
 
+_MAX_CONSEC_FAILS = 10  # bail out of a scrape if the source keeps coming back empty
+
+
 async def _scrape_fml_bulk(session: aiohttp.ClientSession, pages: int) -> list[str]:
     """Hit fmylife.com/random multiple times and return all unique stories."""
     all_stories: list[str] = []
     seen: set[str] = set()
+    consecutive_empty = 0
     for i in range(pages):
         page_stories = await _scrape_fml_page(session)
-        for s in page_stories:
-            if s not in seen:
-                seen.add(s)
-                all_stories.append(s)
+        if page_stories:
+            consecutive_empty = 0
+            for s in page_stories:
+                if s not in seen:
+                    seen.add(s)
+                    all_stories.append(s)
+        else:
+            consecutive_empty += 1
+            if consecutive_empty >= _MAX_CONSEC_FAILS:
+                log.warning(
+                    f"FML scrape: {consecutive_empty} empty pages in a row — "
+                    f"aborting after {i + 1}/{pages} pages"
+                )
+                break
         if i < pages - 1:
             await asyncio.sleep(1)
     return all_stories
@@ -862,11 +876,22 @@ async def _scrape_wyr_bulk(session: aiohttp.ClientSession, count: int) -> list[s
     questions: list[str] = []
     seen: set[str] = set()
     for rating in _WYR_RATINGS:
+        consecutive_fail = 0
         for i in range(count):
             q = await _fetch_wyr_single(session, rating=rating)
-            if q and q not in seen:
-                seen.add(q)
-                questions.append(q)
+            if q:
+                consecutive_fail = 0
+                if q not in seen:
+                    seen.add(q)
+                    questions.append(q)
+            else:
+                consecutive_fail += 1
+                if consecutive_fail >= _MAX_CONSEC_FAILS:
+                    log.warning(
+                        f"WYR scrape ({rating}): {consecutive_fail} failures in a "
+                        f"row — skipping rest of this rating"
+                    )
+                    break
             if i < count - 1:
                 await asyncio.sleep(0.5)
     return questions
@@ -1594,18 +1619,29 @@ class Fun(commands.Cog):
             nekosia_per_tag = _scrape_cfg(self.bot, "nekosia_per_tag")
             nekosia_total_added = 0
             for tag in _THIGH_TAGS:
+                consecutive_fail = 0
                 for _ in range(nekosia_per_tag):
                     try:
                         img, src = await _fetch_nekosia_single(self._session, tag)
                         if img:
+                            consecutive_fail = 0
                             added = await cache_db.add_images(
                                 "nekosia",
                                 tag,
                                 [{"url": img, "source_url": src}],
                             )
                             nekosia_total_added += added
+                        else:
+                            consecutive_fail += 1
                     except Exception as exc:
+                        consecutive_fail += 1
                         log.debug(f"Nekosia scrape error for '{tag}': {exc}")
+                    if consecutive_fail >= _MAX_CONSEC_FAILS:
+                        log.warning(
+                            f"Nekosia scrape ('{tag}'): {consecutive_fail} failures "
+                            f"in a row — skipping rest of this tag"
+                        )
+                        break
                     await asyncio.sleep(0.5)
 
             nekosia_total = await cache_db.count_images("nekosia")

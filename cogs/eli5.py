@@ -58,6 +58,14 @@ class ELI5(commands.Cog):
 
     def __init__(self, bot: commands.Bot):
         self.bot = bot
+        self._session: aiohttp.ClientSession | None = None
+
+    async def cog_load(self):
+        self._session = aiohttp.ClientSession(timeout=aiohttp.ClientTimeout(total=15))
+
+    async def cog_unload(self):
+        if self._session and not self._session.closed:
+            await self._session.close()
 
     # ── /eli5 ─────────────────────────────────────────────────────────────────
     @commands.hybrid_command(
@@ -128,41 +136,38 @@ class ELI5(commands.Cog):
         }
 
         try:
-            async with aiohttp.ClientSession() as session:
-                async with session.post(
-                    _GROQ_URL,
-                    json=payload,
-                    headers=headers,
-                    timeout=aiohttp.ClientTimeout(total=15),
-                ) as resp:
-                    data = await resp.json()
+            async with self._session.post(
+                _GROQ_URL,
+                json=payload,
+                headers=headers,
+            ) as resp:
+                if resp.status == 401:
+                    log.error("ELI5: Invalid Groq API key")
+                    return await ctx.reply(
+                        embed=h.err(
+                            "The Groq API key is invalid. Check your config.",
+                            "🔑 Auth Error",
+                        )
+                    )
+                if resp.status == 429:
+                    log.warning("ELI5: Groq rate limit hit")
+                    return await ctx.reply(
+                        embed=h.warn(
+                            "Rate limit hit. Try again in a moment.",
+                            "⏱️ Rate Limited",
+                        )
+                    )
+                if resp.status != 200:
+                    body = await resp.text()
+                    log.error(f"ELI5: Groq returned {resp.status}: {body[:300]}")
+                    return await ctx.reply(
+                        embed=h.err(
+                            "Something went wrong. Try again shortly.",
+                            "💥 API Error",
+                        )
+                    )
 
-                    if resp.status == 401:
-                        log.error("ELI5: Invalid Groq API key")
-                        return await ctx.reply(
-                            embed=h.err(
-                                "The Groq API key is invalid. Check your config.",
-                                "🔑 Auth Error",
-                            )
-                        )
-                    if resp.status == 429:
-                        log.warning("ELI5: Groq rate limit hit")
-                        return await ctx.reply(
-                            embed=h.warn(
-                                "Rate limit hit. Try again in a moment.",
-                                "⏱️ Rate Limited",
-                            )
-                        )
-                    if resp.status != 200:
-                        log.error(f"ELI5: Groq returned {resp.status}: {data}")
-                        return await ctx.reply(
-                            embed=h.err(
-                                "Something went wrong. Try again shortly.",
-                                "💥 API Error",
-                            )
-                        )
-
-                    explanation = data["choices"][0]["message"]["content"].strip()
+                data = await resp.json()
 
         except aiohttp.ClientError as exc:
             log.error(f"ELI5: Network error: {exc}")
@@ -170,6 +175,17 @@ class ELI5(commands.Cog):
                 embed=h.err(
                     "Couldn't reach Groq. Check your connection and try again.",
                     "🌐 Network Error",
+                )
+            )
+
+        try:
+            explanation = data["choices"][0]["message"]["content"].strip()
+        except (KeyError, IndexError, TypeError):
+            log.error(f"ELI5: unexpected Groq response shape: {str(data)[:300]}")
+            return await ctx.reply(
+                embed=h.err(
+                    "Got an unexpected response. Try again shortly.",
+                    "💥 API Error",
                 )
             )
 

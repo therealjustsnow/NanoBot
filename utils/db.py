@@ -22,6 +22,7 @@ Tables
   automod_attachment_words (guild_id, word) PK
 """
 
+import asyncio
 import json
 import logging
 import os
@@ -31,6 +32,10 @@ from typing import Any
 import aiosqlite
 
 log = logging.getLogger("NanoBot.db")
+
+# Serializes read-modify-write cycles on the JSON columns of automod_config so
+# two concurrent edits can't read the same row and clobber each other's change.
+_automod_write_lock = asyncio.Lock()
 
 _DB_PATH = os.path.join("data", "nanobot.db")
 
@@ -871,8 +876,6 @@ async def get_all_votes_for_notify() -> list[dict]:
 
 async def has_voted_recently(user_id: int, site: str) -> bool:
     """True if the user has an active vote (within the site's cooldown window and our grace period)."""
-    import time
-
     row = await get_vote(user_id, site)
     if not row:
         return False
@@ -1475,13 +1478,15 @@ async def _ensure_automod_tables() -> None:
         CREATE INDEX IF NOT EXISTS aaw_guild ON automod_attachment_words (guild_id);
     """)
     await _conn().commit()
-    try:
+    # Add timeout_seconds if this is an older schema. Check the column list
+    # rather than swallowing every error so a locked/corrupt DB still surfaces.
+    async with _conn().execute("PRAGMA table_info(automod_config)") as cur:
+        cols = {r[1] for r in await cur.fetchall()}
+    if "timeout_seconds" not in cols:
         await _conn().execute(
             "ALTER TABLE automod_config ADD COLUMN timeout_seconds INTEGER NOT NULL DEFAULT 600"
         )
         await _conn().commit()
-    except Exception:
-        pass  # column already exists
 
 
 def _automod_row(row: aiosqlite.Row) -> dict:
@@ -1550,22 +1555,23 @@ async def set_automod_rule(guild_id: int, rule: str, **kwargs: Any) -> None:
     """
     await _ensure_automod_guild(guild_id)
 
-    async with _conn().execute(
-        "SELECT rules FROM automod_config WHERE guild_id=? LIMIT 1",
-        (str(guild_id),),
-    ) as cur:
-        row = await cur.fetchone()
+    async with _automod_write_lock:
+        async with _conn().execute(
+            "SELECT rules FROM automod_config WHERE guild_id=? LIMIT 1",
+            (str(guild_id),),
+        ) as cur:
+            row = await cur.fetchone()
 
-    rules: dict = json.loads(row["rules"]) if row else {}
-    existing = rules.get(rule, {})
-    existing.update(kwargs)
-    rules[rule] = existing
+        rules: dict = json.loads(row["rules"]) if row else {}
+        existing = rules.get(rule, {})
+        existing.update(kwargs)
+        rules[rule] = existing
 
-    await _conn().execute(
-        "UPDATE automod_config SET rules=? WHERE guild_id=?",
-        (json.dumps(rules), str(guild_id)),
-    )
-    await _conn().commit()
+        await _conn().execute(
+            "UPDATE automod_config SET rules=? WHERE guild_id=?",
+            (json.dumps(rules), str(guild_id)),
+        )
+        await _conn().commit()
 
 
 async def add_automod_badword(guild_id: int, word: str) -> bool:
@@ -1612,26 +1618,27 @@ async def toggle_automod_ignore(guild_id: int, kind: str, target_id: int) -> str
     col = "ignore_channels" if kind == "channel" else "ignore_roles"
     tid = str(target_id)
 
-    async with _conn().execute(
-        f"SELECT {col} FROM automod_config WHERE guild_id=? LIMIT 1",
-        (str(guild_id),),
-    ) as cur:
-        row = await cur.fetchone()
+    async with _automod_write_lock:
+        async with _conn().execute(
+            f"SELECT {col} FROM automod_config WHERE guild_id=? LIMIT 1",
+            (str(guild_id),),
+        ) as cur:
+            row = await cur.fetchone()
 
-    ids: list[str] = json.loads(row[col]) if row else []
+        ids: list[str] = json.loads(row[col]) if row else []
 
-    if tid in ids:
-        ids.remove(tid)
-        result = "removed"
-    else:
-        ids.append(tid)
-        result = "added"
+        if tid in ids:
+            ids.remove(tid)
+            result = "removed"
+        else:
+            ids.append(tid)
+            result = "added"
 
-    await _conn().execute(
-        f"UPDATE automod_config SET {col}=? WHERE guild_id=?",
-        (json.dumps(ids), str(guild_id)),
-    )
-    await _conn().commit()
+        await _conn().execute(
+            f"UPDATE automod_config SET {col}=? WHERE guild_id=?",
+            (json.dumps(ids), str(guild_id)),
+        )
+        await _conn().commit()
     return result
 
 

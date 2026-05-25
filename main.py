@@ -16,6 +16,7 @@ import logging.handlers
 import os
 import traceback
 import warnings
+from collections import OrderedDict
 
 import discord
 from discord import app_commands
@@ -31,6 +32,10 @@ _CFG = cfg_mod.load()
 
 # ── Logging ────────────────────────────────────────────────────────────────────
 _VALID_LEVELS = {"DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"}
+
+# Cap on the last-sender LRU (channel_id → Member). Bounds memory on bots that
+# see traffic across very many channels over a long uptime.
+_MAX_LAST_SENDERS = 10_000
 
 
 def _setup_logging(cfg: dict) -> logging.Logger:
@@ -157,10 +162,19 @@ class NanoBot(commands.Bot):
         self.config: dict = dict(cfg)
         self._apply_config(cfg)
         self.prefixes: dict[str, str] = {}
-        self.last_senders: dict[int, discord.Member] = {}
+        # channel_id → last non-bot author. Bounded LRU so a long-lived bot
+        # across many channels can't leak Member references without limit.
+        self.last_senders: OrderedDict[int, discord.Member] = OrderedDict()
         self.last_banned: dict[int, int] = {}  # guild_id → last banned user_id
         self.start_time = discord.utils.utcnow()
         self.commands_ran: int = 0  # incremented in on_command; resets on restart
+        # Strong refs to fire-and-forget tasks so they aren't GC'd mid-flight.
+        self._bg_tasks: set[asyncio.Task] = set()
+
+    def _spawn_bg(self, coro) -> None:
+        task = asyncio.create_task(coro)
+        self._bg_tasks.add(task)
+        task.add_done_callback(self._bg_tasks.discard)
 
     # ── Config application / reload ───────────────────────────────────────────
     def _apply_config(self, cfg: dict) -> None:
@@ -206,13 +220,65 @@ class NanoBot(commands.Bot):
                 # Log but don't abort — optional cogs (eli5) may be absent
                 log.warning(f"⚠️  Could not load {cog}: {exc}")
 
+        await self._sync_commands_if_changed()
+
+    async def _sync_commands_if_changed(self) -> None:
+        """Sync the slash command tree only when it actually changed.
+
+        A global ``tree.sync()`` on every boot is a Discord rate-limit footgun,
+        and the bot can restart often (!restart / !upgrade). We hash the command
+        signatures and skip the network sync when nothing changed. ``!sync``
+        always forces a real sync regardless.
+        """
+        try:
+            fingerprint = self._command_fingerprint()
+        except Exception:
+            log.warning("Couldn't fingerprint command tree — syncing unconditionally")
+            fingerprint = None
+
+        hash_path = os.path.join("data", ".slash_sync_hash")
+        prev = None
+        if fingerprint is not None:
+            try:
+                with open(hash_path, encoding="utf-8") as f:
+                    prev = f.read().strip()
+            except OSError:
+                prev = None
+
+        if fingerprint is not None and fingerprint == prev:
+            log.info("⚡ Slash commands unchanged — skipping sync")
+            return
+
         synced = await self.tree.sync()
         log.info(f"⚡ Synced {len(synced)} slash command(s)")
+        if fingerprint is not None:
+            try:
+                with open(hash_path, "w", encoding="utf-8") as f:
+                    f.write(fingerprint)
+            except OSError as exc:
+                log.warning(f"Couldn't persist slash-sync hash: {exc}")
+
+    def _command_fingerprint(self) -> str:
+        """Stable hash of every app command's name, description and parameters."""
+        import hashlib
+
+        parts: list[str] = []
+        for cmd in self.tree.walk_commands():
+            params = getattr(cmd, "parameters", []) or []
+            sig = ",".join(
+                f"{p.name}:{getattr(p.type, 'name', p.type)}:{p.required}"
+                for p in params
+            )
+            parts.append(
+                f"{cmd.qualified_name}|{getattr(cmd, 'description', '')}|{sig}"
+            )
+        blob = "\n".join(sorted(parts))
+        return hashlib.sha256(blob.encode()).hexdigest()
 
     # ── Owner resolution ───────────────────────────────────────────────────────
     async def is_owner(self, user: discord.User) -> bool:
         """config.ini owner_id takes priority; falls back to application owner."""
-        if self.config_owner_id:
+        if self.config_owner_id is not None:
             return user.id == self.config_owner_id
         return await super().is_owner(user)
 
@@ -253,7 +319,7 @@ class NanoBot(commands.Bot):
         def _warn_hook(message, category, filename, lineno, file=None, line=None):
             orig_showwarning(message, category, filename, lineno, file, line)
             text = warnings.formatwarning(message, category, filename, lineno, line)
-            asyncio.create_task(bot_ref._post_error(f"⚠️ {category.__name__}", text))
+            bot_ref._spawn_bg(bot_ref._post_error(f"⚠️ {category.__name__}", text))
 
         warnings.showwarning = _warn_hook
 
@@ -268,7 +334,7 @@ class NanoBot(commands.Bot):
             else:
                 body = msg
             log.error("asyncio unhandled: %s", msg, exc_info=exc)
-            asyncio.create_task(bot_ref._post_error("🔴 asyncio exception", body))
+            bot_ref._spawn_bg(bot_ref._post_error("🔴 asyncio exception", body))
 
         self.loop.set_exception_handler(_asyncio_exc_handler)
 
@@ -307,6 +373,11 @@ class NanoBot(commands.Bot):
 
     async def on_guild_remove(self, guild: discord.Guild):
         log.info(f"➖ Left server: {guild.name} ({guild.id})")
+        # Drop per-guild state so leaving servers doesn't accumulate forever.
+        self.last_banned.pop(guild.id, None)
+        channel_ids = {ch.id for ch in guild.channels}
+        for cid in [c for c in self.last_senders if c in channel_ids]:
+            self.last_senders.pop(cid, None)
 
     async def on_message(self, message: discord.Message):
         try:
@@ -315,6 +386,9 @@ class NanoBot(commands.Bot):
 
             if message.guild:
                 self.last_senders[message.channel.id] = message.author
+                self.last_senders.move_to_end(message.channel.id)
+                while len(self.last_senders) > _MAX_LAST_SENDERS:
+                    self.last_senders.popitem(last=False)
 
             ctx = await self.get_context(message)
 

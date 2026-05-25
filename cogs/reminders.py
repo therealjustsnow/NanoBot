@@ -90,46 +90,69 @@ class Reminders(commands.Cog):
         self.bot = bot
         self._tasks: dict[str, asyncio.Task] = {}  # reminder_id → Task
 
+    def cog_unload(self):
+        """Cancel all pending fire tasks so a cog reload doesn't leak them
+        (and doesn't double-deliver when the new instance restores from DB)."""
+        for task in self._tasks.values():
+            task.cancel()
+        self._tasks.clear()
+
     # ── Restore on restart ─────────────────────────────────────────────────────
     @commands.Cog.listener()
     async def on_restore_schedules(self):
         data = await db.get_all_reminders()
-        now = _now()
-        fired = 0
+        overdue = 0
 
         for rid, info in data.items():
-            remaining = info["due"] - now
-
-            if remaining <= 0:
-                asyncio.create_task(self._fire(info, delay=0))
-                log.info(f"Overdue reminder {rid} — firing immediately")
-                fired += 1
-            else:
-                self._tasks[rid] = asyncio.create_task(
-                    self._fire(info, delay=remaining)
-                )
-                log.debug(f"Restored reminder {rid} — fires in {remaining:.0f}s")
+            if info["due"] - _now() <= 0:
+                overdue += 1
+            self._spawn(info)
 
         log.info(
-            f"Reminders: restored {len(self._tasks)} active, fired {fired} overdue"
+            f"Reminders: restored {len(self._tasks)} ({overdue} overdue, firing now)"
         )
 
-    # ── Background fire ────────────────────────────────────────────────────────
-    async def _fire(self, info: dict, *, delay: float):
-        """Sleep then deliver the reminder."""
-        if delay > 0:
-            await asyncio.sleep(delay)
+    def _spawn(self, info: dict) -> None:
+        """Create and track the fire task for a reminder, keyed by its id."""
+        self._tasks[info["id"]] = asyncio.create_task(self._fire(info))
 
+    # ── Background fire ────────────────────────────────────────────────────────
+    async def _fire(self, info: dict):
+        """Sleep until due (in bounded chunks) then deliver. Always cleans up."""
+        rid = info["id"]
+        try:
+            await self._sleep_until(info["due"])
+            await self._deliver(info)
+        except asyncio.CancelledError:
+            raise
+        except Exception:
+            log.exception(f"Reminder {rid}: delivery failed")
+        finally:
+            self._tasks.pop(rid, None)
+            try:
+                await db.remove_reminder(rid)
+            except Exception:
+                log.exception(f"Reminder {rid}: failed to remove from DB")
+
+    @staticmethod
+    async def _sleep_until(due: float) -> None:
+        """Sleep until the wall-clock `due` timestamp in chunks no longer than an
+        hour, re-checking each time. A single multi-month sleep is fragile and
+        drifts; chunked sleeps re-anchor to the real clock."""
+        chunk = 3600
+        while True:
+            remaining = due - _now()
+            if remaining <= 0:
+                return
+            await asyncio.sleep(min(remaining, chunk))
+
+    async def _deliver(self, info: dict):
         rid = info["id"]
         target_id = int(info["target_id"])
         set_by_id = int(info["set_by_id"])
         channel_id = int(info["channel_id"])
-        guild_id = int(info["guild_id"])
         message = info["message"]
         use_dm = info.get("dm", True)
-        due = info["due"]
-
-        set_at_ts = due - info.get("duration", 0)
 
         e = discord.Embed(
             title="⏰ Reminder",
@@ -148,7 +171,12 @@ class Reminders(commands.Cog):
 
         # ── Try DM ────────────────────────────────────────────────────────────
         if use_dm:
-            user = self.bot.get_user(target_id) or await self.bot.fetch_user(target_id)
+            user = self.bot.get_user(target_id)
+            if user is None:
+                try:
+                    user = await self.bot.fetch_user(target_id)
+                except discord.HTTPException:
+                    user = None
             if user:
                 try:
                     await user.send(embed=e)
@@ -158,6 +186,8 @@ class Reminders(commands.Cog):
                     log.debug(
                         f"Reminder {rid}: DMs closed for {target_id}, falling back to channel"
                     )
+                except discord.HTTPException as exc:
+                    log.warning(f"Reminder {rid}: DM send failed: {exc}")
 
         # ── Fall back to channel ping ──────────────────────────────────────────
         if not delivered:
@@ -177,17 +207,11 @@ class Reminders(commands.Cog):
                 f"Reminder {rid} for {target_id} could not be delivered anywhere"
             )
 
-        # ── Clean up storage and task dict ────────────────────────────────────
-        self._tasks.pop(rid, None)
-        await db.remove_reminder(rid)
-
     # ── Scheduling ─────────────────────────────────────────────────────────────
     async def _schedule(self, info: dict):
         """Persist a reminder and create its asyncio task."""
         await db.set_reminder(info)
-        self._tasks[info["id"]] = asyncio.create_task(
-            self._fire(info, delay=info["due"] - _now())
-        )
+        self._spawn(info)
 
     # ── Core create logic ──────────────────────────────────────────────────────
     async def _create(

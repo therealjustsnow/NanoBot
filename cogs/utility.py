@@ -13,6 +13,7 @@ Commands:
 """
 
 import ast
+import asyncio
 import inspect
 import io
 import logging
@@ -1871,7 +1872,8 @@ class Utility(commands.Cog):
             return await ctx.reply(embed=e, ephemeral=True)
 
         # ── 2. General symbol search across codebase ──────────────────────────
-        matches = _symbol_search(repo_root, query)
+        # Walks + ast.parses every .py file — offload so it never blocks the loop.
+        matches = await asyncio.to_thread(_symbol_search, repo_root, query)
 
         if not matches:
             return await ctx.reply(

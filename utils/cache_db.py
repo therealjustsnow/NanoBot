@@ -20,6 +20,7 @@ Tables
 import hashlib
 import logging
 import os
+import random
 import time
 
 import aiosqlite
@@ -102,27 +103,30 @@ def _hash(text: str) -> str:
 
 async def add_fml_stories(stories: list[str]) -> int:
     """Insert stories, skipping duplicates. Returns count of NEW stories added."""
+    if not stories:
+        return 0
     now = time.time()
-    added = 0
-    for story in stories:
-        h = _hash(story)
-        try:
-            await _conn().execute(
-                "INSERT INTO fml_stories (hash, content, added_at) VALUES (?, ?, ?)",
-                (h, story.strip(), now),
-            )
-            added += 1
-        except aiosqlite.IntegrityError:
-            pass  # duplicate
-    if added:
-        await _conn().commit()
-    return added
+    rows = [(_hash(s), s.strip(), now) for s in stories]
+    before = _conn().total_changes
+    await _conn().executemany(
+        "INSERT OR IGNORE INTO fml_stories (hash, content, added_at) VALUES (?, ?, ?)",
+        rows,
+    )
+    await _conn().commit()
+    return _conn().total_changes - before
 
 
 async def get_random_fml() -> str | None:
-    """Return a random FML story from the cache."""
+    """Return a random FML story from the cache.
+
+    Uses random-rowid sampling instead of ORDER BY RANDOM(), which sorts the
+    whole table on every call and gets slow as the cache grows.
+    """
     async with _conn().execute(
-        "SELECT content FROM fml_stories ORDER BY RANDOM() LIMIT 1"
+        "SELECT content FROM fml_stories "
+        "WHERE rowid >= (SELECT MIN(rowid) FROM fml_stories) "
+        "+ (ABS(RANDOM()) % (SELECT MAX(rowid) - MIN(rowid) + 1 FROM fml_stories)) "
+        "ORDER BY rowid LIMIT 1"
     ) as cur:
         row = await cur.fetchone()
     return row["content"] if row else None
@@ -150,27 +154,26 @@ async def purge_fml() -> int:
 
 async def add_wyr_questions(questions: list[str]) -> int:
     """Insert questions, skipping duplicates. Returns count of NEW questions added."""
+    if not questions:
+        return 0
     now = time.time()
-    added = 0
-    for q in questions:
-        h = _hash(q)
-        try:
-            await _conn().execute(
-                "INSERT INTO wyr_questions (hash, question, added_at) VALUES (?, ?, ?)",
-                (h, q.strip(), now),
-            )
-            added += 1
-        except aiosqlite.IntegrityError:
-            pass  # duplicate
-    if added:
-        await _conn().commit()
-    return added
+    rows = [(_hash(q), q.strip(), now) for q in questions]
+    before = _conn().total_changes
+    await _conn().executemany(
+        "INSERT OR IGNORE INTO wyr_questions (hash, question, added_at) VALUES (?, ?, ?)",
+        rows,
+    )
+    await _conn().commit()
+    return _conn().total_changes - before
 
 
 async def get_random_wyr() -> str | None:
-    """Return a random WYR question from the cache."""
+    """Return a random WYR question from the cache (random-rowid sampling)."""
     async with _conn().execute(
-        "SELECT question FROM wyr_questions ORDER BY RANDOM() LIMIT 1"
+        "SELECT question FROM wyr_questions "
+        "WHERE rowid >= (SELECT MIN(rowid) FROM wyr_questions) "
+        "+ (ABS(RANDOM()) % (SELECT MAX(rowid) - MIN(rowid) + 1 FROM wyr_questions)) "
+        "ORDER BY rowid LIMIT 1"
     ) as cur:
         row = await cur.fetchone()
     return row["question"] if row else None
@@ -246,10 +249,20 @@ async def get_random_image(source: str, endpoint: str) -> dict | None:
     Return a random cached image for the given source+endpoint.
     Returns dict with keys: url, source_url, artist  (or None if empty).
     """
+    # Pick a random row by offset rather than ORDER BY RANDOM() (which sorts the
+    # whole matching set). The (source, endpoint) index keeps both cheap.
+    async with _conn().execute(
+        "SELECT COUNT(*) FROM image_cache WHERE source=? AND endpoint=?",
+        (source, endpoint),
+    ) as cur:
+        total = (await cur.fetchone())[0]
+    if not total:
+        return None
+    offset = random.randrange(total)
     async with _conn().execute(
         "SELECT url, source_url, artist FROM image_cache "
-        "WHERE source=? AND endpoint=? ORDER BY RANDOM() LIMIT 1",
-        (source, endpoint),
+        "WHERE source=? AND endpoint=? LIMIT 1 OFFSET ?",
+        (source, endpoint, offset),
     ) as cur:
         row = await cur.fetchone()
     if not row:

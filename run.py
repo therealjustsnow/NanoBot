@@ -194,7 +194,9 @@ def check_config():
             "      (Actual validity can only be confirmed at connection time.)"
         )
     else:
-        safe = token[:10] + ("*" * 24)
+        # Show only the first 4 chars — the leading segment decodes to the bot's
+        # user ID, so we keep the logged prefix short.
+        safe = token[:4] + ("*" * 24)
         ok(f"Token: {safe}… (format looks valid — confirmed at connect time)")
 
     # ── Prefix ─────────────────────────────────────────────────────────────────
@@ -295,7 +297,7 @@ def check_logs_dir():
 
     ok(
         "Logging: discord.utils.setup_logging() (coloured console) "
-        "+ RotatingFileHandler → logs/nanobot.log (5 MB × 3 backups)"
+        "+ RotatingFileHandler → logs/nanobot.log (50 KB × 5 backups)"
     )
     warn(
         "discord.http is set to WARNING to reduce noise.\n"

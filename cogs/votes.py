@@ -230,11 +230,30 @@ class Votes(commands.Cog):
         self._allowed_networks = self._parse_allowed_ips(
             cfg.get("webhook_allowed_ips", "")
         )
+        self.webhook_secret = cfg.get("vote_webhook_secret")
+        self.topgg_v1_token = cfg.get("topgg_v1_token")
+        self.dbl_token = cfg.get("dbl_token")
+        self.botsgg_token = cfg.get("discordbotsgg_token")
+        new_port = int(cfg.get("vote_webhook_port", 5000))
+        if new_port != self.webhook_port:
+            log.warning(
+                f"vote_webhook_port changed to {new_port} — reload votes cog "
+                f"to rebind (server still on :{self.webhook_port})"
+            )
         log.info(
-            f"webhook_allowed_ips reloaded — {len(self._allowed_networks)} network(s)"
+            f"Votes config reloaded — {len(self._allowed_networks)} allowlist network(s)"
         )
 
     async def _start_webhook_server(self):
+        # Refuse to expose an unauthenticated webhook: with no secret AND no IP
+        # allowlist, anyone who can reach the port could forge vote payloads.
+        if not self.webhook_secret and not self._allowed_networks:
+            log.warning(
+                "Vote webhook server NOT started: no vote_webhook_secret and no "
+                "webhook_allowed_ips configured. Set one to enable vote webhooks."
+            )
+            return
+
         @aiohttp.web.middleware
         async def ip_filter(
             request: aiohttp.web.Request, handler
@@ -344,7 +363,10 @@ class Votes(commands.Cog):
             return aiohttp.web.Response(status=400)
 
         # DBL payload: {"id": "userid", "username": "...", ...}
-        user_id = int(data.get("id", 0))
+        try:
+            user_id = int(data.get("id", 0))
+        except (ValueError, TypeError):
+            return aiohttp.web.Response(status=400)
 
         if user_id:
             log.info(f"DBL vote received: user={user_id}")
@@ -365,7 +387,10 @@ class Votes(commands.Cog):
             return aiohttp.web.Response(status=400)
 
         # discord.bots.gg payload: {"userId": "...", "botId": "...", "type": "vote"}
-        user_id = int(data.get("userId", 0))
+        try:
+            user_id = int(data.get("userId", 0))
+        except (ValueError, TypeError):
+            return aiohttp.web.Response(status=400)
 
         if user_id:
             log.info(f"discord.bots.gg vote received: user={user_id}")

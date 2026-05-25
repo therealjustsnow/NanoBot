@@ -152,6 +152,16 @@ class NukeConfirm(discord.ui.View):
         )
 
 
+async def _chunked_sleep(seconds: float) -> None:
+    """Sleep in <=1h chunks. A single multi-month asyncio.sleep is fragile;
+    chunking keeps each await short."""
+    remaining = seconds
+    chunk = 3600
+    while remaining > 0:
+        await asyncio.sleep(min(remaining, chunk))
+        remaining -= chunk
+
+
 # ══════════════════════════════════════════════════════════════════════════════
 class Moderation(commands.Cog):
     """Mobile-first moderation commands."""
@@ -206,27 +216,33 @@ class Moderation(commands.Cog):
                 if ch:
                     try:
                         await ch.edit(slowmode_delay=0)
-                    except discord.Forbidden:
-                        pass
+                    except (discord.Forbidden, discord.HTTPException) as exc:
+                        log.warning(f"Overdue unslow failed for {channel_id}: {exc}")
                 await db.remove_slow(channel_id)
 
     async def _auto_unban(self, guild_id, user_id, delay):
-        await asyncio.sleep(delay)
+        # Cleanup runs only on non-cancelled completion: when a scheduled task
+        # is cancelled (reschedule / manual unban) the caller owns cleanup, and
+        # running it here would clobber the replacement task's state.
+        await _chunked_sleep(delay)
         guild = self.bot.get_guild(guild_id)
         if guild:
             try:
                 await guild.unban(
-                    discord.Object(id=user_id), reason="NanoBot: Timed unban complete"
+                    discord.Object(id=user_id),
+                    reason="NanoBot: Timed unban complete",
                 )
                 log.info(f"Timed unban: {user_id} in {guild_id}")
             except discord.NotFound:
                 pass
+            except discord.HTTPException as exc:
+                log.warning(f"Timed unban failed for {user_id} in {guild_id}: {exc}")
         key = f"{guild_id}:{user_id}"
         self._unban_tasks.pop(key, None)
         await db.remove_unban(key)
 
     async def _auto_unslow(self, channel_id, delay):
-        await asyncio.sleep(delay)
+        await _chunked_sleep(delay)
         ch = self.bot.get_channel(channel_id)
         if ch:
             try:
@@ -234,8 +250,8 @@ class Moderation(commands.Cog):
                     slowmode_delay=0, reason="NanoBot: Timed slowmode expired"
                 )
                 log.info(f"Timed slowmode removed: #{ch}")
-            except discord.Forbidden:
-                pass
+            except (discord.Forbidden, discord.HTTPException) as exc:
+                log.warning(f"Timed unslow failed for {channel_id}: {exc}")
         self._slow_tasks.pop(channel_id, None)
         await db.remove_slow(channel_id)
 

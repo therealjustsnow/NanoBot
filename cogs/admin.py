@@ -37,6 +37,30 @@ from utils import helpers as h
 
 log = logging.getLogger("NanoBot.admin")
 
+# Repo root = parent of this cogs/ directory. Pin subprocess cwd to it so
+# git/pip/restart always operate on the bot's own checkout regardless of the
+# directory the process happened to be launched from.
+_REPO_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+
+
+async def _git_pull():
+    """Run `git pull` in a worker thread (network I/O — must not block the loop).
+
+    Returns the completed process, or raises FileNotFoundError / TimeoutExpired.
+    """
+
+    def _run():
+        return subprocess.run(
+            ["git", "pull"],
+            capture_output=True,
+            text=True,
+            timeout=30,
+            cwd=_REPO_ROOT,
+        )
+
+    return await asyncio.to_thread(_run)
+
+
 # All cogs that NanoBot manages (admin reloads itself too — safe with discord.py 2.x)
 _ALL_COGS = (
     "cogs.moderation",
@@ -344,7 +368,7 @@ class Admin(commands.Cog):
         # Spawn a fresh process BEFORE closing so it can start initialising
         # while this one finishes its shutdown.  subprocess.Popen works
         # correctly on all platforms (os.execv silently fails on Windows).
-        subprocess.Popen([sys.executable] + sys.argv)
+        subprocess.Popen([sys.executable] + sys.argv, cwd=_REPO_ROOT)
         log.info("Spawned new process — shutting down this one")
 
         await self.bot.close()
@@ -377,12 +401,7 @@ class Admin(commands.Cog):
 
         # ── Step 1: git pull ───────────────────────────────────────────────────
         try:
-            result = subprocess.run(
-                ["git", "pull"],
-                capture_output=True,
-                text=True,
-                timeout=30,
-            )
+            result = await _git_pull()
             stdout = result.stdout.strip()
             stderr = result.stderr.strip()
             git_ok = result.returncode == 0
@@ -495,12 +514,7 @@ class Admin(commands.Cog):
 
         # ── Step 1: git pull ───────────────────────────────────────────────────
         try:
-            git_result = subprocess.run(
-                ["git", "pull"],
-                capture_output=True,
-                text=True,
-                timeout=30,
-            )
+            git_result = await _git_pull()
             git_stdout = git_result.stdout.strip()
             git_stderr = git_result.stderr.strip()
             git_ok = git_result.returncode == 0
@@ -551,6 +565,7 @@ class Admin(commands.Cog):
                     capture_output=True,
                     text=True,
                     timeout=120,
+                    cwd=_REPO_ROOT,
                 )
 
             pip_result = await asyncio.to_thread(_run_pip)
@@ -592,7 +607,7 @@ class Admin(commands.Cog):
         await ctx.reply(embed=e)
         await asyncio.sleep(0.5)
 
-        subprocess.Popen([sys.executable] + sys.argv)
+        subprocess.Popen([sys.executable] + sys.argv, cwd=_REPO_ROOT)
         log.info(f"upgrade: spawned new process — shutting down (by {ctx.author})")
         await self.bot.close()
 
@@ -826,7 +841,7 @@ class Admin(commands.Cog):
                 ephemeral=True,
             )
 
-        # Read last N lines efficiently without loading the whole file
+        # Log file is capped at 50 KB (rotating handler), so a full read is cheap.
         try:
             with open(log_path, encoding="utf-8", errors="replace") as f:
                 all_lines = f.readlines()
