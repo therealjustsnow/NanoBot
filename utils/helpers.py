@@ -59,6 +59,33 @@ def info(description: str, title: str = "ℹ️ Info") -> discord.Embed:
 # ── Duration Parsing ───────────────────────────────────────────────────────────
 _UNITS_SHORT = {"s": 1, "m": 60, "h": 3600, "d": 86400, "w": 604800}
 
+# ── File Size Parsing ──────────────────────────────────────────────────────────
+_FILESIZE_RE = re.compile(r"^(\d+(?:\.\d+)?)\s*(b|kb|mb|gb|tb)?$", re.IGNORECASE)
+_FILESIZE_UNITS_MB: dict[str, float] = {
+    "": 1.0,
+    "b": 1.0 / (1024 * 1024),
+    "kb": 1.0 / 1024,
+    "mb": 1.0,
+    "gb": 1024.0,
+    "tb": 1024.0 * 1024,
+}
+
+
+def parse_filesize_mb(s: str | None) -> int | None:
+    """
+    Parse a file size string into whole MB. Bare integer treated as MB.
+    Accepts B, KB, MB, GB, TB (case-insensitive, optional space before unit).
+    Returns None for invalid/missing input.
+    """
+    if not s:
+        return None
+    m = _FILESIZE_RE.match(str(s).strip())
+    if not m:
+        return None
+    value = float(m.group(1))
+    unit = (m.group(2) or "").lower()
+    return round(value * _FILESIZE_UNITS_MB[unit])
+
 _UNITS_LONG = {
     "second": 1,
     "seconds": 1,
