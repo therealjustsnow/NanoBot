@@ -9,6 +9,8 @@ import os
 import pytest
 
 from utils.config import (
+    DEFAULTS,
+    SECTION_MAP,
     ConfigIssue,
     _coerce,
     _format,
@@ -19,6 +21,8 @@ from utils.config import (
     save,
     set_value,
 )
+
+_REPO_ROOT = os.path.join(os.path.dirname(__file__), "..")
 
 # ── load ──────────────────────────────────────────────────────────────────────
 
@@ -300,3 +304,22 @@ def test_example_ini_contains_token_key():
 
 def test_example_ini_ends_with_newline():
     assert example_ini().endswith("\n")
+
+
+def test_example_ini_emits_every_default_key():
+    """Generated example must surface every key that has a default."""
+    content = example_ini()
+    missing = [k for k in DEFAULTS if f"{k} =" not in content]
+    assert not missing, f"keys with a default missing from example_ini(): {missing}"
+
+
+def test_committed_example_config_covers_every_schema_key():
+    """The committed example_config.ini must document every recognised key."""
+    path = os.path.join(_REPO_ROOT, "example_config.ini")
+    with open(path) as f:
+        content = f.read()
+    missing = [k for k in SECTION_MAP if f"{k} =" not in content]
+    assert not missing, (
+        "example_config.ini is missing documented keys (add them or remove from "
+        f"the schema): {missing}"
+    )
