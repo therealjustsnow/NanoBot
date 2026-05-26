@@ -172,6 +172,16 @@ class Moderation(commands.Cog):
         self._slow_tasks = {}
         self._unban_tasks = {}
 
+    def cog_unload(self):
+        """Cancel all pending timed-action tasks so a reload/unload doesn't leak
+        them (the new instance restores from DB via on_restore_schedules)."""
+        for task in list(self._unban_tasks.values()):
+            task.cancel()
+        for task in list(self._slow_tasks.values()):
+            task.cancel()
+        self._unban_tasks.clear()
+        self._slow_tasks.clear()
+
     @commands.Cog.listener()
     async def on_restore_schedules(self):
         await asyncio.gather(

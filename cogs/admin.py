@@ -912,7 +912,7 @@ class Admin(commands.Cog):
                 "\U0001f504 Scrape Running",
             )
         )
-        asyncio.create_task(fun_cog._run_scrape())
+        self.bot._spawn_bg(fun_cog._run_scrape())
 
     # ══════════════════════════════════════════════════════════════════════════
     #  cachestats

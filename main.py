@@ -221,7 +221,23 @@ class NanoBot(commands.Bot):
     def _spawn_bg(self, coro) -> None:
         task = asyncio.create_task(coro)
         self._bg_tasks.add(task)
-        task.add_done_callback(self._bg_tasks.discard)
+        task.add_done_callback(self._on_bg_done)
+
+    def _on_bg_done(self, task: asyncio.Task) -> None:
+        self._bg_tasks.discard(task)
+        if task.cancelled():
+            return
+        exc = task.exception()
+        if exc is not None:
+            log.error("Background task failed: %s", exc, exc_info=exc)
+
+    async def close(self) -> None:
+        # Cancel fire-and-forget background tasks on shutdown. (Cog-owned tasks
+        # are cancelled by cog_unload on reload; on full shutdown they stop with
+        # the event loop.)
+        for task in list(self._bg_tasks):
+            task.cancel()
+        await super().close()
 
     # ── Config application / reload ───────────────────────────────────────────
     def _apply_config(self, cfg: dict) -> None:
