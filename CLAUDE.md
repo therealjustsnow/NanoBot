@@ -92,6 +92,8 @@ Two SQLite databases, both opened once at startup via `setup_hook()` and shared 
 
 Both use WAL mode (`PRAGMA journal_mode=WAL`) for concurrent read/write. All queries are async via `aiosqlite`. Initialize with `await db.init()` and `await cache_db.init()` in `NanoBot.setup_hook()`.
 
+**Schema changes:** the `CREATE TABLE IF NOT EXISTS` / `_ensure_columns()` calls in `db.init()` are the version-0 baseline (idempotent on every start). Adding a column to an existing table uses `_ensure_columns(table, {col: definition})`. For anything more involved, register a forward-only migration with `@db.migration(N)` — these run in ascending order on startup, tracked by `PRAGMA user_version`, which advances only after a migration succeeds (so a failure retries next start; write migrations to be safe to re-run). Don't scatter ad-hoc `ALTER TABLE` blocks through `init()`.
+
 ### Utilities (`utils/`)
 
 - **`helpers.py`** — Embed factory (`ok()`, `err()`, `warn()`, `info()` with consistent brand colors), duration parsing (`parse_duration`, `parse_duration_from_end`, `parse_interval`), and `user_display()` for consistent user references.

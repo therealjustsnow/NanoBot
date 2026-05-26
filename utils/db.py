@@ -45,7 +45,7 @@ import json
 import logging
 import os
 import time
-from typing import Any
+from typing import Any, Awaitable, Callable
 
 import aiosqlite
 
@@ -139,6 +139,7 @@ async def init() -> None:
     await _migrate_auditlog_null_events()
     await _ensure_automod_tables()
     await _ensure_music_tables()
+    await _run_migrations()
     log.info(f"Database ready: {_DB_PATH}")
 
 
@@ -154,6 +155,72 @@ def _conn() -> aiosqlite.Connection:
     if _db is None:
         raise RuntimeError("db.init() has not been called")
     return _db
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+#  Schema helpers & versioned migrations
+# ══════════════════════════════════════════════════════════════════════════════
+
+
+async def _ensure_columns(table: str, columns: dict[str, str]) -> None:
+    """Idempotently add any missing columns to *table*.
+
+    `columns` maps a column name to its ALTER TABLE ADD COLUMN definition (type
+    plus any constraints/default). The existing column list is checked rather
+    than swallowing errors, so a locked or corrupt DB surfaces instead of being
+    silently skipped.
+    """
+    async with _conn().execute(f"PRAGMA table_info({table})") as cur:
+        existing = {row["name"] for row in await cur.fetchall()}
+    added = False
+    for col, definition in columns.items():
+        if col not in existing:
+            await _conn().execute(f"ALTER TABLE {table} ADD COLUMN {col} {definition}")
+            added = True
+    if added:
+        await _conn().commit()
+
+
+# Ordered, forward-only schema migrations keyed by version. PRAGMA user_version
+# records the highest applied migration; on startup any with a higher number run
+# in ascending order, and user_version is bumped only after a migration's
+# callable succeeds — so a failure leaves the version unchanged and the migration
+# is retried on the next start (write each one to be safe to re-run). The CREATE
+# TABLE / _ensure_columns calls in init() are the version-0 baseline; add NEW
+# schema changes here as @migration(N) instead of scattering ad-hoc ALTERs.
+_MIGRATIONS: list[tuple[int, Callable[[aiosqlite.Connection], Awaitable[None]]]] = []
+
+
+def migration(version: int):
+    """Register a schema migration to run when the DB is below *version*."""
+
+    def decorator(fn):
+        _MIGRATIONS.append((version, fn))
+        return fn
+
+    return decorator
+
+
+async def _run_migrations(migrations=None) -> None:
+    """Apply every registered migration whose version exceeds user_version."""
+    migrations = _MIGRATIONS if migrations is None else migrations
+    async with _conn().execute("PRAGMA user_version") as cur:
+        row = await cur.fetchone()
+    current = row[0] if row else 0
+
+    for version, fn in sorted(migrations):
+        if version <= current:
+            continue
+        log.info("Applying DB migration %d (%s)", version, fn.__name__)
+        try:
+            await fn(_conn())
+            # PRAGMA doesn't accept bound params; version is an int we control.
+            await _conn().execute(f"PRAGMA user_version = {int(version)}")
+            await _conn().commit()
+        except Exception:
+            await _conn().rollback()
+            log.error("DB migration %d failed — rolled back", version)
+            raise
 
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -707,12 +774,7 @@ async def _ensure_welcome_tables():
         "image_text": "TEXT",
     }
     for table in ("welcome_config", "leave_config"):
-        async with _conn().execute(f"PRAGMA table_info({table})") as cur:
-            existing = {row["name"] for row in await cur.fetchall()}
-        for col, typ in new_columns.items():
-            if col not in existing:
-                await _conn().execute(f"ALTER TABLE {table} ADD COLUMN {col} {typ}")
-    await _conn().commit()
+        await _ensure_columns(table, new_columns)
 
 
 async def _get_event_config(table: str, guild_id: int) -> dict | None:
@@ -1496,15 +1558,10 @@ async def _ensure_automod_tables() -> None:
         CREATE INDEX IF NOT EXISTS aaw_guild ON automod_attachment_words (guild_id);
     """)
     await _conn().commit()
-    # Add timeout_seconds if this is an older schema. Check the column list
-    # rather than swallowing every error so a locked/corrupt DB still surfaces.
-    async with _conn().execute("PRAGMA table_info(automod_config)") as cur:
-        cols = {r[1] for r in await cur.fetchall()}
-    if "timeout_seconds" not in cols:
-        await _conn().execute(
-            "ALTER TABLE automod_config ADD COLUMN timeout_seconds INTEGER NOT NULL DEFAULT 600"
-        )
-        await _conn().commit()
+    # Add timeout_seconds if this is an older schema.
+    await _ensure_columns(
+        "automod_config", {"timeout_seconds": "INTEGER NOT NULL DEFAULT 600"}
+    )
 
 
 def _automod_row(row: aiosqlite.Row) -> dict:
@@ -1804,12 +1861,10 @@ async def _ensure_music_tables() -> None:
     await _conn().commit()
 
     # Migration: add columns to music_settings rows that pre-date persistence.
-    async with _conn().execute("PRAGMA table_info(music_settings)") as cur:
-        existing = {row["name"] for row in await cur.fetchall()}
-    for col in ("voice_channel_id", "text_channel_id", "loop_mode"):
-        if col not in existing:
-            await _conn().execute(f"ALTER TABLE music_settings ADD COLUMN {col} TEXT")
-    await _conn().commit()
+    await _ensure_columns(
+        "music_settings",
+        {"voice_channel_id": "TEXT", "text_channel_id": "TEXT", "loop_mode": "TEXT"},
+    )
 
 
 async def get_music_stay(guild_id: int) -> bool:
