@@ -115,7 +115,7 @@ Tag shortcuts are detected in `on_message`: if a message matches no command but 
 `config.ini` (gitignored) at the repo root, split into six sections:
 
 * **`[bot]`** — `token`, `default_prefix`, `owner_id`, `error_channel_id`
-* **`[logging]`** — `log_level`, `log_http`
+* **`[logging]`** — `log_level`, `log_http`, `log_events_jsonl`
 * **`[votes]`** — `topgg_v1_token`, `dbl_token`, `discordbotsgg_token`, `vote_webhook_port`, `vote_webhook_secret`, `webhook_allowed_ips`
 * **`[groq]`** — `groq_api_key`
 * **`[scraper]`** — `fml_pages_per_scrape`, `wyr_requests_per_scrape`, `nekos_per_endpoint`, `nekosia_per_tag`, `revalidate_age`, `revalidate_batch`, `groq_wyr_system`
@@ -130,7 +130,7 @@ Live editing:
 * `!reloadconfig` — re-reads `config.ini` from disk.
 * `!config show|get|set|unset …` — DM-only inspect/edit. Secrets (token, API keys, webhook secret) are always masked when echoed back.
 
-Logs rotate at 50 KB, 5 backups, written to `logs/nanobot.log`.
+Logs rotate at 50 KB, 5 backups, written to `logs/nanobot.log`. Each line carries a short correlation id (`[abcd1234]`) shared by the start/completion/error records of one command invocation, so a single command's trace is greppable. When `log_events_jsonl` is on (default), structured command-lifecycle events (`command.start/ok/err`, `slash.start/ok/err` with `dur_ms`, user, guild) are also written to `logs/events.jsonl` (one JSON object per line, rotating). Correlation/timing helpers live in `utils/obs.py`.
 
 ### CI
 

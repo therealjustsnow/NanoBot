@@ -9,7 +9,7 @@ load — the old file is renamed to `config.json.bak` after migration.
 
 Sections:
     [bot]      token, default_prefix, owner_id, error_channel_id
-    [logging]  log_level, log_http
+    [logging]  log_level, log_http, log_events_jsonl
     [votes]    top.gg / DBL / discord.bots.gg tokens, webhook port/secret,
                webhook_allowed_ips
     [groq]     groq_api_key
@@ -253,6 +253,13 @@ FIELDS: tuple[Field, ...] = (
         validator=_v_log_level,
     ),
     Field("log_http", "logging", "bool", False, "Log raw HTTP requests (true/false)"),
+    Field(
+        "log_events_jsonl",
+        "logging",
+        "bool",
+        True,
+        "Write structured command-lifecycle events to logs/events.jsonl (true/false)",
+    ),
     # ── [votes] ──
     Field(
         "topgg_v1_token",
