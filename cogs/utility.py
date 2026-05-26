@@ -879,10 +879,9 @@ class Utility(commands.Cog):
     # ══════════════════════════════════════════════════════════════════════════
     #  support
     # ══════════════════════════════════════════════════════════════════════════
-    @commands.hybrid_command(
+    @commands.command(
         name="support",
         aliases=["helpserver"],
-        description="Get a link to the NanoBot support server.",
         extras={
             "category": "⚙️ Config & Info",
             "short": "Link to the NanoBot support server",
@@ -894,7 +893,7 @@ class Utility(commands.Cog):
         },
     )
     @commands.cooldown(1, 10, commands.BucketType.user)
-    async def support(self, ctx: commands.Context):
+    async def pfx_support(self, ctx: commands.Context):
         e = h.embed(title="💬 NanoBot Support", color=h.BLUE)
         e.description = (
             "Need help? Found a bug? Have a suggestion?\n\n"
@@ -906,11 +905,64 @@ class Utility(commands.Cog):
         await ctx.reply(embed=e, ephemeral=True)
 
     # ══════════════════════════════════════════════════════════════════════════
+    #  /bot group — low-frequency bot meta commands (1 top-level slot).
+    #  Prefix stays flat (!ping, !about, !stats, …); the slash twins build a
+    #  Context from the interaction and reuse the prefix callbacks.
+    # ══════════════════════════════════════════════════════════════════════════
+    botinfo_slash = app_commands.Group(
+        name="bot",
+        description="NanoBot info: ping, about, invite, stats, uptime, source, support.",
+    )
+
+    @botinfo_slash.command(
+        name="support", description="Link to the NanoBot support server."
+    )
+    async def slash_bot_support(self, interaction: discord.Interaction):
+        ctx = await commands.Context.from_interaction(interaction)
+        await self.pfx_support(ctx)
+
+    @botinfo_slash.command(name="ping", description="Check NanoBot's latency.")
+    async def slash_bot_ping(self, interaction: discord.Interaction):
+        ctx = await commands.Context.from_interaction(interaction)
+        await self.pfx_ping(ctx)
+
+    @botinfo_slash.command(name="invite", description="Get NanoBot's invite link.")
+    async def slash_bot_invite(self, interaction: discord.Interaction):
+        ctx = await commands.Context.from_interaction(interaction)
+        await self.pfx_invite(ctx)
+
+    @botinfo_slash.command(
+        name="about", description="What NanoBot is and why it exists."
+    )
+    async def slash_bot_about(self, interaction: discord.Interaction):
+        ctx = await commands.Context.from_interaction(interaction)
+        await self.pfx_about(ctx)
+
+    @botinfo_slash.command(
+        name="uptime", description="How long NanoBot has been running."
+    )
+    async def slash_bot_uptime(self, interaction: discord.Interaction):
+        ctx = await commands.Context.from_interaction(interaction)
+        await self.pfx_uptime(ctx)
+
+    @botinfo_slash.command(name="stats", description="NanoBot runtime statistics.")
+    async def slash_bot_stats(self, interaction: discord.Interaction):
+        ctx = await commands.Context.from_interaction(interaction)
+        await self.pfx_stats(ctx)
+
+    @botinfo_slash.command(
+        name="source", description="Show source for a command or symbol."
+    )
+    @app_commands.describe(command="Command name or symbol to inspect")
+    async def slash_bot_source(self, interaction: discord.Interaction, command: str):
+        ctx = await commands.Context.from_interaction(interaction)
+        await self.pfx_source(ctx, command=command)
+
+    # ══════════════════════════════════════════════════════════════════════════
     #  ping
     # ══════════════════════════════════════════════════════════════════════════
-    @commands.hybrid_command(
+    @commands.command(
         name="ping",
-        description="Check NanoBot's latency.",
         extras={
             "category": "⚙️ Config & Info",
             "short": "Check NanoBot's response time",
@@ -922,7 +974,7 @@ class Utility(commands.Cog):
         },
     )
     @commands.cooldown(1, 10, commands.BucketType.user)
-    async def ping(self, ctx: commands.Context):
+    async def pfx_ping(self, ctx: commands.Context):
         ws_ms = round(self.bot.latency * 1000)
         ws_status = "🟢" if ws_ms < 100 else ("🟡" if ws_ms < 200 else "🔴")
 
@@ -1034,9 +1086,8 @@ class Utility(commands.Cog):
     # ══════════════════════════════════════════════════════════════════════════
     #  invite
     # ══════════════════════════════════════════════════════════════════════════
-    @commands.hybrid_command(
+    @commands.command(
         name="invite",
-        description="Get NanoBot's invite link with the correct permissions.",
         extras={
             "category": "⚙️ Config & Info",
             "short": "Get the bot invite link",
@@ -1048,7 +1099,7 @@ class Utility(commands.Cog):
         },
     )
     @commands.cooldown(1, 10, commands.BucketType.user)
-    async def invite(self, ctx: commands.Context):
+    async def pfx_invite(self, ctx: commands.Context):
         # Exact permissions NanoBot needs — nothing more, nothing less
         perms = discord.Permissions(
             # Moderation
@@ -1108,9 +1159,8 @@ class Utility(commands.Cog):
     # ══════════════════════════════════════════════════════════════════════════
     #  about
     # ══════════════════════════════════════════════════════════════════════════
-    @commands.hybrid_command(
+    @commands.command(
         name="about",
-        description="What NanoBot is and why it exists.",
         extras={
             "category": "⚙️ Config & Info",
             "short": "What NanoBot is and why it exists",
@@ -1122,7 +1172,7 @@ class Utility(commands.Cog):
         },
     )
     @commands.cooldown(1, 10, commands.BucketType.user)
-    async def about(self, ctx: commands.Context):
+    async def pfx_about(self, ctx: commands.Context):
         prefix = (
             self.bot.prefixes.get(str(ctx.guild.id), self.bot.default_prefix)
             if ctx.guild
@@ -1650,9 +1700,8 @@ class Utility(commands.Cog):
     # ══════════════════════════════════════════════════════════════════════════
     #  uptime
     # ══════════════════════════════════════════════════════════════════════════
-    @commands.hybrid_command(
+    @commands.command(
         name="uptime",
-        description="How long NanoBot has been running since last (re)start.",
         extras={
             "category": "🔍 Server & User Info",
             "short": "How long the bot has been running",
@@ -1664,7 +1713,7 @@ class Utility(commands.Cog):
         },
     )
     @commands.cooldown(1, 5, commands.BucketType.user)
-    async def uptime(self, ctx: commands.Context):
+    async def pfx_uptime(self, ctx: commands.Context):
         now = discord.utils.utcnow()
         delta = now - self.bot.start_time
         seconds = int(delta.total_seconds())
@@ -1708,9 +1757,8 @@ class Utility(commands.Cog):
     # ══════════════════════════════════════════════════════════════════════════
     #  stats
     # ══════════════════════════════════════════════════════════════════════════
-    @commands.hybrid_command(
+    @commands.command(
         name="stats",
-        description="NanoBot runtime statistics since last start.",
         extras={
             "category": "⚙️ Config & Info",
             "short": "Runtime stats — commands ran, servers, members, uptime, CPU, memory",
@@ -1726,7 +1774,7 @@ class Utility(commands.Cog):
         },
     )
     @commands.cooldown(1, 10, commands.BucketType.user)
-    async def stats(self, ctx: commands.Context):
+    async def pfx_stats(self, ctx: commands.Context):
         now = discord.utils.utcnow()
         delta = now - self.bot.start_time
         seconds = int(delta.total_seconds())
@@ -1804,9 +1852,8 @@ class Utility(commands.Cog):
     # ══════════════════════════════════════════════════════════════════════════
     #  source — show source code for a command or any named symbol
     # ══════════════════════════════════════════════════════════════════════════
-    @commands.hybrid_command(
+    @commands.command(
         name="source",
-        description="Show source code for a command or any named symbol in the bot.",
         extras={
             "category": "⚙️ Config & Info",
             "short": "Show source for a command or symbol",
@@ -1821,9 +1868,8 @@ class Utility(commands.Cog):
             "example": "!source ship\n!source ban\n!source _ship_score\n!source WyrView",
         },
     )
-    @app_commands.describe(command="Command name or symbol to inspect")
     @commands.cooldown(1, 5, commands.BucketType.user)
-    async def source(self, ctx: commands.Context, *, command: str):
+    async def pfx_source(self, ctx: commands.Context, *, command: str):
         query = command.strip()
         repo_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
