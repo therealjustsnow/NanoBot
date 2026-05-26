@@ -151,6 +151,42 @@ async def _slash_error_response(
 
 
 # ── Bot ────────────────────────────────────────────────────────────────────────
+class ObsTree(app_commands.CommandTree):
+    """
+    CommandTree that stamps a correlation id + start time on every app-command
+    invocation. _call() is the single method discord.py routes every slash /
+    context-menu invocation through, and the command callback runs inside it (in
+    this task) — so setting the contextvar here propagates the id to the command
+    body and any log lines it emits, which a listener (separate task) cannot do.
+
+    NOTE: _call is private discord.py API. It has been stable across 2.x; the
+    wrapper is kept thin and the startup cog/tree load exercises it, so a
+    signature change would fail loudly rather than silently.
+    """
+
+    async def _call(self, interaction: discord.Interaction):
+        cid = obs.new_cid()
+        interaction.extras["_nb_cid"] = cid
+        interaction.extras["_nb_t0"] = time.perf_counter()
+        token = obs.set_cid(cid)
+        try:
+            cmd = (
+                interaction.command.qualified_name
+                if interaction.command
+                else (interaction.data or {}).get("name", "?")
+            )
+            obs.log_event(
+                "slash.start",
+                cmd=cmd,
+                user=interaction.user.id if interaction.user else None,
+                guild=interaction.guild_id,
+                channel=interaction.channel_id,
+            )
+            return await super()._call(interaction)
+        finally:
+            obs.reset_cid(token)
+
+
 class NanoBot(commands.Bot):
     def __init__(self, cfg: dict):
         intents = discord.Intents.default()
@@ -162,6 +198,7 @@ class NanoBot(commands.Bot):
             intents=intents,
             help_command=None,
             description="NanoBot — Small. Fast. Built for Mobile Mods.",
+            tree_cls=ObsTree,
         )
 
         # Route app command failures (including transformer errors) to our
@@ -419,28 +456,6 @@ class NanoBot(commands.Bot):
             dur_ms=dur_ms,
             user=ctx.author.id,
             guild=ctx.guild.id if ctx.guild else None,
-        )
-
-    async def on_interaction(self, interaction: discord.Interaction):
-        # Stamp a correlation id + start time on every slash invocation. Adding
-        # this listener does not interfere with the tree's own processing.
-        if interaction.type is not discord.InteractionType.application_command:
-            return
-        cid = obs.new_cid()
-        interaction.extras["_nb_cid"] = cid
-        interaction.extras["_nb_t0"] = time.perf_counter()
-        obs.set_cid(cid)
-        cmd = (
-            interaction.command.qualified_name
-            if interaction.command
-            else (interaction.data or {}).get("name", "?")
-        )
-        obs.log_event(
-            "slash.start",
-            cmd=cmd,
-            user=interaction.user.id if interaction.user else None,
-            guild=interaction.guild_id,
-            channel=interaction.channel_id,
         )
 
     async def on_app_command_completion(
