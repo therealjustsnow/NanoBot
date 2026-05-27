@@ -80,7 +80,7 @@ class ELI5(commands.Cog):
                 ("topic", "What you want explained simply (max 300 chars)"),
             ],
             "perms": "None",
-            "example": "!eli5 black holes\n!eli5 why the sky is blue",
+            "example": "{prefix}eli5 black holes\n{prefix}eli5 why the sky is blue",
         },
     )
     @app_commands.describe(topic="The thing you want explained simply.")

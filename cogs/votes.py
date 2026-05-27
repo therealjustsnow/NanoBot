@@ -563,7 +563,7 @@ class Votes(commands.Cog):
                 ),
             ],
             "perms": "None",
-            "example": "!vote\n!vote notify off",
+            "example": "{prefix}vote\n{prefix}vote notify off",
         },
     )
     @app_commands.describe(action="Optional: 'notify' to toggle cooldown pings")

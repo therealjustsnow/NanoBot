@@ -318,7 +318,7 @@ class Warnings(commands.Cog):
             "desc": "Issue a warning to a user. Configurable auto-kick/ban thresholds apply.",
             "args": [("user", "User to warn"), ("reason", "Reason (optional)")],
             "perms": "Manage Messages",
-            "example": "!warn @Troublemaker Spamming in general",
+            "example": "{prefix}warn @Troublemaker Spamming in general",
         },
     )
     @has_mod_perms()
@@ -353,7 +353,7 @@ class Warnings(commands.Cog):
             "desc": "View all warnings for a user on this server.",
             "args": [("user", "User to look up")],
             "perms": "Manage Messages",
-            "example": "!warnings @Troublemaker",
+            "example": "{prefix}warnings @Troublemaker",
         },
     )
     @has_mod_perms()
@@ -370,7 +370,7 @@ class Warnings(commands.Cog):
             "desc": "Wipe all warnings for a user. Admin only.",
             "args": [("user", "User whose warnings to clear")],
             "perms": "Administrator",
-            "example": "!clearwarnings @Reformed",
+            "example": "{prefix}clearwarnings @Reformed",
         },
     )
     @has_admin_perms()
@@ -391,7 +391,7 @@ class Warnings(commands.Cog):
                 ("dm_user", "DM users on warn (true/false)"),
             ],
             "perms": "Administrator",
-            "example": "!warnconfig 3 5 true\n!warnconfig",
+            "example": "{prefix}warnconfig 3 5 true\n{prefix}warnconfig",
         },
     )
     @has_admin_perms()

@@ -306,7 +306,7 @@ class Moderation(commands.Cog):
                 ("message", "DM to send the user (omit for default)"),
             ],
             "perms": "Ban Members",
-            "example": "!cban @user 7 24h See you tomorrow.",
+            "example": "{prefix}cban @user 7 24h See you tomorrow.",
         },
     )
     @app_commands.describe(
@@ -421,7 +421,7 @@ class Moderation(commands.Cog):
                 ("message", "DM to send (omit for default)"),
             ],
             "perms": "Ban Members",
-            "example": "!ban @user You have been permanently banned.",
+            "example": "{prefix}ban @user You have been permanently banned.",
         },
     )
     @app_commands.describe(
@@ -503,7 +503,7 @@ class Moderation(commands.Cog):
                 ("reason", "Reason applied to all bans"),
             ],
             "perms": "Ban Members",
-            "example": "!massban 111 222 333 Raid cleanup",
+            "example": "{prefix}massban 111 222 333 Raid cleanup",
         },
     )
     @app_commands.describe(
@@ -571,7 +571,7 @@ class Moderation(commands.Cog):
                 ("reason", "Optional reason (shown in audit log)"),
             ],
             "perms": "Ban Members",
-            "example": "!unban 123456789012345678",
+            "example": "{prefix}unban 123456789012345678",
         },
     )
     @app_commands.describe(
@@ -642,7 +642,7 @@ class Moderation(commands.Cog):
                 ("message", "DM to send (omit for default)"),
             ],
             "perms": "Kick Members",
-            "example": "!kick @user Please review the rules.",
+            "example": "{prefix}kick @user Please review the rules.",
         },
     )
     @app_commands.describe(
@@ -723,7 +723,7 @@ class Moderation(commands.Cog):
                 ("length", "Auto-disable after: 10m, 1h, 3d (max 7 days)."),
             ],
             "perms": "Manage Channels",
-            "example": "!slow 2m 1h",
+            "example": "{prefix}slow 2m 1h",
         },
     )
     @app_commands.describe(
@@ -812,7 +812,7 @@ class Moderation(commands.Cog):
                 ("reason", "Optional reason in audit log"),
             ],
             "perms": "Manage Channels",
-            "example": "!lock #general Temporary lock during raid.",
+            "example": "{prefix}lock #general Temporary lock during raid.",
         },
     )
     @app_commands.describe(
@@ -877,7 +877,7 @@ class Moderation(commands.Cog):
                 ("ends_with", "Only messages ending with this text"),
             ],
             "perms": "Manage Messages",
-            "example": "!purge 50\n/purge amount:50 user:@spammer",
+            "example": "{prefix}purge 50\n/purge amount:50 user:@spammer",
         },
     )
     @app_commands.describe(
@@ -989,7 +989,7 @@ class Moderation(commands.Cog):
                 ("amount", "Number of messages to delete (1–500)"),
             ],
             "perms": "Manage Messages",
-            "example": "!snailpurge 200",
+            "example": "{prefix}snailpurge 200",
         },
     )
     @app_commands.describe(amount="Number of messages to delete (1–500)")
@@ -1083,7 +1083,7 @@ class Moderation(commands.Cog):
                 ("amount", "Messages to scan (1–100, default 50)"),
             ],
             "perms": "Manage Messages",
-            "example": "!clean 20",
+            "example": "{prefix}clean 20",
         },
     )
     @app_commands.describe(amount="How many messages to scan (1–100, default 50)")
@@ -1122,7 +1122,7 @@ class Moderation(commands.Cog):
                 ("reason", "Optional reason"),
             ],
             "perms": "Moderate Members",
-            "example": "!freeze @user 30m Please cool down.",
+            "example": "{prefix}freeze @user 30m Please cool down.",
         },
     )
     @app_commands.describe(
@@ -1217,7 +1217,7 @@ class Moderation(commands.Cog):
                 ("user", "User to unfreeze (required)"),
             ],
             "perms": "Moderate Members",
-            "example": "!unfreeze @user",
+            "example": "{prefix}unfreeze @user",
         },
     )
     @app_commands.describe(user="User to unfreeze")
@@ -1257,7 +1257,7 @@ class Moderation(commands.Cog):
                 ("role", "Role to assign (mention or name)"),
             ],
             "perms": "Manage Roles",
-            "example": "!addrole @user Verified",
+            "example": "{prefix}addrole @user Verified",
         },
     )
     @app_commands.describe(user="User to give the role to", role="Role to assign")
@@ -1303,7 +1303,7 @@ class Moderation(commands.Cog):
                 ("role", "Role to remove (mention or name)"),
             ],
             "perms": "Manage Roles",
-            "example": "!removerole @user Muted",
+            "example": "{prefix}removerole @user Muted",
         },
     )
     @app_commands.describe(user="User to remove the role from", role="Role to remove")
@@ -1356,7 +1356,7 @@ class Moderation(commands.Cog):
                 ("channel", "Channel to inspect (default: current channel)"),
             ],
             "perms": "None",
-            "example": "!channelinfo #general",
+            "example": "{prefix}channelinfo #general",
         },
     )
     @app_commands.describe(channel="Channel to inspect (default: current channel)")
@@ -1463,7 +1463,7 @@ class Moderation(commands.Cog):
                 ("content", "Note content (max 1000 chars)"),
             ],
             "perms": "Manage Messages",
-            "example": "!note @user Warned about spam in #general.",
+            "example": "{prefix}note @user Warned about spam in #general.",
         },
     )
     @has_mod_perms()
@@ -1484,7 +1484,7 @@ class Moderation(commands.Cog):
                 ("user", "User to look up"),
             ],
             "perms": "Manage Messages",
-            "example": "!notes @user",
+            "example": "{prefix}notes @user",
         },
     )
     @has_mod_perms()
@@ -1502,7 +1502,7 @@ class Moderation(commands.Cog):
                 ("user", "User whose notes to clear"),
             ],
             "perms": "Administrator",
-            "example": "!clearnotes @user",
+            "example": "{prefix}clearnotes @user",
         },
     )
     @has_admin_perms()
@@ -1559,7 +1559,7 @@ class Moderation(commands.Cog):
             "desc": "Displays who last sent a message in this channel — the default target for kick, ban, freeze, etc.",
             "args": [],
             "perms": "None",
-            "example": "!last",
+            "example": "{prefix}last",
         },
     )
     async def last(self, ctx):
@@ -1597,7 +1597,7 @@ class Moderation(commands.Cog):
                 ("reason", "Optional reason"),
             ],
             "perms": "Ban Members",
-            "example": "!tempban @user 3d Repeated rule violations",
+            "example": "{prefix}tempban @user 3d Repeated rule violations",
         },
     )
     @app_commands.describe(
@@ -1713,7 +1713,7 @@ class Moderation(commands.Cog):
                 ("reason", "Optional reason (shown in audit log)"),
             ],
             "perms": "Manage Channels",
-            "example": "!nuke raid cleanup",
+            "example": "{prefix}nuke raid cleanup",
         },
     )
     @app_commands.describe(reason="Optional reason (shown in audit log)")
@@ -1776,7 +1776,7 @@ class Moderation(commands.Cog):
                 ("channel", "Channel to hide (default: current channel)"),
             ],
             "perms": "Manage Channels",
-            "example": "!hide #staff-only",
+            "example": "{prefix}hide #staff-only",
         },
     )
     @app_commands.describe(channel="Channel to hide (default: current)")
@@ -1820,7 +1820,7 @@ class Moderation(commands.Cog):
                 ("channel", "Channel to unhide (default: current channel)"),
             ],
             "perms": "Manage Channels",
-            "example": "!unhide #announcements",
+            "example": "{prefix}unhide #announcements",
         },
     )
     @app_commands.describe(channel="Channel to unhide (default: current)")
@@ -1867,7 +1867,7 @@ class Moderation(commands.Cog):
                 ("message", "The text to send"),
             ],
             "perms": "Manage Messages",
-            "example": "!echo #announcements Server maintenance in 10 minutes!",
+            "example": "{prefix}echo #announcements Server maintenance in 10 minutes!",
         },
     )
     @app_commands.describe(
@@ -1920,7 +1920,7 @@ class Moderation(commands.Cog):
                 ("from_channel", "Source voice channel (blank = your current VC)"),
             ],
             "perms": "Move Members",
-            "example": "!moveall #General",
+            "example": "{prefix}moveall #General",
         },
     )
     @app_commands.describe(
@@ -2004,7 +2004,7 @@ class Moderation(commands.Cog):
             ),
             "args": [("user", "User to investigate")],
             "perms": "Manage Messages",
-            "example": "!modcheck @Troublemaker\n!check @Troublemaker",
+            "example": "{prefix}modcheck @Troublemaker\n{prefix}check @Troublemaker",
         },
     )
     @app_commands.describe(user="User to investigate")

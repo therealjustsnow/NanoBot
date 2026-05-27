@@ -251,7 +251,7 @@ def _collect_categories(
             ),
             "args": extras.get("args", []),
             "perms": perms,
-            "example": extras.get("example", f"!{cmd.name}"),
+            "example": extras.get("example", "{prefix}" + cmd.name),
         }
         by_cat.setdefault(cat, []).append(entry)
 
@@ -310,7 +310,7 @@ def _flat_lookup(bot: commands.Bot) -> dict[str, dict]:
             ),
             "args": extras.get("args", []),
             "perms": perms,
-            "example": extras.get("example", f"!{cmd.name}"),
+            "example": extras.get("example", "{prefix}" + cmd.name),
         }
         out[cmd.name] = entry
         for alias in cmd.aliases or []:
@@ -715,7 +715,7 @@ class Utility(commands.Cog):
                 ),
             ],
             "perms": "None",
-            "example": "!help\n!help ban\n!help banning\n!help 3",
+            "example": "{prefix}help\n{prefix}help ban\n{prefix}help banning\n{prefix}help 3",
         },
     )
     @app_commands.describe(
@@ -761,7 +761,7 @@ class Utility(commands.Cog):
                 is_slash_only = cmd["name"] in _SLASH_GROUP_LOOKUP
                 title_prefix = "/" if is_slash_only else prefix
                 e = h.embed(title=f"`{title_prefix}{cmd['usage']}`", color=h.BLUE)
-                e.description = cmd["desc"] + "\n\u200b"
+                e.description = cmd["desc"].replace("{prefix}", prefix) + "\n\u200b"
                 if cmd["args"]:
                     e.add_field(
                         name="Arguments",
@@ -770,9 +770,10 @@ class Utility(commands.Cog):
                     )
                 e.add_field(name="Required Permission", value=cmd["perms"], inline=True)
                 if cmd.get("example"):
+                    resolved = cmd["example"].replace("{prefix}", prefix)
                     e.add_field(
                         name="Example",
-                        value="\n".join(f"`{ex}`" for ex in cmd["example"].split("\n")),
+                        value="\n".join(f"`{ex}`" for ex in resolved.split("\n")),
                         inline=False,
                     )
                 if cmd.get("aliases"):
@@ -827,7 +828,7 @@ class Utility(commands.Cog):
                 ("new_prefix", "New prefix (1–5 chars, no spaces). Omit to view."),
             ],
             "perms": "Administrator (to change)",
-            "example": "!prefix ?",
+            "example": "{prefix}prefix ?",
         },
     )
     @app_commands.describe(new_prefix="New prefix (leave blank to view current)")
@@ -889,7 +890,7 @@ class Utility(commands.Cog):
             "desc": "Posts an invite link to the official NanoBot support server.",
             "args": [],
             "perms": "None",
-            "example": "!support",
+            "example": "{prefix}support",
         },
     )
     @commands.cooldown(1, 10, commands.BucketType.user)
@@ -970,7 +971,7 @@ class Utility(commands.Cog):
             "desc": "Returns the current WebSocket latency between NanoBot and Discord's servers.",
             "args": [],
             "perms": "None",
-            "example": "!ping",
+            "example": "{prefix}ping",
         },
     )
     @commands.cooldown(1, 10, commands.BucketType.user)
@@ -1002,10 +1003,10 @@ class Utility(commands.Cog):
             "category": "🔍 Server & User Info",
             "short": "Quick member count",
             "usage": "mc",
-            "desc": "One-tap member count. Faster than !server for when you just need the number.",
+            "desc": "One-tap member count. Faster than {prefix}server for when you just need the number.",
             "args": [],
             "perms": "None",
-            "example": "!mc",
+            "example": "{prefix}mc",
         },
     )
     @commands.cooldown(1, 5, commands.BucketType.user)
@@ -1034,7 +1035,7 @@ class Utility(commands.Cog):
                 ("target", "User, role, or channel to look up (blank = yourself)")
             ],
             "perms": "None",
-            "example": "!id\n!id @someone\n!id #general\n!id @Moderator",
+            "example": "{prefix}id\n{prefix}id @someone\n{prefix}id #general\n{prefix}id @Moderator",
         },
     )
     @app_commands.describe(target="User, role, or channel (blank = yourself)")
@@ -1095,7 +1096,7 @@ class Utility(commands.Cog):
             "desc": "Generates an invite link with exactly the permissions NanoBot needs — no unnecessary extras.",
             "args": [],
             "perms": "None",
-            "example": "!invite",
+            "example": "{prefix}invite",
         },
     )
     @commands.cooldown(1, 10, commands.BucketType.user)
@@ -1168,7 +1169,7 @@ class Utility(commands.Cog):
             "desc": "The NanoBot story — why it was built, what it avoids, and what makes it different.",
             "args": [],
             "perms": "None",
-            "example": "!about",
+            "example": "{prefix}about",
         },
     )
     @commands.cooldown(1, 10, commands.BucketType.user)
@@ -1254,7 +1255,7 @@ class Utility(commands.Cog):
             "desc": "Member counts, boost level, channel breakdown, features, creation date and more.",
             "args": [],
             "perms": "None",
-            "example": "!server",
+            "example": "{prefix}server",
         },
     )
     @commands.cooldown(1, 5, commands.BucketType.user)
@@ -1372,7 +1373,7 @@ class Utility(commands.Cog):
                 ("user", "User to look up (blank = yourself)"),
             ],
             "perms": "None",
-            "example": "!user @someone",
+            "example": "{prefix}user @someone",
         },
     )
     @app_commands.describe(user="User to look up (leave blank for yourself)")
@@ -1511,7 +1512,7 @@ class Utility(commands.Cog):
                 ("user", "Whose avatar to show (blank = yourself)"),
             ],
             "perms": "None",
-            "example": "!avatar @someone",
+            "example": "{prefix}avatar @someone",
         },
     )
     @app_commands.describe(user="User whose avatar to show (leave blank for yourself)")
@@ -1568,7 +1569,7 @@ class Utility(commands.Cog):
                 ("user", "Whose banner to show (blank = yourself)"),
             ],
             "perms": "None",
-            "example": "!banner @someone",
+            "example": "{prefix}banner @someone",
         },
     )
     @app_commands.describe(user="User whose banner to show (leave blank for yourself)")
@@ -1633,7 +1634,7 @@ class Utility(commands.Cog):
                 ("role", "Mention it or type the name"),
             ],
             "perms": "None",
-            "example": "!roleinfo @Moderator",
+            "example": "{prefix}roleinfo @Moderator",
         },
     )
     @app_commands.describe(role="The role to inspect")
@@ -1709,7 +1710,7 @@ class Utility(commands.Cog):
             "desc": "Shows how long NanoBot has been online since its last start or restart.",
             "args": [],
             "perms": "None",
-            "example": "!uptime",
+            "example": "{prefix}uptime",
         },
     )
     @commands.cooldown(1, 5, commands.BucketType.user)
@@ -1770,7 +1771,7 @@ class Utility(commands.Cog):
             ),
             "args": [],
             "perms": "None",
-            "example": "!stats",
+            "example": "{prefix}stats",
         },
     )
     @commands.cooldown(1, 10, commands.BucketType.user)
@@ -1865,7 +1866,7 @@ class Utility(commands.Cog):
             ),
             "args": [("command", "Command name or any symbol to look up")],
             "perms": "None",
-            "example": "!source ship\n!source ban\n!source _ship_score\n!source WyrView",
+            "example": "{prefix}source ship\n{prefix}source ban\n{prefix}source _ship_score\n{prefix}source WyrView",
         },
     )
     @commands.cooldown(1, 5, commands.BucketType.user)
@@ -2011,7 +2012,7 @@ class Utility(commands.Cog):
             ),
             "args": [("channel", "Channel to look up (blank = current channel)")],
             "perms": "None",
-            "example": "!firstmsg\n!firstmsg #rules",
+            "example": "{prefix}firstmsg\n{prefix}firstmsg #rules",
         },
     )
     @app_commands.describe(

@@ -340,7 +340,7 @@ class Reminders(commands.Cog):
                 ),
             ],
             "perms": "None",
-            "example": "!remindme stand up in 1 hour",
+            "example": "{prefix}remindme stand up in 1 hour",
         },
     )
     @app_commands.describe(
@@ -391,7 +391,7 @@ class Reminders(commands.Cog):
                 ("message", "What to remind them about — duration at the end"),
             ],
             "perms": "None",
-            "example": "!remind @user check that PR 2h",
+            "example": "{prefix}remind @user check that PR 2h",
         },
     )
     @app_commands.describe(
@@ -449,7 +449,7 @@ class Reminders(commands.Cog):
                 ("number", "Reminder number shown in the list"),
             ],
             "perms": "None",
-            "example": "!reminders cancel 2",
+            "example": "{prefix}reminders cancel 2",
         },
     )
     @commands.cooldown(1, 5, commands.BucketType.user)

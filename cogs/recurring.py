@@ -299,7 +299,7 @@ class Recurring(commands.Cog):
                 ),
             ],
             "perms": "None",
-            "example": "!every 2w Payday!\n!every daily Stand up meeting",
+            "example": "{prefix}every 2w Payday!\n{prefix}every daily Stand up meeting",
         },
     )
     @app_commands.describe(
@@ -444,7 +444,7 @@ class Recurring(commands.Cog):
                 ),
             ],
             "perms": "None",
-            "example": "!recurring\n!recurring pause abc123\n!recurring cancel abc123",
+            "example": "{prefix}recurring\n{prefix}recurring pause abc123\n{prefix}recurring cancel abc123",
         },
     )
     @commands.cooldown(1, 5, commands.BucketType.user)
