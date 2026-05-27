@@ -22,6 +22,7 @@ _LINES = _MUSIC_SOURCE.splitlines(keepends=True)
 
 _PURE_FUNCTIONS = {
     "_apply_delta",
+    "_extract_ytid",
     "_fmt_time",
     "_progress_bar",
     "_parse_timestamp",
@@ -29,23 +30,25 @@ _PURE_FUNCTIONS = {
     "_split_artist_title",
 }
 
-# Also grab _LYRICS_NOISE which _split_artist_title depends on
-_NOISE_ASSIGN = None
+# Grab module-level assignments that pure functions depend on
+_CONST_NAMES = {"_LYRICS_NOISE", "_YTID_RE"}
+_const_assigns: dict[str, ast.Assign] = {}
 for node in ast.walk(_TREE):
     if isinstance(node, ast.Assign):
         for t in node.targets:
-            if isinstance(t, ast.Name) and t.id == "_LYRICS_NOISE":
-                _NOISE_ASSIGN = node
-                break
+            if isinstance(t, ast.Name) and t.id in _CONST_NAMES:
+                _const_assigns[t.id] = node
 
 _ns: dict = {"re": re, "Optional": Optional}
 
-# Exec _LYRICS_NOISE first
-if _NOISE_ASSIGN:
-    start = _NOISE_ASSIGN.lineno - 1
-    end = _NOISE_ASSIGN.end_lineno
-    src = textwrap.dedent("".join(_LINES[start:end]))
-    exec(compile(src, "<_LYRICS_NOISE>", "exec"), _ns)  # noqa: S102
+# Exec constants first (order matters: _YTID_RE before _extract_ytid)
+for _cname in ("_YTID_RE", "_LYRICS_NOISE"):
+    node = _const_assigns.get(_cname)
+    if node:
+        start = node.lineno - 1
+        end = node.end_lineno
+        src = textwrap.dedent("".join(_LINES[start:end]))
+        exec(compile(src, f"<{_cname}>", "exec"), _ns)  # noqa: S102
 
 # Exec each pure function
 for node in ast.walk(_TREE):
@@ -56,6 +59,7 @@ for node in ast.walk(_TREE):
         exec(compile(src, f"<{node.name}>", "exec"), _ns)  # noqa: S102
 
 _apply_delta = _ns["_apply_delta"]
+_extract_ytid = _ns["_extract_ytid"]
 _fmt_time = _ns["_fmt_time"]
 _progress_bar = _ns["_progress_bar"]
 _parse_timestamp = _ns["_parse_timestamp"]
@@ -290,3 +294,37 @@ class TestSplitArtistTitle:
         artist, title = _split_artist_title("  Artist  -  Title  ")
         assert artist == "Artist"
         assert title == "Title"
+
+
+# ---------------------------------------------------------------------------
+# _extract_ytid
+# ---------------------------------------------------------------------------
+
+
+class TestExtractYtid:
+    def test_watch_url(self):
+        assert _extract_ytid("https://www.youtube.com/watch?v=dQw4w9WgXcQ") == "dQw4w9WgXcQ"
+
+    def test_watch_url_with_extra_params(self):
+        assert _extract_ytid("https://www.youtube.com/watch?v=dQw4w9WgXcQ&list=RDdQw4w9WgXcQ") == "dQw4w9WgXcQ"
+
+    def test_youtu_be_short(self):
+        assert _extract_ytid("https://youtu.be/dQw4w9WgXcQ") == "dQw4w9WgXcQ"
+
+    def test_shorts_url(self):
+        assert _extract_ytid("https://www.youtube.com/shorts/dQw4w9WgXcQ") == "dQw4w9WgXcQ"
+
+    def test_embed_url(self):
+        assert _extract_ytid("https://www.youtube.com/embed/dQw4w9WgXcQ") == "dQw4w9WgXcQ"
+
+    def test_non_youtube_url_returns_none(self):
+        assert _extract_ytid("https://soundcloud.com/artist/track") is None
+
+    def test_empty_string_returns_none(self):
+        assert _extract_ytid("") is None
+
+    def test_plain_text_returns_none(self):
+        assert _extract_ytid("just some text") is None
+
+    def test_youtube_mix_url(self):
+        assert _extract_ytid("https://www.youtube.com/watch?v=dQw4w9WgXcQ&list=RDdQw4w9WgXcQ") == "dQw4w9WgXcQ"
