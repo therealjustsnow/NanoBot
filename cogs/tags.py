@@ -491,10 +491,11 @@ class Tags(commands.Cog):
         await db.set_tag(ctx.guild.id, uid, name, content, img_url)
 
         img_line = "\n🖼️ Image attached." if img_url else ""
+        prefix = self.bot.prefixes.get(str(ctx.guild.id), self.bot.default_prefix)
         await ctx.reply(
             embed=h.ok(
                 f"Personal tag **{name}** created.{img_line}\n"
-                f"Only you can see it. Use `/tag use {name}` or `{ctx.prefix}{name}` to post it.",
+                f"Only you can see it. Use `/tag use {name}` or `{prefix}tag {name}` to post it.",
                 "🏷️ Tag Created",
             ),
             ephemeral=True,
@@ -550,10 +551,11 @@ class Tags(commands.Cog):
         )
 
         img_line = "\n🖼️ Image attached." if img_url else ""
+        prefix = self.bot.prefixes.get(str(ctx.guild.id), self.bot.default_prefix)
         await ctx.reply(
             embed=h.ok(
                 f"Global tag **{name}** created.{img_line}\n"
-                f"Anyone can use it: `/tag use {name}` or `{ctx.prefix}{name}`.",
+                f"Anyone can use it: `/tag use {name}` or `{prefix}tag {name}`.",
                 "🌐 Global Tag Created",
             ),
             ephemeral=True,
