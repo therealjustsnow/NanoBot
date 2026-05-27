@@ -514,6 +514,12 @@ class NanoBot(commands.Bot):
             self.last_senders.pop(cid, None)
 
     async def on_message(self, message: discord.Message):
+        # During shutdown (!restart/!upgrade/reconnect) discord.py's close()
+        # sets self.loop = MISSING. A message still in flight would then crash
+        # inside invoke()'s event dispatch (loop.create_task on a gone loop).
+        if self.is_closed():
+            return
+
         try:
             if message.author.bot:
                 return
@@ -543,6 +549,10 @@ class NanoBot(commands.Bot):
                 if after:
                     await _try_tag_shortcut(message, self, after.lower())
         except Exception as exc:
+            # The bot closing mid-dispatch is an expected shutdown race, not a bug.
+            if self.is_closed():
+                log.debug("Ignoring on_message error during shutdown: %s", exc)
+                return
             log.error(
                 "Unhandled error in on_message for guild=%s channel=%s author=%s: %s",
                 message.guild.id if message.guild else "DM",
