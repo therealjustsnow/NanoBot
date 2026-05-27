@@ -581,7 +581,11 @@ _SCHEMA: dict[str, tuple[type | None, bool, str]] = {
 
 
 # Int-typed keys that store durations in seconds — accept "3m", "1 hour", etc.
-_DURATION_SEC_KEYS = {"music_idle_timeout", "music_ratelimit_cooldown", "revalidate_age"}
+_DURATION_SEC_KEYS = {
+    "music_idle_timeout",
+    "music_ratelimit_cooldown",
+    "revalidate_age",
+}
 
 # Int-typed keys that store sizes in MB — accept "500mb", "1gb", "500", etc.
 _FILESIZE_MB_KEYS = {"music_cache_max_mb"}

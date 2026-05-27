@@ -86,6 +86,7 @@ def parse_filesize_mb(s: str | None) -> int | None:
     unit = (m.group(2) or "").lower()
     return round(value * _FILESIZE_UNITS_MB[unit])
 
+
 _UNITS_LONG = {
     "second": 1,
     "seconds": 1,
