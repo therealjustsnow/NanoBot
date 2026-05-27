@@ -44,9 +44,14 @@ Tests cover pure-Python utilities and the SQLite layer (in-memory), no live Disc
 - `tests/test_storage.py` — sync and async JSON helpers in `utils/storage.py`
 - `tests/test_music_helpers.py` — pure helper functions extracted from `cogs/music.py` (no yt-dlp/FFmpeg needed)
 - `tests/test_no_duplicate_commands.py` — static check that no two cogs register the same top-level command name or alias
+- `tests/test_obs.py` — correlation ids, the logging filter, and the JSONL event sink in `utils/obs.py`
+
+Command-level tests (parse → permission check → DB → reply) run under **dpytest**, which fakes a guild/members/message dispatch so cog wiring executes without a live gateway:
+- `tests/conftest.py` — the `bot` fixture (dpytest-configured `NanoBot` + throwaway DB; load cogs via `@pytest.mark.cogs(...)`) and `grant_perms` helper
+- `tests/test_commands_dpytest.py` — permission enforcement + a note write/read round-trip
 
 CI runs `pytest tests/ -v` on every push and pull request (`.github/workflows/tests.yml`).
-Manual end-to-end testing against a Discord test server is still required for cog-level features.
+Manual end-to-end testing against a Discord test server is still useful for live-gateway behavior (voice, presence, real latency) that dpytest does not simulate.
 
 **Migration (JSON → SQLite, idempotent):**
 ```bash
