@@ -1,0 +1,43 @@
+"""
+Tests for the pure economy helpers in cogs/economy.py (no Discord deps).
+"""
+
+from cogs.economy import DAILY_COOLDOWN, STREAK_WINDOW, compute_daily, fmt_coins
+
+
+def test_fmt_coins_singular_plural_and_commas():
+    assert fmt_coins(1, "NanoCoin", "🪙") == "🪙 **1** NanoCoin"
+    assert fmt_coins(2, "NanoCoin", "🪙") == "🪙 **2** NanoCoins"
+    assert fmt_coins(1234, "NanoCoin", "🪙") == "🪙 **1,234** NanoCoins"
+    assert fmt_coins(0, "NanoCoin", "🪙") == "🪙 **0** NanoCoins"
+
+
+def test_daily_first_claim():
+    res = compute_daily(now=1000.0, last_daily=0, streak=0, base=100, bonus=10)
+    assert res == {"ok": True, "total": 100, "streak": 1}
+
+
+def test_daily_on_cooldown():
+    now = 1_000_000.0
+    res = compute_daily(now=now, last_daily=now - 100, streak=1, base=100, bonus=10)
+    assert res["ok"] is False
+    assert res["retry_after"] == DAILY_COOLDOWN - 100
+
+
+def test_daily_keeps_streak_inside_window():
+    now = 1_000_000.0
+    # Claimed 25h ago: past cooldown, still within the 48h streak window.
+    last = now - (DAILY_COOLDOWN + 3600)
+    res = compute_daily(now=now, last_daily=last, streak=3, base=100, bonus=10)
+    assert res["ok"] is True
+    assert res["streak"] == 4
+    assert res["total"] == 100 + 10 * 3
+
+
+def test_daily_resets_streak_after_window():
+    now = 1_000_000.0
+    last = now - (STREAK_WINDOW + 1)  # missed the window
+    res = compute_daily(now=now, last_daily=last, streak=5, base=100, bonus=10)
+    assert res["ok"] is True
+    assert res["streak"] == 1
+    assert res["total"] == 100

@@ -81,6 +81,7 @@ _ALL_COGS = (
     "cogs.fun",
     "cogs.music",
     "cogs.leveling",
+    "cogs.economy",
     "cogs.debug",
 )
 

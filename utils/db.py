@@ -39,6 +39,8 @@ Tables
   level_config      (guild_id) PK  — per-guild leveling settings
   level_rewards     (guild_id, level) PK  — role granted at a level
   level_ignored_channels (guild_id, channel_id) PK  — channels that earn no XP
+  economy           (guild_id, user_id) PK  — coin balance, daily claim state
+  economy_config    (guild_id) PK  — per-guild currency name/emoji, daily amount
 
 Note: role_panels_new is a transient table used only during the one-time
 role-panel migration (table swap to drop a column); it is not a real table.
@@ -144,6 +146,7 @@ async def init() -> None:
     await _ensure_automod_tables()
     await _ensure_music_tables()
     await _ensure_leveling_tables()
+    await _ensure_economy_tables()
     await _run_migrations()
     log.info(f"Database ready: {_DB_PATH}")
 
@@ -2456,3 +2459,193 @@ async def get_level_ignored_channels(guild_id: int) -> set[int]:
     ) as cur:
         rows = await cur.fetchall()
     return {int(r["channel_id"]) for r in rows}
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+#  Economy (per-guild coin balances + daily claim)
+# ══════════════════════════════════════════════════════════════════════════════
+
+
+async def _ensure_economy_tables():
+    await _conn().execute("""
+        CREATE TABLE IF NOT EXISTS economy (
+            guild_id    TEXT NOT NULL,
+            user_id     TEXT NOT NULL,
+            coins       INTEGER NOT NULL DEFAULT 0,
+            last_daily  REAL NOT NULL DEFAULT 0,
+            streak      INTEGER NOT NULL DEFAULT 0,
+            PRIMARY KEY (guild_id, user_id)
+        )
+    """)
+    await _conn().execute(
+        "CREATE INDEX IF NOT EXISTS economy_guild_coins "
+        "ON economy (guild_id, coins DESC)"
+    )
+    await _conn().execute("""
+        CREATE TABLE IF NOT EXISTS economy_config (
+            guild_id        TEXT PRIMARY KEY,
+            daily_amount    INTEGER NOT NULL DEFAULT 100,
+            streak_bonus    INTEGER NOT NULL DEFAULT 0,
+            currency_name   TEXT NOT NULL DEFAULT 'NanoCoin',
+            currency_emoji  TEXT NOT NULL DEFAULT '🪙'
+        )
+    """)
+    await _conn().commit()
+
+
+# ── Balances ───────────────────────────────────────────────────────────────────
+async def get_balance(guild_id: int, user_id: int) -> int:
+    async with _conn().execute(
+        "SELECT coins FROM economy WHERE guild_id=? AND user_id=?",
+        (str(guild_id), str(user_id)),
+    ) as cur:
+        row = await cur.fetchone()
+    return row["coins"] if row else 0
+
+
+async def set_coins(guild_id: int, user_id: int, amount: int) -> None:
+    await _conn().execute(
+        "INSERT INTO economy (guild_id, user_id, coins) VALUES (?,?,?) "
+        "ON CONFLICT(guild_id, user_id) DO UPDATE SET coins=excluded.coins",
+        (str(guild_id), str(user_id), max(0, int(amount))),
+    )
+    await _conn().commit()
+
+
+async def add_coins(guild_id: int, user_id: int, amount: int) -> int:
+    """Add (or subtract) coins. Clamps at 0. Returns the new balance."""
+    new_bal = max(0, await get_balance(guild_id, user_id) + int(amount))
+    await set_coins(guild_id, user_id, new_bal)
+    return new_bal
+
+
+async def transfer_coins(guild_id: int, from_id: int, to_id: int, amount: int) -> bool:
+    """Move coins between two members. Returns False if amount <= 0 or low funds."""
+    if amount <= 0:
+        return False
+    if await get_balance(guild_id, from_id) < amount:
+        return False
+    await add_coins(guild_id, from_id, -amount)
+    await add_coins(guild_id, to_id, amount)
+    return True
+
+
+async def get_econ_rank(guild_id: int, user_id: int) -> tuple[int, int] | None:
+    """Return (rank, coins) for a member; None if they have no account row."""
+    async with _conn().execute(
+        "SELECT coins FROM economy WHERE guild_id=? AND user_id=?",
+        (str(guild_id), str(user_id)),
+    ) as cur:
+        row = await cur.fetchone()
+    if row is None:
+        return None
+    coins = row["coins"]
+    async with _conn().execute(
+        "SELECT COUNT(*) FROM economy WHERE guild_id=? AND coins > ?",
+        (str(guild_id), coins),
+    ) as cur:
+        ahead = (await cur.fetchone())[0]
+    return ahead + 1, coins
+
+
+async def get_econ_leaderboard(
+    guild_id: int, limit: int = 10, offset: int = 0
+) -> list[dict]:
+    async with _conn().execute(
+        "SELECT user_id, coins FROM economy WHERE guild_id=? AND coins > 0 "
+        "ORDER BY coins DESC, user_id ASC LIMIT ? OFFSET ?",
+        (str(guild_id), int(limit), int(offset)),
+    ) as cur:
+        rows = await cur.fetchall()
+    return [{"user_id": int(r["user_id"]), "coins": r["coins"]} for r in rows]
+
+
+async def count_econ(guild_id: int) -> int:
+    async with _conn().execute(
+        "SELECT COUNT(*) FROM economy WHERE guild_id=? AND coins > 0",
+        (str(guild_id),),
+    ) as cur:
+        return (await cur.fetchone())[0]
+
+
+async def reset_economy(guild_id: int, user_id: int | None = None) -> int:
+    if user_id is None:
+        cur = await _conn().execute(
+            "DELETE FROM economy WHERE guild_id=?", (str(guild_id),)
+        )
+    else:
+        cur = await _conn().execute(
+            "DELETE FROM economy WHERE guild_id=? AND user_id=?",
+            (str(guild_id), str(user_id)),
+        )
+    await _conn().commit()
+    return cur.rowcount
+
+
+# ── Daily claim state ──────────────────────────────────────────────────────────
+async def get_daily_state(guild_id: int, user_id: int) -> tuple[float, int]:
+    """Return (last_daily_epoch, streak) for a member."""
+    async with _conn().execute(
+        "SELECT last_daily, streak FROM economy WHERE guild_id=? AND user_id=?",
+        (str(guild_id), str(user_id)),
+    ) as cur:
+        row = await cur.fetchone()
+    if row:
+        return row["last_daily"], row["streak"]
+    return 0.0, 0
+
+
+async def set_daily_state(
+    guild_id: int, user_id: int, last_daily: float, streak: int
+) -> None:
+    await _conn().execute(
+        "INSERT INTO economy (guild_id, user_id, last_daily, streak) VALUES (?,?,?,?) "
+        "ON CONFLICT(guild_id, user_id) DO UPDATE SET "
+        "last_daily=excluded.last_daily, streak=excluded.streak",
+        (str(guild_id), str(user_id), float(last_daily), int(streak)),
+    )
+    await _conn().commit()
+
+
+# ── Config ─────────────────────────────────────────────────────────────────────
+async def get_econ_config(guild_id: int) -> dict:
+    async with _conn().execute(
+        "SELECT daily_amount, streak_bonus, currency_name, currency_emoji "
+        "FROM economy_config WHERE guild_id=?",
+        (str(guild_id),),
+    ) as cur:
+        row = await cur.fetchone()
+    if row:
+        return {
+            "daily_amount": row["daily_amount"],
+            "streak_bonus": row["streak_bonus"],
+            "currency_name": row["currency_name"],
+            "currency_emoji": row["currency_emoji"],
+        }
+    return {
+        "daily_amount": 100,
+        "streak_bonus": 0,
+        "currency_name": "NanoCoin",
+        "currency_emoji": "🪙",
+    }
+
+
+async def set_econ_config(guild_id: int, **kwargs) -> None:
+    current = await get_econ_config(guild_id)
+    current.update(kwargs)
+    await _conn().execute(
+        "INSERT INTO economy_config "
+        "(guild_id, daily_amount, streak_bonus, currency_name, currency_emoji) "
+        "VALUES (?,?,?,?,?) "
+        "ON CONFLICT(guild_id) DO UPDATE SET daily_amount=excluded.daily_amount, "
+        "streak_bonus=excluded.streak_bonus, currency_name=excluded.currency_name, "
+        "currency_emoji=excluded.currency_emoji",
+        (
+            str(guild_id),
+            int(current["daily_amount"]),
+            int(current["streak_bonus"]),
+            str(current["currency_name"]),
+            str(current["currency_emoji"]),
+        ),
+    )
+    await _conn().commit()

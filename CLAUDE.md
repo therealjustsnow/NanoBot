@@ -45,6 +45,8 @@ Tests cover pure-Python utilities and the SQLite layer (in-memory), no live Disc
 - `tests/test_music_helpers.py` — pure helper functions extracted from `cogs/music.py` (no yt-dlp/FFmpeg needed)
 - `tests/test_leveling_helpers.py` — pure level-math helpers from `cogs/leveling.py` (XP curve, progress bar)
 - `tests/test_leveling_db.py` — leveling accessors in `utils/db.py` against in-memory SQLite
+- `tests/test_economy_helpers.py` — pure economy helpers from `cogs/economy.py` (coin formatting, daily/streak math)
+- `tests/test_economy_db.py` — economy accessors in `utils/db.py` against in-memory SQLite
 - `tests/test_no_duplicate_commands.py` — static check that no two cogs register the same top-level command name or alias
 - `tests/test_obs.py` — correlation ids, the logging filter, and the JSONL event sink in `utils/obs.py`
 
@@ -52,6 +54,7 @@ Command-level tests (parse → permission check → DB → reply) run under **dp
 - `tests/conftest.py` — the `bot` fixture (dpytest-configured `NanoBot` + throwaway DB; load cogs via `@pytest.mark.cogs(...)`) and `grant_perms` helper
 - `tests/test_commands_dpytest.py` — permission enforcement + a note write/read round-trip
 - `tests/test_leveling_commands.py` — `/rank` reply wiring + `/level` admin permission enforcement and config round-trip
+- `tests/test_economy_commands.py` — `/balance`/`/daily`/`/pay` flows + `/coin grant` permission enforcement
 
 CI runs `pytest tests/ -v` on every push and pull request (`.github/workflows/tests.yml`).
 Manual end-to-end testing against a Discord test server is still useful for live-gateway behavior (voice, presence, real latency) that dpytest does not simulate.
@@ -90,13 +93,14 @@ All features live in `cogs/` as discord.py cogs, hot-reloadable via `n!reload <c
 | `images.py` | Anime image commands (husbando, kitsune, neko, waifu) via nekos.best |
 | `debug.py` | Owner-only debug REPL / shell evaluation |
 | `leveling.py` | Per-guild message XP + levels (Mee6-style curve). `/rank` card (flat hybrid) + `/level` group: `top` leaderboard, plus Manage-Server admin subcommands `set`/`give`/`reset`/`toggle`/`rate`/`announce`/`reward`/`ignore`/`config`. In-memory per-member XP cooldown; role rewards granted on level-up; off by default. |
+| `economy.py` | Per-guild NanoCoin economy. Flat `/balance`, `/daily` (24h cooldown + consecutive-day streak bonus), `/pay` + `/coin` group: `top` rich list, plus Manage-Server admin subcommands `grant`/`take`/`reset`/`daily`/`streakbonus`/`name`/`emoji`/`config`. Currency name/emoji configurable per guild. Command-driven (no passive earning in v1). |
 | `music.py` | Voice music player: yt-dlp streaming, Spotify link support (no API key — embed-page metadata scraped then matched on YouTube at play time), per-guild queue, interactive Now Playing card (buttons), search picker, vote-skip, playnext/playnow/stream/shuffleplay, follow, move/jump, loop/shuffle/seek/speed/audio-filters/volume, lyrics, grab, pldump, autoplay + persistent autoplaylist (add accepts whole playlists, dead entries auto-pruned on error), 24/7 stay-connected mode (`radio`/`247`, per-guild, off by default), idle auto-disconnect, per-guild song/user block lists (`blocksong`/`blockuser`, Manage Server), played-track `history`, self-deafen on join, now-playing bot presence (Streaming status with a clickable Watch button for YouTube/Twitch tracks, reverts to "watching over the server" when idle; account-global since Discord has no per-guild activity; `music_status_message` customizes the text), configurable yt-dlp search service/proxy/user-agent/source-address, and YouTube rate-limit (429) back-off. Audio output is configurable via `music_use_opus`: Opus (default) is stream-copied from the source when unprocessed, else re-encoded with libopus at the voice channel's bitrate; PCM mode decodes every track and lets discord.py encode, trading CPU for instant (re-stream-free) volume changes. `music_persist_queue` (on by default) saves the queue to SQLite and resumes it (rejoins the last voice channel, current track restarts from 0:00, rest of queue intact) on restart; `music_predownload` (on by default) fetches the next queued track to `data/music_cache/` while one plays for gapless playback (live streams are skipped — they'd never finish downloading). Reads `[music]` config (incl. cookies). Requires FFmpeg + PyNaCl. Live playback position is in-memory; the autoplaylist, 24/7 setting, and (when enabled) the queue persist in SQLite. |
 
 ### Data Layer
 
 Two SQLite databases, both opened once at startup via `setup_hook()` and shared as module-level connections:
 
-- **`data/nanobot.db`** — All persistent bot data. Managed by `utils/db.py`. Tables include: `tags`, `notes`, `prefixes`, `unban_schedules`, `slow_schedules`, `reminders`, `automod_config`, `automod_badwords`, `automod_regex_patterns`, `automod_attachment_words`, warnings, auditlog settings, role panels, welcome/leave config, recurring reminders, vote history, the music tables (`music_settings`, `music_queue`, `music_history`, `music_autoplaylist`, `music_song_blocklist`, `music_user_blocklist`), and the leveling tables (`user_levels`, `level_config`, `level_rewards`, `level_ignored_channels`).
+- **`data/nanobot.db`** — All persistent bot data. Managed by `utils/db.py`. Tables include: `tags`, `notes`, `prefixes`, `unban_schedules`, `slow_schedules`, `reminders`, `automod_config`, `automod_badwords`, `automod_regex_patterns`, `automod_attachment_words`, warnings, auditlog settings, role panels, welcome/leave config, recurring reminders, vote history, the music tables (`music_settings`, `music_queue`, `music_history`, `music_autoplaylist`, `music_song_blocklist`, `music_user_blocklist`), the leveling tables (`user_levels`, `level_config`, `level_rewards`, `level_ignored_channels`), and the economy tables (`economy`, `economy_config`).
 - **`data/cache.db`** — External content cache (anime images, stories). Managed by `utils/cache_db.py`.
 
 Both use WAL mode (`PRAGMA journal_mode=WAL`) for concurrent read/write. All queries are async via `aiosqlite`. Initialize with `await db.init()` and `await cache_db.init()` in `NanoBot.setup_hook()`.
