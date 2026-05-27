@@ -48,3 +48,37 @@ async def test_level_toggle_updates_config(bot):
     await dpytest.message("!level toggle on", member=author)
     dpytest.get_message()
     assert (await db.get_level_config(guild.id))["enabled"] is True
+
+
+@pytest.mark.cogs("cogs.leveling")
+async def test_coinreward_sets_config(bot):
+    guild = config().guilds[0]
+    author = config().members[0]
+    await grant_perms(author, manage_guild=True)
+
+    await dpytest.message("!level coinreward 10", member=author)
+    dpytest.get_message()
+    assert (await db.get_level_config(guild.id))["coin_reward"] == 10
+
+
+@pytest.mark.cogs("cogs.leveling")
+async def test_level_up_awards_coins(bot):
+    """A message that crosses a level boundary grants coin_reward × new level."""
+    guild = config().guilds[0]
+    author = config().members[0]
+    # Deterministic gain, no cooldown, coins on; start just below level 1.
+    await db.set_level_config(
+        guild.id,
+        enabled=True,
+        xp_min=200,
+        xp_max=200,
+        cooldown=0,
+        coin_reward=10,
+    )
+    await db.set_xp(guild.id, author.id, 90)
+
+    await dpytest.message("just chatting", member=author)
+
+    assert await db.get_xp(guild.id, author.id) == 290  # 90 + 200
+    # 290 XP → level 2, so reward = 10 × 2 = 20 coins.
+    assert await db.get_balance(guild.id, author.id) == 20

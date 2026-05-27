@@ -2250,7 +2250,8 @@ async def _ensure_leveling_tables():
             xp_max            INTEGER NOT NULL DEFAULT 25,
             cooldown          INTEGER NOT NULL DEFAULT 60,
             announce_channel  TEXT,
-            announce          INTEGER NOT NULL DEFAULT 1
+            announce          INTEGER NOT NULL DEFAULT 1,
+            coin_reward       INTEGER NOT NULL DEFAULT 0
         )
     """)
     await _conn().execute("""
@@ -2269,6 +2270,8 @@ async def _ensure_leveling_tables():
         )
     """)
     await _conn().commit()
+    # Upgrade path for guilds whose level_config predates coin_reward.
+    await _ensure_columns("level_config", {"coin_reward": "INTEGER NOT NULL DEFAULT 0"})
 
 
 # ── XP ───────────────────────────────────────────────────────────────────────
@@ -2354,8 +2357,8 @@ async def reset_levels(guild_id: int, user_id: int | None = None) -> int:
 # ── Config ─────────────────────────────────────────────────────────────────────
 async def get_level_config(guild_id: int) -> dict:
     async with _conn().execute(
-        "SELECT enabled, xp_min, xp_max, cooldown, announce_channel, announce "
-        "FROM level_config WHERE guild_id=?",
+        "SELECT enabled, xp_min, xp_max, cooldown, announce_channel, announce, "
+        "coin_reward FROM level_config WHERE guild_id=?",
         (str(guild_id),),
     ) as cur:
         row = await cur.fetchone()
@@ -2369,6 +2372,7 @@ async def get_level_config(guild_id: int) -> dict:
                 int(row["announce_channel"]) if row["announce_channel"] else None
             ),
             "announce": bool(row["announce"]),
+            "coin_reward": row["coin_reward"],
         }
     return {
         "enabled": False,
@@ -2377,6 +2381,7 @@ async def get_level_config(guild_id: int) -> dict:
         "cooldown": 60,
         "announce_channel": None,
         "announce": True,
+        "coin_reward": 0,
     }
 
 
@@ -2386,11 +2391,13 @@ async def set_level_config(guild_id: int, **kwargs) -> None:
     current.update(kwargs)
     await _conn().execute(
         "INSERT INTO level_config "
-        "(guild_id, enabled, xp_min, xp_max, cooldown, announce_channel, announce) "
-        "VALUES (?,?,?,?,?,?,?) "
+        "(guild_id, enabled, xp_min, xp_max, cooldown, announce_channel, announce, "
+        "coin_reward) "
+        "VALUES (?,?,?,?,?,?,?,?) "
         "ON CONFLICT(guild_id) DO UPDATE SET enabled=excluded.enabled, "
         "xp_min=excluded.xp_min, xp_max=excluded.xp_max, cooldown=excluded.cooldown, "
-        "announce_channel=excluded.announce_channel, announce=excluded.announce",
+        "announce_channel=excluded.announce_channel, announce=excluded.announce, "
+        "coin_reward=excluded.coin_reward",
         (
             str(guild_id),
             1 if current["enabled"] else 0,
@@ -2399,6 +2406,7 @@ async def set_level_config(guild_id: int, **kwargs) -> None:
             int(current["cooldown"]),
             str(current["announce_channel"]) if current["announce_channel"] else None,
             1 if current["announce"] else 0,
+            int(current["coin_reward"]),
         ),
     )
     await _conn().commit()

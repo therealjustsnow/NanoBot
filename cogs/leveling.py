@@ -134,6 +134,12 @@ class Leveling(commands.Cog):
         rewards = await db.get_level_rewards(message.guild.id)
         granted = await self._apply_rewards(member, new_level, rewards)
 
+        coins = cfg["coin_reward"] * new_level if cfg["coin_reward"] else 0
+        econ = None
+        if coins:
+            await db.add_coins(message.guild.id, member.id, coins)
+            econ = await db.get_econ_config(message.guild.id)
+
         if not cfg["announce"]:
             return
 
@@ -144,6 +150,11 @@ class Leveling(commands.Cog):
             channel = message.channel
 
         desc = f"{member.mention} reached **level {new_level}**!"
+        if coins and econ:
+            desc += (
+                f"\nEarned {econ['currency_emoji']} **{coins:,}** "
+                f"{econ['currency_name']}{'' if coins == 1 else 's'}"
+            )
         if granted:
             roles = ", ".join(r.mention for r in granted)
             desc += f"\nUnlocked: {roles}"
@@ -399,6 +410,28 @@ class Leveling(commands.Cog):
             )
         )
 
+    # ── /level coinreward ─────────────────────────────────────────────────────────
+    @level.command(
+        name="coinreward",
+        description="Coins awarded per level on level-up (amount × new level). 0 = off.",
+    )
+    @app_commands.describe(amount="Coins per level (multiplied by the new level)")
+    @commands.has_permissions(manage_guild=True)
+    async def level_coinreward(self, ctx: commands.Context, amount: int):
+        if amount < 0:
+            return await ctx.reply(
+                embed=h.err("Amount can't be negative."), ephemeral=True
+            )
+        await db.set_level_config(ctx.guild.id, coin_reward=amount)
+        if amount == 0:
+            return await ctx.reply(embed=h.ok("Level-up coin rewards turned off."))
+        await ctx.reply(
+            embed=h.ok(
+                f"Level-ups now award **{amount:,}** coins × the new level "
+                f"(e.g. level 5 → {amount * 5:,} coins)."
+            )
+        )
+
     # ── /level announce ───────────────────────────────────────────────────────────
     @level.command(
         name="announce",
@@ -577,6 +610,8 @@ class Leveling(commands.Cog):
         embed.add_field(name="Announce", value=announce, inline=True)
         embed.add_field(name="Role rewards", value=str(len(rewards)), inline=True)
         embed.add_field(name="Ignored channels", value=str(len(ignored)), inline=True)
+        coin = f"{cfg['coin_reward']:,}/level" if cfg["coin_reward"] else "off"
+        embed.add_field(name="Coin reward", value=coin, inline=True)
         await ctx.reply(embed=embed)
 
 

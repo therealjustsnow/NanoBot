@@ -27,6 +27,7 @@ Commands
 """
 
 import logging
+import random
 import time
 from typing import Optional
 
@@ -41,6 +42,11 @@ log = logging.getLogger("NanoBot.economy")
 
 DAILY_COOLDOWN = 86_400  # 24h between claims
 STREAK_WINDOW = 172_800  # claim within 48h of the last to keep the streak
+
+# Gamble odds: win chance under 0.5 gives the "house" a slight edge so coins
+# aren't trivially farmed. A win pays the bet back plus (multiplier - 1)x.
+GAMBLE_WIN_CHANCE = 0.45
+GAMBLE_MULTIPLIER = 2.0
 
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -71,6 +77,22 @@ def compute_daily(
         new_streak = 1
     total = base + bonus * (new_streak - 1)
     return {"ok": True, "total": total, "streak": new_streak}
+
+
+def resolve_gamble(
+    amount: int,
+    roll: float,
+    win_chance: float = GAMBLE_WIN_CHANCE,
+    multiplier: float = GAMBLE_MULTIPLIER,
+) -> dict:
+    """Resolve a bet given a roll in [0, 1).
+
+    Returns {"won": bool, "delta": net_coin_change}. A win nets
+    +round(amount × (multiplier - 1)); a loss nets -amount.
+    """
+    if roll < win_chance:
+        return {"won": True, "delta": round(amount * (multiplier - 1))}
+    return {"won": False, "delta": -amount}
 
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -277,6 +299,41 @@ class Economy(commands.Cog):
 
         embed = h.embed(f"{cfg['currency_emoji']} Rich List", "\n".join(lines), h.BLUE)
         embed.set_footer(text=f"Page {page}/{pages} · {total} members")
+        await ctx.reply(embed=embed)
+
+    # ── /coin gamble ─────────────────────────────────────────────────────────────
+    @coin.command(
+        name="gamble",
+        aliases=["bet"],
+        description="Bet some coins for a chance to double them.",
+    )
+    @app_commands.describe(amount="How many coins to bet")
+    async def coin_gamble(self, ctx: commands.Context, amount: int):
+        cfg = await self._cfg(ctx.guild.id)
+        if amount <= 0:
+            return await ctx.reply(embed=h.err("Bet must be positive."), ephemeral=True)
+        balance = await db.get_balance(ctx.guild.id, ctx.author.id)
+        if balance < amount:
+            return await ctx.reply(
+                embed=h.err(f"Not enough coins. You have {self._money(cfg, balance)}."),
+                ephemeral=True,
+            )
+
+        res = resolve_gamble(amount, random.random())
+        new_bal = await db.add_coins(ctx.guild.id, ctx.author.id, res["delta"])
+        if res["won"]:
+            embed = h.ok(
+                f"🎰 You won {self._money(cfg, res['delta'])}!\n"
+                f"Balance: {self._money(cfg, new_bal)}",
+                "🎉 Winner",
+            )
+        else:
+            embed = h.embed(
+                "💸 Bust",
+                f"🎰 You lost {self._money(cfg, amount)}.\n"
+                f"Balance: {self._money(cfg, new_bal)}",
+                h.RED,
+            )
         await ctx.reply(embed=embed)
 
     # ── /coin grant ─────────────────────────────────────────────────────────────

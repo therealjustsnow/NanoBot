@@ -2,7 +2,13 @@
 Tests for the pure economy helpers in cogs/economy.py (no Discord deps).
 """
 
-from cogs.economy import DAILY_COOLDOWN, STREAK_WINDOW, compute_daily, fmt_coins
+from cogs.economy import (
+    DAILY_COOLDOWN,
+    STREAK_WINDOW,
+    compute_daily,
+    fmt_coins,
+    resolve_gamble,
+)
 
 
 def test_fmt_coins_singular_plural_and_commas():
@@ -41,3 +47,24 @@ def test_daily_resets_streak_after_window():
     assert res["ok"] is True
     assert res["streak"] == 1
     assert res["total"] == 100
+
+
+def test_gamble_win_doubles_bet():
+    res = resolve_gamble(100, roll=0.0, win_chance=0.45, multiplier=2.0)
+    assert res == {"won": True, "delta": 100}
+
+
+def test_gamble_loss_takes_bet():
+    res = resolve_gamble(100, roll=0.9, win_chance=0.45, multiplier=2.0)
+    assert res == {"won": False, "delta": -100}
+
+
+def test_gamble_boundary_is_a_loss():
+    # roll == win_chance is a loss (strict <).
+    res = resolve_gamble(50, roll=0.45, win_chance=0.45)
+    assert res["won"] is False
+
+
+def test_gamble_multiplier_scales_winnings():
+    res = resolve_gamble(100, roll=0.0, win_chance=1.0, multiplier=3.0)
+    assert res == {"won": True, "delta": 200}

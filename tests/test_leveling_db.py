@@ -88,10 +88,13 @@ async def test_config_defaults_then_partial_update():
     assert cfg["enabled"] is False
     assert cfg["xp_min"] == 15 and cfg["xp_max"] == 25 and cfg["cooldown"] == 60
 
-    await db.set_level_config(G, enabled=True, cooldown=30)
+    assert cfg["coin_reward"] == 0
+
+    await db.set_level_config(G, enabled=True, cooldown=30, coin_reward=10)
     cfg = await db.get_level_config(G)
     assert cfg["enabled"] is True
     assert cfg["cooldown"] == 30
+    assert cfg["coin_reward"] == 10
     assert cfg["xp_min"] == 15  # untouched keys preserved
 
 
