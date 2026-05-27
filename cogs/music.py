@@ -688,7 +688,7 @@ class GuildPlayer:
         self.audio_filter: str = "none"
         self.autoplay: bool = False  # smart: queue YouTube-related tracks
         self.guildplay: bool = False  # play random tracks from the guild playlist
-        self._smart_seed_url: Optional[str] = None
+        self._smart_seeds: deque[str] = deque(maxlen=5)  # last N YouTube URLs played
         self._smart_recent: deque[str] = deque(maxlen=25)
         self.stay_connected: bool = False  # 24/7 mode: don't leave when empty/idle
         self.skip_votes: set[int] = set()
@@ -1071,11 +1071,11 @@ class GuildPlayer:
                 self.current = track
                 self.skip_votes.clear()
 
-                # Keep the smart autoplay seed current so the mix evolves.
+                # Accumulate smart autoplay seeds so the mix blends recent taste.
                 if track.webpage_url:
                     ytid = _extract_ytid(track.webpage_url)
                     if ytid:
-                        self._smart_seed_url = track.webpage_url
+                        self._smart_seeds.append(track.webpage_url)
 
                 if not self.voice or not self.voice.is_connected():
                     await self.destroy(reason="disconnected")
@@ -1180,24 +1180,34 @@ class GuildPlayer:
         return track
 
     async def _smart_autoplay_pick(self) -> Optional[Track]:
-        """Pick a related track via YouTube's Radio Mix based on the last played track."""
-        seed_url = self._smart_seed_url
-        if not seed_url:
-            return None
-        ytid = _extract_ytid(seed_url)
-        if not ytid:
+        """Pick a related track using YouTube's Mix, seeded by recent played tracks.
+
+        With 2+ seed IDs, uses watch_videos?video_ids=... so YouTube blends
+        multiple tracks' taste. Single seed falls back to the RD{id} radio mix.
+        """
+        seed_ids = [_extract_ytid(u) for u in self._smart_seeds]
+        seed_ids = [s for s in seed_ids if s]  # drop non-YouTube
+        seed_ids_unique = list(dict.fromkeys(reversed(seed_ids)))  # dedup, newest first
+        if not seed_ids_unique:
             return None
 
-        mix_url = f"https://www.youtube.com/watch?v={ytid}&list=RD{ytid}"
+        if len(seed_ids_unique) >= 2:
+            ids_param = ",".join(seed_ids_unique[:5])
+            mix_url = f"https://www.youtube.com/watch_videos?video_ids={ids_param}"
+        else:
+            ytid = seed_ids_unique[0]
+            mix_url = f"https://www.youtube.com/watch?v={ytid}&list=RD{ytid}"
+
+        seed_id_set = set(seed_ids_unique)
         try:
             tracks = await self.cog.search(
                 mix_url,
                 requester_id=self.bot.user.id,
                 requester_name=_AUTOPLAY_REQUESTER,
-                playlist_cap=15,
+                playlist_cap=20,
             )
         except Exception as exc:
-            log.debug("Smart autoplay mix fetch failed for %s: %s", ytid, exc)
+            log.debug("Smart autoplay mix fetch failed: %s", exc)
             self.cog._note_ratelimit(exc)
             return None
 
@@ -1206,8 +1216,8 @@ class GuildPlayer:
             if not url:
                 continue
             tid = _extract_ytid(url)
-            if tid == ytid:
-                continue  # skip the seed itself
+            if tid in seed_id_set:
+                continue  # skip all seed tracks
             if url in self._smart_recent:
                 continue
             kept, _ = await self.cog._filter_blocked_songs(self.guild.id, [track])
@@ -1216,7 +1226,11 @@ class GuildPlayer:
             t = kept[0]
             t.requester_name = _AUTOPLAY_REQUESTER
             self._smart_recent.append(url)
-            self._smart_seed_url = url
+            # Add to seeds so next pick builds on this pick too.
+            if t.webpage_url:
+                pick_id = _extract_ytid(t.webpage_url)
+                if pick_id:
+                    self._smart_seeds.append(t.webpage_url)
             return t
         return None
 
@@ -3124,7 +3138,7 @@ class Music(commands.Cog):
             player.autoplay = not player.autoplay
         player._added.set()  # wake the loop if it's idle
         note = ""
-        if player.autoplay and not player._smart_seed_url:
+        if player.autoplay and not player._smart_seeds:
             note = "\n_Play a YouTube track first to seed the mix._"
         await ctx.reply(
             embed=h.ok(
