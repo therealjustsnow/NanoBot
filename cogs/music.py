@@ -5,9 +5,8 @@ Streams audio from YouTube (and the many other sites yt-dlp supports) into a
 voice channel. Spotify track/album/playlist links are supported without an API
 key: their metadata is scraped from the public embed page and each track is
 matched on YouTube at play time. Designed mobile-first: a single "Now Playing"
-card carries
-interactive buttons (play/pause, skip, stop, loop, shuffle, replay, autoplay,
-queue) so listeners can drive playback from a phone without typing commands.
+card carries interactive buttons (play/pause, skip, stop, loop, shuffle, replay,
+autoplay, queue) so listeners can drive playback from a phone without typing commands.
 
 Runtime requirements (see requirements.txt):
   - yt-dlp        — source extraction / search
