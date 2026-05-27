@@ -722,3 +722,74 @@ async def test_add_remove_automod_attachment_words():
     assert "invoice" in words
     assert await db.remove_automod_attachment_word(1, "invoice") is True
     assert await db.get_automod_attachment_words(1) == []
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+#  Schema helpers & versioned migrations
+# ══════════════════════════════════════════════════════════════════════════════
+
+
+async def _columns(table: str) -> set[str]:
+    async with db._conn().execute(f"PRAGMA table_info({table})") as cur:
+        return {row["name"] for row in await cur.fetchall()}
+
+
+async def test_ensure_columns_adds_missing():
+    await db._conn().execute("CREATE TABLE ec_t (a TEXT)")
+    await db._ensure_columns(
+        "ec_t", {"a": "TEXT", "b": "INTEGER NOT NULL DEFAULT 0", "c": "TEXT"}
+    )
+    assert await _columns("ec_t") == {"a", "b", "c"}
+
+
+async def test_ensure_columns_is_idempotent():
+    await db._conn().execute("CREATE TABLE ec_t2 (a TEXT)")
+    await db._ensure_columns("ec_t2", {"b": "TEXT"})
+    await db._ensure_columns("ec_t2", {"b": "TEXT"})  # second run must not error
+    assert await _columns("ec_t2") == {"a", "b"}
+
+
+async def test_run_migrations_applies_in_order_and_bumps_version():
+    calls = []
+
+    async def m1(conn):
+        await conn.execute("CREATE TABLE mig_one (x TEXT)")
+        calls.append(1)
+
+    async def m2(conn):
+        await conn.execute("CREATE TABLE mig_two (x TEXT)")
+        calls.append(2)
+
+    # Pass out of order to prove the runner sorts ascending.
+    await db._run_migrations([(2, m2), (1, m1)])
+    assert calls == [1, 2]
+    async with db._conn().execute("PRAGMA user_version") as cur:
+        assert (await cur.fetchone())[0] == 2
+
+
+async def test_run_migrations_skips_already_applied():
+    await db._conn().execute("PRAGMA user_version = 5")
+    calls = []
+
+    async def m3(conn):
+        calls.append(3)
+
+    async def m6(conn):
+        calls.append(6)
+
+    await db._run_migrations([(3, m3), (6, m6)])
+    assert calls == [6]  # version 3 <= 5 is skipped
+    async with db._conn().execute("PRAGMA user_version") as cur:
+        assert (await cur.fetchone())[0] == 6
+
+
+async def test_failed_migration_leaves_version_unchanged():
+    await db._conn().execute("PRAGMA user_version = 0")
+
+    async def boom(conn):
+        raise RuntimeError("migration failed")
+
+    with pytest.raises(RuntimeError):
+        await db._run_migrations([(1, boom)])
+    async with db._conn().execute("PRAGMA user_version") as cur:
+        assert (await cur.fetchone())[0] == 0  # not advanced → retried next start

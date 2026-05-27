@@ -172,6 +172,16 @@ class Moderation(commands.Cog):
         self._slow_tasks = {}
         self._unban_tasks = {}
 
+    def cog_unload(self):
+        """Cancel all pending timed-action tasks so a reload/unload doesn't leak
+        them (the new instance restores from DB via on_restore_schedules)."""
+        for task in list(self._unban_tasks.values()):
+            task.cancel()
+        for task in list(self._slow_tasks.values()):
+            task.cancel()
+        self._unban_tasks.clear()
+        self._slow_tasks.clear()
+
     @commands.Cog.listener()
     async def on_restore_schedules(self):
         await asyncio.gather(
@@ -1387,75 +1397,30 @@ class Moderation(commands.Cog):
 
     # ══════════════════════════════════════════════════════════════════════════
     #  note / notes / clearnotes
+    #  Prefix: !note / !notes / !clearnotes (flat, mobile muscle-memory preserved)
+    #  Slash:  /note add / list / clear  (grouped -- 1 top-level slot)
     # ══════════════════════════════════════════════════════════════════════════
-    @commands.hybrid_command(
-        name="note",
-        description="Add an internal mod note about a user (invisible to them).",
-        extras={
-            "category": "🔎 Info & Notes",
-            "short": "Add a private mod note (invisible to the user)",
-            "usage": "note <user> <content>",
-            "desc": "Saves an internal note about a user. The user never sees these.",
-            "args": [
-                ("user", "User to attach the note to"),
-                ("content", "Note content (max 1000 chars)"),
-            ],
-            "perms": "Manage Messages",
-            "example": "!note @user Warned about spam in #general.",
-        },
-    )
-    @app_commands.describe(user="User to attach note to", content="Note content")
-    @has_mod_perms()
-    async def note(self, ctx, user: discord.Member, *, content: str):
+    async def _do_note(self, guild, author, user: discord.Member, content: str):
         if len(content) > 1000:
-            return await ctx.reply(
-                embed=h.err("Note must be 1000 characters or fewer."), ephemeral=True
-            )
+            return h.err("Note must be 1000 characters or fewer.")
         count = await db.add_note(
-            ctx.guild.id,
+            guild.id,
             user.id,
             content,
-            str(ctx.author.id),
-            str(ctx.author),
+            str(author.id),
+            str(author),
             datetime.now(timezone.utc).isoformat(),
         )
-        log.info(
-            f"note: #{count} added for {user} ({user.id}) by {ctx.author} in {ctx.guild}"
-        )
-        await ctx.reply(
-            embed=h.ok(
-                f"Note #{count} added for **{user.display_name}**.\n> {content[:300]}",
-                "📜 Note Saved",
-            ),
-            ephemeral=True,
+        log.info(f"note: #{count} added for {user} ({user.id}) by {author} in {guild}")
+        return h.ok(
+            f"Note #{count} added for **{user.display_name}**.\n> {content[:300]}",
+            "📜 Note Saved",
         )
 
-    @commands.hybrid_command(
-        name="notes",
-        description="View mod notes for a user.",
-        extras={
-            "category": "🔎 Info & Notes",
-            "short": "View mod notes for a user",
-            "usage": "notes <user>",
-            "desc": "Shows up to 5 of the most recent mod notes. Only visible to you (ephemeral).",
-            "args": [
-                ("user", "User to look up"),
-            ],
-            "perms": "Manage Messages",
-            "example": "!notes @user",
-        },
-    )
-    @app_commands.describe(user="User whose notes to view")
-    @has_mod_perms()
-    async def notes(self, ctx, user: discord.Member):
-        user_notes = await db.get_notes(ctx.guild.id, user.id)
+    async def _do_notes(self, guild, user: discord.Member):
+        user_notes = await db.get_notes(guild.id, user.id)
         if not user_notes:
-            return await ctx.reply(
-                embed=h.info(
-                    f"No notes on file for **{user.display_name}**.", "📜 Notes"
-                ),
-                ephemeral=True,
-            )
+            return h.info(f"No notes on file for **{user.display_name}**.", "📜 Notes")
         e = h.embed(title=f"📜 Notes — {user.display_name}", color=h.BLUE)
         shown = user_notes[-5:]
         lines = []
@@ -1472,11 +1437,62 @@ class Moderation(commands.Cog):
         )
         e.set_footer(text=f"{count_str} note(s)  ·  NanoBot")
         e.timestamp = datetime.now(timezone.utc)
-        await ctx.reply(embed=e, ephemeral=True)
+        return e
 
-    @commands.hybrid_command(
+    async def _do_clearnotes(self, guild, author, user: discord.Member):
+        count = await db.clear_notes(guild.id, user.id)
+        if count:
+            log.info(
+                f"clearnotes: {count} notes cleared for {user} by {author} in {guild}"
+            )
+            return h.ok(
+                f"Cleared **{count}** note(s) for **{user.display_name}**.",
+                "📜 Notes Cleared",
+            )
+        return h.info(f"No notes on file for **{user.display_name}**.", "📜 Notes")
+
+    @commands.command(
+        name="note",
+        extras={
+            "category": "🔎 Info & Notes",
+            "short": "Add a private mod note (invisible to the user)",
+            "usage": "note <user> <content>",
+            "desc": "Saves an internal note about a user. The user never sees these.",
+            "args": [
+                ("user", "User to attach the note to"),
+                ("content", "Note content (max 1000 chars)"),
+            ],
+            "perms": "Manage Messages",
+            "example": "!note @user Warned about spam in #general.",
+        },
+    )
+    @has_mod_perms()
+    async def pfx_note(self, ctx, user: discord.Member, *, content: str):
+        await ctx.reply(
+            embed=await self._do_note(ctx.guild, ctx.author, user, content),
+            ephemeral=True,
+        )
+
+    @commands.command(
+        name="notes",
+        extras={
+            "category": "🔎 Info & Notes",
+            "short": "View mod notes for a user",
+            "usage": "notes <user>",
+            "desc": "Shows up to 5 of the most recent mod notes. Only visible to you (ephemeral).",
+            "args": [
+                ("user", "User to look up"),
+            ],
+            "perms": "Manage Messages",
+            "example": "!notes @user",
+        },
+    )
+    @has_mod_perms()
+    async def pfx_notes(self, ctx, user: discord.Member):
+        await ctx.reply(embed=await self._do_notes(ctx.guild, user), ephemeral=True)
+
+    @commands.command(
         name="clearnotes",
-        description="Delete all mod notes for a user. Admin only.",
         extras={
             "category": "🔎 Info & Notes",
             "short": "Delete all mod notes for a user (admin only)",
@@ -1489,28 +1505,46 @@ class Moderation(commands.Cog):
             "example": "!clearnotes @user",
         },
     )
-    @app_commands.describe(user="User whose notes to clear")
     @has_admin_perms()
-    async def clearnotes(self, ctx, user: discord.Member):
-        count = await db.clear_notes(ctx.guild.id, user.id)
-        if count:
-            log.info(
-                f"clearnotes: {count} notes cleared for {user} by {ctx.author} in {ctx.guild}"
-            )
-            await ctx.reply(
-                embed=h.ok(
-                    f"Cleared **{count}** note(s) for **{user.display_name}**.",
-                    "📜 Notes Cleared",
-                ),
-                ephemeral=True,
-            )
-        else:
-            await ctx.reply(
-                embed=h.info(
-                    f"No notes on file for **{user.display_name}**.", "📜 Notes"
-                ),
-                ephemeral=True,
-            )
+    async def pfx_clearnotes(self, ctx, user: discord.Member):
+        await ctx.reply(
+            embed=await self._do_clearnotes(ctx.guild, ctx.author, user),
+            ephemeral=True,
+        )
+
+    note_slash = app_commands.Group(
+        name="note",
+        description="Internal mod notes about a user (invisible to them).",
+        default_permissions=discord.Permissions(manage_messages=True),
+        guild_only=True,
+    )
+
+    @note_slash.command(name="add", description="Add a private mod note about a user.")
+    @app_commands.describe(user="User to attach note to", content="Note content")
+    async def slash_note_add(
+        self, interaction: discord.Interaction, user: discord.Member, content: str
+    ):
+        e = await self._do_note(interaction.guild, interaction.user, user, content)
+        await interaction.response.send_message(embed=e, ephemeral=True)
+
+    @note_slash.command(name="list", description="View mod notes for a user.")
+    @app_commands.describe(user="User whose notes to view")
+    async def slash_note_list(
+        self, interaction: discord.Interaction, user: discord.Member
+    ):
+        e = await self._do_notes(interaction.guild, user)
+        await interaction.response.send_message(embed=e, ephemeral=True)
+
+    @note_slash.command(
+        name="clear", description="Delete all mod notes for a user. Admin only."
+    )
+    @app_commands.describe(user="User whose notes to clear")
+    @app_commands.default_permissions(administrator=True)
+    async def slash_note_clear(
+        self, interaction: discord.Interaction, user: discord.Member
+    ):
+        e = await self._do_clearnotes(interaction.guild, interaction.user, user)
+        await interaction.response.send_message(embed=e, ephemeral=True)
 
     # ══════════════════════════════════════════════════════════════════════════
     #  last

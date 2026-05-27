@@ -2848,10 +2848,21 @@ class Music(commands.Cog):
         await player.seek(0)
         await ctx.reply(embed=h.ok("Restarting the track.", "⏮️ Replay"))
 
-    @commands.hybrid_command(
+    # ══════════════════════════════════════════════════════════════════════════
+    #  /music group — low-frequency music library commands (1 top-level slot).
+    #  Prefix stays flat (!grab, !247, !played, …) for mobile muscle memory; the
+    #  slash twins below build a Context from the interaction and reuse the same
+    #  prefix callbacks via Command.__call__.
+    # ══════════════════════════════════════════════════════════════════════════
+    music_slash = app_commands.Group(
+        name="music",
+        description="Music library: save, lyrics, history, autoplay, 24/7, and more.",
+        guild_only=True,
+    )
+
+    @commands.command(
         name="grab",
         aliases=["save"],
-        description="DM yourself the track that's currently playing.",
         extras={
             "category": "🎵 Music",
             "short": "Save the current track to DMs",
@@ -2863,7 +2874,7 @@ class Music(commands.Cog):
         },
     )
     @commands.guild_only()
-    async def grab(self, ctx: commands.Context):
+    async def pfx_grab(self, ctx: commands.Context):
         player = self._active_player(ctx)
         if not player or player.current is None:
             return await ctx.reply(embed=h.err("Nothing is playing."), ephemeral=True)
@@ -2889,9 +2900,8 @@ class Music(commands.Cog):
             embed=h.ok("Sent it to your DMs.", "🔖 Grabbed"), ephemeral=True
         )
 
-    @commands.hybrid_command(
+    @commands.command(
         name="lyrics",
-        description="Fetch lyrics for the current track (or a search).",
         extras={
             "category": "🎵 Music",
             "short": "Look up song lyrics",
@@ -2905,9 +2915,8 @@ class Music(commands.Cog):
             "example": "!lyrics\n!lyrics daft punk - one more time",
         },
     )
-    @app_commands.describe(query="Artist - Title (optional)")
     @commands.guild_only()
-    async def lyrics(self, ctx: commands.Context, *, query: Optional[str] = None):
+    async def pfx_lyrics(self, ctx: commands.Context, *, query: Optional[str] = None):
         player = self._active_player(ctx)
         if not query:
             if not player or player.current is None:
@@ -2954,9 +2963,8 @@ class Music(commands.Cog):
         e.set_footer(text="Lyrics via lyrics.ovh · NanoBot Music")
         await ctx.reply(embed=e)
 
-    @commands.hybrid_command(
+    @commands.command(
         name="autoplay",
-        description="Toggle autoplay: keep playing from the autoplaylist when idle.",
         extras={
             "category": "🎵 Music",
             "short": "Toggle autoplay",
@@ -2971,15 +2979,8 @@ class Music(commands.Cog):
             "example": "!autoplay on",
         },
     )
-    @app_commands.describe(state="on or off")
-    @app_commands.choices(
-        state=[
-            app_commands.Choice(name="On", value="on"),
-            app_commands.Choice(name="Off", value="off"),
-        ]
-    )
     @commands.guild_only()
-    async def autoplay(self, ctx: commands.Context, state: Optional[str] = None):
+    async def pfx_autoplay(self, ctx: commands.Context, state: Optional[str] = None):
         player = self._active_player(ctx) or self.get_player(ctx.guild)
         player.text_channel = ctx.channel
         if state == "on":
@@ -3000,10 +3001,9 @@ class Music(commands.Cog):
             )
         )
 
-    @commands.hybrid_command(
+    @commands.command(
         name="radio",
         aliases=["247", "stay"],
-        description="Toggle 24/7 mode: stay in voice even when the channel is empty.",
         extras={
             "category": "🎵 Music",
             "short": "Toggle 24/7 stay-connected mode",
@@ -3019,16 +3019,9 @@ class Music(commands.Cog):
             "example": "!radio on",
         },
     )
-    @app_commands.describe(state="on or off")
-    @app_commands.choices(
-        state=[
-            app_commands.Choice(name="On", value="on"),
-            app_commands.Choice(name="Off", value="off"),
-        ]
-    )
     @commands.guild_only()
     @commands.has_permissions(manage_guild=True)
-    async def stay_247(self, ctx: commands.Context, state: Optional[str] = None):
+    async def pfx_radio(self, ctx: commands.Context, state: Optional[str] = None):
         current = await db.get_music_stay(ctx.guild.id)
         if state == "on":
             new_value = True
@@ -3170,9 +3163,8 @@ class Music(commands.Cog):
             ephemeral=True,
         )
 
-    @commands.hybrid_command(
+    @commands.command(
         name="stream",
-        description="Queue a live stream or direct media URL without downloading.",
         extras={
             "category": "🎵 Music",
             "short": "Queue a live stream URL",
@@ -3186,9 +3178,8 @@ class Music(commands.Cog):
             "example": "!stream https://example.com/radio.mp3",
         },
     )
-    @app_commands.describe(url="A livestream or media URL")
     @commands.guild_only()
-    async def stream(self, ctx: commands.Context, *, url: str):
+    async def pfx_stream(self, ctx: commands.Context, *, url: str):
         await self._queue_query(ctx, url, front=False, then_skip=False)
 
     @commands.command(
@@ -3224,9 +3215,8 @@ class Music(commands.Cog):
             )
         )
 
-    @commands.hybrid_command(
+    @commands.command(
         name="follow",
-        description="Make the bot follow you between voice channels.",
         extras={
             "category": "🎵 Music",
             "short": "Follow you between channels",
@@ -3241,7 +3231,7 @@ class Music(commands.Cog):
         },
     )
     @commands.guild_only()
-    async def follow(self, ctx: commands.Context):
+    async def pfx_follow(self, ctx: commands.Context):
         player = await self._ensure_voice(ctx, join=True)
         if player is None:
             return
@@ -3258,9 +3248,8 @@ class Music(commands.Cog):
             )
         )
 
-    @commands.hybrid_command(
+    @commands.command(
         name="pldump",
-        description="Dump the current queue's URLs to a text file.",
         extras={
             "category": "🎵 Music",
             "short": "Export the queue to a file",
@@ -3272,7 +3261,7 @@ class Music(commands.Cog):
         },
     )
     @commands.guild_only()
-    async def pldump(self, ctx: commands.Context):
+    async def pfx_pldump(self, ctx: commands.Context):
         player = self._active_player(ctx)
         if not player or (player.current is None and not player.queue):
             return await ctx.reply(embed=h.err("The queue is empty."), ephemeral=True)
@@ -3545,10 +3534,9 @@ class Music(commands.Cog):
             )
         )
 
-    @commands.hybrid_command(
+    @commands.command(
         name="history",
         aliases=["played"],
-        description="Show recently played tracks on this server.",
         extras={
             "category": "🎵 Music",
             "short": "Show recently played tracks",
@@ -3560,7 +3548,7 @@ class Music(commands.Cog):
         },
     )
     @commands.guild_only()
-    async def history(self, ctx: commands.Context):
+    async def pfx_history(self, ctx: commands.Context):
         if not self.save_history():
             return await ctx.reply(
                 embed=h.info(
@@ -3586,9 +3574,8 @@ class Music(commands.Cog):
                 lines.append(f"`{i:>2}.` {title} · {stamp}")
         await ctx.reply(embed=h.embed("🕘 Recently Played", "\n".join(lines), ACCENT))
 
-    @commands.hybrid_command(
+    @commands.command(
         name="clearhistory",
-        description="Clear this server's played-track history.",
         extras={
             "category": "🎵 Music",
             "short": "Clear played history",
@@ -3601,11 +3588,98 @@ class Music(commands.Cog):
     )
     @commands.has_permissions(manage_guild=True)
     @commands.guild_only()
-    async def clearhistory(self, ctx: commands.Context):
+    async def pfx_clearhistory(self, ctx: commands.Context):
         n = await db.clear_music_history(ctx.guild.id)
         await ctx.reply(
             embed=h.ok(f"Cleared **{n}** history entry/entries.", "🧹 History Cleared")
         )
+
+    # ── /music slash twins ───────────────────────────────────────────────────
+    # Each builds a Context from the interaction and reuses the prefix callback
+    # via Command.__call__ (which skips the prefix command's own checks; the
+    # group/subcommand decorators below carry the slash-side gating instead).
+    @music_slash.command(
+        name="grab", description="Save the currently playing track to your DMs."
+    )
+    async def slash_music_grab(self, interaction: discord.Interaction):
+        ctx = await commands.Context.from_interaction(interaction)
+        await self.pfx_grab(ctx)
+
+    @music_slash.command(name="lyrics", description="Look up lyrics for a song.")
+    @app_commands.describe(
+        query="Artist - Title (optional; uses current track if omitted)"
+    )
+    async def slash_music_lyrics(
+        self, interaction: discord.Interaction, query: Optional[str] = None
+    ):
+        ctx = await commands.Context.from_interaction(interaction)
+        await self.pfx_lyrics(ctx, query=query)
+
+    @music_slash.command(
+        name="autoplay", description="Toggle autoplay from the autoplaylist."
+    )
+    @app_commands.describe(state="on or off")
+    @app_commands.choices(
+        state=[
+            app_commands.Choice(name="On", value="on"),
+            app_commands.Choice(name="Off", value="off"),
+        ]
+    )
+    async def slash_music_autoplay(
+        self, interaction: discord.Interaction, state: Optional[str] = None
+    ):
+        ctx = await commands.Context.from_interaction(interaction)
+        await self.pfx_autoplay(ctx, state)
+
+    @music_slash.command(name="radio", description="Toggle 24/7 stay-connected mode.")
+    @app_commands.describe(state="on or off")
+    @app_commands.choices(
+        state=[
+            app_commands.Choice(name="On", value="on"),
+            app_commands.Choice(name="Off", value="off"),
+        ]
+    )
+    @app_commands.default_permissions(manage_guild=True)
+    async def slash_music_radio(
+        self, interaction: discord.Interaction, state: Optional[str] = None
+    ):
+        ctx = await commands.Context.from_interaction(interaction)
+        await self.pfx_radio(ctx, state)
+
+    @music_slash.command(
+        name="stream", description="Queue a live stream or direct media URL."
+    )
+    @app_commands.describe(url="A livestream or media URL")
+    async def slash_music_stream(self, interaction: discord.Interaction, url: str):
+        ctx = await commands.Context.from_interaction(interaction)
+        await self.pfx_stream(ctx, url=url)
+
+    @music_slash.command(
+        name="follow", description="Toggle the bot following you between channels."
+    )
+    async def slash_music_follow(self, interaction: discord.Interaction):
+        ctx = await commands.Context.from_interaction(interaction)
+        await self.pfx_follow(ctx)
+
+    @music_slash.command(
+        name="pldump", description="Export the queue's URLs to a text file."
+    )
+    async def slash_music_pldump(self, interaction: discord.Interaction):
+        ctx = await commands.Context.from_interaction(interaction)
+        await self.pfx_pldump(ctx)
+
+    @music_slash.command(name="history", description="Show recently played tracks.")
+    async def slash_music_history(self, interaction: discord.Interaction):
+        ctx = await commands.Context.from_interaction(interaction)
+        await self.pfx_history(ctx)
+
+    @music_slash.command(
+        name="clearhistory", description="Clear this server's played-track history."
+    )
+    @app_commands.default_permissions(manage_guild=True)
+    async def slash_music_clearhistory(self, interaction: discord.Interaction):
+        ctx = await commands.Context.from_interaction(interaction)
+        await self.pfx_clearhistory(ctx)
 
     @commands.hybrid_command(
         name="join",

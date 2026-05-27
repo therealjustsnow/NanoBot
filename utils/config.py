@@ -9,7 +9,7 @@ load — the old file is renamed to `config.json.bak` after migration.
 
 Sections:
     [bot]      token, default_prefix, owner_id, error_channel_id
-    [logging]  log_level, log_http
+    [logging]  log_level, log_http, log_events_jsonl
     [votes]    top.gg / DBL / discord.bots.gg tokens, webhook port/secret,
                webhook_allowed_ips
     [groq]     groq_api_key
@@ -28,265 +28,20 @@ Usage:
 from __future__ import annotations
 
 import configparser
+import ipaddress
 import json
 import os
-from dataclasses import dataclass
+from dataclasses import dataclass, field as dc_field
+from typing import Callable, Optional
 
 CONFIG_PATH = "config.ini"
 LEGACY_JSON_PATH = "config.json"
 
 VALID_LOG_LEVELS = {"DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"}
 PLACEHOLDER_TOKENS = {"YOUR_BOT_TOKEN_HERE", "your_token_here", "TOKEN", ""}
-
-# Which INI section each key belongs to.
-SECTION_MAP = {
-    # [bot]
-    "token": "bot",
-    "default_prefix": "bot",
-    "owner_id": "bot",
-    "error_channel_id": "bot",
-    # [logging]
-    "log_level": "logging",
-    "log_http": "logging",
-    # [votes]
-    "topgg_v1_token": "votes",
-    "dbl_token": "votes",
-    "discordbotsgg_token": "votes",
-    "vote_webhook_port": "votes",
-    "vote_webhook_secret": "votes",
-    "webhook_allowed_ips": "votes",
-    # [groq]
-    "groq_api_key": "groq",
-    # [scraper]
-    "fml_pages_per_scrape": "scraper",
-    "wyr_requests_per_scrape": "scraper",
-    "nekos_per_endpoint": "scraper",
-    "nekosia_per_tag": "scraper",
-    "revalidate_age": "scraper",
-    "revalidate_batch": "scraper",
-    "groq_wyr_system": "scraper",
-    # [music]
-    "music_cookie_file": "music",
-    "music_default_volume": "music",
-    "music_idle_timeout": "music",
-    "music_skip_ratio": "music",
-    "music_max_queue": "music",
-    "music_use_opus": "music",
-    "music_persist_queue": "music",
-    "music_predownload": "music",
-    "music_self_deafen": "music",
-    "music_default_speed": "music",
-    "music_search_service": "music",
-    "music_status_message": "music",
-    "music_proxy": "music",
-    "music_user_agent": "music",
-    "music_source_address": "music",
-    "music_autoplay_autoskip": "music",
-    "music_save_videos": "music",
-    "music_cache_max_mb": "music",
-    "music_cache_max_age_days": "music",
-    "music_ratelimit_cooldown": "music",
-    "music_ratelimit_leave": "music",
-    "music_apl_prune_on_error": "music",
-    "music_save_history": "music",
-    "music_js_runtime_path": "music",
-}
+VALID_SEARCH_SERVICES = ("ytsearch", "ytmsearch", "scsearch")
 
 SECTION_ORDER = ("bot", "logging", "votes", "groq", "scraper", "music")
-
-# Schema: key -> (type, required, description)
-_SCHEMA: dict[str, tuple[type | None, bool, str]] = {
-    "token": (str, True, "Bot token from the Discord Developer Portal"),
-    "default_prefix": (str, False, "Command prefix (max 5 chars, no spaces)"),
-    "owner_id": (None, False, "Your Discord user ID (int or blank)"),
-    "error_channel_id": (
-        None,
-        False,
-        "Channel ID to receive Python warnings and unhandled asyncio errors (int or blank)",
-    ),
-    "log_level": (str, False, "DEBUG / INFO / WARNING / ERROR / CRITICAL"),
-    "log_http": (bool, False, "Log raw HTTP requests (true/false)"),
-    "topgg_v1_token": (str, False, "top.gg v1 API token for commands sync"),
-    "dbl_token": (str, False, "discordbotlist.com bot token"),
-    "discordbotsgg_token": (str, False, "discord.bots.gg bot token"),
-    "vote_webhook_port": (int, False, "Open port for the vote webhook"),
-    "vote_webhook_secret": (str, False, "Secret used by bot lists to verify webhooks"),
-    "webhook_allowed_ips": (
-        str,
-        False,
-        "Comma-separated IPs or CIDR ranges allowed to POST vote webhooks (blank = allow all)",
-    ),
-    "groq_api_key": (str, False, "Groq API key (or set GROQ_API_KEY env var)"),
-    # ── scraper ──
-    "fml_pages_per_scrape": (int, False, "FML pages per daily scrape"),
-    "wyr_requests_per_scrape": (int, False, "WYR requests per rating per scrape"),
-    "nekos_per_endpoint": (int, False, "nekos.best images per endpoint per scrape"),
-    "nekosia_per_tag": (int, False, "Nekosia images per tag per scrape"),
-    "revalidate_age": (int, False, "Seconds before a URL is rechecked (HEAD)"),
-    "revalidate_batch": (int, False, "Max URLs checked per revalidation cycle"),
-    "groq_wyr_system": (str, False, "System prompt for Groq WYR generation"),
-    # ── music ──
-    "music_cookie_file": (
-        str,
-        False,
-        "Path to a yt-dlp cookies.txt (for age/region-locked or rate-limited sources)",
-    ),
-    "music_default_volume": (int, False, "Default playback volume, 0-200"),
-    "music_idle_timeout": (int, False, "Seconds idle/alone before auto-disconnect"),
-    "music_skip_ratio": (int, False, "Percent of listeners needed to vote-skip, 0-100"),
-    "music_max_queue": (int, False, "Maximum tracks allowed in a queue"),
-    "music_use_opus": (
-        bool,
-        False,
-        "Send audio as Opus (true) or PCM (false). PCM gives live volume but costs more CPU",
-    ),
-    "music_persist_queue": (
-        bool,
-        False,
-        "Save the queue to disk so it survives a restart (true/false)",
-    ),
-    "music_predownload": (
-        bool,
-        False,
-        "Download the next queued track while one plays for gapless playback (true/false)",
-    ),
-    "music_self_deafen": (
-        bool,
-        False,
-        "Self-deafen when joining voice to save bandwidth (true/false)",
-    ),
-    "music_default_speed": (str, False, "Default playback speed, 0.5-3.0"),
-    "music_search_service": (
-        str,
-        False,
-        "yt-dlp search service: ytsearch / ytmsearch / scsearch",
-    ),
-    "music_status_message": (
-        str,
-        False,
-        "Presence text while playing; {title} = song. YT/Twitch show a Watch button (blank = song title)",
-    ),
-    "music_proxy": (str, False, "HTTP/HTTPS proxy URL for yt-dlp (blank = none)"),
-    "music_user_agent": (
-        str,
-        False,
-        "Static User-Agent header for yt-dlp (blank = default)",
-    ),
-    "music_source_address": (
-        str,
-        False,
-        "Local IP yt-dlp binds to (default 0.0.0.0)",
-    ),
-    "music_autoplay_autoskip": (
-        bool,
-        False,
-        "Skip the current autoplay track when a user queues a real song (true/false)",
-    ),
-    "music_save_videos": (
-        bool,
-        False,
-        "Keep downloaded audio in the cache for instant replays (true/false)",
-    ),
-    "music_cache_max_mb": (
-        int,
-        False,
-        "Max audio cache size in MB when music_save_videos is on (0 = unlimited)",
-    ),
-    "music_cache_max_age_days": (
-        int,
-        False,
-        "Delete cached audio older than this many days (0 = never)",
-    ),
-    "music_ratelimit_cooldown": (
-        int,
-        False,
-        "Seconds to back off after a YouTube rate-limit (HTTP 429)",
-    ),
-    "music_ratelimit_leave": (
-        bool,
-        False,
-        "Leave voice channels when YouTube rate-limits the bot (true/false)",
-    ),
-    "music_apl_prune_on_error": (
-        bool,
-        False,
-        "Remove autoplaylist entries that fail to play (true/false)",
-    ),
-    "music_save_history": (
-        bool,
-        False,
-        "Save per-server played-track history for the history command (true/false)",
-    ),
-    "music_js_runtime_path": (
-        str,
-        False,
-        "Explicit path to deno/node/bun binary for yt-dlp JS (blank = auto-detect)",
-    ),
-}
-
-# Defaults used when writing a fresh example_config.ini and when keys are missing.
-DEFAULTS: dict[str, object] = {
-    "token": "YOUR_BOT_TOKEN_HERE",
-    "default_prefix": "n!",
-    "owner_id": None,
-    "error_channel_id": None,
-    "log_level": "INFO",
-    "log_http": False,
-    "topgg_v1_token": None,
-    "dbl_token": None,
-    "discordbotsgg_token": None,
-    "vote_webhook_port": 5000,
-    "vote_webhook_secret": None,
-    "groq_api_key": None,
-    "fml_pages_per_scrape": 500,
-    "wyr_requests_per_scrape": 500,
-    "nekos_per_endpoint": 400,
-    "nekosia_per_tag": 400,
-    "revalidate_age": 7 * 86400,
-    "revalidate_batch": 1000,
-    "groq_wyr_system": (
-        "You generate Would You Rather questions for a Discord bot. "
-        "Return ONLY a JSON array of strings. Each string must start with "
-        '"Would you rather" and contain exactly two options separated by " or ". '
-        "End each with a question mark. Make them fun, creative, and varied -- "
-        "mix silly, deep, gross, impossible, and everyday scenarios. "
-        "No numbered lists, no markdown, no explanation. Just the JSON array."
-    ),
-    "music_cookie_file": None,
-    "music_default_volume": 50,
-    "music_idle_timeout": 180,
-    "music_skip_ratio": 50,
-    "music_max_queue": 500,
-    "music_use_opus": True,
-    "music_persist_queue": True,
-    "music_predownload": True,
-    "music_self_deafen": True,
-    "music_default_speed": "1.0",
-    "music_search_service": "ytsearch",
-    "music_status_message": None,
-    "music_proxy": None,
-    "music_user_agent": None,
-    "music_source_address": "0.0.0.0",
-    "music_autoplay_autoskip": True,
-    "music_save_videos": False,
-    "music_cache_max_mb": 0,
-    "music_cache_max_age_days": 0,
-    "music_ratelimit_cooldown": 600,
-    "music_ratelimit_leave": False,
-    "music_apl_prune_on_error": True,
-    "music_save_history": True,
-    "music_js_runtime_path": None,
-}
-
-# Keys that must never be echoed back in Discord (logs, !config show, etc).
-SENSITIVE_KEYS = {
-    "token",
-    "topgg_v1_token",
-    "dbl_token",
-    "discordbotsgg_token",
-    "vote_webhook_secret",
-    "groq_api_key",
-}
 
 
 @dataclass
@@ -298,6 +53,524 @@ class ConfigIssue:
     def __str__(self) -> str:
         tag = "ERROR" if self.fatal else "WARN"
         return f"[{tag}] {self.field}: {self.message}"
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+#  Typed schema — single source of truth
+#
+#  Every config key is described once by a Field. The flat lookup dicts the rest
+#  of the codebase relies on (DEFAULTS, SECTION_MAP, SENSITIVE_KEYS, _SCHEMA) are
+#  derived from this list, and validate()/_coerce() are driven by it — so adding
+#  a key means adding one Field, with no risk of the parallel tables drifting.
+# ══════════════════════════════════════════════════════════════════════════════
+
+# Maps a Field.kind to the python type used by _coerce() / the legacy _SCHEMA.
+# "id" coerces to int-or-None (Discord snowflake), so it has no single type.
+_KIND_TYPE: dict[str, type | None] = {"str": str, "int": int, "bool": bool, "id": None}
+
+
+@dataclass(frozen=True)
+class Field:
+    key: str
+    section: str
+    kind: str  # "str" | "int" | "bool" | "id"
+    default: object
+    desc: str
+    required: bool = False
+    sensitive: bool = False
+    # Severity applied to generic type/range/choice failures for this field.
+    fatal: bool = False
+    minimum: Optional[float] = None
+    maximum: Optional[float] = None
+    choices: Optional[tuple[str, ...]] = None
+    numeric_str: bool = False  # str value validated as a float in [min, max]
+    file_exists: bool = False  # str value must point at an existing file
+    # Fully custom check; when set it REPLACES the generic checks above.
+    validator: Optional[Callable[[object], list]] = dc_field(default=None)
+
+
+# ── Per-field custom validators (irregular fields only) ───────────────────────
+def _v_token(v) -> list[ConfigIssue]:
+    if not isinstance(v, str) or v.strip() in PLACEHOLDER_TOKENS:
+        return [
+            ConfigIssue(
+                "token",
+                "Missing or placeholder. Get yours at "
+                "discord.com/developers/applications → Bot → Token",
+                True,
+            )
+        ]
+    return []
+
+
+def _v_prefix(v) -> list[ConfigIssue]:
+    if v is None:
+        return []  # unset → falls back to the built-in default
+    if not isinstance(v, str) or not v:
+        return [ConfigIssue("default_prefix", "Must be a non-empty string", True)]
+    if " " in v:
+        return [
+            ConfigIssue(
+                "default_prefix",
+                f"'{v}' contains a space — prefixes can't have spaces",
+                True,
+            )
+        ]
+    if len(v) > 5:
+        return [
+            ConfigIssue("default_prefix", f"'{v}' is {len(v)} chars — max is 5", True)
+        ]
+    return []
+
+
+def _v_owner_id(v) -> list[ConfigIssue]:
+    if v is None:
+        return []
+    if not isinstance(v, int) and not str(v).isdigit():
+        return [
+            ConfigIssue(
+                "owner_id",
+                f"'{v}' is not a valid Discord user ID (must be an integer or blank)",
+                True,
+            )
+        ]
+    if int(str(v)) < 10000:
+        return [
+            ConfigIssue(
+                "owner_id",
+                f"'{v}' looks too small to be a real Discord user ID",
+                False,
+            )
+        ]
+    return []
+
+
+def _v_error_channel_id(v) -> list[ConfigIssue]:
+    if v is None:
+        return []
+    if not isinstance(v, int) and not str(v).isdigit():
+        return [
+            ConfigIssue(
+                "error_channel_id",
+                f"'{v}' is not a valid Discord channel ID (must be an integer or blank)",
+                False,
+            )
+        ]
+    return []
+
+
+def _v_log_level(v) -> list[ConfigIssue]:
+    if v is None:
+        return []
+    if not isinstance(v, str):
+        return [
+            ConfigIssue("log_level", f"Must be a string, got {type(v).__name__}", False)
+        ]
+    if v.upper() not in VALID_LOG_LEVELS:
+        return [
+            ConfigIssue(
+                "log_level",
+                f"'{v}' is not valid. Choose from: {', '.join(sorted(VALID_LOG_LEVELS))}",
+                False,
+            )
+        ]
+    return []
+
+
+def _v_allowed_ips(v) -> list[ConfigIssue]:
+    if not v:
+        return []
+    issues: list[ConfigIssue] = []
+    for entry in str(v).split(","):
+        entry = entry.strip()
+        if not entry:
+            continue
+        try:
+            ipaddress.ip_network(entry, strict=False)
+        except ValueError:
+            issues.append(
+                ConfigIssue(
+                    "webhook_allowed_ips",
+                    f"'{entry}' is not a valid IP address or CIDR range",
+                    False,
+                )
+            )
+    return issues
+
+
+_WYR_SYSTEM_DEFAULT = (
+    "You generate Would You Rather questions for a Discord bot. "
+    "Return ONLY a JSON array of strings. Each string must start with "
+    '"Would you rather" and contain exactly two options separated by " or ". '
+    "End each with a question mark. Make them fun, creative, and varied -- "
+    "mix silly, deep, gross, impossible, and everyday scenarios. "
+    "No numbered lists, no markdown, no explanation. Just the JSON array."
+)
+
+FIELDS: tuple[Field, ...] = (
+    # ── [bot] ──
+    Field(
+        "token",
+        "bot",
+        "str",
+        "YOUR_BOT_TOKEN_HERE",
+        "Bot token from the Discord Developer Portal",
+        required=True,
+        sensitive=True,
+        validator=_v_token,
+    ),
+    Field(
+        "default_prefix",
+        "bot",
+        "str",
+        "n!",
+        "Command prefix (max 5 chars, no spaces)",
+        validator=_v_prefix,
+    ),
+    Field(
+        "owner_id",
+        "bot",
+        "id",
+        None,
+        "Your Discord user ID (int or blank)",
+        validator=_v_owner_id,
+    ),
+    Field(
+        "error_channel_id",
+        "bot",
+        "id",
+        None,
+        "Channel ID to receive Python warnings and unhandled asyncio errors (int or blank)",
+        validator=_v_error_channel_id,
+    ),
+    # ── [logging] ──
+    Field(
+        "log_level",
+        "logging",
+        "str",
+        "INFO",
+        "DEBUG / INFO / WARNING / ERROR / CRITICAL",
+        validator=_v_log_level,
+    ),
+    Field("log_http", "logging", "bool", False, "Log raw HTTP requests (true/false)"),
+    Field(
+        "log_events_jsonl",
+        "logging",
+        "bool",
+        True,
+        "Write structured command-lifecycle events to logs/events.jsonl (true/false)",
+    ),
+    # ── [votes] ──
+    Field(
+        "topgg_v1_token",
+        "votes",
+        "str",
+        None,
+        "top.gg v1 API token for commands sync",
+        sensitive=True,
+    ),
+    Field(
+        "dbl_token",
+        "votes",
+        "str",
+        None,
+        "discordbotlist.com bot token",
+        sensitive=True,
+    ),
+    Field(
+        "discordbotsgg_token",
+        "votes",
+        "str",
+        None,
+        "discord.bots.gg bot token",
+        sensitive=True,
+    ),
+    Field(
+        "vote_webhook_port",
+        "votes",
+        "int",
+        5000,
+        "Open port for the vote webhook",
+        minimum=1,
+        maximum=65535,
+    ),
+    Field(
+        "vote_webhook_secret",
+        "votes",
+        "str",
+        None,
+        "Secret used by bot lists to verify webhooks",
+        sensitive=True,
+    ),
+    Field(
+        "webhook_allowed_ips",
+        "votes",
+        "str",
+        None,
+        "Comma-separated IPs or CIDR ranges allowed to POST vote webhooks (blank = allow all)",
+        validator=_v_allowed_ips,
+    ),
+    # ── [groq] ──
+    Field(
+        "groq_api_key",
+        "groq",
+        "str",
+        None,
+        "Groq API key (or set GROQ_API_KEY env var)",
+        sensitive=True,
+    ),
+    # ── [scraper] ──
+    Field(
+        "fml_pages_per_scrape",
+        "scraper",
+        "int",
+        500,
+        "FML pages per daily scrape",
+        minimum=0,
+    ),
+    Field(
+        "wyr_requests_per_scrape",
+        "scraper",
+        "int",
+        500,
+        "WYR requests per rating per scrape",
+        minimum=0,
+    ),
+    Field(
+        "nekos_per_endpoint",
+        "scraper",
+        "int",
+        400,
+        "nekos.best images per endpoint per scrape",
+        minimum=0,
+    ),
+    Field(
+        "nekosia_per_tag",
+        "scraper",
+        "int",
+        400,
+        "Nekosia images per tag per scrape",
+        minimum=0,
+    ),
+    Field(
+        "revalidate_age",
+        "scraper",
+        "int",
+        7 * 86400,
+        "Seconds before a URL is rechecked (HEAD)",
+        minimum=0,
+    ),
+    Field(
+        "revalidate_batch",
+        "scraper",
+        "int",
+        1000,
+        "Max URLs checked per revalidation cycle",
+        minimum=0,
+    ),
+    Field(
+        "groq_wyr_system",
+        "scraper",
+        "str",
+        _WYR_SYSTEM_DEFAULT,
+        "System prompt for Groq WYR generation",
+    ),
+    # ── [music] ──
+    Field(
+        "music_cookie_file",
+        "music",
+        "str",
+        None,
+        "Path to a yt-dlp cookies.txt (for age/region-locked or rate-limited sources)",
+        file_exists=True,
+    ),
+    Field(
+        "music_default_volume",
+        "music",
+        "int",
+        50,
+        "Default playback volume, 0-200",
+        minimum=0,
+        maximum=200,
+    ),
+    Field(
+        "music_idle_timeout",
+        "music",
+        "int",
+        180,
+        "Seconds idle/alone before auto-disconnect",
+        minimum=0,
+    ),
+    Field(
+        "music_skip_ratio",
+        "music",
+        "int",
+        50,
+        "Percent of listeners needed to vote-skip, 0-100",
+        minimum=0,
+        maximum=100,
+    ),
+    Field(
+        "music_max_queue",
+        "music",
+        "int",
+        500,
+        "Maximum tracks allowed in a queue",
+        minimum=1,
+    ),
+    Field(
+        "music_use_opus",
+        "music",
+        "bool",
+        True,
+        "Send audio as Opus (true) or PCM (false). PCM gives live volume but costs more CPU",
+    ),
+    Field(
+        "music_persist_queue",
+        "music",
+        "bool",
+        True,
+        "Save the queue to disk so it survives a restart (true/false)",
+    ),
+    Field(
+        "music_predownload",
+        "music",
+        "bool",
+        True,
+        "Download the next queued track while one plays for gapless playback (true/false)",
+    ),
+    Field(
+        "music_self_deafen",
+        "music",
+        "bool",
+        True,
+        "Self-deafen when joining voice to save bandwidth (true/false)",
+    ),
+    Field(
+        "music_default_speed",
+        "music",
+        "str",
+        "1.0",
+        "Default playback speed, 0.5-3.0",
+        numeric_str=True,
+        minimum=0.5,
+        maximum=3.0,
+    ),
+    Field(
+        "music_search_service",
+        "music",
+        "str",
+        "ytsearch",
+        "yt-dlp search service: ytsearch / ytmsearch / scsearch",
+        choices=VALID_SEARCH_SERVICES,
+    ),
+    Field(
+        "music_status_message",
+        "music",
+        "str",
+        None,
+        "Presence text while playing; {title} = song. YT/Twitch show a Watch button (blank = song title)",
+    ),
+    Field(
+        "music_proxy",
+        "music",
+        "str",
+        None,
+        "HTTP/HTTPS proxy URL for yt-dlp (blank = none)",
+    ),
+    Field(
+        "music_user_agent",
+        "music",
+        "str",
+        None,
+        "Static User-Agent header for yt-dlp (blank = default)",
+    ),
+    Field(
+        "music_source_address",
+        "music",
+        "str",
+        "0.0.0.0",
+        "Local IP yt-dlp binds to (default 0.0.0.0)",
+    ),
+    Field(
+        "music_autoplay_autoskip",
+        "music",
+        "bool",
+        True,
+        "Skip the current autoplay track when a user queues a real song (true/false)",
+    ),
+    Field(
+        "music_save_videos",
+        "music",
+        "bool",
+        False,
+        "Keep downloaded audio in the cache for instant replays (true/false)",
+    ),
+    Field(
+        "music_cache_max_mb",
+        "music",
+        "int",
+        0,
+        "Max audio cache size in MB when music_save_videos is on (0 = unlimited)",
+        minimum=0,
+    ),
+    Field(
+        "music_cache_max_age_days",
+        "music",
+        "int",
+        0,
+        "Delete cached audio older than this many days (0 = never)",
+        minimum=0,
+    ),
+    Field(
+        "music_ratelimit_cooldown",
+        "music",
+        "int",
+        600,
+        "Seconds to back off after a YouTube rate-limit (HTTP 429)",
+        minimum=0,
+    ),
+    Field(
+        "music_ratelimit_leave",
+        "music",
+        "bool",
+        False,
+        "Leave voice channels when YouTube rate-limits the bot (true/false)",
+    ),
+    Field(
+        "music_apl_prune_on_error",
+        "music",
+        "bool",
+        True,
+        "Remove autoplaylist entries that fail to play (true/false)",
+    ),
+    Field(
+        "music_save_history",
+        "music",
+        "bool",
+        True,
+        "Save per-server played-track history for the history command (true/false)",
+    ),
+    Field(
+        "music_js_runtime_path",
+        "music",
+        "str",
+        None,
+        "Explicit path to deno/node/bun binary for yt-dlp JS (blank = auto-detect)",
+        file_exists=True,
+    ),
+)
+
+_FIELD: dict[str, Field] = {f.key: f for f in FIELDS}
+
+# Derived lookup tables — kept for backwards compatibility with callers that
+# import them directly (cogs/admin.py, the test suite). Never edit by hand.
+SECTION_MAP: dict[str, str] = {f.key: f.section for f in FIELDS}
+DEFAULTS: dict[str, object] = {f.key: f.default for f in FIELDS}
+SENSITIVE_KEYS: set[str] = {f.key for f in FIELDS if f.sensitive}
+_SCHEMA: dict[str, tuple[type | None, bool, str]] = {
+    f.key: (_KIND_TYPE[f.kind], f.required, f.desc) for f in FIELDS
+}
 
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -458,6 +731,85 @@ def example_ini() -> str:
 # ══════════════════════════════════════════════════════════════════════════════
 
 
+def _range_msg(field: Field, v) -> str:
+    lo, hi = field.minimum, field.maximum
+    if lo is not None and hi is not None:
+        return f"{v} is out of range — must be {_num(lo)}–{_num(hi)}"
+    if lo is not None:
+        return f"Expected integer ≥ {_num(lo)}, got '{v}'"
+    return f"Expected integer ≤ {_num(hi)}, got '{v}'"
+
+
+def _num(x) -> str:
+    """Render a range bound without a trailing .0 for whole numbers."""
+    return str(int(x)) if float(x).is_integer() else str(x)
+
+
+def _check_generic(field: Field, v) -> list[ConfigIssue]:
+    """Type / range / choice / file checks driven by the Field descriptor."""
+    if v is None:
+        if field.required:
+            return [ConfigIssue(field.key, "Required but missing", True)]
+        return []
+
+    # An empty string means "unset" for string keys (mirrors _coerce), so skip
+    # choice/range/file checks — a blank value just falls back to the default.
+    if field.kind == "str" and v == "":
+        return []
+
+    sev = field.fatal
+
+    if field.kind == "bool":
+        if not isinstance(v, bool):
+            return [ConfigIssue(field.key, f"Expected true or false, got '{v}'", sev)]
+        return []
+
+    if field.kind == "int":
+        if not isinstance(v, int) or isinstance(v, bool):
+            return [ConfigIssue(field.key, f"Expected integer, got '{v}'", sev)]
+        if (field.minimum is not None and v < field.minimum) or (
+            field.maximum is not None and v > field.maximum
+        ):
+            return [ConfigIssue(field.key, _range_msg(field, v), sev)]
+        return []
+
+    # str
+    if field.choices is not None and v not in field.choices:
+        return [
+            ConfigIssue(
+                field.key,
+                f"'{v}' is not valid — choose from: {', '.join(field.choices)}",
+                sev,
+            )
+        ]
+    if field.numeric_str:
+        try:
+            f = float(v)
+        except (TypeError, ValueError):
+            return [
+                ConfigIssue(
+                    field.key,
+                    f"'{v}' is not a valid number — must be "
+                    f"{_num(field.minimum)}–{_num(field.maximum)}",
+                    sev,
+                )
+            ]
+        if (field.minimum is not None and f < field.minimum) or (
+            field.maximum is not None and f > field.maximum
+        ):
+            return [
+                ConfigIssue(
+                    field.key,
+                    f"{v} is out of range — must be "
+                    f"{_num(field.minimum)}–{_num(field.maximum)}",
+                    sev,
+                )
+            ]
+    if field.file_exists and not os.path.isfile(v):
+        return [ConfigIssue(field.key, f"File not found: '{v}'", sev)]
+    return []
+
+
 def validate(cfg: dict) -> list[ConfigIssue]:
     """
     Validate a flat config dict against the NanoBot schema.
@@ -465,322 +817,21 @@ def validate(cfg: dict) -> list[ConfigIssue]:
     """
     issues: list[ConfigIssue] = []
 
-    # ── Unknown keys ──────────────────────────────────────────────────────────
+    # Unknown keys → typo warning.
     for key in cfg:
-        if key not in _SCHEMA:
+        if key not in _FIELD:
             issues.append(
-                ConfigIssue(
-                    field=key,
-                    message=f"Unrecognised key '{key}' — check for typos",
-                    fatal=False,
-                )
+                ConfigIssue(key, f"Unrecognised key '{key}' — check for typos", False)
             )
 
-    # ── Token ─────────────────────────────────────────────────────────────────
-    token = cfg.get("token", "")
-    if not isinstance(token, str) or token.strip() in PLACEHOLDER_TOKENS:
-        issues.append(
-            ConfigIssue(
-                field="token",
-                message="Missing or placeholder. Get yours at discord.com/developers/applications → Bot → Token",
-                fatal=True,
-            )
-        )
-
-    # ── default_prefix ────────────────────────────────────────────────────────
-    prefix = cfg.get("default_prefix", "!")
-    if not isinstance(prefix, str) or not prefix:
-        issues.append(ConfigIssue("default_prefix", "Must be a non-empty string", True))
-    elif " " in prefix:
-        issues.append(
-            ConfigIssue(
-                "default_prefix",
-                f"'{prefix}' contains a space — prefixes can't have spaces",
-                True,
-            )
-        )
-    elif len(prefix) > 5:
-        issues.append(
-            ConfigIssue(
-                "default_prefix", f"'{prefix}' is {len(prefix)} chars — max is 5", True
-            )
-        )
-
-    # ── log_level ─────────────────────────────────────────────────────────────
-    raw_level = cfg.get("log_level", "INFO")
-    if raw_level is not None:
-        if not isinstance(raw_level, str):
-            issues.append(
-                ConfigIssue(
-                    "log_level",
-                    f"Must be a string, got {type(raw_level).__name__}",
-                    False,
-                )
-            )
-        elif raw_level.upper() not in VALID_LOG_LEVELS:
-            issues.append(
-                ConfigIssue(
-                    field="log_level",
-                    message=f"'{raw_level}' is not valid. Choose from: {', '.join(sorted(VALID_LOG_LEVELS))}",
-                    fatal=False,
-                )
-            )
-
-    # ── log_http ──────────────────────────────────────────────────────────────
-    log_http = cfg.get("log_http", False)
-    if log_http is not None and not isinstance(log_http, bool):
-        issues.append(
-            ConfigIssue(
-                field="log_http",
-                message=f"Expected true or false, got {type(log_http).__name__} '{log_http}'",
-                fatal=False,
-            )
-        )
-
-    # ── owner_id ──────────────────────────────────────────────────────────────
-    owner_id = cfg.get("owner_id")
-    if owner_id is not None:
-        if not isinstance(owner_id, int) and not str(owner_id).isdigit():
-            issues.append(
-                ConfigIssue(
-                    field="owner_id",
-                    message=f"'{owner_id}' is not a valid Discord user ID (must be an integer or blank)",
-                    fatal=True,
-                )
-            )
-        elif int(str(owner_id)) < 10000:
-            issues.append(
-                ConfigIssue(
-                    field="owner_id",
-                    message=f"'{owner_id}' looks too small to be a real Discord user ID",
-                    fatal=False,
-                )
-            )
-
-    # ── error_channel_id ──────────────────────────────────────────────────────
-    error_ch = cfg.get("error_channel_id")
-    if error_ch is not None:
-        if not isinstance(error_ch, int) and not str(error_ch).isdigit():
-            issues.append(
-                ConfigIssue(
-                    field="error_channel_id",
-                    message=f"'{error_ch}' is not a valid Discord channel ID (must be an integer or blank)",
-                    fatal=False,
-                )
-            )
-
-    # ── vote_webhook_port ─────────────────────────────────────────────────────
-    port = cfg.get("vote_webhook_port")
-    if port is not None:
-        if not isinstance(port, int) or isinstance(port, bool):
-            issues.append(
-                ConfigIssue(
-                    field="vote_webhook_port",
-                    message=f"Must be an integer, got {type(port).__name__} '{port}'",
-                    fatal=False,
-                )
-            )
-        elif not (1 <= port <= 65535):
-            issues.append(
-                ConfigIssue(
-                    field="vote_webhook_port",
-                    message=f"{port} is not a valid port number (must be 1–65535)",
-                    fatal=False,
-                )
-            )
-
-    # ── scraper integer knobs ─────────────────────────────────────────────────
-    for key in (
-        "fml_pages_per_scrape",
-        "wyr_requests_per_scrape",
-        "nekos_per_endpoint",
-        "nekosia_per_tag",
-        "revalidate_age",
-        "revalidate_batch",
-    ):
-        v = cfg.get(key)
-        if v is None:
-            continue
-        if not isinstance(v, int) or isinstance(v, bool) or v < 0:
-            issues.append(
-                ConfigIssue(
-                    field=key,
-                    message=f"Expected non-negative integer, got '{v}'",
-                    fatal=False,
-                )
-            )
-
-    # ── webhook_allowed_ips ───────────────────────────────────────────────────
-    allowed_ips = cfg.get("webhook_allowed_ips")
-    if allowed_ips:
-        import ipaddress
-
-        for entry in str(allowed_ips).split(","):
-            entry = entry.strip()
-            if not entry:
-                continue
-            try:
-                ipaddress.ip_network(entry, strict=False)
-            except ValueError:
-                issues.append(
-                    ConfigIssue(
-                        field="webhook_allowed_ips",
-                        message=f"'{entry}' is not a valid IP address or CIDR range",
-                        fatal=False,
-                    )
-                )
-
-    # ── music booleans ────────────────────────────────────────────────────────
-    for key in (
-        "music_use_opus",
-        "music_persist_queue",
-        "music_predownload",
-        "music_self_deafen",
-        "music_autoplay_autoskip",
-        "music_save_videos",
-        "music_ratelimit_leave",
-        "music_apl_prune_on_error",
-        "music_save_history",
-    ):
-        v = cfg.get(key)
-        if v is not None and not isinstance(v, bool):
-            issues.append(
-                ConfigIssue(
-                    field=key,
-                    message=f"Expected true or false, got '{v}'",
-                    fatal=False,
-                )
-            )
-
-    # ── music non-negative integers ───────────────────────────────────────────
-    for key in (
-        "music_cache_max_mb",
-        "music_cache_max_age_days",
-        "music_ratelimit_cooldown",
-        "music_idle_timeout",
-    ):
-        v = cfg.get(key)
-        if v is None:
-            continue
-        if not isinstance(v, int) or isinstance(v, bool) or v < 0:
-            issues.append(
-                ConfigIssue(
-                    field=key,
-                    message=f"Expected non-negative integer, got '{v}'",
-                    fatal=False,
-                )
-            )
-
-    # ── music_default_volume (0–200) ──────────────────────────────────────────
-    vol = cfg.get("music_default_volume")
-    if vol is not None:
-        if not isinstance(vol, int) or isinstance(vol, bool):
-            issues.append(
-                ConfigIssue(
-                    "music_default_volume",
-                    f"Expected integer 0–200, got '{vol}'",
-                    False,
-                )
-            )
-        elif not (0 <= vol <= 200):
-            issues.append(
-                ConfigIssue(
-                    "music_default_volume",
-                    f"{vol} is out of range — must be 0–200",
-                    False,
-                )
-            )
-
-    # ── music_skip_ratio (0–100) ──────────────────────────────────────────────
-    ratio = cfg.get("music_skip_ratio")
-    if ratio is not None:
-        if not isinstance(ratio, int) or isinstance(ratio, bool):
-            issues.append(
-                ConfigIssue(
-                    "music_skip_ratio",
-                    f"Expected integer 0–100, got '{ratio}'",
-                    False,
-                )
-            )
-        elif not (0 <= ratio <= 100):
-            issues.append(
-                ConfigIssue(
-                    "music_skip_ratio",
-                    f"{ratio} is out of range — must be 0–100",
-                    False,
-                )
-            )
-
-    # ── music_max_queue (≥1) ──────────────────────────────────────────────────
-    max_q = cfg.get("music_max_queue")
-    if max_q is not None:
-        if not isinstance(max_q, int) or isinstance(max_q, bool) or max_q < 1:
-            issues.append(
-                ConfigIssue(
-                    "music_max_queue",
-                    f"Expected integer ≥ 1, got '{max_q}'",
-                    False,
-                )
-            )
-
-    # ── music_default_speed (0.5–3.0) ────────────────────────────────────────
-    speed_raw = cfg.get("music_default_speed")
-    if speed_raw not in (None, ""):
-        try:
-            speed = float(speed_raw)
-            if not (0.5 <= speed <= 3.0):
-                issues.append(
-                    ConfigIssue(
-                        "music_default_speed",
-                        f"{speed_raw} is out of range — must be 0.5–3.0",
-                        False,
-                    )
-                )
-        except (TypeError, ValueError):
-            issues.append(
-                ConfigIssue(
-                    "music_default_speed",
-                    f"'{speed_raw}' is not a valid number — must be 0.5–3.0",
-                    False,
-                )
-            )
-
-    # ── music_search_service ──────────────────────────────────────────────────
-    svc = cfg.get("music_search_service")
-    if svc not in (None, ""):
-        _VALID_SERVICES = ("ytsearch", "ytmsearch", "scsearch")
-        if svc not in _VALID_SERVICES:
-            issues.append(
-                ConfigIssue(
-                    "music_search_service",
-                    f"'{svc}' is not valid — choose from: {', '.join(_VALID_SERVICES)}",
-                    False,
-                )
-            )
-
-    # ── music_cookie_file ─────────────────────────────────────────────────────
-    cookie = cfg.get("music_cookie_file")
-    if cookie:
-        if not os.path.isfile(cookie):
-            issues.append(
-                ConfigIssue(
-                    "music_cookie_file",
-                    f"File not found: '{cookie}'",
-                    False,
-                )
-            )
-
-    # ── music_js_runtime_path ─────────────────────────────────────────────────
-    js_path = cfg.get("music_js_runtime_path")
-    if js_path:
-        if not os.path.isfile(js_path):
-            issues.append(
-                ConfigIssue(
-                    "music_js_runtime_path",
-                    f"File not found: '{js_path}'",
-                    False,
-                )
-            )
+    # Every known field: a custom validator (if any) fully owns its checks,
+    # otherwise the generic type/range/choice/file checks apply.
+    for field in FIELDS:
+        v = cfg.get(field.key)
+        if field.validator is not None:
+            issues.extend(field.validator(v))
+        else:
+            issues.extend(_check_generic(field, v))
 
     return issues
 

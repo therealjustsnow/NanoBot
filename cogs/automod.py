@@ -268,7 +268,7 @@ async def _execute_action(
                 color=h.YELLOW,
             )
         )
-        asyncio.create_task(_soft_delete_after(notice, 6.0))
+        _spawn_soft_delete(notice, 6.0)
     except (discord.Forbidden, discord.HTTPException):
         pass
 
@@ -344,6 +344,17 @@ async def _execute_action(
             pass
         except Exception as exc:
             log.error(f"AutoMod softban failed: {exc}", exc_info=exc)
+
+
+# Strong refs to fire-and-forget soft-delete tasks. Without this the event loop
+# only holds a weak reference and may garbage-collect the task before it runs.
+_bg_tasks: set[asyncio.Task] = set()
+
+
+def _spawn_soft_delete(message: discord.Message, delay: float) -> None:
+    task = asyncio.create_task(_soft_delete_after(message, delay))
+    _bg_tasks.add(task)
+    task.add_done_callback(_bg_tasks.discard)
 
 
 async def _soft_delete_after(message: discord.Message, delay: float) -> None:

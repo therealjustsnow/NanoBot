@@ -14,6 +14,7 @@ import asyncio
 import logging
 import logging.handlers
 import os
+import time
 import traceback
 import warnings
 from collections import OrderedDict
@@ -25,6 +26,7 @@ from discord.ext import commands
 from utils import cache_db
 from utils import config as cfg_mod
 from utils import db
+from utils import obs
 
 # ── Config (read once at module level so logging init can use it) ──────────────
 _CFG = cfg_mod.load()
@@ -47,10 +49,13 @@ def _setup_logging(cfg: dict) -> logging.Logger:
     level = getattr(logging, level_str)
 
     # ── Shared formatter ──────────────────────────────────────────────────────
+    # %(cid)s is the correlation id injected by obs.CorrelationFilter; it reads
+    # "-" when no command is in flight.
     fmt = logging.Formatter(
-        fmt="%(asctime)s [%(levelname)-8s] %(name)s: %(message)s",
+        fmt="%(asctime)s [%(levelname)-8s] [%(cid)s] %(name)s: %(message)s",
         datefmt="%Y-%m-%d %H:%M:%S",
     )
+    correlation_filter = obs.CorrelationFilter()
 
     # ── File handler (rotating) ───────────────────────────────────────────────
     # ~50 KB per file ≈ 500 lines. Small enough for quick n!logs reads,
@@ -62,6 +67,7 @@ def _setup_logging(cfg: dict) -> logging.Logger:
         encoding="utf-8",
     )
     file_handler.setFormatter(fmt)
+    file_handler.addFilter(correlation_filter)
 
     # ── Console handler (with colour if supported) ────────────────────────────
     # Build it ourselves instead of calling discord.utils.setup_logging, which
@@ -72,6 +78,7 @@ def _setup_logging(cfg: dict) -> logging.Logger:
         console_handler.setFormatter(discord.utils._ColourFormatter())
     else:
         console_handler.setFormatter(fmt)
+    console_handler.addFilter(correlation_filter)
 
     # ── Wire up the root logger ───────────────────────────────────────────────
     root = logging.getLogger()
@@ -83,6 +90,9 @@ def _setup_logging(cfg: dict) -> logging.Logger:
 
     http_level = logging.DEBUG if cfg.get("log_http") else logging.WARNING
     logging.getLogger("discord.http").setLevel(http_level)
+
+    # ── Structured JSONL event sink ───────────────────────────────────────────
+    obs.setup_events_logger(bool(cfg.get("log_events_jsonl", True)))
 
     return logging.getLogger("NanoBot")
 
@@ -141,6 +151,42 @@ async def _slash_error_response(
 
 
 # ── Bot ────────────────────────────────────────────────────────────────────────
+class ObsTree(app_commands.CommandTree):
+    """
+    CommandTree that stamps a correlation id + start time on every app-command
+    invocation. _call() is the single method discord.py routes every slash /
+    context-menu invocation through, and the command callback runs inside it (in
+    this task) — so setting the contextvar here propagates the id to the command
+    body and any log lines it emits, which a listener (separate task) cannot do.
+
+    NOTE: _call is private discord.py API. It has been stable across 2.x; the
+    wrapper is kept thin and the startup cog/tree load exercises it, so a
+    signature change would fail loudly rather than silently.
+    """
+
+    async def _call(self, interaction: discord.Interaction):
+        cid = obs.new_cid()
+        interaction.extras["_nb_cid"] = cid
+        interaction.extras["_nb_t0"] = time.perf_counter()
+        token = obs.set_cid(cid)
+        try:
+            cmd = (
+                interaction.command.qualified_name
+                if interaction.command
+                else (interaction.data or {}).get("name", "?")
+            )
+            obs.log_event(
+                "slash.start",
+                cmd=cmd,
+                user=interaction.user.id if interaction.user else None,
+                guild=interaction.guild_id,
+                channel=interaction.channel_id,
+            )
+            return await super()._call(interaction)
+        finally:
+            obs.reset_cid(token)
+
+
 class NanoBot(commands.Bot):
     def __init__(self, cfg: dict):
         intents = discord.Intents.default()
@@ -152,6 +198,7 @@ class NanoBot(commands.Bot):
             intents=intents,
             help_command=None,
             description="NanoBot — Small. Fast. Built for Mobile Mods.",
+            tree_cls=ObsTree,
         )
 
         # Route app command failures (including transformer errors) to our
@@ -174,7 +221,23 @@ class NanoBot(commands.Bot):
     def _spawn_bg(self, coro) -> None:
         task = asyncio.create_task(coro)
         self._bg_tasks.add(task)
-        task.add_done_callback(self._bg_tasks.discard)
+        task.add_done_callback(self._on_bg_done)
+
+    def _on_bg_done(self, task: asyncio.Task) -> None:
+        self._bg_tasks.discard(task)
+        if task.cancelled():
+            return
+        exc = task.exception()
+        if exc is not None:
+            log.error("Background task failed: %s", exc, exc_info=exc)
+
+    async def close(self) -> None:
+        # Cancel fire-and-forget background tasks on shutdown. (Cog-owned tasks
+        # are cancelled by cog_unload on reload; on full shutdown they stop with
+        # the event loop.)
+        for task in list(self._bg_tasks):
+            task.cancel()
+        await super().close()
 
     # ── Config application / reload ───────────────────────────────────────────
     def _apply_config(self, cfg: dict) -> None:
@@ -201,6 +264,7 @@ class NanoBot(commands.Bot):
             logging.getLogger().setLevel(getattr(logging, level_str))
         http_level = logging.DEBUG if new_cfg.get("log_http") else logging.WARNING
         logging.getLogger("discord.http").setLevel(http_level)
+        obs.setup_events_logger(bool(new_cfg.get("log_events_jsonl", True)))
 
         self.dispatch("config_reloaded", self.config)
         return new_cfg
@@ -356,12 +420,82 @@ class NanoBot(commands.Bot):
 
     async def on_command(self, ctx: commands.Context):
         self.commands_ran += 1
+        # Reuse the id/start: stamped in on_message for prefix invocations, or in
+        # on_interaction for hybrid commands invoked via slash (which skip
+        # on_message). Mint a fresh one only if neither ran.
+        inter = ctx.interaction
+        cid = (
+            getattr(ctx, "_nb_cid", None)
+            or (inter.extras.get("_nb_cid") if inter else None)
+            or obs.new_cid()
+        )
+        ctx._nb_cid = cid
+        if not hasattr(ctx, "_nb_t0"):
+            ctx._nb_t0 = (
+                inter.extras.get("_nb_t0")
+                if inter and inter.extras.get("_nb_t0")
+                else time.perf_counter()
+            )
+        if inter is not None:
+            # This hybrid ran through the ext.commands lifecycle, so its success
+            # is logged via on_command_completion — tell on_app_command_completion
+            # not to double-log it.
+            inter.extras["_nb_skip_app_completion"] = True
+        obs.set_cid(cid)  # listener runs in its own task; no reset needed
+
         guild_info = f"{ctx.guild.name} ({ctx.guild.id})" if ctx.guild else "DM"
         log.info(
             f"CMD  {ctx.command}  |  "
             f"{ctx.author} ({ctx.author.id})  |  "
             f"#{ctx.channel}  |  "
             f"{guild_info}"
+        )
+        obs.log_event(
+            "command.start",
+            cmd=str(ctx.command),
+            user=ctx.author.id,
+            guild=ctx.guild.id if ctx.guild else None,
+            channel=getattr(ctx.channel, "id", None),
+            via="slash" if ctx.interaction else "prefix",
+        )
+
+    async def on_command_completion(self, ctx: commands.Context):
+        cid = getattr(ctx, "_nb_cid", "-")
+        t0 = getattr(ctx, "_nb_t0", None)
+        dur_ms = round((time.perf_counter() - t0) * 1000) if t0 is not None else None
+        obs.set_cid(cid)
+        if dur_ms is not None:
+            log.info("DONE %s  |  %dms", ctx.command, dur_ms)
+        obs.log_event(
+            "command.ok",
+            cmd=str(ctx.command),
+            dur_ms=dur_ms,
+            user=ctx.author.id,
+            guild=ctx.guild.id if ctx.guild else None,
+        )
+
+    async def on_app_command_completion(
+        self,
+        interaction: discord.Interaction,
+        command,
+    ):
+        # Hybrid commands invoked via slash also fire on_command_completion, so
+        # skip them here to avoid double-logging their success.
+        if interaction.extras.get("_nb_skip_app_completion"):
+            return
+        cid = interaction.extras.get("_nb_cid", "-")
+        t0 = interaction.extras.get("_nb_t0")
+        dur_ms = round((time.perf_counter() - t0) * 1000) if t0 else None
+        obs.set_cid(cid)
+        name = getattr(command, "qualified_name", str(command))
+        if dur_ms is not None:
+            log.info("DONE /%s  |  %dms", name, dur_ms)
+        obs.log_event(
+            "slash.ok",
+            cmd=name,
+            dur_ms=dur_ms,
+            user=interaction.user.id if interaction.user else None,
+            guild=interaction.guild_id,
         )
 
     async def on_guild_join(self, guild: discord.Guild):
@@ -393,7 +527,15 @@ class NanoBot(commands.Bot):
             ctx = await self.get_context(message)
 
             if ctx.valid:
-                await self.invoke(ctx)
+                # Stamp the correlation id here, in the same task that runs the
+                # command body, so log lines emitted inside cogs inherit it.
+                ctx._nb_cid = obs.new_cid()
+                ctx._nb_t0 = time.perf_counter()
+                token = obs.set_cid(ctx._nb_cid)
+                try:
+                    await self.invoke(ctx)
+                finally:
+                    obs.reset_cid(token)
                 return
 
             if message.guild and ctx.prefix is not None:
@@ -421,6 +563,18 @@ class NanoBot(commands.Bot):
         on_command_error does NOT fire for these — this handler is required.
         """
         cmd_name = interaction.command.name if interaction.command else "that command"
+
+        obs.set_cid(interaction.extras.get("_nb_cid", "-"))
+        t0 = interaction.extras.get("_nb_t0")
+        dur_ms = round((time.perf_counter() - t0) * 1000) if t0 else None
+        obs.log_event(
+            "slash.err",
+            cmd=cmd_name,
+            error=type(error).__name__,
+            dur_ms=dur_ms,
+            user=interaction.user.id if interaction.user else None,
+            guild=interaction.guild_id,
+        )
 
         if isinstance(error, app_commands.TransformerError):
             hint = ""
@@ -492,12 +646,25 @@ class NanoBot(commands.Bot):
 
     # ── Prefix/hybrid command error handler ────────────────────────────────────
     async def on_command_error(self, ctx: commands.Context, error):
+        obs.set_cid(getattr(ctx, "_nb_cid", "-"))
+        t0 = getattr(ctx, "_nb_t0", None)
+        dur_ms = round((time.perf_counter() - t0) * 1000) if t0 is not None else None
+
         # Unwrap both CommandInvokeError and HybridCommandError — both carry
         # the real exception in .original but are different classes.
         if isinstance(
             error, (commands.CommandInvokeError, commands.HybridCommandError)
         ):
             error = error.original
+
+        obs.log_event(
+            "command.err",
+            cmd=str(ctx.command),
+            error=type(error).__name__,
+            dur_ms=dur_ms,
+            user=ctx.author.id,
+            guild=ctx.guild.id if ctx.guild else None,
+        )
 
         if isinstance(error, commands.MissingPermissions):
             cmd_name = ctx.command.name if ctx.command else "that command"

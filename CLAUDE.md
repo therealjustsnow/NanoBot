@@ -44,9 +44,14 @@ Tests cover pure-Python utilities and the SQLite layer (in-memory), no live Disc
 - `tests/test_storage.py` — sync and async JSON helpers in `utils/storage.py`
 - `tests/test_music_helpers.py` — pure helper functions extracted from `cogs/music.py` (no yt-dlp/FFmpeg needed)
 - `tests/test_no_duplicate_commands.py` — static check that no two cogs register the same top-level command name or alias
+- `tests/test_obs.py` — correlation ids, the logging filter, and the JSONL event sink in `utils/obs.py`
+
+Command-level tests (parse → permission check → DB → reply) run under **dpytest**, which fakes a guild/members/message dispatch so cog wiring executes without a live gateway:
+- `tests/conftest.py` — the `bot` fixture (dpytest-configured `NanoBot` + throwaway DB; load cogs via `@pytest.mark.cogs(...)`) and `grant_perms` helper
+- `tests/test_commands_dpytest.py` — permission enforcement + a note write/read round-trip
 
 CI runs `pytest tests/ -v` on every push and pull request (`.github/workflows/tests.yml`).
-Manual end-to-end testing against a Discord test server is still required for cog-level features.
+Manual end-to-end testing against a Discord test server is still useful for live-gateway behavior (voice, presence, real latency) that dpytest does not simulate.
 
 **Migration (JSON → SQLite, idempotent):**
 ```bash
@@ -92,6 +97,8 @@ Two SQLite databases, both opened once at startup via `setup_hook()` and shared 
 
 Both use WAL mode (`PRAGMA journal_mode=WAL`) for concurrent read/write. All queries are async via `aiosqlite`. Initialize with `await db.init()` and `await cache_db.init()` in `NanoBot.setup_hook()`.
 
+**Schema changes:** the `CREATE TABLE IF NOT EXISTS` / `_ensure_columns()` calls in `db.init()` are the version-0 baseline (idempotent on every start). Adding a column to an existing table uses `_ensure_columns(table, {col: definition})`. For anything more involved, register a forward-only migration with `@db.migration(N)` — these run in ascending order on startup, tracked by `PRAGMA user_version`, which advances only after a migration succeeds (so a failure retries next start; write migrations to be safe to re-run). Don't scatter ad-hoc `ALTER TABLE` blocks through `init()`.
+
 ### Utilities (`utils/`)
 
 - **`helpers.py`** — Embed factory (`ok()`, `err()`, `warn()`, `info()` with consistent brand colors), duration parsing (`parse_duration`, `parse_duration_from_end`, `parse_interval`), and `user_display()` for consistent user references.
@@ -115,7 +122,7 @@ Tag shortcuts are detected in `on_message`: if a message matches no command but 
 `config.ini` (gitignored) at the repo root, split into six sections:
 
 * **`[bot]`** — `token`, `default_prefix`, `owner_id`, `error_channel_id`
-* **`[logging]`** — `log_level`, `log_http`
+* **`[logging]`** — `log_level`, `log_http`, `log_events_jsonl`
 * **`[votes]`** — `topgg_v1_token`, `dbl_token`, `discordbotsgg_token`, `vote_webhook_port`, `vote_webhook_secret`, `webhook_allowed_ips`
 * **`[groq]`** — `groq_api_key`
 * **`[scraper]`** — `fml_pages_per_scrape`, `wyr_requests_per_scrape`, `nekos_per_endpoint`, `nekosia_per_tag`, `revalidate_age`, `revalidate_batch`, `groq_wyr_system`
@@ -130,7 +137,7 @@ Live editing:
 * `!reloadconfig` — re-reads `config.ini` from disk.
 * `!config show|get|set|unset …` — DM-only inspect/edit. Secrets (token, API keys, webhook secret) are always masked when echoed back.
 
-Logs rotate at 50 KB, 5 backups, written to `logs/nanobot.log`.
+Logs rotate at 50 KB, 5 backups, written to `logs/nanobot.log`. Each line carries a short correlation id (`[abcd1234]`) shared by the start/completion/error records of one command invocation, so a single command's trace is greppable. When `log_events_jsonl` is on (default), structured command-lifecycle events (`command.start/ok/err`, `slash.start/ok/err` with `dur_ms`, user, guild) are also written to `logs/events.jsonl` (one JSON object per line, rotating). Correlation/timing helpers live in `utils/obs.py`.
 
 ### CI
 
