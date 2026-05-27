@@ -5,9 +5,8 @@ Streams audio from YouTube (and the many other sites yt-dlp supports) into a
 voice channel. Spotify track/album/playlist links are supported without an API
 key: their metadata is scraped from the public embed page and each track is
 matched on YouTube at play time. Designed mobile-first: a single "Now Playing"
-card carries
-interactive buttons (play/pause, skip, stop, loop, shuffle, replay, autoplay,
-queue) so listeners can drive playback from a phone without typing commands.
+card carries interactive buttons (play/pause, skip, stop, loop, shuffle, replay,
+autoplay, queue) so listeners can drive playback from a phone without typing commands.
 
 Runtime requirements (see requirements.txt):
   - yt-dlp        — source extraction / search
@@ -2169,7 +2168,7 @@ class Music(commands.Cog):
                 ("mode", "(slash) normal / next / now / shuffle"),
             ],
             "perms": "None",
-            "example": "!play never gonna give you up\n!play https://youtu.be/dQw4w9WgXcQ",
+            "example": "{prefix}play never gonna give you up\n{prefix}play https://youtu.be/dQw4w9WgXcQ",
         },
     )
     @app_commands.describe(
@@ -2223,7 +2222,7 @@ class Music(commands.Cog):
             "desc": "Adds the track to the front of the queue so it plays next. Slash: use /play with mode: Next.",
             "args": [("query", "A URL or search terms")],
             "perms": "None",
-            "example": "!playnext lofi beats",
+            "example": "{prefix}playnext lofi beats",
         },
     )
     @commands.guild_only()
@@ -2240,7 +2239,7 @@ class Music(commands.Cog):
             "desc": "Adds the track to the front of the queue and skips the current one. Slash: use /play with mode: Now.",
             "args": [("query", "A URL or search terms")],
             "perms": "None",
-            "example": "!playnow https://youtu.be/dQw4w9WgXcQ",
+            "example": "{prefix}playnow https://youtu.be/dQw4w9WgXcQ",
         },
     )
     @commands.guild_only()
@@ -2257,7 +2256,7 @@ class Music(commands.Cog):
             "desc": "Shows the top results in a dropdown so you can choose which to queue.",
             "args": [("terms", "What to search for")],
             "perms": "None",
-            "example": "!search daft punk one more time",
+            "example": "{prefix}search daft punk one more time",
         },
     )
     @app_commands.describe(terms="What to search for")
@@ -2308,7 +2307,7 @@ class Music(commands.Cog):
             ),
             "args": [],
             "perms": "None",
-            "example": "!skip",
+            "example": "{prefix}skip",
         },
     )
     @commands.guild_only()
@@ -2357,7 +2356,7 @@ class Music(commands.Cog):
             "desc": "Immediately skips the current track, bypassing the skip vote.",
             "args": [],
             "perms": "Manage Server",
-            "example": "!forceskip",
+            "example": "{prefix}forceskip",
         },
     )
     @commands.has_permissions(manage_guild=True)
@@ -2381,7 +2380,7 @@ class Music(commands.Cog):
             "desc": "Discards everything before the chosen position and plays it now.",
             "args": [("position", "Queue position to jump to")],
             "perms": "None",
-            "example": "!jump 4",
+            "example": "{prefix}jump 4",
         },
     )
     @app_commands.describe(position="Queue position to jump to")
@@ -2414,7 +2413,7 @@ class Music(commands.Cog):
             "desc": "Stops playback, empties the queue, and disconnects the bot.",
             "args": [],
             "perms": "None",
-            "example": "!stop",
+            "example": "{prefix}stop",
         },
     )
     @commands.guild_only()
@@ -2437,7 +2436,7 @@ class Music(commands.Cog):
             "desc": "Pauses the current track. Resume with `resume`.",
             "args": [],
             "perms": "None",
-            "example": "!pause",
+            "example": "{prefix}pause",
         },
     )
     @commands.guild_only()
@@ -2459,7 +2458,7 @@ class Music(commands.Cog):
             "desc": "Resumes a track that was paused.",
             "args": [],
             "perms": "None",
-            "example": "!resume",
+            "example": "{prefix}resume",
         },
     )
     @commands.guild_only()
@@ -2481,7 +2480,7 @@ class Music(commands.Cog):
             "desc": "Re-posts the interactive Now Playing card with live progress.",
             "args": [],
             "perms": "None",
-            "example": "!np",
+            "example": "{prefix}np",
         },
     )
     @commands.guild_only()
@@ -2509,7 +2508,7 @@ class Music(commands.Cog):
             "desc": "Shows the currently playing track and up to 15 upcoming tracks.",
             "args": [],
             "perms": "None",
-            "example": "!queue",
+            "example": "{prefix}queue",
         },
     )
     @commands.guild_only()
@@ -2535,7 +2534,7 @@ class Music(commands.Cog):
             "desc": "Moves the track at one queue position to another.",
             "args": [("from_pos", "Current position"), ("to_pos", "New position")],
             "perms": "None",
-            "example": "!move 5 1",
+            "example": "{prefix}move 5 1",
         },
     )
     @app_commands.describe(from_pos="Current position", to_pos="New position")
@@ -2570,7 +2569,7 @@ class Music(commands.Cog):
             "desc": "Removes a track from the queue using the number shown in `queue`.",
             "args": [("position", "Queue position (see !queue)")],
             "perms": "None",
-            "example": "!remove 3",
+            "example": "{prefix}remove 3",
         },
     )
     @app_commands.describe(position="Queue position (see /queue)")
@@ -2602,7 +2601,7 @@ class Music(commands.Cog):
             "desc": "Removes every upcoming track. The current track keeps playing.",
             "args": [],
             "perms": "None",
-            "example": "!clear",
+            "example": "{prefix}clear",
         },
     )
     @commands.guild_only()
@@ -2625,7 +2624,7 @@ class Music(commands.Cog):
             "desc": "Randomly reorders the upcoming tracks in the queue.",
             "args": [],
             "perms": "None",
-            "example": "!shuffle",
+            "example": "{prefix}shuffle",
         },
     )
     @commands.guild_only()
@@ -2651,7 +2650,7 @@ class Music(commands.Cog):
             ),
             "args": [("amount", "0-200, or +N / -N to adjust")],
             "perms": "None",
-            "example": "!volume +10",
+            "example": "{prefix}volume +10",
         },
     )
     @app_commands.describe(amount="0-200, or +N / -N to adjust")
@@ -2683,7 +2682,7 @@ class Music(commands.Cog):
             ),
             "args": [("rate", "0.5-3.0, or +N / -N to adjust")],
             "perms": "None",
-            "example": "!speed +0.25",
+            "example": "{prefix}speed +0.25",
         },
     )
     @app_commands.describe(rate="0.5-3.0, or +N / -N to adjust")
@@ -2720,7 +2719,7 @@ class Music(commands.Cog):
             "desc": "Applies a DSP effect to playback. Use `none` to clear it.",
             "args": [("name", "Effect name")],
             "perms": "None",
-            "example": "!filter bassboost",
+            "example": "{prefix}filter bassboost",
         },
     )
     @app_commands.describe(name="Effect to apply")
@@ -2756,7 +2755,7 @@ class Music(commands.Cog):
             ),
             "args": [("mode", "off, track, or queue (optional)")],
             "perms": "None",
-            "example": "!loop\n!loop track",
+            "example": "{prefix}loop\n{prefix}loop track",
         },
     )
     @app_commands.describe(mode="off, track, or queue")
@@ -2799,7 +2798,7 @@ class Music(commands.Cog):
             ),
             "args": [("position", "Timestamp like 1:30 or seconds like 90")],
             "perms": "None",
-            "example": "!seek 1:30",
+            "example": "{prefix}seek 1:30",
         },
     )
     @app_commands.describe(position="Timestamp (1:30) or seconds (90)")
@@ -2837,7 +2836,7 @@ class Music(commands.Cog):
             "desc": "Seeks the current track back to 0:00.",
             "args": [],
             "perms": "None",
-            "example": "!replay",
+            "example": "{prefix}replay",
         },
     )
     @commands.guild_only()
@@ -2870,7 +2869,7 @@ class Music(commands.Cog):
             "desc": "Sends you a DM with a link to the track that's playing now.",
             "args": [],
             "perms": "None",
-            "example": "!grab",
+            "example": "{prefix}grab",
         },
     )
     @commands.guild_only()
@@ -2912,7 +2911,7 @@ class Music(commands.Cog):
             ),
             "args": [("query", "Artist - Title (optional)")],
             "perms": "None",
-            "example": "!lyrics\n!lyrics daft punk - one more time",
+            "example": "{prefix}lyrics\n{prefix}lyrics daft punk - one more time",
         },
     )
     @commands.guild_only()
@@ -2976,7 +2975,7 @@ class Music(commands.Cog):
             ),
             "args": [("state", "on or off (optional — toggles if omitted)")],
             "perms": "None",
-            "example": "!autoplay on",
+            "example": "{prefix}autoplay on",
         },
     )
     @commands.guild_only()
@@ -3016,7 +3015,7 @@ class Music(commands.Cog):
             ),
             "args": [("state", "on or off (optional — toggles if omitted)")],
             "perms": "Manage Server",
-            "example": "!radio on",
+            "example": "{prefix}radio on",
         },
     )
     @commands.guild_only()
@@ -3175,7 +3174,7 @@ class Music(commands.Cog):
             ),
             "args": [("url", "A livestream or media URL")],
             "perms": "None",
-            "example": "!stream https://example.com/radio.mp3",
+            "example": "{prefix}stream https://example.com/radio.mp3",
         },
     )
     @commands.guild_only()
@@ -3192,7 +3191,7 @@ class Music(commands.Cog):
             "desc": "Resolves a playlist, shuffles the tracks, then adds them all. Slash: use /play with mode: Shuffle.",
             "args": [("query", "A playlist URL or search terms")],
             "perms": "None",
-            "example": "!shuffleplay https://open.spotify.com/playlist/...",
+            "example": "{prefix}shuffleplay https://open.spotify.com/playlist/...",
         },
     )
     @commands.guild_only()
@@ -3227,7 +3226,7 @@ class Music(commands.Cog):
             ),
             "args": [],
             "perms": "None",
-            "example": "!follow",
+            "example": "{prefix}follow",
         },
     )
     @commands.guild_only()
@@ -3257,7 +3256,7 @@ class Music(commands.Cog):
             "desc": "Sends a .txt file listing the URLs of the current and queued tracks.",
             "args": [],
             "perms": "None",
-            "example": "!pldump",
+            "example": "{prefix}pldump",
         },
     )
     @commands.guild_only()
@@ -3293,7 +3292,7 @@ class Music(commands.Cog):
             ),
             "args": [("pattern", "A URL, word, or phrase to block")],
             "perms": "Manage Server",
-            "example": "!blocksong rickroll",
+            "example": "{prefix}blocksong rickroll",
         },
     )
     @commands.has_permissions(manage_guild=True)
@@ -3322,7 +3321,7 @@ class Music(commands.Cog):
             "desc": "Removes a previously blocked URL, word, or phrase.",
             "args": [("pattern", "The exact blocked pattern to remove")],
             "perms": "Manage Server",
-            "example": "!unblocksong rickroll",
+            "example": "{prefix}unblocksong rickroll",
         },
     )
     @commands.has_permissions(manage_guild=True)
@@ -3344,7 +3343,7 @@ class Music(commands.Cog):
             "desc": "Lists every URL, word, or phrase blocked from the queue.",
             "args": [],
             "perms": "Manage Server",
-            "example": "!blockedsongs",
+            "example": "{prefix}blockedsongs",
         },
     )
     @commands.has_permissions(manage_guild=True)
@@ -3371,7 +3370,7 @@ class Music(commands.Cog):
             "desc": "Stops a member from using any music command on this server.",
             "args": [("member", "The member to block")],
             "perms": "Manage Server",
-            "example": "!blockuser @spammer",
+            "example": "{prefix}blockuser @spammer",
         },
     )
     @commands.has_permissions(manage_guild=True)
@@ -3399,7 +3398,7 @@ class Music(commands.Cog):
             "desc": "Removes a member from the music block list.",
             "args": [("member", "The member to unblock")],
             "perms": "Manage Server",
-            "example": "!unblockuser @user",
+            "example": "{prefix}unblockuser @user",
         },
     )
     @commands.has_permissions(manage_guild=True)
@@ -3544,7 +3543,7 @@ class Music(commands.Cog):
             "desc": "Lists the most recently played tracks (newest first).",
             "args": [],
             "perms": "None",
-            "example": "!history",
+            "example": "{prefix}history",
         },
     )
     @commands.guild_only()
@@ -3583,7 +3582,7 @@ class Music(commands.Cog):
             "desc": "Deletes every entry from this server's played-track history.",
             "args": [],
             "perms": "Manage Server",
-            "example": "!clearhistory",
+            "example": "{prefix}clearhistory",
         },
     )
     @commands.has_permissions(manage_guild=True)
@@ -3692,7 +3691,7 @@ class Music(commands.Cog):
             "desc": "Connects (or moves) the bot to the voice channel you're in.",
             "args": [],
             "perms": "None",
-            "example": "!join",
+            "example": "{prefix}join",
         },
     )
     @commands.guild_only()

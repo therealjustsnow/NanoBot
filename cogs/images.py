@@ -119,7 +119,7 @@ class Images(commands.Cog):
             "desc": "Fetches a random anime husbando image from nekos.best.",
             "args": [],
             "perms": "None",
-            "example": "!husbando",
+            "example": "{prefix}husbando",
         },
     )
     @commands.cooldown(1, 3, commands.BucketType.user)
@@ -136,7 +136,7 @@ class Images(commands.Cog):
             "desc": "Fetches a random anime kitsune image from nekos.best.",
             "args": [],
             "perms": "None",
-            "example": "!kitsune",
+            "example": "{prefix}kitsune",
         },
     )
     @commands.cooldown(1, 3, commands.BucketType.user)
@@ -153,7 +153,7 @@ class Images(commands.Cog):
             "desc": "Fetches a random anime neko image from nekos.best.",
             "args": [],
             "perms": "None",
-            "example": "!neko",
+            "example": "{prefix}neko",
         },
     )
     @commands.cooldown(1, 3, commands.BucketType.user)
@@ -170,7 +170,7 @@ class Images(commands.Cog):
             "desc": "Fetches a random anime waifu image from nekos.best.",
             "args": [],
             "perms": "None",
-            "example": "!waifu",
+            "example": "{prefix}waifu",
         },
     )
     @commands.cooldown(1, 3, commands.BucketType.user)

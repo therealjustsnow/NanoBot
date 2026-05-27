@@ -203,7 +203,7 @@ class Leveling(commands.Cog):
             "desc": "Shows level, total XP, progress to the next level, and server rank.",
             "args": ["member — whose card to show (defaults to you)"],
             "perms": "None",
-            "example": "!rank\n!rank @Friend",
+            "example": "{prefix}rank\n{prefix}rank @Friend",
         },
     )
     @commands.guild_only()
@@ -252,7 +252,7 @@ class Leveling(commands.Cog):
             "role rewards, the announcement channel, and ignored channels.",
             "args": [],
             "perms": "Admin subcommands require Manage Server",
-            "example": "!level top\n!level reward add 5 @Regular",
+            "example": "{prefix}level top\n{prefix}level reward add 5 @Regular",
         },
     )
     @commands.guild_only()

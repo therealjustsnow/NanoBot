@@ -8,13 +8,13 @@ Global tags:   usable by anyone (mod-only creation).
 ──────────────────────────────────────────────────────
 Shorthand (prefix commands — fastest on mobile)
 ──────────────────────────────────────────────────────
-  !tag                              → list all tags
-  !tag hello                        → send (DM) the tag named "hello"
-  !tag + hello Hello world!         → create personal tag "hello"
-  !tag add hello Hello world!       → same
-  !tag - hello                      → delete tag "hello"
-  !tag remove hello                 → same
-  !hello                            → also sends tag "hello" (handled in main.py)
+  <prefix>tag                       → list all tags
+  <prefix>tag hello                 → send (DM) the tag named "hello"
+  <prefix>tag + hello Hello world!  → create personal tag "hello"
+  <prefix>tag add hello Hello world!→ same
+  <prefix>tag - hello               → delete tag "hello"
+  <prefix>tag remove hello          → same
+  <prefix>hello                     → also sends tag "hello" (handled in main.py)
 
 Full subcommands (work as slash AND prefix)
 ──────────────────────────────────────────────────────
@@ -152,10 +152,10 @@ class Tags(commands.Cog):
             "category": "🏷️ Tags",
             "short": "Post text snippets in channel or DM — personal or server-wide",
             "usage": "tag [shorthand or subcommand]",
-            "desc": "Tags let you save text (and images) and fire them instantly.\nShorthand: !tag <n> — post tag, !<n> — same shorter, !tag + <n> | <content> — create, !tag - <n> — delete\nSubcommands: /tag create, /tag global, /tag use, /tag preview, /tag edit, /tag delete, /tag list, /tag export, /tag import",
+            "desc": "Tags let you save text (and images) and fire them instantly.\nShorthand: {prefix}tag <n> — post tag, {prefix}<n> — same shorter, {prefix}tag + <n> | <content> — create, {prefix}tag - <n> — delete\nSubcommands: /tag create, /tag global, /tag use, /tag preview, /tag edit, /tag delete, /tag list, /tag export, /tag import",
             "args": [],
             "perms": "None (global creation requires Manage Messages)",
-            "example": "!tag + rules | Read #rules before posting!\n!rules",
+            "example": "{prefix}tag + rules | Read #rules before posting!\n{prefix}rules",
         },
     )
     async def tag(self, ctx: commands.Context, *, args: str = ""):
@@ -491,10 +491,11 @@ class Tags(commands.Cog):
         await db.set_tag(ctx.guild.id, uid, name, content, img_url)
 
         img_line = "\n🖼️ Image attached." if img_url else ""
+        prefix = self.bot.prefixes.get(str(ctx.guild.id), self.bot.default_prefix)
         await ctx.reply(
             embed=h.ok(
                 f"Personal tag **{name}** created.{img_line}\n"
-                f"Only you can see it. Use `/tag use {name}` or `{ctx.prefix}{name}` to post it.",
+                f"Only you can see it. Use `/tag use {name}` or `{prefix}tag {name}` to post it.",
                 "🏷️ Tag Created",
             ),
             ephemeral=True,
@@ -550,10 +551,11 @@ class Tags(commands.Cog):
         )
 
         img_line = "\n🖼️ Image attached." if img_url else ""
+        prefix = self.bot.prefixes.get(str(ctx.guild.id), self.bot.default_prefix)
         await ctx.reply(
             embed=h.ok(
                 f"Global tag **{name}** created.{img_line}\n"
-                f"Anyone can use it: `/tag use {name}` or `{ctx.prefix}{name}`.",
+                f"Anyone can use it: `/tag use {name}` or `{prefix}tag {name}`.",
                 "🌐 Global Tag Created",
             ),
             ephemeral=True,

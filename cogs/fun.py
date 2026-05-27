@@ -2023,7 +2023,7 @@ class Fun(commands.Cog):
             "desc": "Smashes two users' names together and gives a compatibility score.",
             "args": [("user1", "First user"), ("user2", "Second user")],
             "perms": "None",
-            "example": "!ship @Snow @Nano",
+            "example": "{prefix}ship @Snow @Nano",
         },
     )
     @commands.cooldown(1, 5, commands.BucketType.user)
@@ -2095,7 +2095,7 @@ class Fun(commands.Cog):
             "desc": "Get a random FML story from fmylife.com.",
             "args": [],
             "perms": "None",
-            "example": "!fml",
+            "example": "{prefix}fml",
         },
     )
     @commands.cooldown(1, 5, commands.BucketType.user)
@@ -2119,7 +2119,7 @@ class Fun(commands.Cog):
             "desc": "Get a random anime thigh pic (SFW).",
             "args": [],
             "perms": "None",
-            "example": "!thigh",
+            "example": "{prefix}thigh",
         },
     )
     @commands.cooldown(1, 5, commands.BucketType.user)
@@ -2147,7 +2147,7 @@ class Fun(commands.Cog):
             "desc": "Start a Would You Rather poll with buttons. Duration examples: 30m, 2h, 1h30m. Default: 1h. Max: 24h.",
             "args": [("duration", "How long voting lasts (optional, default 1h)")],
             "perms": "None",
-            "example": "!wyr 30m",
+            "example": "{prefix}wyr 30m",
         },
     )
     @commands.cooldown(1, 10, commands.BucketType.channel)
@@ -2173,7 +2173,7 @@ class Fun(commands.Cog):
             "desc": "Challenge someone to Rock Paper Scissors! Leave user empty to play vs the bot.",
             "args": [("user", "Who to challenge (optional)")],
             "perms": "None",
-            "example": "!rps @Snow",
+            "example": "{prefix}rps @Snow",
         },
     )
     @commands.cooldown(1, 5, commands.BucketType.user)

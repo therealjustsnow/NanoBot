@@ -122,7 +122,7 @@ class Economy(commands.Cog):
             "desc": "Shows the coin balance and server wealth rank for you or another member.",
             "args": ["member — whose balance to show (defaults to you)"],
             "perms": "None",
-            "example": "!balance\n!bal @Friend",
+            "example": "{prefix}balance\n{prefix}bal @Friend",
         },
     )
     @commands.guild_only()
@@ -163,7 +163,7 @@ class Economy(commands.Cog):
             "desc": "Grants the daily reward. Claim within 48h of your last to grow a streak bonus.",
             "args": [],
             "perms": "None",
-            "example": "!daily",
+            "example": "{prefix}daily",
         },
     )
     @commands.guild_only()
@@ -210,7 +210,7 @@ class Economy(commands.Cog):
             "desc": "Transfers coins from your balance to another member's.",
             "args": ["member — who to pay", "amount — how many coins"],
             "perms": "None",
-            "example": "!pay @Friend 50",
+            "example": "{prefix}pay @Friend 50",
         },
     )
     @commands.guild_only()
@@ -258,7 +258,7 @@ class Economy(commands.Cog):
             "and customise the daily reward, streak bonus, currency name, and emoji.",
             "args": [],
             "perms": "Admin subcommands require Manage Server",
-            "example": "!coin top\n!coin grant @User 500",
+            "example": "{prefix}coin top\n{prefix}coin grant @User 500",
         },
     )
     @commands.guild_only()
