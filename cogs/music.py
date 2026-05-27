@@ -6,7 +6,7 @@ voice channel. Spotify track/album/playlist links are supported without an API
 key: their metadata is scraped from the public embed page and each track is
 matched on YouTube at play time. Designed mobile-first: a single "Now Playing"
 card carries interactive buttons (play/pause, skip, stop, loop, shuffle, replay,
-autoplay, queue) so listeners can drive playback from a phone without typing commands.
+autoplay, guild play, queue) so listeners can drive playback from a phone without typing commands.
 
 Runtime requirements (see requirements.txt):
   - yt-dlp        — source extraction / search
@@ -37,11 +37,11 @@ Config ([music] section, all optional — see example_config.ini):
   music_proxy           — HTTP/HTTPS proxy for yt-dlp (blank)
   music_user_agent      — static yt-dlp User-Agent (blank)
   music_source_address  — local bind IP for yt-dlp (default 0.0.0.0)
-  music_autoplay_autoskip — skip autoplay filler when a user queues (true)
+  music_autoplay_autoskip — skip autoplay/guild-play filler when a user queues (true)
   music_save_videos     — keep downloads cached for replays (false)
   music_cache_max_mb / music_cache_max_age_days — cache caps (0 = off)
   music_ratelimit_cooldown / music_ratelimit_leave — 429 back-off behavior
-  music_apl_prune_on_error — drop dead autoplaylist entries (true)
+  music_apl_prune_on_error — drop dead guild playlist entries on playback error (true)
   music_save_history    — keep per-guild played history (true)
 
 Commands (hybrid — slash + prefix), category "🎵 Music":
@@ -70,8 +70,9 @@ Commands (hybrid — slash + prefix), category "🎵 Music":
   seek / replay     — jump within / restart the current track
   lyrics            — fetch lyrics for the current track
   grab / save       — DM yourself the current track
-  autoplay          — keep playing from the autoplaylist when the queue empties
-  autoplaylist/apl  — manage the persistent server autoplaylist (add takes playlists)
+  autoplay          — smart autoplay: queue YouTube-related tracks when the queue empties
+  guildplay         — keep playing from the guild playlist when the queue empties
+  guildplaylist/gpl — manage the persistent server guild playlist (add takes playlists)
   radio / 247       — toggle 24/7 mode: stay in voice even when empty (Manage Server)
   history / played  — show recently played tracks (clearhistory: Manage Server)
   blocksong / unblocksong / blockedsongs — song block list (Manage Server)
@@ -90,6 +91,7 @@ import re
 import shlex
 import shutil
 import time
+from collections import deque
 from dataclasses import dataclass
 from typing import Optional
 
@@ -187,6 +189,21 @@ _LYRICS_NOISE = re.compile(
     r"|\bhd\b|\b4k\b|\bm/?v\b",
     re.IGNORECASE,
 )
+
+
+_YTID_RE = re.compile(
+    r"(?:youtube\.com/(?:watch\?.*?v=|shorts/|embed/)|youtu\.be/)([A-Za-z0-9_-]{11})"
+)
+
+
+def _extract_ytid(url: str) -> Optional[str]:
+    """Return the 11-char YouTube video ID from a URL, or None."""
+    m = _YTID_RE.search(url)
+    return m.group(1) if m else None
+
+
+_GUILDPLAY_REQUESTER = "📻 Guild Play"
+_AUTOPLAY_REQUESTER = "✨ Autoplay"
 
 
 def _apply_delta(arg: str, current: float) -> Optional[float]:
@@ -338,6 +355,11 @@ class Controls(discord.ui.View):
             if self.player.autoplay
             else discord.ButtonStyle.secondary
         )
+        self.guildplay_btn.style = (
+            discord.ButtonStyle.success
+            if self.player.guildplay
+            else discord.ButtonStyle.secondary
+        )
 
     async def interaction_check(self, interaction: discord.Interaction) -> bool:
         voice = self.player.voice
@@ -417,12 +439,22 @@ class Controls(discord.ui.View):
         await interaction.response.send_message("⏮️ Replaying.", ephemeral=True)
 
     @discord.ui.button(
-        emoji="📻", label="Autoplay", style=discord.ButtonStyle.secondary, row=1
+        emoji="✨", label="Autoplay", style=discord.ButtonStyle.secondary, row=1
     )
     async def autoplay_btn(
         self, interaction: discord.Interaction, _: discord.ui.Button
     ):
         self.player.autoplay = not self.player.autoplay
+        self.player._added.set()
+        await self._update_controls(interaction)
+
+    @discord.ui.button(
+        emoji="📻", label="Guild Play", style=discord.ButtonStyle.secondary, row=1
+    )
+    async def guildplay_btn(
+        self, interaction: discord.Interaction, _: discord.ui.Button
+    ):
+        self.player.guildplay = not self.player.guildplay
         self.player._added.set()
         await self._update_controls(interaction)
 
@@ -495,9 +527,9 @@ class QueuePageView(discord.ui.View):
         )
 
 
-# ── Paginated autoplaylist view ─────────────────────────────────────────────────
+# ── Paginated guild playlist view ───────────────────────────────────────────────
 class AplPageView(discord.ui.View):
-    """Scrollable autoplaylist display; snapshot of entries at creation time."""
+    """Scrollable guild playlist display; snapshot of entries at creation time."""
 
     def __init__(self, entries: list, invoker_id: int):
         super().__init__(timeout=120)
@@ -521,7 +553,9 @@ class AplPageView(discord.ui.View):
             lines.append(f"`{i:>2}.` [{label}]({e['url']})")
         tp = self._total_pages()
         embed = h.embed(
-            f"📻 Autoplaylist · {len(self.entries)} track(s)", "\n".join(lines), ACCENT
+            f"📻 Guild Playlist · {len(self.entries)} track(s)",
+            "\n".join(lines),
+            ACCENT,
         )
         if tp > 1:
             embed.set_footer(text=f"Page {self.page + 1}/{tp}")
@@ -652,7 +686,10 @@ class GuildPlayer:
         self.volume: float = cog.default_volume()
         self.speed: float = cog.default_speed()
         self.audio_filter: str = "none"
-        self.autoplay: bool = False
+        self.autoplay: bool = False  # smart: queue YouTube-related tracks
+        self.guildplay: bool = False  # play random tracks from the guild playlist
+        self._smart_seeds: deque[str] = deque(maxlen=5)  # last N YouTube URLs played
+        self._smart_recent: deque[str] = deque(maxlen=25)
         self.stay_connected: bool = False  # 24/7 mode: don't leave when empty/idle
         self.skip_votes: set[int] = set()
         self.follow_target: Optional[int] = None  # user id the bot follows
@@ -1034,6 +1071,12 @@ class GuildPlayer:
                 self.current = track
                 self.skip_votes.clear()
 
+                # Accumulate smart autoplay seeds so the mix blends recent taste.
+                if track.webpage_url:
+                    ytid = _extract_ytid(track.webpage_url)
+                    if ytid:
+                        self._smart_seeds.append(track.webpage_url)
+
                 if not self.voice or not self.voice.is_connected():
                     await self.destroy(reason="disconnected")
                     return
@@ -1086,12 +1129,16 @@ class GuildPlayer:
             log.error("Player loop crashed in %s: %s", self.guild.id, exc, exc_info=exc)
 
     async def _next_track(self) -> Optional[Track]:
-        """Pop the queue, fall back to autoplay, or wait until something arrives."""
+        """Pop the queue, fall back to autoplay/guildplay, or wait until something arrives."""
         while not self._destroyed:
             if self.queue:
                 return self.queue.pop(0)
             if self.autoplay:
-                picked = await self._autoplay_pick()
+                picked = await self._smart_autoplay_pick()
+                if picked is not None:
+                    return picked
+            if self.guildplay:
+                picked = await self._guildplay_pick()
                 if picked is not None:
                     return picked
             self._added.clear()
@@ -1105,17 +1152,19 @@ class GuildPlayer:
                 return None
         return None
 
-    async def _autoplay_pick(self) -> Optional[Track]:
+    async def _guildplay_pick(self) -> Optional[Track]:
         entries = await db.get_autoplaylist(self.guild.id)
         if not entries:
             return None
         choice = random.choice(entries)
         try:
             tracks = await self.cog.search(
-                choice["url"], requester_id=self.bot.user.id, requester_name="Autoplay"
+                choice["url"],
+                requester_id=self.bot.user.id,
+                requester_name=_GUILDPLAY_REQUESTER,
             )
         except Exception as exc:
-            log.debug("Autoplay resolve failed for %s: %s", choice["url"], exc)
+            log.debug("Guild play resolve failed for %s: %s", choice["url"], exc)
             if not self.cog._note_ratelimit(exc) and self.cog.apl_prune_on_error():
                 await db.remove_autoplaylist_entry(self.guild.id, choice["url"])
             return None
@@ -1127,16 +1176,73 @@ class GuildPlayer:
         kept, _removed = await self.cog._filter_blocked_songs(self.guild.id, [track])
         if not kept:
             return None
-        track.requester_name = "📻 Autoplay"
+        track.requester_name = _GUILDPLAY_REQUESTER
         return track
+
+    async def _smart_autoplay_pick(self) -> Optional[Track]:
+        """Pick a related track using YouTube's Mix, seeded by recent played tracks.
+
+        With 2+ seed IDs, uses watch_videos?video_ids=... so YouTube blends
+        multiple tracks' taste. Single seed falls back to the RD{id} radio mix.
+        """
+        seed_ids = [_extract_ytid(u) for u in self._smart_seeds]
+        seed_ids = [s for s in seed_ids if s]  # drop non-YouTube
+        seed_ids_unique = list(dict.fromkeys(reversed(seed_ids)))  # dedup, newest first
+        if not seed_ids_unique:
+            return None
+
+        if len(seed_ids_unique) >= 2:
+            ids_param = ",".join(seed_ids_unique[:5])
+            mix_url = f"https://www.youtube.com/watch_videos?video_ids={ids_param}"
+        else:
+            ytid = seed_ids_unique[0]
+            mix_url = f"https://www.youtube.com/watch?v={ytid}&list=RD{ytid}"
+
+        seed_id_set = set(seed_ids_unique)
+        try:
+            tracks = await self.cog.search(
+                mix_url,
+                requester_id=self.bot.user.id,
+                requester_name=_AUTOPLAY_REQUESTER,
+                playlist_cap=20,
+            )
+        except Exception as exc:
+            log.debug("Smart autoplay mix fetch failed: %s", exc)
+            self.cog._note_ratelimit(exc)
+            return None
+
+        for track in tracks:
+            url = track.webpage_url or track.query or ""
+            if not url:
+                continue
+            tid = _extract_ytid(url)
+            if tid in seed_id_set:
+                continue  # skip all seed tracks
+            if url in self._smart_recent:
+                continue
+            kept, _ = await self.cog._filter_blocked_songs(self.guild.id, [track])
+            if not kept:
+                continue
+            t = kept[0]
+            t.requester_name = _AUTOPLAY_REQUESTER
+            self._smart_recent.append(url)
+            # Add to seeds so next pick builds on this pick too.
+            if t.webpage_url:
+                pick_id = _extract_ytid(t.webpage_url)
+                if pick_id:
+                    self._smart_seeds.append(t.webpage_url)
+            return t
+        return None
 
     def _is_autoplay_track(self, track: Optional[Track]) -> bool:
         return bool(track and self.bot.user and track.requester_id == self.bot.user.id)
 
     async def _handle_play_error(self, track: Track) -> None:
-        """Prune a dead autoplaylist entry when its track fails to play."""
+        """Prune a dead guild playlist entry when its track fails to play."""
         if not self._is_autoplay_track(track) or not self.cog.apl_prune_on_error():
             return
+        if track.requester_name != _GUILDPLAY_REQUESTER:
+            return  # only prune entries that came from the guild playlist
         for url in (track.webpage_url, track.query):
             if url:
                 await db.remove_autoplaylist_entry(self.guild.id, url)
@@ -1202,7 +1308,9 @@ class GuildPlayer:
                 inline=False,
             )
         e.set_footer(
-            text="NanoBot Music" + (" · 📻 Autoplay on" if self.autoplay else "")
+            text="NanoBot Music"
+            + (" · ✨ Autoplay" if self.autoplay else "")
+            + (" · 📻 Guild Play" if self.guildplay else "")
         )
         return e
 
@@ -1344,7 +1452,7 @@ def _apl_single_embed(entries: list) -> discord.Embed:
             label = label[:57] + "…"
         lines.append(f"`{i:>2}.` [{label}]({e['url']})")
     return h.embed(
-        f"📻 Autoplaylist · {len(entries)} track(s)", "\n".join(lines), ACCENT
+        f"📻 Guild Playlist · {len(entries)} track(s)", "\n".join(lines), ACCENT
     )
 
 
@@ -2963,15 +3071,55 @@ class Music(commands.Cog):
         await ctx.reply(embed=e)
 
     @commands.command(
+        name="guildplay",
+        extras={
+            "category": "🎵 Music",
+            "short": "Toggle guild playlist playback",
+            "usage": "guildplay [on|off]",
+            "desc": (
+                "When on, the bot keeps playing random tracks from the server "
+                "guild playlist once the queue empties. Manage the list with "
+                "`guildplaylist`."
+            ),
+            "args": [("state", "on or off (optional — toggles if omitted)")],
+            "perms": "None",
+            "example": "{prefix}guildplay on",
+        },
+    )
+    @commands.guild_only()
+    async def pfx_guildplay(self, ctx: commands.Context, state: Optional[str] = None):
+        player = self._active_player(ctx) or self.get_player(ctx.guild)
+        player.text_channel = ctx.channel
+        if state == "on":
+            player.guildplay = True
+        elif state == "off":
+            player.guildplay = False
+        else:
+            player.guildplay = not player.guildplay
+        player._added.set()  # wake the loop if it's idle
+        entries = await db.get_autoplaylist(ctx.guild.id)
+        note = ""
+        if player.guildplay and not entries:
+            note = (
+                "\n_The guild playlist is empty — add tracks with `guildplaylist add`._"
+            )
+        await ctx.reply(
+            embed=h.ok(
+                f"Guild play is now **{'on' if player.guildplay else 'off'}**.{note}",
+                "📻 Guild Play",
+            )
+        )
+
+    @commands.command(
         name="autoplay",
         extras={
             "category": "🎵 Music",
-            "short": "Toggle autoplay",
+            "short": "Toggle smart autoplay",
             "usage": "autoplay [on|off]",
             "desc": (
-                "When on, the bot keeps playing random tracks from the server "
-                "autoplaylist once the queue empties. Manage the list with "
-                "`autoplaylist`."
+                "When on, the bot automatically queues YouTube-related tracks "
+                "when the queue empties, based on what was last playing. "
+                "A YouTube track must have played first to seed the mix."
             ),
             "args": [("state", "on or off (optional — toggles if omitted)")],
             "perms": "None",
@@ -2989,14 +3137,13 @@ class Music(commands.Cog):
         else:
             player.autoplay = not player.autoplay
         player._added.set()  # wake the loop if it's idle
-        entries = await db.get_autoplaylist(ctx.guild.id)
         note = ""
-        if player.autoplay and not entries:
-            note = "\n_The autoplaylist is empty — add tracks with `autoplaylist add`._"
+        if player.autoplay and not player._smart_seeds:
+            note = "\n_Play a YouTube track first to seed the mix._"
         await ctx.reply(
             embed=h.ok(
-                f"Autoplay is now **{'on' if player.autoplay else 'off'}**.{note}",
-                "📻 Autoplay",
+                f"Smart autoplay is now **{'on' if player.autoplay else 'off'}**.{note}",
+                "✨ Autoplay",
             )
         )
 
@@ -3010,7 +3157,7 @@ class Music(commands.Cog):
             "desc": (
                 "When on, the bot stays connected to its voice channel even when "
                 "everyone leaves and the queue runs dry — overriding the normal "
-                "leave-when-empty/idle behavior. Pair with `autoplay` for a "
+                "leave-when-empty/idle behavior. Pair with `guildplay` for a "
                 "non-stop radio. Off by default; the setting is saved per server."
             ),
             "args": [("state", "on or off (optional — toggles if omitted)")],
@@ -3047,15 +3194,15 @@ class Music(commands.Cog):
             )
         await ctx.reply(embed=h.ok(msg, "📻 24/7 Mode"))
 
-    # ── /autoplaylist group ─────────────────────────────────────────────────────
-    apl_group = app_commands.Group(
-        name="autoplaylist",
-        description="Manage the persistent server autoplaylist.",
+    # ── /guildplaylist group ─────────────────────────────────────────────────────
+    gpl_group = app_commands.Group(
+        name="guildplaylist",
+        description="Manage the persistent server guild playlist.",
         guild_only=True,
     )
 
-    @apl_group.command(
-        name="add", description="Add a track or whole playlist to the autoplaylist."
+    @gpl_group.command(
+        name="add", description="Add a track or whole playlist to the guild playlist."
     )
     @app_commands.describe(url="A track, video, or playlist URL (or search terms)")
     async def apl_add(self, interaction: discord.Interaction, url: str):
@@ -3069,7 +3216,7 @@ class Music(commands.Cog):
             tracks = await self.search(
                 url,
                 requester_id=interaction.user.id,
-                requester_name="apl",
+                requester_name="gpl",
                 playlist_cap=None,
             )
         except Exception as exc:
@@ -3096,25 +3243,27 @@ class Music(commands.Cog):
 
         if added == 0:
             return await interaction.followup.send(
-                embed=h.warn("Everything in that link is already in the autoplaylist."),
+                embed=h.warn(
+                    "Everything in that link is already in the guild playlist."
+                ),
                 ephemeral=True,
             )
 
         # Single track vs. playlist gets a tailored confirmation.
         if len(tracks) == 1:
-            msg = f"Added **{tracks[0].title}** to the autoplaylist."
+            msg = f"Added **{tracks[0].title}** to the guild playlist."
         else:
-            msg = f"Added **{added}** track(s) to the autoplaylist."
+            msg = f"Added **{added}** track(s) to the guild playlist."
             if skipped:
                 msg += f" ({skipped} already present, skipped.)"
         await interaction.followup.send(
-            embed=h.ok(msg, "📻 Autoplaylist"), ephemeral=True
+            embed=h.ok(msg, "📻 Guild Playlist"), ephemeral=True
         )
 
-    @apl_group.command(
-        name="remove", description="Remove a track from the autoplaylist by position."
+    @gpl_group.command(
+        name="remove", description="Remove a track from the guild playlist by position."
     )
-    @app_commands.describe(position="Position shown in /autoplaylist list")
+    @app_commands.describe(position="Position shown in /guildplaylist list")
     async def apl_remove(self, interaction: discord.Interaction, position: int):
         entries = await db.get_autoplaylist(interaction.guild_id)
         if not 1 <= position <= len(entries):
@@ -3126,19 +3275,19 @@ class Music(commands.Cog):
         await db.remove_autoplaylist_entry(interaction.guild_id, entry["url"])
         await interaction.response.send_message(
             embed=h.ok(
-                f"Removed **{entry['title'] or entry['url']}**.", "📻 Autoplaylist"
+                f"Removed **{entry['title'] or entry['url']}**.", "📻 Guild Playlist"
             ),
             ephemeral=True,
         )
 
-    @apl_group.command(name="list", description="Show the server autoplaylist.")
+    @gpl_group.command(name="list", description="Show the server guild playlist.")
     async def apl_list(self, interaction: discord.Interaction):
         entries = await db.get_autoplaylist(interaction.guild_id)
         if not entries:
             return await interaction.response.send_message(
                 embed=h.info(
-                    "The autoplaylist is empty.\nAdd tracks with `/autoplaylist add`.",
-                    "📻 Autoplaylist",
+                    "The guild playlist is empty.\nAdd tracks with `/guildplaylist add`.",
+                    "📻 Guild Playlist",
                 ),
                 ephemeral=True,
             )
@@ -3149,15 +3298,15 @@ class Music(commands.Cog):
         if needs_pages:
             view.message = await interaction.original_response()
 
-    @apl_group.command(
-        name="clear", description="Remove every track from the autoplaylist."
+    @gpl_group.command(
+        name="clear", description="Remove every track from the guild playlist."
     )
     @app_commands.checks.has_permissions(manage_guild=True)
     async def apl_clear(self, interaction: discord.Interaction):
         n = await db.clear_autoplaylist(interaction.guild_id)
         await interaction.response.send_message(
             embed=h.ok(
-                f"Cleared **{n}** track(s) from the autoplaylist.", "📻 Cleared"
+                f"Cleared **{n}** track(s) from the guild playlist.", "📻 Cleared"
             ),
             ephemeral=True,
         )
@@ -3615,7 +3764,8 @@ class Music(commands.Cog):
         await self.pfx_lyrics(ctx, query=query)
 
     @music_slash.command(
-        name="autoplay", description="Toggle autoplay from the autoplaylist."
+        name="autoplay",
+        description="Toggle smart autoplay (queues YouTube-related tracks).",
     )
     @app_commands.describe(state="on or off")
     @app_commands.choices(
@@ -3629,6 +3779,22 @@ class Music(commands.Cog):
     ):
         ctx = await commands.Context.from_interaction(interaction)
         await self.pfx_autoplay(ctx, state)
+
+    @music_slash.command(
+        name="guildplay", description="Toggle playback from the server guild playlist."
+    )
+    @app_commands.describe(state="on or off")
+    @app_commands.choices(
+        state=[
+            app_commands.Choice(name="On", value="on"),
+            app_commands.Choice(name="Off", value="off"),
+        ]
+    )
+    async def slash_music_guildplay(
+        self, interaction: discord.Interaction, state: Optional[str] = None
+    ):
+        ctx = await commands.Context.from_interaction(interaction)
+        await self.pfx_guildplay(ctx, state)
 
     @music_slash.command(name="radio", description="Toggle 24/7 stay-connected mode.")
     @app_commands.describe(state="on or off")
