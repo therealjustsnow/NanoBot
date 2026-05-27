@@ -128,6 +128,7 @@ _ALL_COGS = (
     "cogs.images",
     "cogs.eli5",
     "cogs.music",
+    "cogs.leveling",
     "cogs.debug",
 )
 
