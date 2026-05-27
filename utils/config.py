@@ -34,6 +34,8 @@ import os
 from dataclasses import dataclass, field as dc_field
 from typing import Callable, Optional
 
+from utils.helpers import parse_duration, parse_filesize_mb
+
 CONFIG_PATH = "config.ini"
 LEGACY_JSON_PATH = "config.json"
 
@@ -357,7 +359,7 @@ FIELDS: tuple[Field, ...] = (
         "scraper",
         "int",
         7 * 86400,
-        "Seconds before a URL is rechecked (HEAD)",
+        "How long before a URL is rechecked (HEAD) (e.g. 604800, 7d, 1 week)",
         minimum=0,
     ),
     Field(
@@ -398,7 +400,7 @@ FIELDS: tuple[Field, ...] = (
         "music",
         "int",
         180,
-        "Seconds idle/alone before auto-disconnect",
+        "Time idle/alone before auto-disconnect (e.g. 180, 3m, 3 minutes)",
         minimum=0,
     ),
     Field(
@@ -511,7 +513,7 @@ FIELDS: tuple[Field, ...] = (
         "music",
         "int",
         0,
-        "Max audio cache size in MB when music_save_videos is on (0 = unlimited)",
+        "Max audio cache size when music_save_videos is on (e.g. 500, 500mb, 1gb; 0 = unlimited)",
         minimum=0,
     ),
     Field(
@@ -527,7 +529,7 @@ FIELDS: tuple[Field, ...] = (
         "music",
         "int",
         600,
-        "Seconds to back off after a YouTube rate-limit (HTTP 429)",
+        "Back-off time after a YouTube rate-limit (HTTP 429) (e.g. 600, 10m, 10 minutes)",
         minimum=0,
     ),
     Field(
@@ -578,6 +580,17 @@ _SCHEMA: dict[str, tuple[type | None, bool, str]] = {
 # ══════════════════════════════════════════════════════════════════════════════
 
 
+# Int-typed keys that store durations in seconds — accept "3m", "1 hour", etc.
+_DURATION_SEC_KEYS = {
+    "music_idle_timeout",
+    "music_ratelimit_cooldown",
+    "revalidate_age",
+}
+
+# Int-typed keys that store sizes in MB — accept "500mb", "1gb", "500", etc.
+_FILESIZE_MB_KEYS = {"music_cache_max_mb"}
+
+
 def _coerce(key: str, raw: str):
     """Convert an INI string value to the type declared in the schema."""
     if raw is None:
@@ -593,6 +606,12 @@ def _coerce(key: str, raw: str):
 
     if typ is bool:
         return raw.lower() in ("true", "1", "yes", "on")
+    if key in _DURATION_SEC_KEYS:
+        parsed = parse_duration(raw)
+        return parsed if parsed is not None else raw
+    if key in _FILESIZE_MB_KEYS:
+        parsed = parse_filesize_mb(raw)
+        return parsed if parsed is not None else raw
     if typ is int:
         try:
             return int(raw)

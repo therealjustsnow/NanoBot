@@ -14,6 +14,7 @@ from utils.helpers import (
     fmt_interval,
     parse_duration,
     parse_duration_from_end,
+    parse_filesize_mb,
     parse_interval,
 )
 
@@ -205,3 +206,58 @@ class TestFmtInterval:
 
     def test_zero(self):
         assert fmt_interval(0) == "0s"
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+#  parse_filesize_mb
+# ══════════════════════════════════════════════════════════════════════════════
+
+
+class TestParseFilesizeMb:
+    def test_bare_int_is_mb(self):
+        assert parse_filesize_mb("500") == 500
+
+    def test_explicit_mb(self):
+        assert parse_filesize_mb("500mb") == 500
+
+    def test_explicit_mb_uppercase(self):
+        assert parse_filesize_mb("500MB") == 500
+
+    def test_explicit_mb_with_space(self):
+        assert parse_filesize_mb("500 mb") == 500
+
+    def test_gigabytes(self):
+        assert parse_filesize_mb("1gb") == 1024
+
+    def test_gigabytes_uppercase(self):
+        assert parse_filesize_mb("1 GB") == 1024
+
+    def test_gigabytes_fractional(self):
+        assert parse_filesize_mb("1.5gb") == 1536
+
+    def test_terabytes(self):
+        assert parse_filesize_mb("1tb") == 1024 * 1024
+
+    def test_kilobytes(self):
+        assert parse_filesize_mb("1024kb") == 1
+
+    def test_bytes(self):
+        assert parse_filesize_mb("1048576b") == 1
+
+    def test_zero(self):
+        assert parse_filesize_mb("0") == 0
+
+    def test_zero_gb(self):
+        assert parse_filesize_mb("0gb") == 0
+
+    def test_none_returns_none(self):
+        assert parse_filesize_mb(None) is None
+
+    def test_empty_returns_none(self):
+        assert parse_filesize_mb("") is None
+
+    def test_invalid_returns_none(self):
+        assert parse_filesize_mb("big") is None
+
+    def test_invalid_unit_returns_none(self):
+        assert parse_filesize_mb("500pb") is None

@@ -216,6 +216,60 @@ def test_coerce_bool_variants():
         assert _coerce("log_http", val) is False
 
 
+# ── _coerce: duration keys ────────────────────────────────────────────────────
+
+
+def test_coerce_duration_short_unit():
+    assert _coerce("music_idle_timeout", "3m") == 180
+
+
+def test_coerce_duration_long_form():
+    assert _coerce("music_idle_timeout", "3 minutes") == 180
+
+
+def test_coerce_duration_hours():
+    assert _coerce("music_ratelimit_cooldown", "10m") == 600
+
+
+def test_coerce_duration_natural():
+    assert _coerce("music_ratelimit_cooldown", "1 hour") == 3600
+
+
+def test_coerce_duration_plain_int_still_works():
+    assert _coerce("music_idle_timeout", "180") == 180
+
+
+def test_coerce_duration_revalidate_age_days():
+    assert _coerce("revalidate_age", "7d") == 7 * 86400
+
+
+def test_coerce_duration_revalidate_age_weeks():
+    assert _coerce("revalidate_age", "1 week") == 604800
+
+
+# ── _coerce: filesize keys ────────────────────────────────────────────────────
+
+
+def test_coerce_filesize_plain_int():
+    assert _coerce("music_cache_max_mb", "500") == 500
+
+
+def test_coerce_filesize_mb_suffix():
+    assert _coerce("music_cache_max_mb", "500mb") == 500
+
+
+def test_coerce_filesize_gb():
+    assert _coerce("music_cache_max_mb", "1gb") == 1024
+
+
+def test_coerce_filesize_gb_uppercase():
+    assert _coerce("music_cache_max_mb", "2 GB") == 2048
+
+
+def test_coerce_filesize_zero():
+    assert _coerce("music_cache_max_mb", "0") == 0
+
+
 def test_coerce_int():
     assert _coerce("vote_webhook_port", "8080") == 8080
 
