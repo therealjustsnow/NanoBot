@@ -553,7 +553,9 @@ class AplPageView(discord.ui.View):
             lines.append(f"`{i:>2}.` [{label}]({e['url']})")
         tp = self._total_pages()
         embed = h.embed(
-            f"📻 Guild Playlist · {len(self.entries)} track(s)", "\n".join(lines), ACCENT
+            f"📻 Guild Playlist · {len(self.entries)} track(s)",
+            "\n".join(lines),
+            ACCENT,
         )
         if tp > 1:
             embed.set_footer(text=f"Page {self.page + 1}/{tp}")
@@ -684,7 +686,7 @@ class GuildPlayer:
         self.volume: float = cog.default_volume()
         self.speed: float = cog.default_speed()
         self.audio_filter: str = "none"
-        self.autoplay: bool = False   # smart: queue YouTube-related tracks
+        self.autoplay: bool = False  # smart: queue YouTube-related tracks
         self.guildplay: bool = False  # play random tracks from the guild playlist
         self._smart_seed_url: Optional[str] = None
         self._smart_recent: deque[str] = deque(maxlen=25)
@@ -3084,7 +3086,9 @@ class Music(commands.Cog):
         entries = await db.get_autoplaylist(ctx.guild.id)
         note = ""
         if player.guildplay and not entries:
-            note = "\n_The guild playlist is empty — add tracks with `guildplaylist add`._"
+            note = (
+                "\n_The guild playlist is empty — add tracks with `guildplaylist add`._"
+            )
         await ctx.reply(
             embed=h.ok(
                 f"Guild play is now **{'on' if player.guildplay else 'off'}**.{note}",
@@ -3225,7 +3229,9 @@ class Music(commands.Cog):
 
         if added == 0:
             return await interaction.followup.send(
-                embed=h.warn("Everything in that link is already in the guild playlist."),
+                embed=h.warn(
+                    "Everything in that link is already in the guild playlist."
+                ),
                 ephemeral=True,
             )
 
@@ -3744,7 +3750,8 @@ class Music(commands.Cog):
         await self.pfx_lyrics(ctx, query=query)
 
     @music_slash.command(
-        name="autoplay", description="Toggle smart autoplay (queues YouTube-related tracks)."
+        name="autoplay",
+        description="Toggle smart autoplay (queues YouTube-related tracks).",
     )
     @app_commands.describe(state="on or off")
     @app_commands.choices(

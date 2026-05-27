@@ -303,19 +303,31 @@ class TestSplitArtistTitle:
 
 class TestExtractYtid:
     def test_watch_url(self):
-        assert _extract_ytid("https://www.youtube.com/watch?v=dQw4w9WgXcQ") == "dQw4w9WgXcQ"
+        assert (
+            _extract_ytid("https://www.youtube.com/watch?v=dQw4w9WgXcQ")
+            == "dQw4w9WgXcQ"
+        )
 
     def test_watch_url_with_extra_params(self):
-        assert _extract_ytid("https://www.youtube.com/watch?v=dQw4w9WgXcQ&list=RDdQw4w9WgXcQ") == "dQw4w9WgXcQ"
+        assert (
+            _extract_ytid(
+                "https://www.youtube.com/watch?v=dQw4w9WgXcQ&list=RDdQw4w9WgXcQ"
+            )
+            == "dQw4w9WgXcQ"
+        )
 
     def test_youtu_be_short(self):
         assert _extract_ytid("https://youtu.be/dQw4w9WgXcQ") == "dQw4w9WgXcQ"
 
     def test_shorts_url(self):
-        assert _extract_ytid("https://www.youtube.com/shorts/dQw4w9WgXcQ") == "dQw4w9WgXcQ"
+        assert (
+            _extract_ytid("https://www.youtube.com/shorts/dQw4w9WgXcQ") == "dQw4w9WgXcQ"
+        )
 
     def test_embed_url(self):
-        assert _extract_ytid("https://www.youtube.com/embed/dQw4w9WgXcQ") == "dQw4w9WgXcQ"
+        assert (
+            _extract_ytid("https://www.youtube.com/embed/dQw4w9WgXcQ") == "dQw4w9WgXcQ"
+        )
 
     def test_non_youtube_url_returns_none(self):
         assert _extract_ytid("https://soundcloud.com/artist/track") is None
@@ -327,4 +339,9 @@ class TestExtractYtid:
         assert _extract_ytid("just some text") is None
 
     def test_youtube_mix_url(self):
-        assert _extract_ytid("https://www.youtube.com/watch?v=dQw4w9WgXcQ&list=RDdQw4w9WgXcQ") == "dQw4w9WgXcQ"
+        assert (
+            _extract_ytid(
+                "https://www.youtube.com/watch?v=dQw4w9WgXcQ&list=RDdQw4w9WgXcQ"
+            )
+            == "dQw4w9WgXcQ"
+        )
