@@ -1424,6 +1424,7 @@ _AUDIT_ALL_EVENTS: list[str] = [
     "channel_delete",
     "role_create",
     "role_delete",
+    "automod_action",
 ]
 
 _AUDIT_ALL_EVENTS_JSON: str = json.dumps(_AUDIT_ALL_EVENTS)
@@ -1566,10 +1567,11 @@ async def _ensure_automod_tables() -> None:
         CREATE INDEX IF NOT EXISTS aaw_guild ON automod_attachment_words (guild_id);
     """)
     await _conn().commit()
-    # Add timeout_seconds if this is an older schema.
+    # Add columns for older schemas.
     await _ensure_columns(
         "automod_config", {"timeout_seconds": "INTEGER NOT NULL DEFAULT 600"}
     )
+    await _ensure_columns("automod_config", {"log_channel_id": "TEXT"})
 
 
 def _automod_row(row: aiosqlite.Row) -> dict:
@@ -1579,6 +1581,7 @@ def _automod_row(row: aiosqlite.Row) -> dict:
         "ignore_channels": json.loads(row["ignore_channels"]),
         "ignore_roles": json.loads(row["ignore_roles"]),
         "timeout_seconds": row["timeout_seconds"],
+        "log_channel_id": row["log_channel_id"],
     }
 
 
@@ -1594,7 +1597,7 @@ async def _ensure_automod_guild(guild_id: int) -> None:
 async def get_automod_config(guild_id: int) -> dict | None:
     """Return the full automod config for a guild, or None if not yet set up."""
     async with _conn().execute(
-        "SELECT enabled, rules, ignore_channels, ignore_roles, timeout_seconds "
+        "SELECT enabled, rules, ignore_channels, ignore_roles, timeout_seconds, log_channel_id "
         "FROM automod_config WHERE guild_id=? LIMIT 1",
         (str(guild_id),),
     ) as cur:
@@ -1620,6 +1623,16 @@ async def set_automod_timeout_seconds(guild_id: int, seconds: int) -> None:
            VALUES (?, ?)
            ON CONFLICT(guild_id) DO UPDATE SET timeout_seconds=excluded.timeout_seconds""",
         (str(guild_id), seconds),
+    )
+    await _conn().commit()
+
+
+async def set_automod_log_channel(guild_id: int, channel_id: int | None) -> None:
+    """Set (or clear) the dedicated automod log channel. Pass None to revert to fallback."""
+    await _ensure_automod_guild(guild_id)
+    await _conn().execute(
+        "UPDATE automod_config SET log_channel_id=? WHERE guild_id=?",
+        (str(channel_id) if channel_id is not None else None, str(guild_id)),
     )
     await _conn().commit()
 
