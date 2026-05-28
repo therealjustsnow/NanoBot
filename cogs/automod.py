@@ -1,5 +1,5 @@
 """
-cogs/automod.py — v1.2.0
+cogs/automod.py — v1.3.0
 Passive auto-moderation — watches every message and enforces configurable rules.
 
 Rules (all individually togglable, each with its own action):
@@ -21,10 +21,16 @@ Actions (per rule):
 
 Exempt channels and roles are ignored for all rules.
 
+Logging:
+  Every triggered action posts an embed to the automod log channel.
+  Priority: dedicated channel set via /automod logchannel > audit log channel
+  (if the automod_action event is enabled in /auditlog events).
+
 Commands (all /automod, require Manage Server):
   /automod status               — Full config overview
   /automod enable               — Master on switch
   /automod disable              — Master off switch
+  /automod logchannel [channel] — Set (or clear) the dedicated automod log channel
   /automod rule                 — Toggle a rule on/off, set its action, and optional DM to the user
   /automod spam                 — Set spam detection count + time window
   /automod caps                 — Set caps % threshold and minimum message length
@@ -224,6 +230,71 @@ async def _matches_regex_safe(content: str, patterns: list[dict]) -> str | None:
         return None
 
 
+# ── Log channel resolution ─────────────────────────────────────────────────────
+
+
+async def _get_automod_log_channel(
+    bot: commands.Bot,
+    guild: discord.Guild,
+    am_cfg: dict,
+) -> discord.TextChannel | None:
+    """Resolve the channel for automod action logs.
+
+    Priority:
+      1. Dedicated automod log channel (am_cfg["log_channel_id"])
+      2. Audit log channel, if the automod_action event is toggled on there
+    """
+    log_ch_id = am_cfg.get("log_channel_id")
+    if log_ch_id:
+        ch = guild.get_channel(int(log_ch_id))
+        if isinstance(ch, discord.TextChannel):
+            return ch
+
+    # Fall back to audit log if automod_action event is enabled
+    al_cfg = await db.get_auditlog_config(guild.id)
+    if not al_cfg or not al_cfg["enabled"]:
+        return None
+    if "automod_action" not in al_cfg["events"]:
+        return None
+    if not al_cfg["channel_id"]:
+        return None
+    ch = guild.get_channel(int(al_cfg["channel_id"]))
+    return ch if isinstance(ch, discord.TextChannel) else None
+
+
+async def _send_action_log(
+    bot: commands.Bot,
+    message: discord.Message,
+    action: str,
+    rule: str,
+    detail: str,
+) -> None:
+    """Post an automod action embed to the configured log channel."""
+    am_cfg = await db.get_automod_config(message.guild.id)
+    if am_cfg is None:
+        return
+    ch = await _get_automod_log_channel(bot, message.guild, am_cfg)
+    if ch is None:
+        return
+    member = message.author
+    e = discord.Embed(title="🛡️ AutoMod Action", color=h.YELLOW)
+    e.add_field(
+        name="User",
+        value=f"{member.mention} (`{member.id}`)",
+        inline=True,
+    )
+    e.add_field(name="Channel", value=message.channel.mention, inline=True)
+    e.add_field(name="Rule", value=RULE_LABELS.get(rule, rule), inline=True)
+    e.add_field(name="Action", value=ACTION_LABELS.get(action, action), inline=True)
+    e.add_field(name="Reason", value=detail[:512], inline=False)
+    e.set_footer(text=f"NanoBot AutoMod  •  User ID: {member.id}")
+    e.timestamp = discord.utils.utcnow()
+    try:
+        await ch.send(embed=e)
+    except (discord.Forbidden, discord.HTTPException) as exc:
+        log.debug("AutoMod log send failed in #%s: %s", ch, exc)
+
+
 # ── Action executor ────────────────────────────────────────────────────────────
 
 
@@ -234,6 +305,7 @@ async def _execute_action(
     detail: str,
     timeout_seconds: int = TIMEOUT_SECONDS,
     dm_message: Optional[str] = None,
+    bot: Optional[commands.Bot] = None,
 ) -> None:
     """
     Delete the offending message and optionally warn/timeout the author.
@@ -256,94 +328,104 @@ async def _execute_action(
         except (discord.Forbidden, discord.HTTPException):
             pass
 
-    if action == "delete":
-        return
-
-    # Notify the user with a short ephemeral-style message that auto-deletes
-    reason_text = f"AutoMod ({RULE_LABELS.get(rule, rule)}): {detail}"
     try:
-        notice = await message.channel.send(
-            embed=discord.Embed(
-                description=f"⚠️ {member.mention} — your message was removed.\n`{detail}`",
-                color=h.YELLOW,
-            )
-        )
-        _spawn_soft_delete(notice, 6.0)
-    except (discord.Forbidden, discord.HTTPException):
-        pass
+        if action == "delete":
+            return
 
-    if action in ("warn", "timeout"):
-        now = datetime.now(timezone.utc)
+        # Notify the user with a short ephemeral-style message that auto-deletes
+        reason_text = f"AutoMod ({RULE_LABELS.get(rule, rule)}): {detail}"
         try:
-            count = await db.add_warning(
-                guild.id,
-                member.id,
-                reason_text,
-                "AutoMod",
-                "AutoMod",
-                now.isoformat(),
+            notice = await message.channel.send(
+                embed=discord.Embed(
+                    description=f"⚠️ {member.mention} — your message was removed.\n`{detail}`",
+                    color=h.YELLOW,
+                )
             )
-            log.info(
-                f"AutoMod warned {member} ({member.id}) in {guild} "
-                f"— {rule}: {detail} (warning #{count})"
-            )
-
-            # Respect warnconfig auto-kick/ban thresholds
-            warn_cfg = await db.get_warn_config(guild.id)
-            if warn_cfg["ban_at"] and count >= warn_cfg["ban_at"]:
-                try:
-                    await guild.ban(
-                        member,
-                        reason=f"NanoBot auto-ban: {count} warnings (AutoMod)",
-                        delete_message_days=0,
-                    )
-                except discord.Forbidden:
-                    pass
-            elif warn_cfg["kick_at"] and count >= warn_cfg["kick_at"]:
-                try:
-                    await guild.kick(
-                        member, reason=f"NanoBot auto-kick: {count} warnings (AutoMod)"
-                    )
-                except discord.Forbidden:
-                    pass
-
-        except Exception as exc:
-            log.error(f"AutoMod warn failed: {exc}", exc_info=exc)
-
-    if action == "timeout":
-        try:
-            until = discord.utils.utcnow() + timedelta(seconds=timeout_seconds)
-            await member.timeout(until, reason=reason_text)
-            log.info(f"AutoMod timed out {member} ({member.id}) in {guild} — {rule}")
-        except discord.Forbidden:
+            _spawn_soft_delete(notice, 6.0)
+        except (discord.Forbidden, discord.HTTPException):
             pass
-        except Exception as exc:
-            log.error(f"AutoMod timeout failed: {exc}", exc_info=exc)
-        return
 
-    if action == "kick":
-        try:
-            await guild.kick(member, reason=reason_text)
-            log.info(f"AutoMod kicked {member} ({member.id}) in {guild} — {rule}")
-        except discord.Forbidden:
-            pass
-        except Exception as exc:
-            log.error(f"AutoMod kick failed: {exc}", exc_info=exc)
-        return
+        if action in ("warn", "timeout"):
+            now = datetime.now(timezone.utc)
+            try:
+                count = await db.add_warning(
+                    guild.id,
+                    member.id,
+                    reason_text,
+                    "AutoMod",
+                    "AutoMod",
+                    now.isoformat(),
+                )
+                log.info(
+                    f"AutoMod warned {member} ({member.id}) in {guild} "
+                    f"— {rule}: {detail} (warning #{count})"
+                )
 
-    if action == "softban":
-        try:
-            await guild.ban(
-                member,
-                reason=f"{reason_text} (softban)",
-                delete_message_days=1,
-            )
-            await guild.unban(member, reason=f"{reason_text} (softban release)")
-            log.info(f"AutoMod softbanned {member} ({member.id}) in {guild} — {rule}")
-        except discord.Forbidden:
-            pass
-        except Exception as exc:
-            log.error(f"AutoMod softban failed: {exc}", exc_info=exc)
+                # Respect warnconfig auto-kick/ban thresholds
+                warn_cfg = await db.get_warn_config(guild.id)
+                if warn_cfg["ban_at"] and count >= warn_cfg["ban_at"]:
+                    try:
+                        await guild.ban(
+                            member,
+                            reason=f"NanoBot auto-ban: {count} warnings (AutoMod)",
+                            delete_message_days=0,
+                        )
+                    except discord.Forbidden:
+                        pass
+                elif warn_cfg["kick_at"] and count >= warn_cfg["kick_at"]:
+                    try:
+                        await guild.kick(
+                            member,
+                            reason=f"NanoBot auto-kick: {count} warnings (AutoMod)",
+                        )
+                    except discord.Forbidden:
+                        pass
+
+            except Exception as exc:
+                log.error(f"AutoMod warn failed: {exc}", exc_info=exc)
+
+        if action == "timeout":
+            try:
+                until = discord.utils.utcnow() + timedelta(seconds=timeout_seconds)
+                await member.timeout(until, reason=reason_text)
+                log.info(
+                    f"AutoMod timed out {member} ({member.id}) in {guild} — {rule}"
+                )
+            except discord.Forbidden:
+                pass
+            except Exception as exc:
+                log.error(f"AutoMod timeout failed: {exc}", exc_info=exc)
+            return
+
+        if action == "kick":
+            try:
+                await guild.kick(member, reason=reason_text)
+                log.info(f"AutoMod kicked {member} ({member.id}) in {guild} — {rule}")
+            except discord.Forbidden:
+                pass
+            except Exception as exc:
+                log.error(f"AutoMod kick failed: {exc}", exc_info=exc)
+            return
+
+        if action == "softban":
+            try:
+                await guild.ban(
+                    member,
+                    reason=f"{reason_text} (softban)",
+                    delete_message_days=1,
+                )
+                await guild.unban(member, reason=f"{reason_text} (softban release)")
+                log.info(
+                    f"AutoMod softbanned {member} ({member.id}) in {guild} — {rule}"
+                )
+            except discord.Forbidden:
+                pass
+            except Exception as exc:
+                log.error(f"AutoMod softban failed: {exc}", exc_info=exc)
+
+    finally:
+        if bot is not None:
+            await _send_action_log(bot, message, action, rule, detail)
 
 
 # Strong refs to fire-and-forget soft-delete tasks. Without this the event loop
@@ -500,8 +582,17 @@ class AutoMod(commands.Cog):
         status = "🟢 Enabled" if cfg["enabled"] else "🔴 Disabled"
         rules = cfg["rules"]
         tmo_secs = cfg.get("timeout_seconds", TIMEOUT_SECONDS)
+
+        log_ch_id = cfg.get("log_channel_id")
+        if log_ch_id:
+            log_ch = interaction.guild.get_channel(int(log_ch_id))
+            log_ch_str = log_ch.mention if log_ch else f"⚠️ Unknown (`{log_ch_id}`)"
+        else:
+            log_ch_str = "_not set — falls back to audit log_"
+
         lines = [
-            f"**Status:** {status} · **Timeout duration:** {h.fmt_duration(tmo_secs)}\n"
+            f"**Status:** {status} · **Timeout duration:** {h.fmt_duration(tmo_secs)}",
+            f"**Log channel:** {log_ch_str}\n",
         ]
 
         for key, label in RULE_LABELS.items():
@@ -574,6 +665,43 @@ class AutoMod(commands.Cog):
             embed=h.ok("AutoMod is now **disabled**.", "🛡️ AutoMod Off"),
             ephemeral=True,
         )
+
+    # ── /automod logchannel ────────────────────────────────────────────────────
+    @automod_group.command(
+        name="logchannel",
+        description="Set a dedicated channel for AutoMod action logs. Omit to clear (falls back to audit log).",
+    )
+    @app_commands.describe(
+        channel="Channel to post AutoMod logs in. Leave blank to clear the dedicated channel."
+    )
+    @has_admin_perms()
+    async def am_logchannel(
+        self,
+        interaction: discord.Interaction,
+        channel: Optional[discord.TextChannel] = None,
+    ):
+        await db.set_automod_log_channel(
+            interaction.guild_id, channel.id if channel else None
+        )
+        self._invalidate(interaction.guild_id)
+        if channel:
+            await interaction.response.send_message(
+                embed=h.ok(
+                    f"AutoMod action logs will be sent to {channel.mention}.",
+                    "🛡️ AutoMod Log Channel Set",
+                ),
+                ephemeral=True,
+            )
+        else:
+            await interaction.response.send_message(
+                embed=h.ok(
+                    "Dedicated AutoMod log channel cleared.\n"
+                    "Logs will fall back to the audit log channel if the **AutoMod Action** "
+                    "event is enabled there (`/auditlog events`).",
+                    "🛡️ AutoMod Log Channel Cleared",
+                ),
+                ephemeral=True,
+            )
 
     # ── /automod rule ──────────────────────────────────────────────────────────
     @automod_group.command(
@@ -1169,6 +1297,7 @@ class AutoMod(commands.Cog):
                     f"{count} messages in {seconds}s",
                     tmo,
                     r.get("dm_message"),
+                    self.bot,
                 )
                 return  # one action per message
 
@@ -1191,6 +1320,7 @@ class AutoMod(commands.Cog):
                 "Discord invite link",
                 tmo,
                 _invites_rule.get("dm_message"),
+                self.bot,
             )
             return
 
@@ -1203,6 +1333,7 @@ class AutoMod(commands.Cog):
                 "External URL",
                 tmo,
                 _links_rule.get("dm_message"),
+                self.bot,
             )
             return
 
@@ -1219,6 +1350,7 @@ class AutoMod(commands.Cog):
                     f">{threshold}% uppercase",
                     tmo,
                     r.get("dm_message"),
+                    self.bot,
                 )
                 return
 
@@ -1235,6 +1367,7 @@ class AutoMod(commands.Cog):
                     f"{mention_count} mentions",
                     tmo,
                     r.get("dm_message"),
+                    self.bot,
                 )
                 return
 
@@ -1250,6 +1383,7 @@ class AutoMod(commands.Cog):
                     "Filtered word",
                     tmo,
                     r.get("dm_message"),
+                    self.bot,
                 )
                 return
 
@@ -1265,6 +1399,7 @@ class AutoMod(commands.Cog):
                     f"Matched: {match}",
                     tmo,
                     r.get("dm_message"),
+                    self.bot,
                 )
                 return
 
@@ -1282,6 +1417,7 @@ class AutoMod(commands.Cog):
                         f"Flagged word with {len(message.attachments)} attachment(s)",
                         tmo,
                         r.get("dm_message"),
+                        self.bot,
                     )
                     return
 

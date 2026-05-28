@@ -15,6 +15,7 @@ Events logged (all toggleable per-server):
   channel_delete — Channel deleted
   role_create    — Role created
   role_delete    — Role deleted
+  automod_action — AutoMod rule triggered (fallback when no dedicated /automod logchannel set)
 
 Commands (all require Manage Server):
   /auditlog channel <#channel>  — Set the log channel
@@ -51,6 +52,7 @@ ALL_EVENTS: list[str] = [
     "channel_delete",
     "role_create",
     "role_delete",
+    "automod_action",
 ]
 
 EVENT_LABELS: dict[str, str] = {
@@ -66,6 +68,7 @@ EVENT_LABELS: dict[str, str] = {
     "channel_delete": "💥  Channel Deleted",
     "role_create": "✨  Role Created",
     "role_delete": "🗑️  Role Deleted",
+    "automod_action": "🛡️  AutoMod Action",
 }
 
 
