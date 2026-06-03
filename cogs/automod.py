@@ -357,7 +357,8 @@ async def _execute_action(
                     now.isoformat(),
                 )
                 log.info(
-                    f"AutoMod warned {member} ({member.id}) in {guild} "
+                    f"AutoMod warned {member.display_name} "
+                    f"(@{member.name}, {member.id}) in {guild} "
                     f"— {rule}: {detail} (warning #{count})"
                 )
 
@@ -389,7 +390,8 @@ async def _execute_action(
                 until = discord.utils.utcnow() + timedelta(seconds=timeout_seconds)
                 await member.timeout(until, reason=reason_text)
                 log.info(
-                    f"AutoMod timed out {member} ({member.id}) in {guild} — {rule}"
+                    f"AutoMod timed out {member.display_name} "
+                    f"(@{member.name}, {member.id}) in {guild} — {rule}"
                 )
             except discord.Forbidden:
                 pass
@@ -400,7 +402,10 @@ async def _execute_action(
         if action == "kick":
             try:
                 await guild.kick(member, reason=reason_text)
-                log.info(f"AutoMod kicked {member} ({member.id}) in {guild} — {rule}")
+                log.info(
+                    f"AutoMod kicked {member.display_name} "
+                    f"(@{member.name}, {member.id}) in {guild} — {rule}"
+                )
             except discord.Forbidden:
                 pass
             except Exception as exc:
@@ -416,7 +421,8 @@ async def _execute_action(
                 )
                 await guild.unban(member, reason=f"{reason_text} (softban release)")
                 log.info(
-                    f"AutoMod softbanned {member} ({member.id}) in {guild} — {rule}"
+                    f"AutoMod softbanned {member.display_name} "
+                    f"(@{member.name}, {member.id}) in {guild} — {rule}"
                 )
             except discord.Forbidden:
                 pass
