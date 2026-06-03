@@ -196,7 +196,7 @@ class ELI5(commands.Cog):
         )
         e.set_footer(text=f"Asked by {ctx.author.display_name}  ·  NanoBot")
         await ctx.reply(embed=e)
-        log.info(f"ELI5: '{topic}' for {ctx.author} in {ctx.guild}")
+        log.info(f"ELI5: '{topic}' for {h.user_log(ctx.author)} in {ctx.guild}")
 
 
 # ── Registration ───────────────────────────────────────────────────────────────

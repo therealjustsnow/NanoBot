@@ -575,7 +575,7 @@ class Recurring(commands.Cog):
             ),
             ephemeral=True,
         )
-        log.info(f"Recurring {rid} paused by {ctx.author}")
+        log.info(f"Recurring {rid} paused by {h.user_log(ctx.author)}")
 
     # ── Resume ─────────────────────────────────────────────────────────────────
 
@@ -614,7 +614,7 @@ class Recurring(commands.Cog):
             ),
             ephemeral=True,
         )
-        log.info(f"Recurring {rid} resumed by {ctx.author}")
+        log.info(f"Recurring {rid} resumed by {h.user_log(ctx.author)}")
 
     # ── Cancel ─────────────────────────────────────────────────────────────────
 
@@ -639,7 +639,7 @@ class Recurring(commands.Cog):
             ),
             ephemeral=True,
         )
-        log.info(f"Recurring {rid} cancelled by {ctx.author}")
+        log.info(f"Recurring {rid} cancelled by {h.user_log(ctx.author)}")
 
     # ── Ownership check ────────────────────────────────────────────────────────
 

@@ -234,7 +234,7 @@ class RoleButton(discord.ui.Button):
                     ephemeral=True,
                 )
                 log.debug(
-                    f"Role panel: removed {role} from {member} ({member.id}) in {guild}"
+                    f"Role panel: removed {role} from {h.user_log(member)} in {guild}"
                 )
                 return
 
@@ -266,7 +266,7 @@ class RoleButton(discord.ui.Button):
                 embed=h.ok(f"You now have **{role.name}**.", "✅ Role Assigned"),
                 ephemeral=True,
             )
-            log.debug(f"Role panel: added {role} to {member} ({member.id}) in {guild}")
+            log.debug(f"Role panel: added {role} to {h.user_log(member)} in {guild}")
 
         except Exception as exc:
             log.error(

@@ -279,12 +279,12 @@ async def _send_event(
     if cfg["dm"]:
         try:
             await member.send(**send_kwargs)
-            log.info(f"{event} DM sent to {member} ({member.id}) in {member.guild}")
+            log.info(f"{event} DM sent to {h.user_log(member)} in {member.guild}")
             return
         except discord.Forbidden:
-            log.debug(f"{event} DM failed for {member} ({member.id}) — closed DMs")
+            log.debug(f"{event} DM failed for {h.user_log(member)} — closed DMs")
         except discord.HTTPException as exc:
-            log.warning(f"{event} DM to {member} ({member.id}) failed: {exc}")
+            log.warning(f"{event} DM to {h.user_log(member)} failed: {exc}")
 
     # Channel delivery
     channel: discord.TextChannel | None = None
