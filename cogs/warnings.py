@@ -60,8 +60,8 @@ class Warnings(commands.Cog):
                 pass
 
         log.info(
-            f"Warned {user} ({user.id}) in {guild} ({guild.id}) "
-            f"by {author} \u2014 warning #{count}: {reason}"
+            f"Warned {h.user_log(user)} in {guild} ({guild.id}) "
+            f"by {h.user_log(author)} \u2014 warning #{count}: {reason}"
         )
 
         lines = [
@@ -81,13 +81,13 @@ class Warnings(commands.Cog):
                 )
                 action_taken = f"\U0001f528 Auto-banned (reached {count} warnings \u2014 threshold: {cfg['ban_at']})"
                 log.warning(
-                    f"Auto-banned {user} ({user.id}) in {guild} \u2014 {count} warnings"
+                    f"Auto-banned {h.user_log(user)} in {guild} \u2014 {count} warnings"
                 )
             except discord.Forbidden:
                 action_taken = "\u26a0\ufe0f Auto-ban threshold reached but I lack Ban Members permission."
             except discord.HTTPException as exc:
                 action_taken = "\u26a0\ufe0f Auto-ban threshold reached but the action failed (try again)."
-                log.error(f"Auto-ban failed for {user} ({user.id}) in {guild}: {exc}")
+                log.error(f"Auto-ban failed for {h.user_log(user)} in {guild}: {exc}")
 
         elif cfg["kick_at"] and count >= cfg["kick_at"]:
             try:
@@ -96,13 +96,13 @@ class Warnings(commands.Cog):
                 )
                 action_taken = f"\U0001f462 Auto-kicked (reached {count} warnings \u2014 threshold: {cfg['kick_at']})"
                 log.warning(
-                    f"Auto-kicked {user} ({user.id}) in {guild} \u2014 {count} warnings"
+                    f"Auto-kicked {h.user_log(user)} in {guild} \u2014 {count} warnings"
                 )
             except discord.Forbidden:
                 action_taken = "\u26a0\ufe0f Auto-kick threshold reached but I lack Kick Members permission."
             except discord.HTTPException as exc:
                 action_taken = "\u26a0\ufe0f Auto-kick threshold reached but the action failed (try again)."
-                log.error(f"Auto-kick failed for {user} ({user.id}) in {guild}: {exc}")
+                log.error(f"Auto-kick failed for {h.user_log(user)} in {guild}: {exc}")
 
         if action_taken:
             lines.append(action_taken)
@@ -166,7 +166,8 @@ class Warnings(commands.Cog):
         count = await db.clear_warnings(guild.id, user.id)
         if count:
             log.info(
-                f"Cleared {count} warning(s) for {user} ({user.id}) in {guild} by {author}"
+                f"Cleared {count} warning(s) for {h.user_log(user)} "
+                f"in {guild} by {h.user_log(author)}"
             )
             return h.ok(
                 f"Cleared **{count}** warning(s) for **{user.display_name}**.",

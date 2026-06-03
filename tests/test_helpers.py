@@ -16,7 +16,27 @@ from utils.helpers import (
     parse_duration_from_end,
     parse_filesize_mb,
     parse_interval,
+    user_log,
 )
+
+
+class _FakeUser:
+    def __init__(self, display_name, name, id):
+        self.display_name = display_name
+        self.name = name
+        self.id = id
+
+
+class TestUserLog:
+    def test_format(self):
+        u = _FakeUser("el racisto", "32oi4712349865kj", 317873654128050186)
+        assert user_log(u) == "el racisto (@32oi4712349865kj, 317873654128050186)"
+
+    def test_readable_name_first(self):
+        # Display name leads so logs are scannable; @username + id stay for stability.
+        u = _FakeUser("Cool Mod", "coolmod", 42)
+        assert user_log(u).startswith("Cool Mod (@coolmod, 42)")
+
 
 # ══════════════════════════════════════════════════════════════════════════════
 #  parse_duration

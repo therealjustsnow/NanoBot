@@ -261,3 +261,12 @@ def fmt_interval(seconds: int) -> str:
 def user_display(member: discord.Member) -> str:
     """Return 'Display Name (@username) | ID' for consistent user references."""
     return f"**{member.display_name}** (`{member.name}` · `{member.id}`)"
+
+
+def user_log(user) -> str:
+    """Return 'Display Name (@username, id)' for plain-text log lines.
+
+    Logs the readable display name first (what mods recognize) plus the stable
+    @username and ID, since str(user) alone yields only the unreadable username.
+    """
+    return f"{user.display_name} (@{user.name}, {user.id})"

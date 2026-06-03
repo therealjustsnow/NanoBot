@@ -377,7 +377,8 @@ class Moderation(commands.Cog):
 
         self.bot.last_banned[ctx.guild.id] = target.id
         log.info(
-            f"cban: {target} ({target.id}) by {ctx.author} in #{ctx.channel} / {ctx.guild} | days={days} timed={is_timed}"
+            f"cban: {h.user_log(target)} by {h.user_log(ctx.author)} "
+            f"in #{ctx.channel} / {ctx.guild} | days={days} timed={is_timed}"
         )
         if is_timed:
             await self._schedule_unban(ctx.guild.id, target.id, wait_secs)
@@ -477,7 +478,9 @@ class Moderation(commands.Cog):
             )
 
         self.bot.last_banned[ctx.guild.id] = target.id
-        log.info(f"ban: {target} ({target.id}) by {ctx.author} in {ctx.guild}")
+        log.info(
+            f"ban: {h.user_log(target)} by {h.user_log(ctx.author)} in {ctx.guild}"
+        )
         await ctx.reply(
             embed=h.ok(
                 f"**{target.display_name}** (`{target.id}`) permanently banned.\n📨 DM {'sent' if dm_sent else 'failed'}.",
@@ -619,7 +622,7 @@ class Moderation(commands.Cog):
             self._unban_tasks.pop(key, None)
             await db.remove_unban(key)
 
-        log.info(f"unban: {uid} by {ctx.author} in {ctx.guild}")
+        log.info(f"unban: {uid} by {h.user_log(ctx.author)} in {ctx.guild}")
         await ctx.reply(
             embed=h.ok(f"User `{uid}` has been unbanned.", "✅ Unbanned"),
             ephemeral=True,
@@ -697,7 +700,9 @@ class Moderation(commands.Cog):
                 ephemeral=True,
             )
 
-        log.info(f"kick: {target} ({target.id}) by {ctx.author} in {ctx.guild}")
+        log.info(
+            f"kick: {h.user_log(target)} by {h.user_log(ctx.author)} in {ctx.guild}"
+        )
         await ctx.reply(
             embed=h.ok(
                 f"**{target.display_name}** (`{target.id}`) kicked.\n📨 DM {'sent' if dm_sent else 'failed'}.",
@@ -1187,7 +1192,8 @@ class Moderation(commands.Cog):
             )
 
         log.info(
-            f"freeze: {target} ({target.id}) for {h.fmt_duration(secs)} by {ctx.author} in {ctx.guild}"
+            f"freeze: {h.user_log(target)} for {h.fmt_duration(secs)} "
+            f"by {h.user_log(ctx.author)} in {ctx.guild}"
         )
         desc = (
             f"**{target.display_name}** is frozen for **{h.fmt_duration(secs)}**."
@@ -1233,7 +1239,9 @@ class Moderation(commands.Cog):
             return await ctx.reply(
                 embed=h.err("I can't remove that timeout."), ephemeral=True
             )
-        log.info(f"unfreeze: {user} ({user.id}) by {ctx.author} in {ctx.guild}")
+        log.info(
+            f"unfreeze: {h.user_log(user)} by {h.user_log(ctx.author)} in {ctx.guild}"
+        )
         await ctx.reply(
             embed=h.ok(f"**{user.display_name}** has been unfrozen.", "🌡️ Unfrozen"),
             ephemeral=True,
@@ -1280,7 +1288,10 @@ class Moderation(commands.Cog):
                 embed=h.err("I don't have permission to assign that role."),
                 ephemeral=True,
             )
-        log.info(f"addrole: {role} → {user} ({user.id}) by {ctx.author} in {ctx.guild}")
+        log.info(
+            f"addrole: {role} → {h.user_log(user)} "
+            f"by {h.user_log(ctx.author)} in {ctx.guild}"
+        )
         await ctx.reply(
             embed=h.ok(
                 f"Gave **{role.name}** to **{user.display_name}**.", "🎭 Role Added"
@@ -1327,7 +1338,8 @@ class Moderation(commands.Cog):
                 ephemeral=True,
             )
         log.info(
-            f"removerole: {role} ← {user} ({user.id}) by {ctx.author} in {ctx.guild}"
+            f"removerole: {role} ← {h.user_log(user)} "
+            f"by {h.user_log(ctx.author)} in {ctx.guild}"
         )
         await ctx.reply(
             embed=h.ok(
@@ -1411,7 +1423,10 @@ class Moderation(commands.Cog):
             str(author),
             datetime.now(timezone.utc).isoformat(),
         )
-        log.info(f"note: #{count} added for {user} ({user.id}) by {author} in {guild}")
+        log.info(
+            f"note: #{count} added for {h.user_log(user)} "
+            f"by {h.user_log(author)} in {guild}"
+        )
         return h.ok(
             f"Note #{count} added for **{user.display_name}**.\n> {content[:300]}",
             "📜 Note Saved",
@@ -1443,7 +1458,8 @@ class Moderation(commands.Cog):
         count = await db.clear_notes(guild.id, user.id)
         if count:
             log.info(
-                f"clearnotes: {count} notes cleared for {user} by {author} in {guild}"
+                f"clearnotes: {count} notes cleared for {h.user_log(user)} "
+                f"by {h.user_log(author)} in {guild}"
             )
             return h.ok(
                 f"Cleared **{count}** note(s) for **{user.display_name}**.",
@@ -1677,7 +1693,8 @@ class Moderation(commands.Cog):
         self.bot.last_banned[ctx.guild.id] = target.id
         await self._schedule_unban(ctx.guild.id, target.id, wait_secs)
         log.info(
-            f"tempban: {target} ({target.id}) for {h.fmt_duration(wait_secs)} by {ctx.author} in {ctx.guild}"
+            f"tempban: {h.user_log(target)} for {h.fmt_duration(wait_secs)} "
+            f"by {h.user_log(ctx.author)} in {ctx.guild}"
         )
 
         await ctx.reply(
@@ -1799,7 +1816,7 @@ class Moderation(commands.Cog):
         await target.set_permissions(
             everyone, overwrite=ow, reason=f"hide by {ctx.author}"
         )
-        log.info(f"hide: #{target.name} by {ctx.author} in {ctx.guild}")
+        log.info(f"hide: #{target.name} by {h.user_log(ctx.author)} in {ctx.guild}")
         await ctx.reply(
             embed=h.ok(
                 f"{target.mention} is now **hidden** from @everyone. 🙈", "👁️ Hidden"
@@ -1842,7 +1859,7 @@ class Moderation(commands.Cog):
         await target.set_permissions(
             everyone, overwrite=ow, reason=f"unhide by {ctx.author}"
         )
-        log.info(f"unhide: #{target.name} by {ctx.author} in {ctx.guild}")
+        log.info(f"unhide: #{target.name} by {h.user_log(ctx.author)} in {ctx.guild}")
         await ctx.reply(
             embed=h.ok(
                 f"{target.mention} is now **visible** to @everyone. 👁️", "👁️ Unhidden"
@@ -1887,7 +1904,10 @@ class Moderation(commands.Cog):
                 ephemeral=True,
             )
 
-        log.info(f"echo: by {ctx.author} in #{target} / {ctx.guild}: {message[:100]}")
+        log.info(
+            f"echo: by {h.user_log(ctx.author)} in #{target} "
+            f"/ {ctx.guild}: {message[:100]}"
+        )
 
         if target != ctx.channel:
             await ctx.reply(
@@ -2097,7 +2117,10 @@ class Moderation(commands.Cog):
         e.set_footer(text=f"NanoBot · {user.name}")
         e.timestamp = now
         await ctx.reply(embed=e, ephemeral=True)
-        log.info(f"modcheck: {ctx.author} checked {user} ({user.id}) in {ctx.guild}")
+        log.info(
+            f"modcheck: {h.user_log(ctx.author)} checked "
+            f"{h.user_log(user)} in {ctx.guild}"
+        )
 
 
 async def setup(bot):

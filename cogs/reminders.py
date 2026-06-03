@@ -317,7 +317,7 @@ class Reminders(commands.Cog):
             ephemeral=True,
         )
         log.info(
-            f"Reminder {rid} set by {ctx.author} for {target} "
+            f"Reminder {rid} set by {h.user_log(ctx.author)} for {h.user_log(target)} "
             f"in {h.fmt_duration(secs)} via {'DM' if use_dm else 'channel'}"
         )
 
@@ -601,7 +601,7 @@ class Reminders(commands.Cog):
             ),
             ephemeral=True,
         )
-        log.info(f"Reminder {rid} (#{number}) cancelled by {ctx.author}")
+        log.info(f"Reminder {rid} (#{number}) cancelled by {h.user_log(ctx.author)}")
 
 
 # ── Registration ───────────────────────────────────────────────────────────────

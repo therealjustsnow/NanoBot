@@ -295,7 +295,7 @@ class Admin(commands.Cog):
 
         try:
             await self.bot.unload_extension(target)
-            log.info(f"Unloaded: {target} (by {ctx.author})")
+            log.info(f"Unloaded: {target} (by {h.user_log(ctx.author)})")
             await ctx.reply(
                 embed=h.ok(
                     f"Unloaded `{target}`.\n"
@@ -328,7 +328,7 @@ class Admin(commands.Cog):
     )
     async def shutdown(self, ctx: commands.Context):
         """Flush logs, send a goodbye embed, close the Discord connection cleanly."""
-        log.warning(f"Shutdown initiated by {ctx.author} ({ctx.author.id})")
+        log.warning(f"Shutdown initiated by {h.user_log(ctx.author)}")
 
         await ctx.reply(
             embed=h.ok(
@@ -357,7 +357,7 @@ class Admin(commands.Cog):
 
         Works with both `python main.py` and `python run.py`.
         """
-        log.warning(f"Restart initiated by {ctx.author} ({ctx.author.id})")
+        log.warning(f"Restart initiated by {h.user_log(ctx.author)}")
 
         await ctx.reply(
             embed=h.ok(
@@ -435,7 +435,7 @@ class Admin(commands.Cog):
             log.error(f"git pull failed (rc={result.returncode}): {git_output}")
             return await ctx.reply(embed=e)
 
-        log.info(f"git pull OK by {ctx.author}: {stdout[:200]}")
+        log.info(f"git pull OK by {h.user_log(ctx.author)}: {stdout[:200]}")
 
         # ── Step 2: reload all cogs ────────────────────────────────────────────
         reload_results = []
@@ -483,7 +483,7 @@ class Admin(commands.Cog):
             )
 
         log.info(
-            f"update complete: git_ok={git_ok}, reload_errors={had_errors}, by {ctx.author}"
+            f"update complete: git_ok={git_ok}, reload_errors={had_errors}, by {h.user_log(ctx.author)}"
         )
         await ctx.reply(embed=e)
 
@@ -514,7 +514,7 @@ class Admin(commands.Cog):
         """
         await ctx.defer()
 
-        log.warning(f"Upgrade initiated by {ctx.author} ({ctx.author.id})")
+        log.warning(f"Upgrade initiated by {h.user_log(ctx.author)}")
 
         # ── Step 1: git pull ───────────────────────────────────────────────────
         try:
@@ -548,7 +548,9 @@ class Admin(commands.Cog):
             )
             return await ctx.reply(embed=e)
 
-        log.info(f"upgrade: git pull OK by {ctx.author}: {git_stdout[:200]}")
+        log.info(
+            f"upgrade: git pull OK by {h.user_log(ctx.author)}: {git_stdout[:200]}"
+        )
 
         # ── Step 2: pip install (run in thread — can take 30s+) ───────────────
         pip_ok = False
@@ -612,7 +614,9 @@ class Admin(commands.Cog):
         await asyncio.sleep(0.5)
 
         subprocess.Popen([sys.executable] + sys.argv, cwd=_REPO_ROOT)
-        log.info(f"upgrade: spawned new process — shutting down (by {ctx.author})")
+        log.info(
+            f"upgrade: spawned new process — shutting down (by {h.user_log(ctx.author)})"
+        )
         await self.bot.close()
 
     # ══════════════════════════════════════════════════════════════════════════
@@ -682,7 +686,9 @@ class Admin(commands.Cog):
                     ephemeral=True,
                 )
 
-            log.info(f"Cleared guild commands for {guild_id} by {ctx.author}")
+            log.info(
+                f"Cleared guild commands for {guild_id} by {h.user_log(ctx.author)}"
+            )
             await ctx.reply(
                 embed=h.ok(
                     f"Cleared guild-specific commands from `{guild_id}`.\n"
@@ -731,7 +737,7 @@ class Admin(commands.Cog):
                 )
 
             log.info(
-                f"Guild sync to {parsed_guild_id}: {len(synced)} command(s) by {ctx.author}"
+                f"Guild sync to {parsed_guild_id}: {len(synced)} command(s) by {h.user_log(ctx.author)}"
             )
             await ctx.reply(
                 embed=h.ok(
@@ -755,7 +761,7 @@ class Admin(commands.Cog):
                 ephemeral=True,
             )
 
-        log.info(f"Global sync: {len(synced)} command(s) by {ctx.author}")
+        log.info(f"Global sync: {len(synced)} command(s) by {h.user_log(ctx.author)}")
         await ctx.reply(
             embed=h.ok(
                 f"Synced **{len(synced)}** slash command(s) globally.\n"
@@ -795,7 +801,7 @@ class Admin(commands.Cog):
         # Apply to the root logger (affects all NanoBot.* and discord.* loggers)
         numeric = getattr(logging, level)
         logging.getLogger().setLevel(numeric)
-        log.info(f"Log level changed to {level} by {ctx.author} ({ctx.author.id})")
+        log.info(f"Log level changed to {level} by {h.user_log(ctx.author)}")
 
         # Persist to config.ini and refresh bot.config.
         cfg_mod.set_value("log_level", level)
@@ -1089,7 +1095,7 @@ class Admin(commands.Cog):
             lines.append("All values validated cleanly.")
 
         log.info(
-            f"reloadconfig by {ctx.author} ({ctx.author.id}) — "
+            f"reloadconfig by {h.user_log(ctx.author)} — "
             f"{len(fatals)} fatal, {len(warns)} warning(s)"
         )
         await ctx.reply(
@@ -1280,9 +1286,7 @@ class Admin(commands.Cog):
         if hasattr(self.bot, "reload_config"):
             self.bot.reload_config()
 
-        log.info(
-            f"config set: [{section}] {key} changed by {ctx.author} ({ctx.author.id})"
-        )
+        log.info(f"config set: [{section}] {key} changed by {h.user_log(ctx.author)}")
         display = self._display(key, coerced)
         await ctx.reply(
             embed=h.ok(
@@ -1357,7 +1361,9 @@ class Admin(commands.Cog):
             view = ServersView(embeds=embeds, author=ctx.author, index=start_index)
             view.message = await ctx.send(embed=embeds[start_index], view=view)
 
-        log.info(f"servers: page {start_index + 1}/{total_pages} for {ctx.author}")
+        log.info(
+            f"servers: page {start_index + 1}/{total_pages} for {h.user_log(ctx.author)}"
+        )
 
 
 # ── Registration ───────────────────────────────────────────────────────────────

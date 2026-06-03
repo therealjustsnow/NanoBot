@@ -400,7 +400,7 @@ class AuditLog(commands.Cog):
         roles = [r.mention for r in member.roles if r != member.guild.default_role]
         e = discord.Embed(
             title="📤 Member Left",
-            description=f"**{member}** (`{member.id}`)",
+            description=h.user_display(member),
             color=h.GREY,
         )
         e.set_thumbnail(url=member.display_avatar.url)
@@ -418,7 +418,7 @@ class AuditLog(commands.Cog):
 
         e = discord.Embed(
             title="🔨 Member Banned",
-            description=f"**{user}** (`{user.id}`)",
+            description=h.user_display(user),
             color=h.RED,
         )
         e.set_thumbnail(url=user.display_avatar.url)
@@ -455,7 +455,7 @@ class AuditLog(commands.Cog):
 
         e = discord.Embed(
             title="🔓 Member Unbanned",
-            description=f"**{user}** (`{user.id}`)",
+            description=h.user_display(user),
             color=h.GREEN,
         )
         e.set_thumbnail(url=user.display_avatar.url)

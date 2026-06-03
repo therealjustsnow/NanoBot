@@ -27,6 +27,7 @@ from discord.ext import commands, tasks
 from utils import cache_db
 from utils import config as cfg_mod
 from utils import db
+from utils import helpers as h
 from utils import obs
 
 # ── Config (read once at module level so logging init can use it) ──────────────
@@ -518,7 +519,7 @@ class NanoBot(commands.Bot):
         guild_info = f"{ctx.guild.name} ({ctx.guild.id})" if ctx.guild else "DM"
         log.info(
             f"CMD  {ctx.command}  |  "
-            f"{ctx.author} ({ctx.author.id})  |  "
+            f"{h.user_log(ctx.author)}  |  "
             f"#{ctx.channel}  |  "
             f"{guild_info}"
         )
