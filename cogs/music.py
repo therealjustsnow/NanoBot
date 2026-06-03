@@ -43,6 +43,7 @@ Config ([music] section, all optional — see example_config.ini):
   music_ratelimit_cooldown / music_ratelimit_leave — 429 back-off behavior
   music_apl_prune_on_error — drop dead guild playlist entries on playback error (true)
   music_save_history    — keep per-guild played history (true)
+  music_metadata_lookup — fill missing artist via free iTunes Search API (true)
 
 Commands (hybrid — slash + prefix), category "🎵 Music":
   play / p          — queue a song or playlist (URL, Spotify link, or search)
@@ -234,6 +235,11 @@ def _fmt_time(seconds: float | int | None) -> str:
     return f"{mm}:{ss:02d}"
 
 
+def _ellipsize(text: str, limit: int) -> str:
+    """Trim `text` to `limit` chars, appending an ellipsis when shortened."""
+    return text if len(text) <= limit else text[: limit - 1] + "…"
+
+
 def _progress_bar(elapsed: float, total: float | None, length: int = 18) -> str:
     """Render a slider-style progress bar."""
     if not total:
@@ -278,6 +284,8 @@ class Track:
     # Set when the track has been predownloaded to a local file (not persisted).
     local_path: Optional[str] = None
     acodec: Optional[str] = None
+    # True once metadata enrichment has run for this track (not persisted).
+    meta_checked: bool = False
 
     def to_dict(self) -> dict:
         """Serialise the persistable fields (skips ephemeral download state)."""
@@ -629,7 +637,7 @@ class SearchView(discord.ui.View):
 
         options = []
         for i, t in enumerate(tracks):
-            label = t.title if len(t.title) <= 90 else t.title[:87] + "…"
+            label = _ellipsize(t.title, 90)
             options.append(
                 discord.SelectOption(
                     label=label,
@@ -1309,7 +1317,7 @@ class GuildPlayer:
         if self.queue:
             preview_lines = []
             for i, t in enumerate(self.queue[:NP_UP_NEXT], start=1):
-                title = t.title if len(t.title) <= 45 else t.title[:42] + "…"
+                title = _ellipsize(t.title, 45)
                 preview_lines.append(f"`{i}.` {title} `{_fmt_time(t.duration)}`")
             if len(self.queue) > NP_UP_NEXT:
                 preview_lines.append(f"_…and {len(self.queue) - NP_UP_NEXT} more_")
@@ -1339,7 +1347,7 @@ class GuildPlayer:
             start = page * PAGE_SIZE_QUEUE
             end = start + PAGE_SIZE_QUEUE
             for i, t in enumerate(self.queue[start:end], start=start + 1):
-                title = t.title if len(t.title) <= 55 else t.title[:52] + "…"
+                title = _ellipsize(t.title, 55)
                 lines.append(f"`{i:>2}.` {title} `{_fmt_time(t.duration)}`")
         total = sum(t.duration or 0 for t in self.queue)
         total_pages = max(1, math.ceil(len(self.queue) / PAGE_SIZE_QUEUE))
@@ -1353,6 +1361,9 @@ class GuildPlayer:
     async def _post_now_playing(self) -> None:
         if not self.text_channel:
             return
+        # Best-effort artist enrichment before the card renders. Never blocks
+        # playback (audio already started) and fails silently.
+        await self.cog._enrich_metadata(self.current)
         self.now_view = Controls(self)
         await self._retire_now_playing(delete=True)
         try:
@@ -1582,6 +1593,44 @@ class Music(commands.Cog):
 
     def save_history(self) -> bool:
         return self._cfg_bool("music_save_history", True)
+
+    def metadata_lookup(self) -> bool:
+        return self._cfg_bool("music_metadata_lookup", True)
+
+    # ── metadata enrichment (free, keyless iTunes Search API) ───────────────────
+    async def _enrich_metadata(self, track: Optional[Track]) -> None:
+        """Fill in a missing artist via Apple's iTunes Search API.
+
+        Free and keyless. Runs once per track, only when the artist is unknown,
+        and fails silently — purely cosmetic for the Now Playing card.
+        """
+        if not track or track.meta_checked:
+            return
+        track.meta_checked = True
+        if track.artist or not self.metadata_lookup():
+            return
+        query = _metadata_query(track.title)
+        if not query:
+            return
+        try:
+            params = {"term": query, "entity": "song", "limit": 5}
+            async with aiohttp.ClientSession() as session:
+                async with session.get(
+                    "https://itunes.apple.com/search",
+                    params=params,
+                    timeout=aiohttp.ClientTimeout(total=6),
+                ) as r:
+                    if r.status != 200:
+                        return
+                    # iTunes serves JSON as text/javascript — skip the type check.
+                    data = await r.json(content_type=None)
+        except Exception as exc:
+            log.debug("metadata lookup failed for '%s': %s", track.title, exc)
+            return
+        match = _pick_itunes_match(track.title, data.get("results") or [])
+        if match:
+            track.artist = match[0]
+            log.debug("metadata: '%s' → artist '%s'", track.title, match[0])
 
     # ── rate-limit back-off ────────────────────────────────────────────────────
     def _ratelimited(self) -> bool:
@@ -3949,6 +3998,38 @@ def _clean_artist(
     if cand_words and cand_words <= title_words:
         return None
     return cand
+
+
+def _metadata_query(title: str) -> str:
+    """Strip YouTube-title noise (brackets, 'feat.', 'Official Video', …) to a
+    clean search term for the music-metadata API."""
+    q = _LYRICS_NOISE.sub("", title)
+    return re.sub(r"\s+", " ", q).strip(" -·|")
+
+
+def _pick_itunes_match(title: str, results: list) -> Optional[tuple[str, str]]:
+    """Pick a confident (artist, track) from iTunes Search results for `title`.
+
+    Only accepts a result whose track name substantially overlaps the original
+    title (≥60% of its words appear in it) so an unrelated "closest" song is
+    never mislabelled onto the playing track. Returns None when nothing matches.
+    """
+    want = {w for w in re.findall(r"[a-z0-9]+", title.lower()) if len(w) > 1}
+    if not want:
+        return None
+    for item in results:
+        if not isinstance(item, dict):
+            continue
+        artist = (item.get("artistName") or "").strip()
+        track = (item.get("trackName") or "").strip()
+        if not artist or not track:
+            continue
+        track_words = {w for w in re.findall(r"[a-z0-9]+", track.lower()) if len(w) > 1}
+        if not track_words:
+            continue
+        if len(track_words & want) / len(track_words) >= 0.6:
+            return artist, track
+    return None
 
 
 def _split_artist_title(query: str) -> tuple[str, str]:

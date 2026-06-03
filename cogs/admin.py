@@ -1215,16 +1215,8 @@ class Admin(commands.Cog):
 
     @staticmethod
     def _display(key: str, val) -> str:
-        if val is None or val == "":
-            return "_(unset)_"
-        if key in cfg_mod.SENSITIVE_KEYS:
-            s = str(val)
-            return f"`{s[:4]}…{s[-2:]}`" if len(s) > 8 else "`***`"
-        # Truncate long strings (like groq_wyr_system) for readability.
-        s = str(val)
-        if len(s) > 120:
-            return f"`{s[:117]}…`"
-        return f"`{s}`"
+        masked = cfg_mod.mask_value(key, val)
+        return "_(unset)_" if masked == "(unset)" else f"`{masked}`"
 
     async def _config_show(self, ctx: commands.Context):
         cfg = cfg_mod.load()

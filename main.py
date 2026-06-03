@@ -224,6 +224,8 @@ class NanoBot(commands.Bot):
         # plays; when None the idle presence (manual override or auto-rotating
         # "Listening to /help | /<command>") is shown instead.
         self._music_activity: discord.BaseActivity | None = None
+        # Guard so the startup config dump prints once, not on every reconnect.
+        self._config_printed: bool = False
 
     def _spawn_bg(self, coro) -> None:
         task = asyncio.create_task(coro)
@@ -473,6 +475,14 @@ class NanoBot(commands.Bot):
             self._presence_loop.start()
         self.dispatch("restore_schedules")
         self._install_error_hooks()
+        # Print the active config LAST so it isn't buried under cog-load and
+        # gateway chatter. Once only — on_ready can re-fire on reconnect.
+        if not self._config_printed:
+            self._config_printed = True
+            log.info(
+                "⚙️ Active config (config.ini · secrets masked):\n%s",
+                cfg_mod.summary(self.config),
+            )
 
     async def on_command(self, ctx: commands.Context):
         self.commands_ran += 1

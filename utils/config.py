@@ -562,6 +562,13 @@ FIELDS: tuple[Field, ...] = (
         "Save per-server played-track history for the history command (true/false)",
     ),
     Field(
+        "music_metadata_lookup",
+        "music",
+        "bool",
+        True,
+        "Fill missing artist via the free iTunes Search API (true/false)",
+    ),
+    Field(
         "music_js_runtime_path",
         "music",
         "str",
@@ -581,6 +588,37 @@ SENSITIVE_KEYS: set[str] = {f.key for f in FIELDS if f.sensitive}
 _SCHEMA: dict[str, tuple[type | None, bool, str]] = {
     f.key: (_KIND_TYPE[f.kind], f.required, f.desc) for f in FIELDS
 }
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+#  Display helpers (shared by the !config command and the startup summary)
+# ══════════════════════════════════════════════════════════════════════════════
+def mask_value(key: str, val) -> str:
+    """Render a config value as a plain string, masking secrets and truncating.
+
+    Returns ``"(unset)"`` for blank values, a partially-obscured token for
+    SENSITIVE_KEYS, and a length-capped string otherwise. Callers that need
+    markdown (the !config command) wrap the result themselves.
+    """
+    if val is None or val == "":
+        return "(unset)"
+    s = str(val)
+    if key in SENSITIVE_KEYS:
+        return f"{s[:4]}…{s[-2:]}" if len(s) > 8 else "***"
+    return s if len(s) <= 120 else f"{s[:117]}…"
+
+
+def summary(cfg: dict) -> str:
+    """A grouped, secret-masked plaintext dump of the active config for logs."""
+    lines: list[str] = []
+    for section in SECTION_ORDER:
+        keys = [k for k, sec in SECTION_MAP.items() if sec == section]
+        if not keys:
+            continue
+        lines.append(f"[{section}]")
+        for k in keys:
+            lines.append(f"  {k} = {mask_value(k, cfg.get(k, DEFAULTS.get(k)))}")
+    return "\n".join(lines)
 
 
 # ══════════════════════════════════════════════════════════════════════════════
