@@ -43,6 +43,7 @@ Config ([music] section, all optional — see example_config.ini):
   music_ratelimit_cooldown / music_ratelimit_leave — 429 back-off behavior
   music_apl_prune_on_error — drop dead guild playlist entries on playback error (true)
   music_save_history    — keep per-guild played history (true)
+  music_metadata_lookup — fill missing artist via free iTunes Search API (true)
 
 Commands (hybrid — slash + prefix), category "🎵 Music":
   play / p          — queue a song or playlist (URL, Spotify link, or search)
@@ -234,6 +235,11 @@ def _fmt_time(seconds: float | int | None) -> str:
     return f"{mm}:{ss:02d}"
 
 
+def _ellipsize(text: str, limit: int) -> str:
+    """Trim `text` to `limit` chars, appending an ellipsis when shortened."""
+    return text if len(text) <= limit else text[: limit - 1] + "…"
+
+
 def _progress_bar(elapsed: float, total: float | None, length: int = 18) -> str:
     """Render a slider-style progress bar."""
     if not total:
@@ -272,10 +278,14 @@ class Track:
     uploader: Optional[str]
     requester_id: int
     requester_name: str
+    # Cleaned artist label (de-duplicated vs the title). May be None.
+    artist: Optional[str] = None
 
     # Set when the track has been predownloaded to a local file (not persisted).
     local_path: Optional[str] = None
     acodec: Optional[str] = None
+    # True once metadata enrichment has run for this track (not persisted).
+    meta_checked: bool = False
 
     def to_dict(self) -> dict:
         """Serialise the persistable fields (skips ephemeral download state)."""
@@ -286,6 +296,7 @@ class Track:
             "webpage_url": self.webpage_url,
             "thumbnail": self.thumbnail,
             "uploader": self.uploader,
+            "artist": self.artist,
             "requester_id": str(self.requester_id),
             "requester_name": self.requester_name,
         }
@@ -303,6 +314,7 @@ class Track:
             webpage_url=d.get("webpage_url") or "",
             thumbnail=d.get("thumbnail"),
             uploader=d.get("uploader"),
+            artist=d.get("artist"),
             requester_id=rid,
             requester_name=d.get("requester_name") or "Unknown",
         )
@@ -318,13 +330,18 @@ class Track:
         thumb = info.get("thumbnail")
         if not thumb and info.get("thumbnails"):
             thumb = info["thumbnails"][-1].get("url")
+        title = info.get("title") or "Unknown title"
+        uploader = info.get("uploader") or info.get("channel")
         return cls(
             query=webpage or info.get("title", ""),
-            title=info.get("title") or "Unknown title",
+            title=title,
             duration=info.get("duration"),
             webpage_url=webpage,
             thumbnail=thumb,
-            uploader=info.get("uploader") or info.get("channel"),
+            uploader=uploader,
+            artist=_clean_artist(
+                title, uploader, info.get("artist") or info.get("creator")
+            ),
             requester_id=requester_id,
             requester_name=requester_name,
         )
@@ -620,7 +637,7 @@ class SearchView(discord.ui.View):
 
         options = []
         for i, t in enumerate(tracks):
-            label = t.title if len(t.title) <= 90 else t.title[:87] + "…"
+            label = _ellipsize(t.title, 90)
             options.append(
                 discord.SelectOption(
                     label=label,
@@ -1281,7 +1298,9 @@ class GuildPlayer:
         e.set_author(name=f"{status} · Now Playing")
         if t.thumbnail:
             e.set_thumbnail(url=t.thumbnail)
-        if t.uploader:
+        if t.artist:
+            e.add_field(name="Artist", value=t.artist, inline=True)
+        elif t.uploader:
             e.add_field(name="Uploader", value=t.uploader, inline=True)
         e.add_field(name="Volume", value=f"{int(self.volume * 100)}%", inline=True)
         e.add_field(name="Loop", value=_LOOP_LABEL[self.loop], inline=True)
@@ -1298,7 +1317,7 @@ class GuildPlayer:
         if self.queue:
             preview_lines = []
             for i, t in enumerate(self.queue[:NP_UP_NEXT], start=1):
-                title = t.title if len(t.title) <= 45 else t.title[:42] + "…"
+                title = _ellipsize(t.title, 45)
                 preview_lines.append(f"`{i}.` {title} `{_fmt_time(t.duration)}`")
             if len(self.queue) > NP_UP_NEXT:
                 preview_lines.append(f"_…and {len(self.queue) - NP_UP_NEXT} more_")
@@ -1328,7 +1347,7 @@ class GuildPlayer:
             start = page * PAGE_SIZE_QUEUE
             end = start + PAGE_SIZE_QUEUE
             for i, t in enumerate(self.queue[start:end], start=start + 1):
-                title = t.title if len(t.title) <= 55 else t.title[:52] + "…"
+                title = _ellipsize(t.title, 55)
                 lines.append(f"`{i:>2}.` {title} `{_fmt_time(t.duration)}`")
         total = sum(t.duration or 0 for t in self.queue)
         total_pages = max(1, math.ceil(len(self.queue) / PAGE_SIZE_QUEUE))
@@ -1342,6 +1361,9 @@ class GuildPlayer:
     async def _post_now_playing(self) -> None:
         if not self.text_channel:
             return
+        # Best-effort artist enrichment before the card renders. Never blocks
+        # playback (audio already started) and fails silently.
+        await self.cog._enrich_metadata(self.current)
         self.now_view = Controls(self)
         await self._retire_now_playing(delete=True)
         try:
@@ -1572,6 +1594,44 @@ class Music(commands.Cog):
     def save_history(self) -> bool:
         return self._cfg_bool("music_save_history", True)
 
+    def metadata_lookup(self) -> bool:
+        return self._cfg_bool("music_metadata_lookup", True)
+
+    # ── metadata enrichment (free, keyless iTunes Search API) ───────────────────
+    async def _enrich_metadata(self, track: Optional[Track]) -> None:
+        """Fill in a missing artist via Apple's iTunes Search API.
+
+        Free and keyless. Runs once per track, only when the artist is unknown,
+        and fails silently — purely cosmetic for the Now Playing card.
+        """
+        if not track or track.meta_checked:
+            return
+        track.meta_checked = True
+        if track.artist or not self.metadata_lookup():
+            return
+        query = _metadata_query(track.title)
+        if not query:
+            return
+        try:
+            params = {"term": query, "entity": "song", "limit": 5}
+            async with aiohttp.ClientSession() as session:
+                async with session.get(
+                    "https://itunes.apple.com/search",
+                    params=params,
+                    timeout=aiohttp.ClientTimeout(total=6),
+                ) as r:
+                    if r.status != 200:
+                        return
+                    # iTunes serves JSON as text/javascript — skip the type check.
+                    data = await r.json(content_type=None)
+        except Exception as exc:
+            log.debug("metadata lookup failed for '%s': %s", track.title, exc)
+            return
+        match = _pick_itunes_match(track.title, data.get("results") or [])
+        if match:
+            track.artist = match[0]
+            log.debug("metadata: '%s' → artist '%s'", track.title, match[0])
+
     # ── rate-limit back-off ────────────────────────────────────────────────────
     def _ratelimited(self) -> bool:
         return time.time() < self._ratelimit_until
@@ -1582,26 +1642,52 @@ class Music(commands.Cog):
     def _note_ratelimit(self, exc: Exception) -> bool:
         """If `exc` looks like a YouTube rate-limit, start a cooldown. Returns True."""
         text = str(exc).lower()
-        if "429" not in text and "too many requests" not in text and "rate" not in text:
+        signals = ("429", "403", "too many requests", "forbidden", "rate")
+        if not any(s in text for s in signals):
             return False
         cooldown = self.ratelimit_cooldown()
         if cooldown:
             self._ratelimit_until = time.time() + cooldown
             log.warning("yt-dlp rate-limited — backing off %ds", cooldown)
             if self.ratelimit_leave():
+                mins = max(1, cooldown // 60)
                 for player in list(self.players.values()):
+                    # Notify the last control-panel channel before disconnecting
+                    # so the server knows why the music stopped. Capture the
+                    # channel now — destroy() may clear it concurrently.
+                    self._spawn_bg(
+                        self._notify_ratelimit_leave(player.text_channel, mins)
+                    )
                     self._spawn_bg(player.destroy(reason="rate-limited"))
         return True
 
-    # ── presence: "Watching <song>" while playing, else watching the server ─────
+    async def _notify_ratelimit_leave(self, channel, mins: int) -> None:
+        """Tell a guild's last control-panel channel we left due to a rate-limit."""
+        if not channel:
+            return
+        try:
+            await channel.send(
+                embed=h.warn(
+                    "YouTube rate-limited me (HTTP 429/403), so I left the voice "
+                    f"channel to cool down. Try again in about **{mins} min**.",
+                    "⏳ Music Paused — Rate-Limited",
+                )
+            )
+        except Exception as exc:
+            log.debug("Could not send rate-limit notice: %s", exc)
+
+    # ── presence: "Watching <song>" while playing, else the bot's idle status ───
     # Discord bot presence is account-global (there's no per-guild activity API),
     # so with multiple servers playing at once this shows the first one found.
+    # The activity is handed to the bot's presence manager, which falls back to
+    # the rotating idle status when nothing is playing.
     async def _refresh_presence(self) -> None:
         track = None
         for player in self.players.values():
             if player.current:
                 track = player.current
                 break
+        activity = None
         if track:
             tmpl = self.status_template()
             text = tmpl.replace("{title}", track.title) if tmpl else track.title
@@ -1615,14 +1701,14 @@ class Music(commands.Cog):
                 activity = discord.Activity(
                     type=discord.ActivityType.watching, name=text[:128]
                 )
-        else:
-            activity = discord.Activity(
-                type=discord.ActivityType.watching, name="over the server 👁️"
-            )
-        try:
-            await self.bot.change_presence(activity=activity)
-        except Exception:
-            pass
+        setter = getattr(self.bot, "set_music_activity", None)
+        if setter:
+            setter(activity)
+        else:  # pragma: no cover — fallback if the bot lacks the helper
+            try:
+                await self.bot.change_presence(activity=activity)
+            except Exception:
+                pass
 
     # ── song blocklist ──────────────────────────────────────────────────────────
     async def _filter_blocked_songs(
@@ -1917,6 +2003,7 @@ class Music(commands.Cog):
                     webpage_url=url,
                     thumbnail=_spotify_cover(item) or default_cover,
                     uploader=subtitle or "Spotify",
+                    artist=subtitle or None,
                     requester_id=requester_id,
                     requester_name=requester_name,
                 )
@@ -3880,6 +3967,68 @@ def _spotify_cover(obj: dict) -> Optional[str]:
     sources = art.get("sources") if isinstance(art, dict) else None
     if sources:
         return sources[-1].get("url")
+    return None
+
+
+def _clean_artist(
+    title: str, uploader: Optional[str], artist: Optional[str] = None
+) -> Optional[str]:
+    """Best-effort artist label, de-duplicated against the title.
+
+    Prefers an explicit artist tag (YouTube Music supplies ``artist``/``creator``),
+    else falls back to the channel/uploader with common noise ("- Topic", "VEVO",
+    "Official …") stripped. Returns ``None`` when the result is empty or every
+    meaningful word already appears in the title — so the Now Playing card never
+    shows the same words twice (e.g. uploader "Eminem" alongside title
+    "Eminem - Godzilla").
+    """
+    cand = (artist or uploader or "").strip()
+    if not cand:
+        return None
+    # Strip channel-name noise that isn't really an artist.
+    cand = re.sub(r"\s*-\s*topic\s*$", "", cand, flags=re.IGNORECASE)
+    cand = re.sub(r"\s*vevo\s*$", "", cand, flags=re.IGNORECASE)
+    cand = re.sub(r"\s*-\s*official.*$", "", cand, flags=re.IGNORECASE)
+    cand = re.sub(r"\bofficial\b", "", cand, flags=re.IGNORECASE)
+    cand = re.sub(r"\s+", " ", cand).strip(" -·|")
+    if not cand:
+        return None
+    title_words = {w for w in re.findall(r"[a-z0-9]+", title.lower()) if len(w) > 1}
+    cand_words = {w for w in re.findall(r"[a-z0-9]+", cand.lower()) if len(w) > 1}
+    if cand_words and cand_words <= title_words:
+        return None
+    return cand
+
+
+def _metadata_query(title: str) -> str:
+    """Strip YouTube-title noise (brackets, 'feat.', 'Official Video', …) to a
+    clean search term for the music-metadata API."""
+    q = _LYRICS_NOISE.sub("", title)
+    return re.sub(r"\s+", " ", q).strip(" -·|")
+
+
+def _pick_itunes_match(title: str, results: list) -> Optional[tuple[str, str]]:
+    """Pick a confident (artist, track) from iTunes Search results for `title`.
+
+    Only accepts a result whose track name substantially overlaps the original
+    title (≥60% of its words appear in it) so an unrelated "closest" song is
+    never mislabelled onto the playing track. Returns None when nothing matches.
+    """
+    want = {w for w in re.findall(r"[a-z0-9]+", title.lower()) if len(w) > 1}
+    if not want:
+        return None
+    for item in results:
+        if not isinstance(item, dict):
+            continue
+        artist = (item.get("artistName") or "").strip()
+        track = (item.get("trackName") or "").strip()
+        if not artist or not track:
+            continue
+        track_words = {w for w in re.findall(r"[a-z0-9]+", track.lower()) if len(w) > 1}
+        if not track_words:
+            continue
+        if len(track_words & want) / len(track_words) >= 0.6:
+            return artist, track
     return None
 
 

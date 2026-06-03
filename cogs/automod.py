@@ -685,13 +685,32 @@ class AutoMod(commands.Cog):
         )
         self._invalidate(interaction.guild_id)
         if channel:
-            await interaction.response.send_message(
-                embed=h.ok(
-                    f"AutoMod action logs will be sent to {channel.mention}.",
-                    "🛡️ AutoMod Log Channel Set",
-                ),
-                ephemeral=True,
+            # Warn now if the bot can't actually post there — otherwise the first
+            # time anyone notices is a silently-dropped AutoMod log.
+            perms = channel.permissions_for(interaction.guild.me)
+            missing = [
+                name
+                for name, has in (
+                    ("View Channel", perms.view_channel),
+                    ("Send Messages", perms.send_messages),
+                    ("Embed Links", perms.embed_links),
+                )
+                if not has
+            ]
+            body = f"AutoMod action logs will be sent to {channel.mention}."
+            if missing:
+                body += (
+                    "\n\n⚠️ **Heads up:** I'm missing "
+                    + ", ".join(f"**{m}**" for m in missing)
+                    + f" in {channel.mention}, so logs there will fail. "
+                    "Grant those permissions or pick another channel."
+                )
+            embed = (
+                h.warn(body, "🛡️ AutoMod Log Channel Set")
+                if missing
+                else h.ok(body, "🛡️ AutoMod Log Channel Set")
             )
+            await interaction.response.send_message(embed=embed, ephemeral=True)
         else:
             await interaction.response.send_message(
                 embed=h.ok(

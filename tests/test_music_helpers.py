@@ -28,6 +28,10 @@ _PURE_FUNCTIONS = {
     "_parse_timestamp",
     "_spotify_cover",
     "_split_artist_title",
+    "_clean_artist",
+    "_ellipsize",
+    "_metadata_query",
+    "_pick_itunes_match",
 }
 
 # Grab module-level assignments that pure functions depend on
@@ -65,6 +69,10 @@ _progress_bar = _ns["_progress_bar"]
 _parse_timestamp = _ns["_parse_timestamp"]
 _spotify_cover = _ns["_spotify_cover"]
 _split_artist_title = _ns["_split_artist_title"]
+_clean_artist = _ns["_clean_artist"]
+_ellipsize = _ns["_ellipsize"]
+_metadata_query = _ns["_metadata_query"]
+_pick_itunes_match = _ns["_pick_itunes_match"]
 
 
 # ---------------------------------------------------------------------------
@@ -344,4 +352,128 @@ class TestExtractYtid:
                 "https://www.youtube.com/watch?v=dQw4w9WgXcQ&list=RDdQw4w9WgXcQ"
             )
             == "dQw4w9WgXcQ"
+        )
+
+
+# ---------------------------------------------------------------------------
+# _clean_artist
+# ---------------------------------------------------------------------------
+
+
+class TestCleanArtist:
+    def test_explicit_artist_preferred(self):
+        # YouTube Music supplies a clean artist tag — use it over the channel.
+        assert _clean_artist("Godzilla", "EminemVEVO", "Eminem") == "Eminem"
+
+    def test_uploader_fallback(self):
+        assert _clean_artist("Some Song", "Lyrical Lemonade") == "Lyrical Lemonade"
+
+    def test_redundant_uploader_dropped(self):
+        # Uploader words already in the title → no duplicate Artist field.
+        assert _clean_artist("Eminem - Godzilla", "Eminem") is None
+
+    def test_topic_suffix_stripped(self):
+        assert _clean_artist("Godzilla", "Eminem - Topic") == "Eminem"
+
+    def test_vevo_suffix_stripped(self):
+        assert _clean_artist("Godzilla", "EminemVEVO") == "Eminem"
+
+    def test_official_marker_stripped(self):
+        assert _clean_artist("Blinding Lights", "The Weeknd - Official") == "The Weeknd"
+
+    def test_distinct_uploader_kept(self):
+        # MV uploader differs from the song's artist — keep it (best we can do).
+        assert (
+            _clean_artist("Eminem - Godzilla ft. Juice WRLD", "Lyrical Lemonade")
+            == "Lyrical Lemonade"
+        )
+
+    def test_empty_inputs(self):
+        assert _clean_artist("Some Song", None) is None
+        assert _clean_artist("Some Song", "", None) is None
+
+    def test_only_noise_becomes_none(self):
+        assert _clean_artist("Some Song", "Official") is None
+
+
+# ---------------------------------------------------------------------------
+# _ellipsize
+# ---------------------------------------------------------------------------
+
+
+class TestEllipsize:
+    def test_under_limit_unchanged(self):
+        assert _ellipsize("short", 10) == "short"
+
+    def test_exactly_limit_unchanged(self):
+        assert _ellipsize("12345", 5) == "12345"
+
+    def test_over_limit_truncated_with_ellipsis(self):
+        out = _ellipsize("abcdefgh", 5)
+        assert out == "abcd…"
+        assert len(out) == 5
+
+    def test_empty(self):
+        assert _ellipsize("", 5) == ""
+
+
+# ---------------------------------------------------------------------------
+# _metadata_query
+# ---------------------------------------------------------------------------
+
+
+class TestMetadataQuery:
+    def test_strips_parens_and_feat(self):
+        assert _metadata_query("Godzilla (Official Video) ft. Juice WRLD") == "Godzilla"
+
+    def test_strips_brackets(self):
+        assert _metadata_query("Blinding Lights [Official Audio]") == "Blinding Lights"
+
+    def test_strips_lyrics_marker(self):
+        assert _metadata_query("Eminem - Godzilla Lyrics") == "Eminem - Godzilla"
+
+    def test_plain_title_unchanged(self):
+        assert _metadata_query("Some Song") == "Some Song"
+
+
+# ---------------------------------------------------------------------------
+# _pick_itunes_match
+# ---------------------------------------------------------------------------
+
+
+class TestPickItunesMatch:
+    def test_confident_match(self):
+        results = [{"artistName": "Eminem", "trackName": "Godzilla"}]
+        assert _pick_itunes_match("Eminem - Godzilla", results) == (
+            "Eminem",
+            "Godzilla",
+        )
+
+    def test_rejects_unrelated(self):
+        results = [{"artistName": "Adele", "trackName": "Hello"}]
+        assert _pick_itunes_match("Eminem - Godzilla", results) is None
+
+    def test_skips_incomplete_then_takes_good(self):
+        results = [
+            {"artistName": "", "trackName": "Godzilla"},
+            {"artistName": "Eminem", "trackName": "Godzilla"},
+        ]
+        assert _pick_itunes_match("Eminem Godzilla MV", results) == (
+            "Eminem",
+            "Godzilla",
+        )
+
+    def test_empty_results(self):
+        assert _pick_itunes_match("Eminem - Godzilla", []) is None
+
+    def test_empty_title(self):
+        results = [{"artistName": "Eminem", "trackName": "Godzilla"}]
+        assert _pick_itunes_match("", results) is None
+
+    def test_partial_track_overlap_accepted(self):
+        # 2 of 3 track words present (≥60%) → accepted.
+        results = [{"artistName": "The Weeknd", "trackName": "Blinding Lights Remix"}]
+        assert _pick_itunes_match("Blinding Lights live", results) == (
+            "The Weeknd",
+            "Blinding Lights Remix",
         )
