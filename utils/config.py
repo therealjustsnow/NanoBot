@@ -593,23 +593,28 @@ _SCHEMA: dict[str, tuple[type | None, bool, str]] = {
 # ══════════════════════════════════════════════════════════════════════════════
 #  Display helpers (shared by the !config command and the startup summary)
 # ══════════════════════════════════════════════════════════════════════════════
-def mask_value(key: str, val) -> str:
-    """Render a config value as a plain string, masking secrets and truncating.
+def mask_value(key: str, val, mask: bool = True) -> str:
+    """Render a config value as a plain string, optionally masking secrets.
 
     Returns ``"(unset)"`` for blank values, a partially-obscured token for
-    SENSITIVE_KEYS, and a length-capped string otherwise. Callers that need
-    markdown (the !config command) wrap the result themselves.
+    SENSITIVE_KEYS (when ``mask`` is True), and a length-capped string otherwise.
+    Callers that need markdown (the !config command) wrap the result themselves.
     """
     if val is None or val == "":
         return "(unset)"
     s = str(val)
-    if key in SENSITIVE_KEYS:
+    if mask and key in SENSITIVE_KEYS:
         return f"{s[:4]}…{s[-2:]}" if len(s) > 8 else "***"
     return s if len(s) <= 120 else f"{s[:117]}…"
 
 
-def summary(cfg: dict) -> str:
-    """A grouped, secret-masked plaintext dump of the active config for logs."""
+def summary(cfg: dict, mask: bool = True) -> str:
+    """Grouped plaintext dump of the active config.
+
+    ``mask=True`` (default) obscures secrets — use it for anything that leaves
+    the host (the !config command, log files). ``mask=False`` shows everything
+    in the clear and is only safe for the local terminal.
+    """
     lines: list[str] = []
     for section in SECTION_ORDER:
         keys = [k for k, sec in SECTION_MAP.items() if sec == section]
@@ -617,7 +622,7 @@ def summary(cfg: dict) -> str:
             continue
         lines.append(f"[{section}]")
         for k in keys:
-            lines.append(f"  {k} = {mask_value(k, cfg.get(k, DEFAULTS.get(k)))}")
+            lines.append(f"  {k} = {mask_value(k, cfg.get(k, DEFAULTS.get(k)), mask)}")
     return "\n".join(lines)
 
 

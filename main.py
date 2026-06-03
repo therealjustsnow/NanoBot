@@ -475,13 +475,19 @@ class NanoBot(commands.Bot):
             self._presence_loop.start()
         self.dispatch("restore_schedules")
         self._install_error_hooks()
-        # Print the active config LAST so it isn't buried under cog-load and
+        # Dump the active config LAST so it isn't buried under cog-load and
         # gateway chatter. Once only — on_ready can re-fire on reconnect.
+        # Printed to stdout (not the logger) and UNMASKED: it's for the local
+        # terminal, where only the host operator can see it. Routing it through
+        # the logger would copy secrets into the rotating logs/nanobot.log file
+        # (and expose them via the owner `!logs` command), so we don't.
         if not self._config_printed:
             self._config_printed = True
-            log.info(
-                "⚙️ Active config (config.ini · secrets masked):\n%s",
-                cfg_mod.summary(self.config),
+            print(
+                "\n⚙️ Active config (config.ini):\n"
+                + cfg_mod.summary(self.config, mask=False)
+                + "\n",
+                flush=True,
             )
 
     async def on_command(self, ctx: commands.Context):

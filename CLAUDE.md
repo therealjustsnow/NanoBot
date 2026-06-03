@@ -145,7 +145,7 @@ Live editing:
 * `!reloadconfig` — re-reads `config.ini` from disk.
 * `!config show|get|set|unset …` — DM-only inspect/edit. Secrets (token, API keys, webhook secret) are always masked when echoed back.
 
-On startup the active config is logged **last** (end of `on_ready`, once) so it isn't buried under cog-load/gateway output. Both the startup dump and `!config show`/`get` mask secrets via the shared `config.mask_value()` / `config.summary()` helpers.
+On startup the active config is printed **last** (end of `on_ready`, once) so it isn't buried under cog-load/gateway output. It goes to stdout (not the logger) and is **unmasked** — terminal-only for the host operator; routing it through the logger would copy secrets into the rotating `logs/nanobot.log` (and expose them via `!logs`). `!config show`/`get` stay masked. Both paths share `config.summary()` / `config.mask_value()` (which take a `mask` flag).
 
 Logs rotate at 50 KB, 5 backups, written to `logs/nanobot.log`. Each line carries a short correlation id (`[abcd1234]`) shared by the start/completion/error records of one command invocation, so a single command's trace is greppable. When `log_events_jsonl` is on (default), structured command-lifecycle events (`command.start/ok/err`, `slash.start/ok/err` with `dur_ms`, user, guild) are also written to `logs/events.jsonl` (one JSON object per line, rotating). Correlation/timing helpers live in `utils/obs.py`.
 
