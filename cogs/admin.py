@@ -14,6 +14,7 @@ Commands:
   shutdown           — graceful shutdown (flushes logs, closes connection)
   restart            — graceful shutdown then re-exec the process
   setloglevel <lvl>  — change log level live and persist to config.ini
+  status [text|clear]— set the idle presence text (or clear to auto-rotate)
   logs [lines]       — tail the log file right in Discord
   scrape             — manually trigger the daily content cache scrape
   cachestats         — show cache DB statistics (FML, WYR, images)
@@ -816,6 +817,58 @@ class Admin(commands.Cog):
                 "📋 Log Level Updated",
             )
         )
+
+    # ══════════════════════════════════════════════════════════════════════════
+    #  status
+    # ══════════════════════════════════════════════════════════════════════════
+    @commands.command(
+        name="status",
+        aliases=["setstatus", "presence"],
+        help=(
+            "Set the bot's idle presence text (owner only).\n\n"
+            "Usage:\n"
+            "  !status <text>   → show 'Listening to <text>' while idle\n"
+            "  !status clear    → resume the auto-rotating /help | /<command> status\n\n"
+            "The override persists across restarts (saved to config.ini). While "
+            "music is playing, the Now Playing status still takes priority."
+        ),
+    )
+    async def status(self, ctx: commands.Context, *, text: Optional[str] = None):
+        clearing = text is None or text.strip().lower() in ("clear", "reset", "off")
+        new_val = None if clearing else text.strip()
+
+        # Persist + apply live.
+        self.bot.manual_status = new_val
+        cfg_mod.set_value("idle_status_message", new_val or "")
+        if hasattr(self.bot, "reload_config"):
+            # Keep bot.config in sync without clobbering the value we just set.
+            self.bot.config["idle_status_message"] = new_val or ""
+        if hasattr(self.bot, "apply_presence"):
+            await self.bot.apply_presence()
+
+        log.info(
+            "Idle status %s by %s (%s)",
+            "cleared" if clearing else f"set to {new_val!r}",
+            ctx.author,
+            ctx.author.id,
+        )
+
+        if clearing:
+            await ctx.reply(
+                embed=h.ok(
+                    "Idle status cleared. Resuming the auto-rotating "
+                    "**Listening to /help | /<command>** status.",
+                    "🟢 Status Reset",
+                )
+            )
+        else:
+            await ctx.reply(
+                embed=h.ok(
+                    f"Idle status set to **Listening to {new_val}**.\n"
+                    "Saved to `config.ini`. Music playback still overrides it.",
+                    "🟢 Status Updated",
+                )
+            )
 
     # ══════════════════════════════════════════════════════════════════════════
     #  logs

@@ -28,6 +28,7 @@ _PURE_FUNCTIONS = {
     "_parse_timestamp",
     "_spotify_cover",
     "_split_artist_title",
+    "_clean_artist",
 }
 
 # Grab module-level assignments that pure functions depend on
@@ -65,6 +66,7 @@ _progress_bar = _ns["_progress_bar"]
 _parse_timestamp = _ns["_parse_timestamp"]
 _spotify_cover = _ns["_spotify_cover"]
 _split_artist_title = _ns["_split_artist_title"]
+_clean_artist = _ns["_clean_artist"]
 
 
 # ---------------------------------------------------------------------------
@@ -345,3 +347,44 @@ class TestExtractYtid:
             )
             == "dQw4w9WgXcQ"
         )
+
+
+# ---------------------------------------------------------------------------
+# _clean_artist
+# ---------------------------------------------------------------------------
+
+
+class TestCleanArtist:
+    def test_explicit_artist_preferred(self):
+        # YouTube Music supplies a clean artist tag — use it over the channel.
+        assert _clean_artist("Godzilla", "EminemVEVO", "Eminem") == "Eminem"
+
+    def test_uploader_fallback(self):
+        assert _clean_artist("Some Song", "Lyrical Lemonade") == "Lyrical Lemonade"
+
+    def test_redundant_uploader_dropped(self):
+        # Uploader words already in the title → no duplicate Artist field.
+        assert _clean_artist("Eminem - Godzilla", "Eminem") is None
+
+    def test_topic_suffix_stripped(self):
+        assert _clean_artist("Godzilla", "Eminem - Topic") == "Eminem"
+
+    def test_vevo_suffix_stripped(self):
+        assert _clean_artist("Godzilla", "EminemVEVO") == "Eminem"
+
+    def test_official_marker_stripped(self):
+        assert _clean_artist("Blinding Lights", "The Weeknd - Official") == "The Weeknd"
+
+    def test_distinct_uploader_kept(self):
+        # MV uploader differs from the song's artist — keep it (best we can do).
+        assert (
+            _clean_artist("Eminem - Godzilla ft. Juice WRLD", "Lyrical Lemonade")
+            == "Lyrical Lemonade"
+        )
+
+    def test_empty_inputs(self):
+        assert _clean_artist("Some Song", None) is None
+        assert _clean_artist("Some Song", "", None) is None
+
+    def test_only_noise_becomes_none(self):
+        assert _clean_artist("Some Song", "Official") is None

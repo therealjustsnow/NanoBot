@@ -8,7 +8,8 @@ For backwards compatibility a legacy `config.json` is auto-migrated on first
 load — the old file is renamed to `config.json.bak` after migration.
 
 Sections:
-    [bot]      token, default_prefix, owner_id, error_channel_id
+    [bot]      token, default_prefix, owner_id, error_channel_id,
+               idle_status_message
     [logging]  log_level, log_http, log_events_jsonl
     [votes]    top.gg / DBL / discord.bots.gg tokens, webhook port/secret,
                webhook_allowed_ips
@@ -244,6 +245,13 @@ FIELDS: tuple[Field, ...] = (
         None,
         "Channel ID to receive Python warnings and unhandled asyncio errors (int or blank)",
         validator=_v_error_channel_id,
+    ),
+    Field(
+        "idle_status_message",
+        "bot",
+        "str",
+        None,
+        "Manual idle presence text (blank = auto-rotate 'Listening to /help | /<command>')",
     ),
     # ── [logging] ──
     Field(

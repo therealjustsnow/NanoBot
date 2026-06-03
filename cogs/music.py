@@ -272,6 +272,8 @@ class Track:
     uploader: Optional[str]
     requester_id: int
     requester_name: str
+    # Cleaned artist label (de-duplicated vs the title). May be None.
+    artist: Optional[str] = None
 
     # Set when the track has been predownloaded to a local file (not persisted).
     local_path: Optional[str] = None
@@ -286,6 +288,7 @@ class Track:
             "webpage_url": self.webpage_url,
             "thumbnail": self.thumbnail,
             "uploader": self.uploader,
+            "artist": self.artist,
             "requester_id": str(self.requester_id),
             "requester_name": self.requester_name,
         }
@@ -303,6 +306,7 @@ class Track:
             webpage_url=d.get("webpage_url") or "",
             thumbnail=d.get("thumbnail"),
             uploader=d.get("uploader"),
+            artist=d.get("artist"),
             requester_id=rid,
             requester_name=d.get("requester_name") or "Unknown",
         )
@@ -318,13 +322,18 @@ class Track:
         thumb = info.get("thumbnail")
         if not thumb and info.get("thumbnails"):
             thumb = info["thumbnails"][-1].get("url")
+        title = info.get("title") or "Unknown title"
+        uploader = info.get("uploader") or info.get("channel")
         return cls(
             query=webpage or info.get("title", ""),
-            title=info.get("title") or "Unknown title",
+            title=title,
             duration=info.get("duration"),
             webpage_url=webpage,
             thumbnail=thumb,
-            uploader=info.get("uploader") or info.get("channel"),
+            uploader=uploader,
+            artist=_clean_artist(
+                title, uploader, info.get("artist") or info.get("creator")
+            ),
             requester_id=requester_id,
             requester_name=requester_name,
         )
@@ -1281,7 +1290,9 @@ class GuildPlayer:
         e.set_author(name=f"{status} · Now Playing")
         if t.thumbnail:
             e.set_thumbnail(url=t.thumbnail)
-        if t.uploader:
+        if t.artist:
+            e.add_field(name="Artist", value=t.artist, inline=True)
+        elif t.uploader:
             e.add_field(name="Uploader", value=t.uploader, inline=True)
         e.add_field(name="Volume", value=f"{int(self.volume * 100)}%", inline=True)
         e.add_field(name="Loop", value=_LOOP_LABEL[self.loop], inline=True)
@@ -1582,26 +1593,52 @@ class Music(commands.Cog):
     def _note_ratelimit(self, exc: Exception) -> bool:
         """If `exc` looks like a YouTube rate-limit, start a cooldown. Returns True."""
         text = str(exc).lower()
-        if "429" not in text and "too many requests" not in text and "rate" not in text:
+        signals = ("429", "403", "too many requests", "forbidden", "rate")
+        if not any(s in text for s in signals):
             return False
         cooldown = self.ratelimit_cooldown()
         if cooldown:
             self._ratelimit_until = time.time() + cooldown
             log.warning("yt-dlp rate-limited — backing off %ds", cooldown)
             if self.ratelimit_leave():
+                mins = max(1, cooldown // 60)
                 for player in list(self.players.values()):
+                    # Notify the last control-panel channel before disconnecting
+                    # so the server knows why the music stopped. Capture the
+                    # channel now — destroy() may clear it concurrently.
+                    self._spawn_bg(
+                        self._notify_ratelimit_leave(player.text_channel, mins)
+                    )
                     self._spawn_bg(player.destroy(reason="rate-limited"))
         return True
 
-    # ── presence: "Watching <song>" while playing, else watching the server ─────
+    async def _notify_ratelimit_leave(self, channel, mins: int) -> None:
+        """Tell a guild's last control-panel channel we left due to a rate-limit."""
+        if not channel:
+            return
+        try:
+            await channel.send(
+                embed=h.warn(
+                    "YouTube rate-limited me (HTTP 429/403), so I left the voice "
+                    f"channel to cool down. Try again in about **{mins} min**.",
+                    "⏳ Music Paused — Rate-Limited",
+                )
+            )
+        except Exception as exc:
+            log.debug("Could not send rate-limit notice: %s", exc)
+
+    # ── presence: "Watching <song>" while playing, else the bot's idle status ───
     # Discord bot presence is account-global (there's no per-guild activity API),
     # so with multiple servers playing at once this shows the first one found.
+    # The activity is handed to the bot's presence manager, which falls back to
+    # the rotating idle status when nothing is playing.
     async def _refresh_presence(self) -> None:
         track = None
         for player in self.players.values():
             if player.current:
                 track = player.current
                 break
+        activity = None
         if track:
             tmpl = self.status_template()
             text = tmpl.replace("{title}", track.title) if tmpl else track.title
@@ -1615,14 +1652,14 @@ class Music(commands.Cog):
                 activity = discord.Activity(
                     type=discord.ActivityType.watching, name=text[:128]
                 )
-        else:
-            activity = discord.Activity(
-                type=discord.ActivityType.watching, name="over the server 👁️"
-            )
-        try:
-            await self.bot.change_presence(activity=activity)
-        except Exception:
-            pass
+        setter = getattr(self.bot, "set_music_activity", None)
+        if setter:
+            setter(activity)
+        else:  # pragma: no cover — fallback if the bot lacks the helper
+            try:
+                await self.bot.change_presence(activity=activity)
+            except Exception:
+                pass
 
     # ── song blocklist ──────────────────────────────────────────────────────────
     async def _filter_blocked_songs(
@@ -1917,6 +1954,7 @@ class Music(commands.Cog):
                     webpage_url=url,
                     thumbnail=_spotify_cover(item) or default_cover,
                     uploader=subtitle or "Spotify",
+                    artist=subtitle or None,
                     requester_id=requester_id,
                     requester_name=requester_name,
                 )
@@ -3881,6 +3919,36 @@ def _spotify_cover(obj: dict) -> Optional[str]:
     if sources:
         return sources[-1].get("url")
     return None
+
+
+def _clean_artist(
+    title: str, uploader: Optional[str], artist: Optional[str] = None
+) -> Optional[str]:
+    """Best-effort artist label, de-duplicated against the title.
+
+    Prefers an explicit artist tag (YouTube Music supplies ``artist``/``creator``),
+    else falls back to the channel/uploader with common noise ("- Topic", "VEVO",
+    "Official …") stripped. Returns ``None`` when the result is empty or every
+    meaningful word already appears in the title — so the Now Playing card never
+    shows the same words twice (e.g. uploader "Eminem" alongside title
+    "Eminem - Godzilla").
+    """
+    cand = (artist or uploader or "").strip()
+    if not cand:
+        return None
+    # Strip channel-name noise that isn't really an artist.
+    cand = re.sub(r"\s*-\s*topic\s*$", "", cand, flags=re.IGNORECASE)
+    cand = re.sub(r"\s*vevo\s*$", "", cand, flags=re.IGNORECASE)
+    cand = re.sub(r"\s*-\s*official.*$", "", cand, flags=re.IGNORECASE)
+    cand = re.sub(r"\bofficial\b", "", cand, flags=re.IGNORECASE)
+    cand = re.sub(r"\s+", " ", cand).strip(" -·|")
+    if not cand:
+        return None
+    title_words = {w for w in re.findall(r"[a-z0-9]+", title.lower()) if len(w) > 1}
+    cand_words = {w for w in re.findall(r"[a-z0-9]+", cand.lower()) if len(w) > 1}
+    if cand_words and cand_words <= title_words:
+        return None
+    return cand
 
 
 def _split_artist_title(query: str) -> tuple[str, str]:

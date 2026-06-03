@@ -14,6 +14,7 @@ import asyncio
 import logging
 import logging.handlers
 import os
+import random
 import time
 import traceback
 import warnings
@@ -21,7 +22,7 @@ from collections import OrderedDict
 
 import discord
 from discord import app_commands
-from discord.ext import commands
+from discord.ext import commands, tasks
 
 from utils import cache_db
 from utils import config as cfg_mod
@@ -219,6 +220,10 @@ class NanoBot(commands.Bot):
         self.commands_ran: int = 0  # incremented in on_command; resets on restart
         # Strong refs to fire-and-forget tasks so they aren't GC'd mid-flight.
         self._bg_tasks: set[asyncio.Task] = set()
+        # Presence state. `_music_activity` is set by the music cog while a track
+        # plays; when None the idle presence (manual override or auto-rotating
+        # "Listening to /help | /<command>") is shown instead.
+        self._music_activity: discord.BaseActivity | None = None
 
     def _spawn_bg(self, coro) -> None:
         task = asyncio.create_task(coro)
@@ -241,6 +246,54 @@ class NanoBot(commands.Bot):
             task.cancel()
         await super().close()
 
+    # ── Presence ──────────────────────────────────────────────────────────────
+    # Single source of truth for the bot's activity. The music cog calls
+    # set_music_activity() while a track plays; otherwise the idle presence is
+    # shown — a manual override (!status) if set, else an auto-rotating
+    # "Listening to /help | /<command>" that reshuffles hourly.
+    def set_music_activity(self, activity: discord.BaseActivity | None) -> None:
+        """Called by the music cog. None reverts to the idle presence."""
+        self._music_activity = activity
+        self._spawn_bg(self.apply_presence())
+
+    def _idle_activity(self) -> discord.Activity:
+        if self.manual_status:
+            name = self.manual_status
+        else:
+            cmd = self._random_command_name()
+            name = f"/help | /{cmd}" if cmd else "/help"
+        return discord.Activity(type=discord.ActivityType.listening, name=name[:128])
+
+    def _random_command_name(self) -> str | None:
+        """A random slash-command name (incl. subcommands) for the idle status."""
+        try:
+            names = [
+                c.qualified_name
+                for c in self.tree.walk_commands()
+                if isinstance(c, app_commands.Command) and c.qualified_name != "help"
+            ]
+        except Exception:
+            names = []
+        return random.choice(names) if names else None
+
+    async def apply_presence(self) -> None:
+        """Push the current activity (music override > idle) to Discord."""
+        activity = self._music_activity or self._idle_activity()
+        try:
+            await self.change_presence(activity=activity)
+        except Exception as exc:
+            log.debug("change_presence failed: %s", exc)
+
+    @tasks.loop(hours=1)
+    async def _presence_loop(self) -> None:
+        # Only the idle presence rotates; while music plays apply_presence keeps
+        # the override, so this is a no-op refresh until playback stops.
+        await self.apply_presence()
+
+    @_presence_loop.before_loop
+    async def _before_presence_loop(self) -> None:
+        await self.wait_until_ready()
+
     # ── Config application / reload ───────────────────────────────────────────
     def _apply_config(self, cfg: dict) -> None:
         """Copy the flat config dict onto the bot's runtime attributes."""
@@ -250,6 +303,10 @@ class NanoBot(commands.Bot):
         self.config_owner_id: int | None = (
             int(raw_owner) if raw_owner not in (None, "") else None
         )
+        # Manual idle presence override (set via !status, persisted to config.ini).
+        self.manual_status: str | None = (
+            cfg.get("idle_status_message") or ""
+        ).strip() or None
 
     def reload_config(self) -> dict:
         """
@@ -411,12 +468,9 @@ class NanoBot(commands.Bot):
         log.info(
             f"🔑 Owner: {'config override' if self.config_owner_id else 'application owner'}"
         )
-        await self.change_presence(
-            activity=discord.Activity(
-                type=discord.ActivityType.watching,
-                name="over the server 👁️",
-            )
-        )
+        await self.apply_presence()
+        if not self._presence_loop.is_running():
+            self._presence_loop.start()
         self.dispatch("restore_schedules")
         self._install_error_hooks()
 
