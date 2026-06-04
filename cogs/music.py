@@ -1204,10 +1204,13 @@ class GuildPlayer:
         return track
 
     async def _smart_autoplay_pick(self) -> Optional[Track]:
-        """Pick a related track using YouTube's Mix, seeded by recent played tracks.
+        """Pick a related track using YouTube's RD radio mix.
 
-        With 2+ seed IDs, uses watch_videos?video_ids=... so YouTube blends
-        multiple tracks' taste. Single seed falls back to the RD{id} radio mix.
+        Walks seeds newest-first. Most recent seed's mix reflects current taste;
+        older seeds are tried only when all 20 candidates from the first mix are
+        already in _smart_recent or the blocklist. This gives real multi-seed
+        blending (the playlist grows toward what you're listening to) without
+        extra network requests in the normal case.
         """
         seed_ids = [_extract_ytid(u) for u in self._smart_seeds]
         seed_ids = [s for s in seed_ids if s]  # drop non-YouTube
@@ -1215,48 +1218,45 @@ class GuildPlayer:
         if not seed_ids_unique:
             return None
 
-        # Always use the RD radio mix for the most recent seed. The
-        # watch_videos?video_ids=... URL looks like it should blend multiple
-        # seeds but yt-dlp just returns those exact videos back, so every
-        # candidate lands in seed_id_set and gets filtered — autoplay dies
-        # silently after the very first autoplay track.
-        ytid = seed_ids_unique[0]
-        mix_url = f"https://www.youtube.com/watch?v={ytid}&list=RD{ytid}"
-
         seed_id_set = set(seed_ids_unique)
-        try:
-            tracks = await self.cog.search(
-                mix_url,
-                requester_id=self.bot.user.id,
-                requester_name=_AUTOPLAY_REQUESTER,
-                playlist_cap=20,
-            )
-        except Exception as exc:
-            log.debug("Smart autoplay mix fetch failed: %s", exc)
-            self.cog._note_ratelimit(exc)
-            return None
 
-        for track in tracks:
-            url = track.webpage_url or track.query or ""
-            if not url:
-                continue
-            tid = _extract_ytid(url)
-            if tid in seed_id_set:
-                continue  # skip all seed tracks
-            if url in self._smart_recent:
-                continue
-            kept, _ = await self.cog._filter_blocked_songs(self.guild.id, [track])
-            if not kept:
-                continue
-            t = kept[0]
-            t.requester_name = _AUTOPLAY_REQUESTER
-            self._smart_recent.append(url)
-            # Add to seeds so next pick builds on this pick too.
-            if t.webpage_url:
-                pick_id = _extract_ytid(t.webpage_url)
-                if pick_id:
-                    self._smart_seeds.append(t.webpage_url)
-            return t
+        for ytid in seed_ids_unique:
+            mix_url = f"https://www.youtube.com/watch?v={ytid}&list=RD{ytid}"
+            try:
+                tracks = await self.cog.search(
+                    mix_url,
+                    requester_id=self.bot.user.id,
+                    requester_name=_AUTOPLAY_REQUESTER,
+                    playlist_cap=20,
+                )
+            except Exception as exc:
+                log.debug("Smart autoplay mix fetch failed for seed %s: %s", ytid, exc)
+                self.cog._note_ratelimit(exc)
+                continue  # try next seed
+
+            for track in tracks:
+                url = track.webpage_url or track.query or ""
+                if not url:
+                    continue
+                tid = _extract_ytid(url)
+                if tid in seed_id_set:
+                    continue  # skip all seed tracks
+                if url in self._smart_recent:
+                    continue
+                kept, _ = await self.cog._filter_blocked_songs(self.guild.id, [track])
+                if not kept:
+                    continue
+                t = kept[0]
+                t.requester_name = _AUTOPLAY_REQUESTER
+                self._smart_recent.append(url)
+                # Add to seeds so next pick builds on this pick too.
+                if t.webpage_url:
+                    pick_id = _extract_ytid(t.webpage_url)
+                    if pick_id:
+                        self._smart_seeds.append(t.webpage_url)
+                return t
+            # All 20 candidates filtered — fall back to next seed's mix
+
         return None
 
     def _is_autoplay_track(self, track: Optional[Track]) -> bool:
