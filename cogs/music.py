@@ -1154,6 +1154,13 @@ class GuildPlayer:
                 picked = await self._smart_autoplay_pick()
                 if picked is not None:
                     return picked
+                # Pick failed (rate-limit, network blip, etc.).  If we have
+                # seeds, retry after a brief pause rather than falling through
+                # to the idle wait — that would stall autoplay until the user
+                # manually queues something.
+                if self._smart_seeds:
+                    await asyncio.sleep(5)
+                    continue
             if self.guildplay:
                 picked = await self._guildplay_pick()
                 if picked is not None:
@@ -1208,12 +1215,13 @@ class GuildPlayer:
         if not seed_ids_unique:
             return None
 
-        if len(seed_ids_unique) >= 2:
-            ids_param = ",".join(seed_ids_unique[:5])
-            mix_url = f"https://www.youtube.com/watch_videos?video_ids={ids_param}"
-        else:
-            ytid = seed_ids_unique[0]
-            mix_url = f"https://www.youtube.com/watch?v={ytid}&list=RD{ytid}"
+        # Always use the RD radio mix for the most recent seed. The
+        # watch_videos?video_ids=... URL looks like it should blend multiple
+        # seeds but yt-dlp just returns those exact videos back, so every
+        # candidate lands in seed_id_set and gets filtered — autoplay dies
+        # silently after the very first autoplay track.
+        ytid = seed_ids_unique[0]
+        mix_url = f"https://www.youtube.com/watch?v={ytid}&list=RD{ytid}"
 
         seed_id_set = set(seed_ids_unique)
         try:
