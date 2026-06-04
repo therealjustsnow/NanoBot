@@ -49,6 +49,7 @@ Tests cover pure-Python utilities and the SQLite layer (in-memory), no live Disc
 - `tests/test_economy_db.py` — economy accessors in `utils/db.py` against in-memory SQLite
 - `tests/test_no_duplicate_commands.py` — static check that no two cogs register the same top-level command name or alias
 - `tests/test_obs.py` — correlation ids, the logging filter, and the JSONL event sink in `utils/obs.py`
+- `tests/test_gatekeeper.py` — perceptual (difference) hash helpers + the join-time `_evaluate` mute-decision logic in `cogs/gatekeeper.py` (the slash-only `/gatekeeper` group isn't dispatchable via dpytest); gatekeeper DB accessors live in `tests/test_db.py`
 
 Command-level tests (parse → permission check → DB → reply) run under **dpytest**, which fakes a guild/members/message dispatch so cog wiring executes without a live gateway:
 - `tests/conftest.py` — the `bot` fixture (dpytest-configured `NanoBot` + throwaway DB; load cogs via `@pytest.mark.cogs(...)`) and `grant_perms` helper
@@ -80,6 +81,7 @@ All features live in `cogs/` as discord.py cogs, hot-reloadable via `n!reload <c
 | `moderation.py` | Ban/kick/mute/purge/lock/slowmode, timed actions, last-sender targeting |
 | `warnings.py` | Warning tracking with configurable auto-kick/ban thresholds |
 | `automod.py` | Passive rule enforcement (spam, invites, links, caps, mentions, badwords, regex, word+attachment); actions: delete/warn/timeout/kick/softban |
+| `gatekeeper.py` | New-account gate: on join, role-mutes (`Muted (NanoBot)`) accounts younger than a threshold (default 30d, auto-unmute at 35d/5w), with no avatar (Discord logo default, `member.avatar is None`), or with a pickable "stock" avatar matched by perceptual (difference) hash against a catalog (`assets/gatekeeper_avatars/` bundled seeds + `data/gatekeeper_avatars/` runtime adds via `/gatekeeper learnavatar`). Muted members get a verification prompt (DM first, fallback to a quarantine channel) with a persistent button → math-captcha modal; correct answer unmutes. Unverified members are kicked after a timeout (default 7d). Auto-unmute + auto-kick persist in SQLite and restore on restart via `on_restore_schedules` (mirrors `moderation.py`). `/gatekeeper` group (Manage Server): `setup`/`status`/`enable`/`disable`/`role`/`channel`/`logchannel`/`minage`/`unmuteage`/`kicktimeout`/`newaccounts`/`noavatar`/`stockavatar`/`verify`/`message`/`learnavatar`/`checkavatar`. |
 | `auditlog.py` | 12 server event types logged to a configurable channel |
 | `roles.py` | Persistent button-based self-assign role panels |
 | `tags.py` | Personal and global text snippets; `n!tagname` shortcut fires any tag |
@@ -100,7 +102,7 @@ All features live in `cogs/` as discord.py cogs, hot-reloadable via `n!reload <c
 
 Two SQLite databases, both opened once at startup via `setup_hook()` and shared as module-level connections:
 
-- **`data/nanobot.db`** — All persistent bot data. Managed by `utils/db.py`. Tables include: `tags`, `notes`, `prefixes`, `unban_schedules`, `slow_schedules`, `reminders`, `automod_config`, `automod_badwords`, `automod_regex_patterns`, `automod_attachment_words`, warnings, auditlog settings, role panels, welcome/leave config, recurring reminders, vote history, the music tables (`music_settings`, `music_queue`, `music_history`, `music_autoplaylist`, `music_song_blocklist`, `music_user_blocklist`), the leveling tables (`user_levels`, `level_config`, `level_rewards`, `level_ignored_channels`), and the economy tables (`economy`, `economy_config`).
+- **`data/nanobot.db`** — All persistent bot data. Managed by `utils/db.py`. Tables include: `tags`, `notes`, `prefixes`, `unban_schedules`, `slow_schedules`, `reminders`, `automod_config`, `automod_badwords`, `automod_regex_patterns`, `automod_attachment_words`, warnings, auditlog settings, role panels, welcome/leave config, recurring reminders, vote history, the music tables (`music_settings`, `music_queue`, `music_history`, `music_autoplaylist`, `music_song_blocklist`, `music_user_blocklist`), the leveling tables (`user_levels`, `level_config`, `level_rewards`, `level_ignored_channels`), the economy tables (`economy`, `economy_config`), and the gatekeeper tables (`gatekeeper_config`, `gatekeeper_pending`).
 - **`data/cache.db`** — External content cache (anime images, stories). Managed by `utils/cache_db.py`.
 
 Both use WAL mode (`PRAGMA journal_mode=WAL`) for concurrent read/write. All queries are async via `aiosqlite`. Initialize with `await db.init()` and `await cache_db.init()` in `NanoBot.setup_hook()`.

@@ -80,6 +80,7 @@ async def database(monkeypatch):
     await db._ensure_auditlog_tables()
     await db._migrate_auditlog_null_events()
     await db._ensure_automod_tables()
+    await db._ensure_gatekeeper_tables()
 
     yield conn
 
@@ -793,3 +794,73 @@ async def test_failed_migration_leaves_version_unchanged():
         await db._run_migrations([(1, boom)])
     async with db._conn().execute("PRAGMA user_version") as cur:
         assert (await cur.fetchone())[0] == 0  # not advanced → retried next start
+
+
+# ── Gatekeeper ──────────────────────────────────────────────────────────────────
+async def test_gatekeeper_config_defaults_when_unset():
+    cfg = await db.get_gatekeeper_config(123)
+    assert cfg["enabled"] is False
+    assert cfg["mute_role_id"] is None
+    assert cfg["min_account_age"] == 2592000
+    assert cfg["unmute_age"] == 3024000
+    assert cfg["mute_new_accounts"] is True
+    assert cfg["verify_enabled"] is True
+    assert cfg["kick_timeout"] == 604800
+
+
+async def test_gatekeeper_config_set_and_roundtrip():
+    await db.set_gatekeeper_config(
+        123, enabled=True, mute_role_id="555", min_account_age=86400
+    )
+    cfg = await db.get_gatekeeper_config(123)
+    assert cfg["enabled"] is True
+    assert cfg["mute_role_id"] == "555"
+    assert cfg["min_account_age"] == 86400
+    # Untouched fields keep their defaults.
+    assert cfg["kick_timeout"] == 604800
+
+
+async def test_gatekeeper_config_partial_update_preserves_other_fields():
+    await db.set_gatekeeper_config(123, mute_role_id="555", verify_enabled=False)
+    await db.set_gatekeeper_config(123, enabled=True)
+    cfg = await db.get_gatekeeper_config(123)
+    assert cfg["enabled"] is True
+    assert cfg["mute_role_id"] == "555"  # preserved across the second write
+    assert cfg["verify_enabled"] is False
+
+
+async def test_gatekeeper_pending_set_get_remove():
+    await db.set_gatekeeper_pending("1:2", 1, 2, "new account", 100.0, 200.0)
+    row = await db.get_gatekeeper_pending("1:2")
+    assert row["guild_id"] == "1"
+    assert row["user_id"] == "2"
+    assert row["reason"] == "new account"
+    assert row["unmute_at"] == 100.0
+    assert row["kick_at"] == 200.0
+    assert row["created_at"] > 0
+
+    await db.remove_gatekeeper_pending("1:2")
+    assert await db.get_gatekeeper_pending("1:2") is None
+
+
+async def test_gatekeeper_pending_nullable_schedules():
+    await db.set_gatekeeper_pending("1:3", 1, 3, "no profile picture", None, 500.0)
+    row = await db.get_gatekeeper_pending("1:3")
+    assert row["unmute_at"] is None
+    assert row["kick_at"] == 500.0
+
+
+async def test_gatekeeper_pending_upsert_updates_schedules():
+    await db.set_gatekeeper_pending("1:4", 1, 4, "new account", 100.0, 200.0)
+    await db.set_gatekeeper_pending("1:4", 1, 4, "new account", None, 999.0)
+    row = await db.get_gatekeeper_pending("1:4")
+    assert row["unmute_at"] is None
+    assert row["kick_at"] == 999.0
+
+
+async def test_gatekeeper_get_all_pending():
+    await db.set_gatekeeper_pending("1:2", 1, 2, "r", 1.0, 2.0)
+    await db.set_gatekeeper_pending("1:5", 1, 5, "r", None, 3.0)
+    allp = await db.get_all_gatekeeper_pending()
+    assert set(allp.keys()) == {"1:2", "1:5"}
+    assert allp["1:5"]["kick_at"] == 3.0

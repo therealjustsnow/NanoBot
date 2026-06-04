@@ -41,6 +41,8 @@ Tables
   level_ignored_channels (guild_id, channel_id) PK  — channels that earn no XP
   economy           (guild_id, user_id) PK  — coin balance, daily claim state
   economy_config    (guild_id) PK  — per-guild currency name/emoji, daily amount
+  gatekeeper_config (guild_id) PK  — new-account mute / verification settings
+  gatekeeper_pending (key) PK  — pending unmute + kick schedules ("guild:user")
 
 Note: role_panels_new is a transient table used only during the one-time
 role-panel migration (table swap to drop a column); it is not a real table.
@@ -147,6 +149,7 @@ async def init() -> None:
     await _ensure_music_tables()
     await _ensure_leveling_tables()
     await _ensure_economy_tables()
+    await _ensure_gatekeeper_tables()
     await _run_migrations()
     log.info(f"Database ready: {_DB_PATH}")
 
@@ -2669,4 +2672,179 @@ async def set_econ_config(guild_id: int, **kwargs) -> None:
             str(current["currency_emoji"]),
         ),
     )
+    await _conn().commit()
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+#  Gatekeeper (new-account mute + captcha verification)
+# ══════════════════════════════════════════════════════════════════════════════
+# `gatekeeper_config` holds per-guild settings. `gatekeeper_pending` tracks every
+# member currently held behind the mute role: `unmute_at` is set only for
+# account-age mutes (auto-lifts once the account is old enough); `kick_at` is set
+# whenever verification is on (the member is kicked if still unverified by then).
+# Verifying or leaving removes the row.
+
+# Default timings: mute accounts younger than 30d, auto-unmute at 35d (5 weeks),
+# kick unverified members after 7d.
+_GK_DEFAULTS = {
+    "enabled": False,
+    "mute_role_id": None,
+    "quarantine_channel_id": None,
+    "log_channel_id": None,
+    "min_account_age": 2592000,  # 30 days
+    "unmute_age": 3024000,  # 35 days (5 weeks)
+    "mute_new_accounts": True,
+    "mute_default_avatar": True,  # Discord's auto-assigned logo avatars
+    "mute_stock_avatar": True,  # pickable stock avatars matched against the catalog
+    "verify_enabled": True,
+    "verify_message": None,
+    "kick_timeout": 604800,  # 7 days
+}
+
+# Which columns are stored as 0/1 integers but exposed as Python bools.
+_GK_BOOL_COLS = (
+    "enabled",
+    "mute_new_accounts",
+    "mute_default_avatar",
+    "mute_stock_avatar",
+    "verify_enabled",
+)
+# Ordered list of all config columns (used for the upsert in set_gatekeeper_config).
+_GK_COLS = (
+    "enabled",
+    "mute_role_id",
+    "quarantine_channel_id",
+    "log_channel_id",
+    "min_account_age",
+    "unmute_age",
+    "mute_new_accounts",
+    "mute_default_avatar",
+    "mute_stock_avatar",
+    "verify_enabled",
+    "verify_message",
+    "kick_timeout",
+)
+
+
+async def _ensure_gatekeeper_tables() -> None:
+    await _conn().executescript("""
+        CREATE TABLE IF NOT EXISTS gatekeeper_config (
+            guild_id              TEXT PRIMARY KEY,
+            enabled               INTEGER NOT NULL DEFAULT 0,
+            mute_role_id          TEXT,
+            quarantine_channel_id TEXT,
+            log_channel_id        TEXT,
+            min_account_age       INTEGER NOT NULL DEFAULT 2592000,
+            unmute_age            INTEGER NOT NULL DEFAULT 3024000,
+            mute_new_accounts     INTEGER NOT NULL DEFAULT 1,
+            mute_default_avatar   INTEGER NOT NULL DEFAULT 1,
+            mute_stock_avatar     INTEGER NOT NULL DEFAULT 1,
+            verify_enabled        INTEGER NOT NULL DEFAULT 1,
+            verify_message        TEXT,
+            kick_timeout          INTEGER NOT NULL DEFAULT 604800
+        );
+
+        CREATE TABLE IF NOT EXISTS gatekeeper_pending (
+            key         TEXT PRIMARY KEY,   -- "guild_id:user_id"
+            guild_id    TEXT NOT NULL,
+            user_id     TEXT NOT NULL,
+            reason      TEXT NOT NULL,
+            unmute_at   REAL,
+            kick_at     REAL,
+            created_at  REAL NOT NULL
+        );
+        CREATE INDEX IF NOT EXISTS gk_pending_guild ON gatekeeper_pending (guild_id);
+    """)
+    await _conn().commit()
+
+
+def _gatekeeper_row(row: aiosqlite.Row) -> dict:
+    out: dict = {}
+    for col in _GK_COLS:
+        val = row[col]
+        out[col] = bool(val) if col in _GK_BOOL_COLS else val
+    return out
+
+
+async def get_gatekeeper_config(guild_id: int) -> dict:
+    """Return the gatekeeper config for a guild, defaults merged in when unset."""
+    async with _conn().execute(
+        f"SELECT {', '.join(_GK_COLS)} FROM gatekeeper_config WHERE guild_id=? LIMIT 1",
+        (str(guild_id),),
+    ) as cur:
+        row = await cur.fetchone()
+    return _gatekeeper_row(row) if row else dict(_GK_DEFAULTS)
+
+
+async def set_gatekeeper_config(guild_id: int, **kwargs: Any) -> None:
+    """Merge kwargs into the guild's config row (creating it from defaults)."""
+    current = await get_gatekeeper_config(guild_id)
+    current.update(kwargs)
+    values = [str(guild_id)]
+    for col in _GK_COLS:
+        val = current[col]
+        if col in _GK_BOOL_COLS:
+            values.append(1 if val else 0)
+        else:
+            values.append(val)
+    placeholders = ", ".join(["?"] * (len(_GK_COLS) + 1))
+    updates = ", ".join(f"{c}=excluded.{c}" for c in _GK_COLS)
+    await _conn().execute(
+        f"INSERT INTO gatekeeper_config (guild_id, {', '.join(_GK_COLS)}) "
+        f"VALUES ({placeholders}) "
+        f"ON CONFLICT(guild_id) DO UPDATE SET {updates}",
+        values,
+    )
+    await _conn().commit()
+
+
+async def set_gatekeeper_pending(
+    key: str,
+    guild_id: int,
+    user_id: int,
+    reason: str,
+    unmute_at: float | None,
+    kick_at: float | None,
+) -> None:
+    """Insert or replace a pending gatekeeper hold for a member."""
+    await _conn().execute(
+        "INSERT INTO gatekeeper_pending "
+        "(key, guild_id, user_id, reason, unmute_at, kick_at, created_at) "
+        "VALUES (?,?,?,?,?,?,?) "
+        "ON CONFLICT(key) DO UPDATE SET reason=excluded.reason, "
+        "unmute_at=excluded.unmute_at, kick_at=excluded.kick_at",
+        (
+            key,
+            str(guild_id),
+            str(user_id),
+            reason,
+            unmute_at,
+            kick_at,
+            time.time(),
+        ),
+    )
+    await _conn().commit()
+
+
+async def get_gatekeeper_pending(key: str) -> dict | None:
+    async with _conn().execute(
+        "SELECT key, guild_id, user_id, reason, unmute_at, kick_at, created_at "
+        "FROM gatekeeper_pending WHERE key=? LIMIT 1",
+        (key,),
+    ) as cur:
+        row = await cur.fetchone()
+    return dict(row) if row else None
+
+
+async def get_all_gatekeeper_pending() -> dict:
+    async with _conn().execute(
+        "SELECT key, guild_id, user_id, reason, unmute_at, kick_at, created_at "
+        "FROM gatekeeper_pending"
+    ) as cur:
+        rows = await cur.fetchall()
+    return {r["key"]: dict(r) for r in rows}
+
+
+async def remove_gatekeeper_pending(key: str) -> None:
+    await _conn().execute("DELETE FROM gatekeeper_pending WHERE key=?", (key,))
     await _conn().commit()
