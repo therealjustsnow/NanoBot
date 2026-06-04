@@ -2699,6 +2699,7 @@ _GK_DEFAULTS = {
     "verify_enabled": True,
     "verify_message": None,
     "kick_timeout": 604800,  # 7 days
+    "stock_threshold": 8,  # max dHash Hamming distance for a stock-avatar match
 }
 
 # Which columns are stored as 0/1 integers but exposed as Python bools.
@@ -2723,6 +2724,7 @@ _GK_COLS = (
     "verify_enabled",
     "verify_message",
     "kick_timeout",
+    "stock_threshold",
 )
 
 
@@ -2741,7 +2743,8 @@ async def _ensure_gatekeeper_tables() -> None:
             mute_stock_avatar     INTEGER NOT NULL DEFAULT 1,
             verify_enabled        INTEGER NOT NULL DEFAULT 1,
             verify_message        TEXT,
-            kick_timeout          INTEGER NOT NULL DEFAULT 604800
+            kick_timeout          INTEGER NOT NULL DEFAULT 604800,
+            stock_threshold       INTEGER NOT NULL DEFAULT 8
         );
 
         CREATE TABLE IF NOT EXISTS gatekeeper_pending (
@@ -2756,6 +2759,10 @@ async def _ensure_gatekeeper_tables() -> None:
         CREATE INDEX IF NOT EXISTS gk_pending_guild ON gatekeeper_pending (guild_id);
     """)
     await _conn().commit()
+    # Added after the table's first cut — backfill for early-branch databases.
+    await _ensure_columns(
+        "gatekeeper_config", {"stock_threshold": "INTEGER NOT NULL DEFAULT 8"}
+    )
 
 
 def _gatekeeper_row(row: aiosqlite.Row) -> dict:

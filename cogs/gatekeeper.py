@@ -243,8 +243,15 @@ class Gatekeeper(commands.Cog):
             log.debug(f"avatar fetch failed: {exc}")
             return None
 
-    async def _matches_stock_avatar(self, member: discord.Member) -> bool:
-        """True if the member's custom avatar matches a catalog reference image."""
+    async def _matches_stock_avatar(
+        self, member: discord.Member, threshold: int = _DHASH_THRESHOLD
+    ) -> bool:
+        """True if the member's custom avatar matches a catalog reference image.
+
+        `threshold` is the max perceptual-hash Hamming distance counted as a
+        match — higher is looser (catches recolours/near-variants of a known
+        avatar) at the cost of more false positives.
+        """
         if not self._catalog or member.avatar is None:
             return False
         data = await self._fetch_avatar_bytes(member.avatar)
@@ -253,7 +260,7 @@ class Gatekeeper(commands.Cog):
         digest = _dhash(data)
         if digest is None:
             return False
-        return any(_hamming(digest, ref) <= _DHASH_THRESHOLD for ref in self._catalog)
+        return any(_hamming(digest, ref) <= threshold for ref in self._catalog)
 
     # ── Logging ───────────────────────────────────────────────────────────────
     async def _log(self, guild: discord.Guild, cfg: dict, embed: discord.Embed):
@@ -520,7 +527,8 @@ class Gatekeeper(commands.Cog):
         if cfg["mute_default_avatar"] and member.avatar is None:
             reasons.append("no profile picture")
         elif cfg["mute_stock_avatar"] and member.avatar is not None:
-            if await self._matches_stock_avatar(member):
+            threshold = cfg.get("stock_threshold", _DHASH_THRESHOLD)
+            if await self._matches_stock_avatar(member, threshold):
                 reasons.append("default profile picture")
         return reasons
 
@@ -688,7 +696,8 @@ class Gatekeeper(commands.Cog):
             f"**Auto-unmute age:** {h.fmt_duration(cfg['unmute_age'])}",
             f"**Mute no-avatar (logo):** {'✅' if cfg['mute_default_avatar'] else '❌'}",
             f"**Mute stock avatars:** {'✅' if cfg['mute_stock_avatar'] else '❌'} "
-            f"({len(self._catalog)} reference image(s))",
+            f"({len(self._catalog)} reference image(s), sensitivity "
+            f"{cfg.get('stock_threshold', 8)})",
             f"**Verification:** {'✅' if cfg['verify_enabled'] else '❌'} "
             f"(kick after {h.fmt_duration(cfg['kick_timeout'])})",
             "",
@@ -1001,18 +1010,46 @@ class Gatekeeper(commands.Cog):
         self, interaction: discord.Interaction, user: discord.Member
     ):
         await interaction.response.defer(ephemeral=True)
+        cfg = await db.get_gatekeeper_config(interaction.guild_id)
+        threshold = cfg.get("stock_threshold", _DHASH_THRESHOLD)
         if user.avatar is None:
             verdict = "Has the **Discord logo default** (no custom avatar)."
         elif not self._catalog:
             verdict = (
                 "Catalog is empty — add references with `/gatekeeper learnavatar`."
             )
-        elif await self._matches_stock_avatar(user):
-            verdict = "✅ **Matches** a catalogued stock avatar."
+        elif await self._matches_stock_avatar(user, threshold):
+            verdict = (
+                f"✅ **Matches** a catalogued stock avatar (sensitivity {threshold})."
+            )
         else:
             verdict = "❌ No catalog match (looks like a real custom avatar)."
         await interaction.followup.send(
             embed=h.info(f"{h.user_display(user)}\n\n{verdict}", "🖼️ Avatar Check"),
+            ephemeral=True,
+        )
+
+    @gk.command(
+        name="sensitivity",
+        description="How close an avatar must match the catalog (0=exact, higher=looser).",
+    )
+    @app_commands.describe(distance="Max hash distance for a match (0–20, default 8)")
+    @app_commands.checks.has_permissions(manage_guild=True)
+    async def gk_sensitivity(self, interaction: discord.Interaction, distance: int):
+        if not 0 <= distance <= 20:
+            await interaction.response.send_message(
+                embed=h.err("Pick a distance between **0** and **20**."),
+                ephemeral=True,
+            )
+            return
+        await db.set_gatekeeper_config(interaction.guild_id, stock_threshold=distance)
+        await interaction.response.send_message(
+            embed=h.ok(
+                f"Stock-avatar match distance set to **{distance}**.\n"
+                "Lower = stricter (near-exact only). Higher = looser (catches "
+                "recolours/variants, but more false positives).",
+                "🔧 Sensitivity",
+            ),
             ephemeral=True,
         )
 

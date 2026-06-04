@@ -806,6 +806,7 @@ async def test_gatekeeper_config_defaults_when_unset():
     assert cfg["mute_new_accounts"] is True
     assert cfg["verify_enabled"] is True
     assert cfg["kick_timeout"] == 604800
+    assert cfg["stock_threshold"] == 8
 
 
 async def test_gatekeeper_config_set_and_roundtrip():
@@ -827,6 +828,14 @@ async def test_gatekeeper_config_partial_update_preserves_other_fields():
     assert cfg["enabled"] is True
     assert cfg["mute_role_id"] == "555"  # preserved across the second write
     assert cfg["verify_enabled"] is False
+
+
+async def test_gatekeeper_stock_threshold_roundtrip():
+    await db.set_gatekeeper_config(123, stock_threshold=14)
+    cfg = await db.get_gatekeeper_config(123)
+    assert cfg["stock_threshold"] == 14
+    # Other defaults untouched.
+    assert cfg["kick_timeout"] == 604800
 
 
 async def test_gatekeeper_pending_set_get_remove():
