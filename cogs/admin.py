@@ -83,6 +83,7 @@ _ALL_COGS = (
     "cogs.music",
     "cogs.leveling",
     "cogs.economy",
+    "cogs.gatekeeper",
     "cogs.debug",
 )
 
