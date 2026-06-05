@@ -99,7 +99,9 @@ class Warnings(commands.Cog):
                 log.error(f"Auto-kick failed for {h.user_log(user)} in {guild}: {exc}")
 
         # Reply embed (mod-only, ephemeral): includes DM delivery status + auto-action.
-        reply_reason = f"{reason}\n\U0001f4e8 DM {'sent' if dm_sent else 'failed (closed DMs)'}."
+        reply_reason = (
+            f"{reason}\n\U0001f4e8 DM {'sent' if dm_sent else 'failed (closed DMs)'}."
+        )
         if action_taken:
             reply_reason += f"\n{action_taken}"
         reply_embed = h.mod_action_embed(
