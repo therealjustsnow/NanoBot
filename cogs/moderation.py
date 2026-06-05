@@ -1434,9 +1434,8 @@ class Moderation(commands.Cog):
             f"note: #{count} added for {h.user_log(user)} "
             f"by {h.user_log(author)} in {guild}"
         )
-        return h.ok(
-            f"Note #{count} added for **{user.display_name}**.\n> {content[:300]}",
-            "📜 Note Saved",
+        return h.mod_action_embed(
+            "📜 Note Saved", user, content[:300], moderator=author
         )
 
     async def _do_notes(self, guild, user: discord.Member):
@@ -1468,9 +1467,12 @@ class Moderation(commands.Cog):
                 f"clearnotes: {count} notes cleared for {h.user_log(user)} "
                 f"by {h.user_log(author)} in {guild}"
             )
-            return h.ok(
-                f"Cleared **{count}** note(s) for **{user.display_name}**.",
+            return h.mod_action_embed(
                 "📜 Notes Cleared",
+                user,
+                f"{count} note(s) cleared.",
+                moderator=author,
+                color=h.GREEN,
             )
         return h.info(f"No notes on file for **{user.display_name}**.", "📜 Notes")
 
