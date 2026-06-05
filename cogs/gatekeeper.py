@@ -437,7 +437,10 @@ class Gatekeeper(commands.Cog):
             await self._log(
                 guild,
                 cfg,
-                h.ok(f"{member.mention} {h.user_display(member)} verified.", "✅ Gatekeeper Verify"),
+                h.ok(
+                    f"{member.mention} {h.user_display(member)} verified.",
+                    "✅ Gatekeeper Verify",
+                ),
             )
 
     # ── Join handling ─────────────────────────────────────────────────────────
