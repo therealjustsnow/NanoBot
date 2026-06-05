@@ -371,9 +371,10 @@ class Gatekeeper(commands.Cog):
                     await self._log(
                         guild,
                         cfg,
-                        h.warn(
-                            f"Kicked {h.user_display(member)} — did not verify in time.",
+                        h.mod_action_embed(
                             "🚪 Gatekeeper Kick",
+                            member,
+                            "Did not verify in time.",
                         ),
                     )
                 except (discord.Forbidden, discord.HTTPException) as exc:
@@ -437,7 +438,12 @@ class Gatekeeper(commands.Cog):
             await self._log(
                 guild,
                 cfg,
-                h.ok(f"{h.user_display(member)} verified.", "✅ Gatekeeper Verify"),
+                h.mod_action_embed(
+                    "✅ Gatekeeper Verify",
+                    member,
+                    "Passed verification captcha.",
+                    color=h.GREEN,
+                ),
             )
 
     # ── Join handling ─────────────────────────────────────────────────────────
@@ -463,11 +469,13 @@ class Gatekeeper(commands.Cog):
             await self._log(
                 guild,
                 cfg,
-                h.err(
-                    f"Wanted to mute {h.user_display(member)} "
-                    f"({', '.join(reasons)}) but the mute role is missing or above my "
-                    "highest role. Run `/gatekeeper setup` or move my role up.",
+                h.mod_action_embed(
                     "⚠️ Gatekeeper Misconfigured",
+                    member,
+                    f"Tried to mute ({', '.join(reasons)}) but the mute role is "
+                    "missing or above my highest role. Run `/gatekeeper setup` or "
+                    "move my role up.",
+                    color=h.RED,
                 ),
             )
             return
@@ -509,9 +517,10 @@ class Gatekeeper(commands.Cog):
         await self._log(
             guild,
             cfg,
-            h.warn(
-                f"Muted {h.user_display(member)}\n**Reason:** {', '.join(reasons)}",
+            h.mod_action_embed(
                 "🔇 Gatekeeper Mute",
+                member,
+                ", ".join(reasons),
             ),
         )
         if cfg["verify_enabled"]:

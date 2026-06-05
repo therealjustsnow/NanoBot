@@ -90,14 +90,21 @@ def can_bot_target(bot_member, target):
 
 
 async def action_log(ctx, emoji, action, *, target=None, detail=""):
-    desc = f"{emoji} **{ctx.author.display_name}** used **{action}**"
-    if target:
-        desc += f" on **{target.display_name}** (`{target.id}`)"
-    if detail:
-        desc += f"\n{detail}"
-    e = discord.Embed(description=desc, color=h.GREY)
-    e.timestamp = discord.utils.utcnow()
-    e.set_footer(text="NanoBot")
+    if target is not None:
+        e = h.mod_action_embed(
+            f"{emoji} {action.title()}",
+            target,
+            detail or "No reason given",
+            moderator=ctx.author,
+            color=h.GREY,
+        )
+    else:
+        desc = f"{emoji} **{ctx.author.display_name}** used **{action}**"
+        if detail:
+            desc += f"\n{detail}"
+        e = discord.Embed(description=desc, color=h.GREY)
+        e.timestamp = discord.utils.utcnow()
+        e.set_footer(text="NanoBot")
     try:
         await ctx.channel.send(embed=e)
     except discord.HTTPException:

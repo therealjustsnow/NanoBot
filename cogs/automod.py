@@ -287,6 +287,7 @@ async def _send_action_log(
     e.add_field(name="Rule", value=RULE_LABELS.get(rule, rule), inline=True)
     e.add_field(name="Action", value=ACTION_LABELS.get(action, action), inline=True)
     e.add_field(name="Reason", value=detail[:512], inline=False)
+    e.add_field(name="Moderator", value="NanoBot (automated)", inline=True)
     e.set_footer(text=f"NanoBot AutoMod  •  User ID: {member.id}")
     e.timestamp = discord.utils.utcnow()
     try:
