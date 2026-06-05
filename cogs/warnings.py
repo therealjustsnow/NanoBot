@@ -64,12 +64,6 @@ class Warnings(commands.Cog):
             f"by {h.user_log(author)} \u2014 warning #{count}: {reason}"
         )
 
-        lines = [
-            f"**{user.display_name}** has been warned. That's warning **#{count}**.",
-            f"\U0001f4dd {reason}",
-            f"\U0001f4e8 DM {'sent' if dm_sent else 'failed (closed DMs)'}.",
-        ]
-
         action_taken = None
 
         if cfg["ban_at"] and count >= cfg["ban_at"]:
@@ -104,22 +98,21 @@ class Warnings(commands.Cog):
                 action_taken = "\u26a0\ufe0f Auto-kick threshold reached but the action failed (try again)."
                 log.error(f"Auto-kick failed for {h.user_log(user)} in {guild}: {exc}")
 
+        # Reply embed (mod-only, ephemeral): includes DM delivery status + auto-action.
+        reply_reason = f"{reason}\n\U0001f4e8 DM {'sent' if dm_sent else 'failed (closed DMs)'}."
         if action_taken:
-            lines.append(action_taken)
-
-        reply_embed = h.warn("\n".join(lines), f"\u26a0\ufe0f Warning #{count}")
-
-        public_embed = discord.Embed(
-            description=(
-                f"\u26a0\ufe0f **{author.display_name}** warned **{user.display_name}** (`{user.id}`)\n"
-                f"\U0001f4dd {reason}\n"
-                f"Total warnings: **{count}**"
-                + (f"\n{action_taken}" if action_taken else "")
-            ),
-            color=h.YELLOW,
+            reply_reason += f"\n{action_taken}"
+        reply_embed = h.mod_action_embed(
+            f"\u26a0\ufe0f Warning #{count}", user, reply_reason, moderator=author
         )
-        public_embed.set_footer(text="NanoBot")
-        public_embed.timestamp = now
+
+        # Public embed (posted to channel): reason + running count + auto-action.
+        pub_reason = f"{reason}\nTotal warnings: **{count}**"
+        if action_taken:
+            pub_reason += f"\n{action_taken}"
+        public_embed = h.mod_action_embed(
+            f"\u26a0\ufe0f Warning #{count}", user, pub_reason, moderator=author
+        )
 
         return reply_embed, public_embed
 
@@ -169,9 +162,12 @@ class Warnings(commands.Cog):
                 f"Cleared {count} warning(s) for {h.user_log(user)} "
                 f"in {guild} by {h.user_log(author)}"
             )
-            return h.ok(
-                f"Cleared **{count}** warning(s) for **{user.display_name}**.",
+            return h.mod_action_embed(
                 "\u2705 Warnings Cleared",
+                user,
+                f"{count} warning(s) cleared.",
+                moderator=author,
+                color=h.GREEN,
             )
         return h.info(
             f"**{user.display_name}** has no warnings to clear.",
