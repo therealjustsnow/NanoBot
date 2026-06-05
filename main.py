@@ -230,7 +230,13 @@ class NanoBot(commands.Bot):
         self._config_printed: bool = False
 
     def _spawn_bg(self, coro) -> None:
-        task = asyncio.create_task(coro)
+        try:
+            task = asyncio.create_task(coro)
+        except RuntimeError:
+            # No running event loop (called during/after shutdown). Close the
+            # coroutine explicitly so Python doesn't warn about it being unawaited.
+            coro.close()
+            return
         self._bg_tasks.add(task)
         task.add_done_callback(self._on_bg_done)
 
@@ -243,6 +249,12 @@ class NanoBot(commands.Bot):
             log.error("Background task failed: %s", exc, exc_info=exc)
 
     async def close(self) -> None:
+        # Restore the warning hook before the event loop begins tearing down so
+        # late RuntimeWarnings (e.g. "coroutine '_run_event' was never awaited")
+        # don't trigger _spawn_bg on a closing loop and cascade into more warnings.
+        orig = getattr(self, "_orig_showwarning", None)
+        if orig is not None:
+            warnings.showwarning = orig
         # Cancel fire-and-forget background tasks on shutdown. (Cog-owned tasks
         # are cancelled by cog_unload on reload; on full shutdown they stop with
         # the event loop.)
@@ -441,10 +453,14 @@ class NanoBot(commands.Bot):
     def _install_error_hooks(self) -> None:
         """Hook Python warnings and asyncio unhandled exceptions into _post_error."""
         bot_ref = self
-        orig_showwarning = warnings.showwarning
+        # Store original so close() can restore it before the loop tears down.
+        self._orig_showwarning = warnings.showwarning
+        orig_showwarning = self._orig_showwarning
 
         def _warn_hook(message, category, filename, lineno, file=None, line=None):
             orig_showwarning(message, category, filename, lineno, file, line)
+            if bot_ref.is_closed():
+                return
             text = warnings.formatwarning(message, category, filename, lineno, line)
             bot_ref._spawn_bg(bot_ref._post_error(f"⚠️ {category.__name__}", text))
 
@@ -461,7 +477,8 @@ class NanoBot(commands.Bot):
             else:
                 body = msg
             log.error("asyncio unhandled: %s", msg, exc_info=exc)
-            bot_ref._spawn_bg(bot_ref._post_error("🔴 asyncio exception", body))
+            if not bot_ref.is_closed():
+                bot_ref._spawn_bg(bot_ref._post_error("🔴 asyncio exception", body))
 
         self.loop.set_exception_handler(_asyncio_exc_handler)
 
