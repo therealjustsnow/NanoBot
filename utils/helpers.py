@@ -258,9 +258,36 @@ def fmt_interval(seconds: int) -> str:
 
 
 # ── Misc Helpers ───────────────────────────────────────────────────────────────
-def user_display(member: discord.Member) -> str:
+def user_display(member: discord.Member | discord.User) -> str:
     """Return 'Display Name (@username) | ID' for consistent user references."""
     return f"**{member.display_name}** (`{member.name}` · `{member.id}`)"
+
+
+def mod_action_embed(
+    title: str,
+    target: discord.Member | discord.User,
+    reason: str,
+    *,
+    moderator: discord.Member | discord.User | None = None,
+    color: int = YELLOW,
+) -> discord.Embed:
+    """Consistently styled embed for mod actions (bot-automated or human).
+
+    moderator=None  →  "NanoBot (automated)"
+    moderator=member →  mention + display info
+    """
+    e = embed(title, f"{target.mention} {user_display(target)}", color)
+    e.add_field(name="Reason", value=reason or "No reason given", inline=False)
+    e.add_field(
+        name="Moderator",
+        value=(
+            f"{moderator.mention} {user_display(moderator)}"
+            if moderator is not None
+            else "NanoBot (automated)"
+        ),
+        inline=False,
+    )
+    return e
 
 
 def user_log(user) -> str:
