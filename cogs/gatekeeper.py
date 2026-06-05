@@ -372,7 +372,7 @@ class Gatekeeper(commands.Cog):
                         guild,
                         cfg,
                         h.warn(
-                            f"Kicked {h.user_display(member)} — did not verify in time.",
+                            f"{member.mention} Kicked {h.user_display(member)} — did not verify in time.",
                             "🚪 Gatekeeper Kick",
                         ),
                     )
@@ -437,7 +437,7 @@ class Gatekeeper(commands.Cog):
             await self._log(
                 guild,
                 cfg,
-                h.ok(f"{h.user_display(member)} verified.", "✅ Gatekeeper Verify"),
+                h.ok(f"{member.mention} {h.user_display(member)} verified.", "✅ Gatekeeper Verify"),
             )
 
     # ── Join handling ─────────────────────────────────────────────────────────
@@ -464,7 +464,7 @@ class Gatekeeper(commands.Cog):
                 guild,
                 cfg,
                 h.err(
-                    f"Wanted to mute {h.user_display(member)} "
+                    f"Wanted to mute {member.mention} {h.user_display(member)} "
                     f"({', '.join(reasons)}) but the mute role is missing or above my "
                     "highest role. Run `/gatekeeper setup` or move my role up.",
                     "⚠️ Gatekeeper Misconfigured",
@@ -510,7 +510,7 @@ class Gatekeeper(commands.Cog):
             guild,
             cfg,
             h.warn(
-                f"Muted {h.user_display(member)}\n**Reason:** {', '.join(reasons)}",
+                f"{member.mention} Muted {h.user_display(member)}\n**Reason:** {', '.join(reasons)}",
                 "🔇 Gatekeeper Mute",
             ),
         )
