@@ -67,7 +67,7 @@ Commands (hybrid — slash + prefix), category "🎵 Music":
   volume / vol      — set playback volume (0-200)
   speed             — set playback speed (0.5-3.0)
   filter / fx       — apply an audio effect (bassboost, nightcore, …)
-  loop / repeat     — cycle loop mode: off → track → queue
+  loop              — cycle loop mode: off → track → queue
   seek / replay     — jump within / restart the current track
   lyrics            — fetch lyrics for the current track
   grab / save       — DM yourself the current track

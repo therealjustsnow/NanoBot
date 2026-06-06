@@ -16,6 +16,7 @@ Commands
   /daily                         → claim the daily reward
   /pay <member> <amount>         → send coins to someone
   /coin top [page]               → richest members
+  /coin gamble <amount>          → bet coins to double them (alias: bet)
   /coin grant <member> <amount>  → add coins        (Manage Server)
   /coin take <member> <amount>   → remove coins     (Manage Server)
   /coin reset [member]           → wipe balances    (Manage Server)
