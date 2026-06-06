@@ -197,6 +197,10 @@ class NanoBot(commands.Bot):
         intents = discord.Intents.default()
         intents.message_content = True
         intents.members = True
+        # Privileged intent: without it member.status is always "offline", so the
+        # /user (n!user) info card can't show real presence. Must also be toggled
+        # on in the Discord Developer Portal → Bot → Presence Intent.
+        intents.presences = True
 
         super().__init__(
             command_prefix=get_prefix,

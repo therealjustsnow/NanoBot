@@ -199,8 +199,10 @@ export DISCORD_TOKEN=your_token_here
 Enable these **Privileged Gateway Intents** in your app's Bot settings:
 - ✅ **Server Members Intent**
 - ✅ **Message Content Intent**
+- ✅ **Presence Intent**
 
-Without these, prefix commands and most mod commands will silently fail.
+Without these, prefix commands and most mod commands will silently fail, and the
+`/user` card will show everyone as offline.
 
 ### 5. Migrating from JSON storage
 

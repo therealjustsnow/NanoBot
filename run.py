@@ -270,8 +270,10 @@ def check_intents_reminder():
         "Make sure these are enabled in the Discord Developer Portal:\n"
         "      https://discord.com/developers/applications → Your Bot → Bot\n\n"
         "      ✅ SERVER MEMBERS INTENT   (required for member-related commands)\n"
-        "      ✅ MESSAGE CONTENT INTENT  (required for prefix commands)\n\n"
-        "      Without these, prefix commands and most mod commands will silently fail."
+        "      ✅ MESSAGE CONTENT INTENT  (required for prefix commands)\n"
+        "      ✅ PRESENCE INTENT         (required for /user status to be accurate)\n\n"
+        "      Without these, prefix commands and most mod commands will silently fail,\n"
+        "      and the /user card will show everyone as offline."
     )
     return True
 
