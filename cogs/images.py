@@ -70,8 +70,8 @@ class Images(commands.Cog):
     async def _image_cmd(self, ctx_or_i, key: str):
         """Handle both prefix and slash invocations."""
         # Import here to avoid circular import at module level.
-        # fun.py owns the cache-aware getter; images.py just calls it.
-        from cogs.fun import _get_nekos_image
+        # The fun package owns the cache-aware getter; images.py just calls it.
+        from cogs.fun.sources import _get_nekos_image
 
         info = _ENDPOINTS[key]
         result = await _get_nekos_image(self._session, info["endpoint"])

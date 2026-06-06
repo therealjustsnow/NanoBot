@@ -17,8 +17,9 @@ HERE = os.path.dirname(__file__)
 COGS_DIR = os.path.join(HERE, "..", "cogs")
 
 # Cogs whose top-level commands are generated dynamically at runtime, so they
-# are intentionally not enumerated by name in the module docstring.
-_DOCSTRING_EXEMPT = {"fun.py"}
+# are intentionally not enumerated by name in the module docstring (matched by
+# path relative to cogs/, with forward slashes).
+_DOCSTRING_EXEMPT = {"fun/cog.py"}
 
 _CMD_DECORATORS = {"command", "group", "hybrid_command", "hybrid_group"}
 
@@ -60,10 +61,10 @@ def test_every_command_is_named_in_its_cog_docstring():
         for fname in sorted(files):
             if not fname.endswith(".py") or fname == "__init__.py":
                 continue
-            if fname in _DOCSTRING_EXEMPT:
-                continue
             path = os.path.join(root, fname)
-            label = os.path.relpath(path, COGS_DIR)
+            label = os.path.relpath(path, COGS_DIR).replace(os.sep, "/")
+            if label in _DOCSTRING_EXEMPT:
+                continue
             tree = ast.parse(open(path).read(), filename=fname)
             tokens = _module_docstring_tokens(tree)
             for name in _top_level_command_names(tree):

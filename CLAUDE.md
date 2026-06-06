@@ -89,7 +89,7 @@ All features live in `cogs/` as discord.py cogs, hot-reloadable via `n!reload <c
 | `reminders.py` / `recurring.py` | One-time and repeating reminders, restart-safe via SQLite |
 | `welcome.py` | Per-guild join/leave messages with template variables |
 | `utility.py` | Info commands (`/server`, `/user`, `/help`; `serverinfo`/`userinfo` aliases) |
-| `fun.py` | 26 social + 33 reaction GIF commands via nekos.best |
+| `fun/` | 26 social + 33 reaction GIF commands via nekos.best (a package — see "Fun package layout" below) |
 | `votes.py` | top.gg / DBL / discord.bots.gg stat posting and vote webhooks |
 | `eli5.py` | Plain-English AI explanations via Groq (Llama 3.1 8B) |
 | `images.py` | Anime image commands (husbando, kitsune, neko, waifu) via nekos.best |
@@ -113,6 +113,19 @@ All features live in `cogs/` as discord.py cogs, hot-reloadable via `n!reload <c
 | `cog.py` | The `Music` cog: command surface, listeners, config accessors, presence/rate-limit/metadata helpers. Instantiates `self.source = MusicSource(self)`. Carries the full module docstring (commands enumerated for `test_docs_freshness`). |
 
 The static scanners `test_no_duplicate_commands.py` and `test_docs_freshness.py` walk `cogs/` recursively so package submodules are covered.
+
+### Fun package layout
+
+`cogs/fun/` is the other cog split into a package (was a single 2.2k-line file). `load_extension("cogs.fun")` works via `setup()` in `__init__.py`. Most of the fun cog's logic already lived in module-level functions (not cog methods), so the split is a straight move — no call-site rewriting. Submodules, in dependency order:
+
+| Module | Holds |
+|---|---|
+| `constants.py` | URLs, colours, tags, Groq/Kaggle/WYR constants, scraper defaults, compiled regexes. |
+| `actions.py` | Static data tables: `_SOCIAL_ACTIONS`, `_REACT_ACTIONS`, 8-ball pools, RPS constants, and the derived `_ALL_NEKOS_ENDPOINTS`. |
+| `helpers.py` | Pure helpers (`_ship_score`/`_ship_name`/`_ship_verdict`, `_split_wyr`, `_parse_duration`, `_scrape_cfg`). |
+| `sources.py` | Network layer: nekos.best / Nekosia fetches, FML/WYR scrapers, the Kaggle seed, Groq WYR generation; all cached via `cache_db`. `cogs/images.py` imports `_get_nekos_image` from here. |
+| `views.py` | `WyrView` (Would-You-Rather voting) + `RpsView` (Rock-Paper-Scissors). |
+| `cog.py` | The `Fun` cog: slash `/fun` group, dynamically-registered prefix commands, daily scrape + revalidate loops. (`test_docs_freshness` exempts `fun/cog.py` since its prefix commands are generated at runtime.) |
 
 ### Data Layer
 
