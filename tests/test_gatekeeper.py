@@ -112,6 +112,42 @@ async def test_evaluate_old_account_no_avatar_muted():
 
 
 @pytest.mark.asyncio
+async def test_evaluate_and_mode_young_and_no_avatar_muted():
+    cog = _cog()
+    member = _FakeMember(discord.utils.utcnow(), avatar=None)
+    reasons = await cog._evaluate(member, _cfg(match_mode="and"))
+    assert reasons == ["new account", "no profile picture"]
+
+
+@pytest.mark.asyncio
+async def test_evaluate_and_mode_young_good_avatar_allowed():
+    cog = _cog()
+    # Young but has a custom avatar → AND requires both, so no mute.
+    member = _FakeMember(discord.utils.utcnow(), avatar=object())
+    reasons = await cog._evaluate(member, _cfg(match_mode="and"))
+    assert reasons == []
+
+
+@pytest.mark.asyncio
+async def test_evaluate_and_mode_old_no_avatar_allowed():
+    cog = _cog()
+    old = discord.utils.utcnow() - timedelta(days=60)
+    member = _FakeMember(old, avatar=None)
+    reasons = await cog._evaluate(member, _cfg(match_mode="and"))
+    assert reasons == []
+
+
+@pytest.mark.asyncio
+async def test_evaluate_or_mode_old_no_avatar_muted():
+    # OR is the default; an old no-avatar account still gets muted.
+    cog = _cog()
+    old = discord.utils.utcnow() - timedelta(days=60)
+    member = _FakeMember(old, avatar=None)
+    reasons = await cog._evaluate(member, _cfg(match_mode="or"))
+    assert reasons == ["no profile picture"]
+
+
+@pytest.mark.asyncio
 async def test_evaluate_respects_disabled_toggles():
     cog = _cog()
     member = _FakeMember(discord.utils.utcnow(), avatar=None)
