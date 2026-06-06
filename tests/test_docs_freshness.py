@@ -56,16 +56,21 @@ def _top_level_command_names(tree: ast.Module) -> list[str]:
 def test_every_command_is_named_in_its_cog_docstring():
     """A new command must be added to the cog's module docstring too."""
     failures = []
-    for fname in sorted(os.listdir(COGS_DIR)):
-        if not fname.endswith(".py") or fname in {"__init__.py"}:
-            continue
-        if fname in _DOCSTRING_EXEMPT:
-            continue
-        tree = ast.parse(open(os.path.join(COGS_DIR, fname)).read(), filename=fname)
-        tokens = _module_docstring_tokens(tree)
-        for name in _top_level_command_names(tree):
-            if name.lower() not in tokens:
-                failures.append(f"  {fname}: command {name!r} not in module docstring")
+    for root, _dirs, files in os.walk(COGS_DIR):
+        for fname in sorted(files):
+            if not fname.endswith(".py") or fname == "__init__.py":
+                continue
+            if fname in _DOCSTRING_EXEMPT:
+                continue
+            path = os.path.join(root, fname)
+            label = os.path.relpath(path, COGS_DIR)
+            tree = ast.parse(open(path).read(), filename=fname)
+            tokens = _module_docstring_tokens(tree)
+            for name in _top_level_command_names(tree):
+                if name.lower() not in tokens:
+                    failures.append(
+                        f"  {label}: command {name!r} not in module docstring"
+                    )
     assert not failures, "Commands missing from their cog docstring:\n" + "\n".join(
         failures
     )

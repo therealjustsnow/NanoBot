@@ -1,79 +1,22 @@
-"""Tests for pure helper functions in cogs/music.py.
+"""Tests for pure helper functions in the music package.
 
-We extract only the pure functions via ast/textwrap so no Discord,
-yt-dlp, or FFmpeg stubs are needed.
+These live in cogs/music/helpers.py — a Discord/yt-dlp-free module — so they
+can be imported directly.
 """
 
-import ast
-import re
-import textwrap
-from pathlib import Path
-from typing import Optional
-
-import pytest
-
-# ---------------------------------------------------------------------------
-# Extract pure free functions from music.py without importing the whole module
-# ---------------------------------------------------------------------------
-
-_MUSIC_SOURCE = (Path(__file__).parent.parent / "cogs" / "music.py").read_text()
-_TREE = ast.parse(_MUSIC_SOURCE)
-_LINES = _MUSIC_SOURCE.splitlines(keepends=True)
-
-_PURE_FUNCTIONS = {
-    "_apply_delta",
-    "_extract_ytid",
-    "_fmt_time",
-    "_progress_bar",
-    "_parse_timestamp",
-    "_spotify_cover",
-    "_split_artist_title",
-    "_clean_artist",
-    "_ellipsize",
-    "_metadata_query",
-    "_pick_itunes_match",
-}
-
-# Grab module-level assignments that pure functions depend on
-_CONST_NAMES = {"_LYRICS_NOISE", "_YTID_RE"}
-_const_assigns: dict[str, ast.Assign] = {}
-for node in ast.walk(_TREE):
-    if isinstance(node, ast.Assign):
-        for t in node.targets:
-            if isinstance(t, ast.Name) and t.id in _CONST_NAMES:
-                _const_assigns[t.id] = node
-
-_ns: dict = {"re": re, "Optional": Optional}
-
-# Exec constants first (order matters: _YTID_RE before _extract_ytid)
-for _cname in ("_YTID_RE", "_LYRICS_NOISE"):
-    node = _const_assigns.get(_cname)
-    if node:
-        start = node.lineno - 1
-        end = node.end_lineno
-        src = textwrap.dedent("".join(_LINES[start:end]))
-        exec(compile(src, f"<{_cname}>", "exec"), _ns)  # noqa: S102
-
-# Exec each pure function
-for node in ast.walk(_TREE):
-    if isinstance(node, ast.FunctionDef) and node.name in _PURE_FUNCTIONS:
-        start = node.lineno - 1
-        end = node.end_lineno
-        src = textwrap.dedent("".join(_LINES[start:end]))
-        exec(compile(src, f"<{node.name}>", "exec"), _ns)  # noqa: S102
-
-_apply_delta = _ns["_apply_delta"]
-_extract_ytid = _ns["_extract_ytid"]
-_fmt_time = _ns["_fmt_time"]
-_progress_bar = _ns["_progress_bar"]
-_parse_timestamp = _ns["_parse_timestamp"]
-_spotify_cover = _ns["_spotify_cover"]
-_split_artist_title = _ns["_split_artist_title"]
-_clean_artist = _ns["_clean_artist"]
-_ellipsize = _ns["_ellipsize"]
-_metadata_query = _ns["_metadata_query"]
-_pick_itunes_match = _ns["_pick_itunes_match"]
-
+from cogs.music.helpers import (
+    _apply_delta,
+    _extract_ytid,
+    _fmt_time,
+    _progress_bar,
+    _parse_timestamp,
+    _spotify_cover,
+    _split_artist_title,
+    _clean_artist,
+    _ellipsize,
+    _metadata_query,
+    _pick_itunes_match,
+)
 
 # ---------------------------------------------------------------------------
 # _apply_delta
