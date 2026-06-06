@@ -109,9 +109,15 @@ def test_automod_help_covers_all_rules_and_actions():
     rules = _dict_string_keys(automod, "RULE_LABELS")
     actions = _dict_string_keys(automod, "ACTION_LABELS")
 
-    help_text = open(os.path.join(COGS_DIR, "utility.py")).read().lower()
-    # The automod entry lives in _SLASH_GROUPS; checking the whole file is enough
-    # to catch a rule/action that was added to automod but never surfaced in help.
+    # The automod entry lives in _SLASH_GROUPS in the utility help engine;
+    # checking the whole utility package is enough to catch a rule/action that
+    # was added to automod but never surfaced in help.
+    util_dir = os.path.join(COGS_DIR, "utility")
+    help_text = "".join(
+        open(os.path.join(util_dir, f)).read()
+        for f in sorted(os.listdir(util_dir))
+        if f.endswith(".py")
+    ).lower()
     missing_rules = [
         r
         for r in rules

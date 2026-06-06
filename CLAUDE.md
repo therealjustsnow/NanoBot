@@ -88,7 +88,7 @@ All features live in `cogs/` as discord.py cogs, hot-reloadable via `n!reload <c
 | `admin.py` | Owner-only: reload cogs, restart, git pull update, full upgrade (pull+pip+restart), sync slash commands, `status` (set idle presence text / `clear` to auto-rotate) |
 | `reminders.py` / `recurring.py` | One-time and repeating reminders, restart-safe via SQLite |
 | `welcome.py` | Per-guild join/leave messages with template variables |
-| `utility.py` | Info commands (`/server`, `/user`, `/help`; `serverinfo`/`userinfo` aliases) |
+| `utility/` | Info commands (`/server`, `/user`, `/help`; `serverinfo`/`userinfo` aliases) (a package — see "Utility package layout" below) |
 | `fun/` | 26 social + 33 reaction GIF commands via nekos.best (a package — see "Fun package layout" below) |
 | `votes.py` | top.gg / DBL / discord.bots.gg stat posting and vote webhooks |
 | `eli5.py` | Plain-English AI explanations via Groq (Llama 3.1 8B) |
@@ -113,6 +113,16 @@ All features live in `cogs/` as discord.py cogs, hot-reloadable via `n!reload <c
 | `cog.py` | The `Music` cog: command surface, listeners, config accessors, presence/rate-limit/metadata helpers. Instantiates `self.source = MusicSource(self)`. Carries the full module docstring (commands enumerated for `test_docs_freshness`). |
 
 The static scanners `test_no_duplicate_commands.py` and `test_docs_freshness.py` walk `cogs/` recursively so package submodules are covered.
+
+### Utility package layout
+
+`cogs/utility/` splits the help engine and source-viewer out of the cog. `load_extension("cogs.utility")` works via `setup()` in `__init__.py`.
+
+| Module | Holds |
+|---|---|
+| `help_engine.py` | The `/help` engine: `_CATEGORY_ORDER`, the static `_SLASH_GROUPS` metadata (for pure-slash groups like automod/roles/auditlog that can't carry `extras`), category collection/lookup, embed builders, and the paginated `HelpView`. Walks `bot.commands` at call-time so help never goes stale. `test_docs_freshness` reads this file for the AutoMod-help coverage check. |
+| `source.py` | Helpers for the `source` command: GitHub URL building (`_gh_url`), related-callable discovery, codebase symbol search. |
+| `cog.py` | The `Utility` cog: the full command surface (`help`, `prefix`, `ping`, `server`, `user`, `source`, …). |
 
 ### Moderation package layout
 
