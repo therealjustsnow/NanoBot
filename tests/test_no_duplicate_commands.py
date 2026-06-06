@@ -48,17 +48,25 @@ def _top_level_commands(filepath: str) -> list[tuple[str, list[str]]]:
     return results
 
 
+def _iter_cog_files():
+    """Yield (label, path) for every cog .py, recursing into cog subpackages."""
+    for root, _dirs, files in os.walk(COGS_DIR):
+        for fname in sorted(files):
+            if not fname.endswith(".py"):
+                continue
+            path = os.path.join(root, fname)
+            label = os.path.relpath(path, COGS_DIR)
+            yield label, path
+
+
 def _collect_all() -> dict[str, list[str]]:
     """Map every command token (name or alias) → [cog filenames that define it]."""
     token_to_cogs: dict[str, list[str]] = defaultdict(list)
-    for fname in sorted(os.listdir(COGS_DIR)):
-        if not fname.endswith(".py"):
-            continue
-        path = os.path.join(COGS_DIR, fname)
+    for label, path in _iter_cog_files():
         for name, aliases in _top_level_commands(path):
-            token_to_cogs[name].append(fname)
+            token_to_cogs[name].append(label)
             for alias in aliases:
-                token_to_cogs[alias].append(fname)
+                token_to_cogs[alias].append(label)
     return token_to_cogs
 
 

@@ -1,5 +1,5 @@
 """
-cogs/admin.py
+cogs/admin/cog.py
 Owner-only bot management commands.
 
 All commands here require the invoker to be the bot owner
@@ -37,131 +37,16 @@ from discord.ext import commands
 from utils import config as cfg_mod
 from utils import helpers as h
 
+from .constants import _REPO_ROOT, _ALL_COGS, _VALID_LEVELS
+from .helpers import _git_pull
+from .views import ServersView
+from .config_ops import ConfigMixin
+
 log = logging.getLogger("NanoBot.admin")
 
-# Repo root = parent of this cogs/ directory. Pin subprocess cwd to it so
-# git/pip/restart always operate on the bot's own checkout regardless of the
-# directory the process happened to be launched from.
-_REPO_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
-
-async def _git_pull():
-    """Run `git pull` in a worker thread (network I/O — must not block the loop).
-
-    Returns the completed process, or raises FileNotFoundError / TimeoutExpired.
-    """
-
-    def _run():
-        return subprocess.run(
-            ["git", "pull"],
-            capture_output=True,
-            text=True,
-            timeout=30,
-            cwd=_REPO_ROOT,
-        )
-
-    return await asyncio.to_thread(_run)
-
-
-# All cogs that NanoBot manages (admin reloads itself too — safe with discord.py 2.x)
-_ALL_COGS = (
-    "cogs.moderation",
-    "cogs.tags",
-    "cogs.utility",
-    "cogs.reminders",
-    "cogs.recurring",
-    "cogs.warnings",
-    "cogs.welcome",
-    "cogs.admin",
-    "cogs.votes",
-    "cogs.auditlog",
-    "cogs.automod",
-    "cogs.roles",
-    "cogs.eli5",
-    "cogs.images",
-    "cogs.fun",
-    "cogs.music",
-    "cogs.leveling",
-    "cogs.economy",
-    "cogs.gatekeeper",
-    "cogs.debug",
-)
-
-_VALID_LEVELS = ("DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL")
-
-
-class ServersView(discord.ui.View):
-    """Paginated ◀ ▶ navigation for the servers command."""
-
-    def __init__(
-        self,
-        embeds: list[discord.Embed],
-        author: discord.Member,
-        index: int = 0,
-    ):
-        super().__init__(timeout=120)
-        self.embeds = embeds
-        self.author = author
-        self.index = index
-        self.message: discord.Message | None = None
-        self._update_buttons()
-
-    def _update_buttons(self):
-        self.prev_btn.disabled = self.index == 0
-        self.next_btn.disabled = self.index == len(self.embeds) - 1
-
-    async def _edit(self, interaction: discord.Interaction):
-        self._update_buttons()
-        await interaction.response.edit_message(
-            embed=self.embeds[self.index], view=self
-        )
-
-    async def interaction_check(self, interaction: discord.Interaction) -> bool:
-        if interaction.user != self.author:
-            await interaction.response.send_message(
-                "Only " + self.author.display_name + " can navigate this list.",
-                ephemeral=True,
-            )
-            return False
-        return True
-
-    async def on_timeout(self):
-        self.stop()
-        if self.message:
-            try:
-                await self.message.edit(view=None)
-            except discord.HTTPException:
-                pass
-
-    @discord.ui.button(
-        emoji=chr(11013) + chr(65039), style=discord.ButtonStyle.secondary
-    )
-    async def prev_btn(
-        self, interaction: discord.Interaction, button: discord.ui.Button
-    ):
-        self.index -= 1
-        await self._edit(interaction)
-
-    @discord.ui.button(emoji=chr(10060), style=discord.ButtonStyle.secondary)
-    async def close_btn(
-        self, interaction: discord.Interaction, button: discord.ui.Button
-    ):
-        self.stop()
-        await interaction.message.delete()
-
-    @discord.ui.button(
-        emoji=chr(10145) + chr(65039), style=discord.ButtonStyle.secondary
-    )
-    async def next_btn(
-        self, interaction: discord.Interaction, button: discord.ui.Button
-    ):
-        self.index += 1
-        await self._edit(interaction)
-
-
-# ══════════════════════════════════════════════════════════════════════════════
-class Admin(commands.Cog):
-    """Owner-only bot management."""
+class Admin(ConfigMixin, commands.Cog):
+    """Owner-only bot management commands."""
 
     def __init__(self, bot: commands.Bot):
         self.bot = bot
@@ -1203,100 +1088,6 @@ class Admin(commands.Cog):
             )
         )
 
-    # ── config helpers ────────────────────────────────────────────────────────
-    @staticmethod
-    def _resolve_key(raw: str) -> Optional[tuple[str, str]]:
-        """Accept either 'section.key' or bare 'key'. Returns (section, key) or None."""
-        raw = raw.strip().lower()
-        if "." in raw:
-            section, _, bare = raw.partition(".")
-            if (
-                section in cfg_mod.SECTION_ORDER
-                and cfg_mod.SECTION_MAP.get(bare) == section
-            ):
-                return section, bare
-            return None
-        if raw in cfg_mod.SECTION_MAP:
-            return cfg_mod.SECTION_MAP[raw], raw
-        return None
-
-    @staticmethod
-    def _display(key: str, val) -> str:
-        masked = cfg_mod.mask_value(key, val)
-        return "_(unset)_" if masked == "(unset)" else f"`{masked}`"
-
-    async def _config_show(self, ctx: commands.Context):
-        cfg = cfg_mod.load()
-        lines: list[str] = []
-        for section in cfg_mod.SECTION_ORDER:
-            keys = [k for k, sec in cfg_mod.SECTION_MAP.items() if sec == section]
-            if not keys:
-                continue
-            lines.append(f"**[{section}]**")
-            for k in keys:
-                val = cfg.get(k, cfg_mod.DEFAULTS.get(k))
-                lines.append(f"  `{k}` = {self._display(k, val)}")
-            lines.append("")
-        e = h.embed(
-            title="⚙️ Config (config.ini)",
-            description="\n".join(lines).rstrip(),
-            color=h.BLUE,
-        )
-        e.set_footer(
-            text="Secrets are masked · `!config set <key> <value>` to change · NanoBot"
-        )
-        await ctx.reply(embed=e)
-
-    async def _config_get(self, ctx: commands.Context, section: str, key: str):
-        cfg = cfg_mod.load()
-        val = cfg.get(key, cfg_mod.DEFAULTS.get(key))
-        desc = f"**[{section}]** `{key}` = {self._display(key, val)}"
-        if key in cfg_mod.SENSITIVE_KEYS:
-            desc += "\n_(masked — secret)_"
-        await ctx.reply(
-            embed=h.embed(
-                title="⚙️ Config Value",
-                description=desc,
-                color=h.BLUE,
-            )
-        )
-
-    async def _config_set(
-        self, ctx: commands.Context, section: str, key: str, raw_value: str
-    ):
-        # Coerce the string through the same pipeline used by config.load()
-        coerced = cfg_mod._coerce(key, raw_value)
-
-        # Block obviously bad values before touching disk.
-        cfg = cfg_mod.load()
-        cfg[key] = coerced
-        issues = [i for i in cfg_mod.validate(cfg) if i.field == key and i.fatal]
-        if issues:
-            return await ctx.reply(
-                embed=h.err(
-                    f"Rejected — `{key}` failed validation: {issues[0].message}"
-                )
-            )
-
-        try:
-            cfg_mod.set_value(key, coerced)
-        except Exception as exc:
-            log.error(f"config set {key} failed: {exc}", exc_info=exc)
-            return await ctx.reply(embed=h.err(f"Could not write config.ini: {exc}"))
-
-        if hasattr(self.bot, "reload_config"):
-            self.bot.reload_config()
-
-        log.info(f"config set: [{section}] {key} changed by {h.user_log(ctx.author)}")
-        display = self._display(key, coerced)
-        await ctx.reply(
-            embed=h.ok(
-                f"**[{section}]** `{key}` = {display}\n"
-                "Saved to `config.ini` and live now.",
-                "⚙️ Config Updated",
-            )
-        )
-
     # ══════════════════════════════════════════════════════════════════════════
     #  servers
     # ══════════════════════════════════════════════════════════════════════════
@@ -1365,8 +1156,3 @@ class Admin(commands.Cog):
         log.info(
             f"servers: page {start_index + 1}/{total_pages} for {h.user_log(ctx.author)}"
         )
-
-
-# ── Registration ───────────────────────────────────────────────────────────────
-async def setup(bot: commands.Bot):
-    await bot.add_cog(Admin(bot))

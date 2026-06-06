@@ -23,7 +23,7 @@ Account-age mutes also auto-lift once the account is old enough (default 35
 days / 5 weeks) even without verifying.
 
 All schedules (auto-unmute + auto-kick) persist in SQLite and are restored on
-restart via the on_restore_schedules event, mirroring cogs/moderation.py.
+restart via the on_restore_schedules event, mirroring cogs/moderation/.
 
 The mute role itself only restricts members if it denies sending in every
 channel. `/gatekeeper setup` creates the role and applies those overwrites.

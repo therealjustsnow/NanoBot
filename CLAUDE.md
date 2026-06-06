@@ -42,7 +42,7 @@ Tests cover pure-Python utilities and the SQLite layer (in-memory), no live Disc
 - `tests/test_db.py` — `utils/db.py` against an in-memory SQLite database
 - `tests/test_cache_db.py` — `utils/cache_db.py` against an in-memory SQLite database
 - `tests/test_storage.py` — sync and async JSON helpers in `utils/storage.py`
-- `tests/test_music_helpers.py` — pure helper functions extracted from `cogs/music.py` (no yt-dlp/FFmpeg needed); includes `_extract_ytid`
+- `tests/test_music_helpers.py` — pure helper functions imported directly from `cogs/music/helpers.py` (Discord/yt-dlp-free module); includes `_extract_ytid`
 - `tests/test_leveling_helpers.py` — pure level-math helpers from `cogs/leveling.py` (XP curve, progress bar)
 - `tests/test_leveling_db.py` — leveling accessors in `utils/db.py` against in-memory SQLite
 - `tests/test_economy_helpers.py` — pure economy helpers from `cogs/economy.py` (coin formatting, daily/streak math)
@@ -78,25 +78,87 @@ All features live in `cogs/` as discord.py cogs, hot-reloadable via `n!reload <c
 
 | Cog | Responsibility |
 |---|---|
-| `moderation.py` | Ban/kick/mute/purge/lock/slowmode, timed actions, last-sender targeting |
+| `moderation/` | Ban/kick/mute/purge/lock/slowmode, timed actions, last-sender targeting (a package — see "Moderation package layout" below) |
 | `warnings.py` | Warning tracking with configurable auto-kick/ban thresholds |
 | `automod.py` | Passive rule enforcement (spam, invites, links, caps, mentions, badwords, regex, word+attachment); actions: delete/warn/timeout/kick/softban |
 | `gatekeeper.py` | New-account gate: on join, role-mutes (`Muted (NanoBot)`) accounts younger than a threshold (default 30d, auto-unmute at 35d/5w), with no avatar (Discord logo default, `member.avatar is None`), or with a pickable "stock" avatar matched by perceptual (difference) hash against a **system-wide** catalog (`assets/gatekeeper_avatars/` bundled seeds + `data/gatekeeper_avatars/` runtime adds via `/gatekeeper learnavatar`; the catalog is global, so every guild reads the same images and any guild's `learnavatar` contributes to it). How the age and avatar checks combine is per-guild via `match_mode` (`or` = mute on either signal, default; `and` = mute only when an account is both too young AND has a bad avatar). Muted members get a verification prompt (DM first, fallback to a quarantine channel) with a persistent button → math-captcha modal; correct answer unmutes. Account-age mutes auto-unmute once the account ages out (per-guild `age_unmute_enabled`, on by default; off forces verification). Unverified members are kicked after a timeout (default 7d). Auto-unmute + auto-kick persist in SQLite and restore on restart via `on_restore_schedules` (mirrors `moderation.py`). Log-channel events are emoji-tagged: 🔇 mute, ✅ verify, 🔊 auto-unmute, 🚪 kick. `/gatekeeper` group (Manage Server): `setup`/`status`/`enable`/`disable`/`role`/`channel`/`logchannel`/`minage`/`unmuteage`/`kicktimeout`/`newaccounts`/`noavatar`/`stockavatar`/`sensitivity` (per-guild dHash match distance, default 8)/`matchmode` (and/or)/`ageunmute` (toggle age auto-unmute)/`verify`/`message`/`learnavatar`/`checkavatar`. Bulk-seed the stock-avatar catalog from a Figma file with `scripts/import_figma_avatars.py` (stdlib-only, needs a Figma token). |
 | `auditlog.py` | 13 toggleable event types (12 Discord server events + AutoMod action) logged to a configurable channel |
 | `roles.py` | Persistent button-based self-assign role panels |
 | `tags.py` | Personal and global text snippets; `n!tagname` shortcut fires any tag |
-| `admin.py` | Owner-only: reload cogs, restart, git pull update, full upgrade (pull+pip+restart), sync slash commands, `status` (set idle presence text / `clear` to auto-rotate) |
+| `admin/` | Owner-only: reload cogs, restart, git pull update, full upgrade (pull+pip+restart), sync slash commands, `status` (set idle presence text / `clear` to auto-rotate) (a package — see "Admin package layout" below) |
 | `reminders.py` / `recurring.py` | One-time and repeating reminders, restart-safe via SQLite |
 | `welcome.py` | Per-guild join/leave messages with template variables |
-| `utility.py` | Info commands (`/server`, `/user`, `/help`; `serverinfo`/`userinfo` aliases) |
-| `fun.py` | 26 social + 33 reaction GIF commands via nekos.best |
+| `utility/` | Info commands (`/server`, `/user`, `/help`; `serverinfo`/`userinfo` aliases) (a package — see "Utility package layout" below) |
+| `fun/` | 26 social + 33 reaction GIF commands via nekos.best (a package — see "Fun package layout" below) |
 | `votes.py` | top.gg / DBL / discord.bots.gg stat posting and vote webhooks |
 | `eli5.py` | Plain-English AI explanations via Groq (Llama 3.1 8B) |
 | `images.py` | Anime image commands (husbando, kitsune, neko, waifu) via nekos.best |
 | `debug.py` | Owner-only debug REPL / shell evaluation |
 | `leveling.py` | Per-guild message XP + levels (Mee6-style curve). `/rank` card (flat hybrid) + `/level` group: `top` leaderboard, plus Manage-Server admin subcommands `set`/`give`/`reset`/`toggle`/`rate`/`announce`/`reward`/`ignore`/`coinreward`/`config`. In-memory per-member XP cooldown; role rewards granted on level-up; optional coin reward on level-up (`coin_reward` × new level, written via `db.add_coins`); off by default. |
 | `economy.py` | Per-guild NanoCoin economy. Flat `/balance`, `/daily` (24h cooldown + consecutive-day streak bonus), `/pay` + `/coin` group: `top` rich list, `gamble` (bet coins, ~45% win, double-or-nothing), plus Manage-Server admin subcommands `grant`/`take`/`reset`/`daily`/`streakbonus`/`name`/`emoji`/`config`. Currency name/emoji configurable per guild. |
-| `music.py` | Voice music player: yt-dlp streaming, Spotify link support (no API key — embed-page metadata scraped then matched on YouTube at play time), per-guild queue, interactive Now Playing card (buttons), search picker, vote-skip, playnext/playnow/stream/shuffleplay, follow, move/jump, loop/shuffle/seek/speed/audio-filters/volume, lyrics, grab, pldump, smart `autoplay` (queues YouTube Mix/related tracks when the queue empties, seeded by last played YouTube track) + `guildplay` (plays random tracks from the server's persistent `guildplaylist`/`gpl`; add accepts whole playlists, dead entries auto-pruned on error), 24/7 stay-connected mode (`radio`/`247`, per-guild, off by default), idle auto-disconnect, per-guild song/user block lists (`blocksong`/`blockuser`, Manage Server), played-track `history`, self-deafen on join, now-playing bot presence (Streaming status with a clickable Watch button for YouTube/Twitch tracks; account-global since Discord has no per-guild activity; `music_status_message` customizes the text). Presence is owned by `NanoBot` in main.py (`set_music_activity`/`apply_presence`/hourly `_presence_loop`): music activity takes priority while a track plays, otherwise the idle status shows a manual override (`idle_status_message`, set live via owner `!status`) or auto-rotates "Listening to /help | /<command>" hourly. Tracks carry a cleaned `artist` field (`_clean_artist` prefers yt-dlp's `artist`/`creator` tag, else de-dupes the uploader against the title; the Now Playing card shows Artist when known, else Uploader). When the artist is still unknown, `_enrich_metadata` does a one-shot lookup against Apple's free, keyless iTunes Search API at Now-Playing time (`music_metadata_lookup`, on by default; `_pick_itunes_match` only accepts a result whose track name substantially overlaps the title). Configurable yt-dlp search service/proxy/user-agent/source-address, and YouTube rate-limit (429/403) back-off (`music_ratelimit_leave` posts a notice to each guild's last control-panel channel before disconnecting). Audio output is configurable via `music_use_opus`: Opus (default) is stream-copied from the source when unprocessed, else re-encoded with libopus at the voice channel's bitrate; PCM mode decodes every track and lets discord.py encode, trading CPU for instant (re-stream-free) volume changes. `music_persist_queue` (on by default) saves the queue to SQLite and resumes it (rejoins the last voice channel, current track restarts from 0:00, rest of queue intact) on restart; `music_predownload` (on by default) fetches the next queued track to `data/music_cache/` while one plays for gapless playback (live streams are skipped — they'd never finish downloading). Reads `[music]` config (incl. cookies). Requires FFmpeg + PyNaCl. Live playback position is in-memory; the guild playlist, 24/7 setting, and (when enabled) the queue persist in SQLite. |
+| `music/` | Voice music player (a package — see "Music package layout" below). yt-dlp streaming, Spotify link support (no API key — embed-page metadata scraped then matched on YouTube at play time), per-guild queue, interactive Now Playing card (buttons), search picker, vote-skip, playnext/playnow/stream/shuffleplay, follow, move/jump, loop/shuffle/seek/speed/audio-filters/volume, lyrics, grab, pldump, smart `autoplay` (queues YouTube Mix/related tracks when the queue empties, seeded by last played YouTube track) + `guildplay` (plays random tracks from the server's persistent `guildplaylist`/`gpl`; add accepts whole playlists, dead entries auto-pruned on error), 24/7 stay-connected mode (`radio`/`247`, per-guild, off by default), idle auto-disconnect, per-guild song/user block lists (`blocksong`/`blockuser`, Manage Server), played-track `history`, self-deafen on join, now-playing bot presence (Streaming status with a clickable Watch button for YouTube/Twitch tracks; account-global since Discord has no per-guild activity; `music_status_message` customizes the text). Presence is owned by `NanoBot` in main.py (`set_music_activity`/`apply_presence`/hourly `_presence_loop`): music activity takes priority while a track plays, otherwise the idle status shows a manual override (`idle_status_message`, set live via owner `!status`) or auto-rotates "Listening to /help | /<command>" hourly. Tracks carry a cleaned `artist` field (`_clean_artist` prefers yt-dlp's `artist`/`creator` tag, else de-dupes the uploader against the title; the Now Playing card shows Artist when known, else Uploader). When the artist is still unknown, `_enrich_metadata` does a one-shot lookup against Apple's free, keyless iTunes Search API at Now-Playing time (`music_metadata_lookup`, on by default; `_pick_itunes_match` only accepts a result whose track name substantially overlaps the title). Configurable yt-dlp search service/proxy/user-agent/source-address, and YouTube rate-limit (429/403) back-off (`music_ratelimit_leave` posts a notice to each guild's last control-panel channel before disconnecting). Audio output is configurable via `music_use_opus`: Opus (default) is stream-copied from the source when unprocessed, else re-encoded with libopus at the voice channel's bitrate; PCM mode decodes every track and lets discord.py encode, trading CPU for instant (re-stream-free) volume changes. `music_persist_queue` (on by default) saves the queue to SQLite and resumes it (rejoins the last voice channel, current track restarts from 0:00, rest of queue intact) on restart; `music_predownload` (on by default) fetches the next queued track to `data/music_cache/` while one plays for gapless playback (live streams are skipped — they'd never finish downloading). Downloading is the only thing that populates the cache, so enabling `music_save_videos` also triggers the fetch even when `music_predownload` is off (otherwise the cache config would be dead). Reads `[music]` config (incl. cookies). Requires FFmpeg + PyNaCl. Live playback position is in-memory; the guild playlist, 24/7 setting, and (when enabled) the queue persist in SQLite. |
+
+### Music package layout
+
+`cogs/music/` is the one cog split into a package (it was a single 4k-line file). `load_extension("cogs.music")` still works via `setup()` in `__init__.py`. Submodules, in dependency order (no import cycles; cross-class type hints use `TYPE_CHECKING`):
+
+| Module | Holds |
+|---|---|
+| `constants.py` | Module constants + compiled regexes (`ACCENT`, `LOOP_*`, `FILTERS`, `_YTDL_BASE`, `_MUSIC_CACHE_DIR`, `_SPOTIFY_*`, …). |
+| `helpers.py` | Pure, Discord/yt-dlp-free helpers (`_extract_ytid`, `_fmt_time`, `_clean_artist`, `_pick_itunes_match`, …). Imported directly by tests. |
+| `track.py` | The `Track` dataclass. |
+| `source.py` | `MusicSource`: yt-dlp extraction/search, downloading, the on-disk cache, and Spotify metadata scraping (the "downloaded.py" equivalent). Holds a back-ref to the cog for config + `players`. Owns the `yt_dlp` import / `YTDLP_AVAILABLE`. |
+| `views.py` | discord.ui views (`Controls`, `QueuePageView`, `AplPageView`, `SearchView`) + `_apl_single_embed`. |
+| `player.py` | `GuildPlayer`: per-guild queue, player loop, predownload, source building, Now Playing card. Calls `self.cog.source.*` for extraction/download. |
+| `cog.py` | The `Music` cog: command surface, listeners, config accessors, presence/rate-limit/metadata helpers. Instantiates `self.source = MusicSource(self)`. Carries the full module docstring (commands enumerated for `test_docs_freshness`). |
+
+The static scanners `test_no_duplicate_commands.py` and `test_docs_freshness.py` walk `cogs/` recursively so package submodules are covered.
+
+### Admin package layout
+
+`cogs/admin/` is command-heavy, so every command stays in one `Admin` class (no command moved); only the supporting code is extracted. `load_extension("cogs.admin")` works via `setup()` in `__init__.py`.
+
+| Module | Holds |
+|---|---|
+| `constants.py` | `_REPO_ROOT` (pinned subprocess cwd — **two** `dirname` levels up now the file lives in `cogs/admin/`), `_ALL_COGS` (the managed-cog list; keep in sync with `main.py`'s copy), `_VALID_LEVELS`. |
+| `helpers.py` | `_git_pull` (the git-pull subprocess wrapper). |
+| `views.py` | `ServersView` paginator for the `servers` command. |
+| `config_ops.py` | `ConfigMixin`: the DM-only `config` show/get/set operations (`_resolve_key`, `_display`, `_config_show/get/set`). `Admin` inherits it. |
+| `cog.py` | `Admin(ConfigMixin, commands.Cog)`: the full command surface. |
+
+### Utility package layout
+
+`cogs/utility/` splits the help engine and source-viewer out of the cog. `load_extension("cogs.utility")` works via `setup()` in `__init__.py`.
+
+| Module | Holds |
+|---|---|
+| `help_engine.py` | The `/help` engine: `_CATEGORY_ORDER`, the static `_SLASH_GROUPS` metadata (for pure-slash groups like automod/roles/auditlog that can't carry `extras`), category collection/lookup, embed builders, and the paginated `HelpView`. Walks `bot.commands` at call-time so help never goes stale. `test_docs_freshness` reads this file for the AutoMod-help coverage check. |
+| `source.py` | Helpers for the `source` command: GitHub URL building (`_gh_url`), related-callable discovery, codebase symbol search. |
+| `cog.py` | The `Utility` cog: the full command surface (`help`, `prefix`, `ping`, `server`, `user`, `source`, …). |
+
+### Moderation package layout
+
+`cogs/moderation/` is a command-heavy cog, so the split keeps every command in one `Moderation` class (no command moved) and extracts only the supporting code. `load_extension("cogs.moderation")` works via `setup()` in `__init__.py`.
+
+| Module | Holds |
+|---|---|
+| `helpers.py` | Stateless module functions: `resolve_target`, `try_dm`, `can_target`, `can_bot_target`, `action_log`, `_chunked_sleep`. Commands call them as bare names. |
+| `views.py` | `NukeConfirm` confirm/cancel view for `/nuke`. |
+| `schedules.py` | `TimedActionsMixin`: auto-unban / auto-unslow scheduling + restore, persisted in SQLite. `Moderation` inherits it; the task dicts are created in `Moderation.__init__` and restore is driven by the cog's `on_restore_schedules` listener. |
+| `cog.py` | `Moderation(TimedActionsMixin, commands.Cog)`: `__init__`/`cog_unload`/`on_restore_schedules` + the full command surface. |
+
+### Fun package layout
+
+`cogs/fun/` is the other cog split into a package (was a single 2.2k-line file). `load_extension("cogs.fun")` works via `setup()` in `__init__.py`. Most of the fun cog's logic already lived in module-level functions (not cog methods), so the split is a straight move — no call-site rewriting. Submodules, in dependency order:
+
+| Module | Holds |
+|---|---|
+| `constants.py` | URLs, colours, tags, Groq/Kaggle/WYR constants, scraper defaults, compiled regexes. |
+| `actions.py` | Static data tables: `_SOCIAL_ACTIONS`, `_REACT_ACTIONS`, 8-ball pools, RPS constants, and the derived `_ALL_NEKOS_ENDPOINTS`. |
+| `helpers.py` | Pure helpers (`_ship_score`/`_ship_name`/`_ship_verdict`, `_split_wyr`, `_parse_duration`, `_scrape_cfg`). |
+| `sources.py` | Network layer: nekos.best / Nekosia fetches, FML/WYR scrapers, the Kaggle seed, Groq WYR generation; all cached via `cache_db`. `cogs/images.py` imports `_get_nekos_image` from here. |
+| `views.py` | `WyrView` (Would-You-Rather voting) + `RpsView` (Rock-Paper-Scissors). |
+| `cog.py` | The `Fun` cog: slash `/fun` group, dynamically-registered prefix commands, daily scrape + revalidate loops. (`test_docs_freshness` exempts `fun/cog.py` since its prefix commands are generated at runtime.) |
 
 ### Data Layer
 

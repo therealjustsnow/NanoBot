@@ -1,5 +1,5 @@
 """
-cogs/moderation.py — v2.1.1
+cogs/moderation/cog.py — v2.1.1
 Core moderation commands — designed for speed on mobile.
 
 Commands:
@@ -55,123 +55,21 @@ from utils.checks import (
     has_admin_perms,
 )
 
+from .helpers import (
+    resolve_target,
+    try_dm,
+    can_target,
+    can_bot_target,
+    action_log,
+)
+from .views import NukeConfirm
+from .schedules import TimedActionsMixin
+
 log = logging.getLogger("NanoBot.moderation")
 
 
-# ── Helpers ────────────────────────────────────────────────────────────────────
-
-
-def resolve_target(bot, channel_id, explicit):
-    return explicit if explicit else bot.last_senders.get(channel_id)
-
-
-async def try_dm(member, content):
-    try:
-        await member.send(content)
-        return True
-    except (discord.Forbidden, discord.HTTPException):
-        return False
-
-
-def can_target(actor, target):
-    if actor == actor.guild.owner:
-        return True
-    return actor.top_role > target.top_role
-
-
-def can_bot_target(bot_member, target):
-    """Check whether the bot's role is high enough to act on target.
-
-    This is separate from can_target (which checks the human moderator).
-    Discord will 403 if the bot's top role is not strictly above the target's
-    top role, even when the bot has the relevant permission node.
-    """
-    return bot_member.top_role > target.top_role
-
-
-async def action_log(ctx, emoji, action, *, target=None, detail=""):
-    if target is not None:
-        e = h.mod_action_embed(
-            f"{emoji} {action.title()}",
-            target,
-            detail or "No reason given",
-            moderator=ctx.author,
-            color=h.GREY,
-        )
-    else:
-        desc = f"{emoji} **{ctx.author.display_name}** used **{action}**"
-        if detail:
-            desc += f"\n{detail}"
-        e = discord.Embed(description=desc, color=h.GREY)
-        e.timestamp = discord.utils.utcnow()
-        e.set_footer(text="NanoBot")
-    try:
-        await ctx.channel.send(embed=e)
-    except discord.HTTPException:
-        pass
-
-
-# ── Nuke confirmation view ────────────────────────────────────────────────────
-class NukeConfirm(discord.ui.View):
-    """Ephemeral confirm/cancel buttons for /nuke. Times out after 30 s."""
-
-    def __init__(self, author: discord.Member):
-        super().__init__(timeout=30)
-        self.author = author
-        self.outcome: bool | None = None
-        self.message: discord.Message | None = None
-
-    async def interaction_check(self, interaction: discord.Interaction) -> bool:
-        if interaction.user != self.author:
-            await interaction.response.send_message(
-                "That's not your nuke to confirm.", ephemeral=True
-            )
-            return False
-        return True
-
-    async def on_timeout(self):
-        for item in self.children:
-            item.disabled = True
-        if self.message:
-            try:
-                await self.message.edit(view=self)
-            except discord.HTTPException:
-                pass
-
-    @discord.ui.button(label="💥 Nuke it", style=discord.ButtonStyle.danger)
-    async def confirm_btn(
-        self, interaction: discord.Interaction, button: discord.ui.Button
-    ):
-        self.outcome = True
-        self.stop()
-        await interaction.response.edit_message(
-            embed=discord.Embed(description="💥 Nuking…", color=0xED4245), view=None
-        )
-
-    @discord.ui.button(label="Cancel", style=discord.ButtonStyle.secondary)
-    async def cancel_btn(
-        self, interaction: discord.Interaction, button: discord.ui.Button
-    ):
-        self.outcome = False
-        self.stop()
-        await interaction.response.edit_message(
-            embed=discord.Embed(description="✅ Nuke cancelled.", color=0x57F287),
-            view=None,
-        )
-
-
-async def _chunked_sleep(seconds: float) -> None:
-    """Sleep in <=1h chunks. A single multi-month asyncio.sleep is fragile;
-    chunking keeps each await short."""
-    remaining = seconds
-    chunk = 3600
-    while remaining > 0:
-        await asyncio.sleep(min(remaining, chunk))
-        remaining -= chunk
-
-
 # ══════════════════════════════════════════════════════════════════════════════
-class Moderation(commands.Cog):
+class Moderation(TimedActionsMixin, commands.Cog):
     """Mobile-first moderation commands."""
 
     def __init__(self, bot):
@@ -193,105 +91,6 @@ class Moderation(commands.Cog):
     async def on_restore_schedules(self):
         await asyncio.gather(
             self._restore_unban_schedules(), self._restore_slow_schedules()
-        )
-
-    async def _restore_unban_schedules(self):
-        data = await db.get_all_unbans()
-        now = datetime.now(timezone.utc).timestamp()
-        for key, info in data.items():
-            remaining = info["until"] - now
-            guild_id = int(info["guild_id"])
-            user_id = int(info["user_id"])
-            if remaining > 0:
-                self._unban_tasks[key] = asyncio.create_task(
-                    self._auto_unban(guild_id, user_id, remaining)
-                )
-            else:
-                guild = self.bot.get_guild(guild_id)
-                if guild:
-                    try:
-                        await guild.unban(
-                            discord.Object(id=user_id),
-                            reason="NanoBot: Timed unban (overdue)",
-                        )
-                        log.info(f"Overdue unban: {user_id} in {guild_id}")
-                    except discord.NotFound:
-                        pass
-                await db.remove_unban(key)
-
-    async def _restore_slow_schedules(self):
-        data = await db.get_all_slows()
-        now = datetime.now(timezone.utc).timestamp()
-        for cid_str, info in data.items():
-            remaining = info["until"] - now
-            channel_id = int(cid_str)
-            if remaining > 0:
-                self._slow_tasks[channel_id] = asyncio.create_task(
-                    self._auto_unslow(channel_id, remaining)
-                )
-            else:
-                ch = self.bot.get_channel(channel_id)
-                if ch:
-                    try:
-                        await ch.edit(slowmode_delay=0)
-                    except (discord.Forbidden, discord.HTTPException) as exc:
-                        log.warning(f"Overdue unslow failed for {channel_id}: {exc}")
-                await db.remove_slow(channel_id)
-
-    async def _auto_unban(self, guild_id, user_id, delay):
-        # Cleanup runs only on non-cancelled completion: when a scheduled task
-        # is cancelled (reschedule / manual unban) the caller owns cleanup, and
-        # running it here would clobber the replacement task's state.
-        await _chunked_sleep(delay)
-        guild = self.bot.get_guild(guild_id)
-        if guild:
-            try:
-                await guild.unban(
-                    discord.Object(id=user_id),
-                    reason="NanoBot: Timed unban complete",
-                )
-                log.info(f"Timed unban: {user_id} in {guild_id}")
-            except discord.NotFound:
-                pass
-            except discord.HTTPException as exc:
-                log.warning(f"Timed unban failed for {user_id} in {guild_id}: {exc}")
-        key = f"{guild_id}:{user_id}"
-        self._unban_tasks.pop(key, None)
-        await db.remove_unban(key)
-
-    async def _auto_unslow(self, channel_id, delay):
-        await _chunked_sleep(delay)
-        ch = self.bot.get_channel(channel_id)
-        if ch:
-            try:
-                await ch.edit(
-                    slowmode_delay=0, reason="NanoBot: Timed slowmode expired"
-                )
-                log.info(f"Timed slowmode removed: #{ch}")
-            except (discord.Forbidden, discord.HTTPException) as exc:
-                log.warning(f"Timed unslow failed for {channel_id}: {exc}")
-        self._slow_tasks.pop(channel_id, None)
-        await db.remove_slow(channel_id)
-
-    async def _schedule_unban(self, guild_id, user_id, delay):
-        key = f"{guild_id}:{user_id}"
-        if key in self._unban_tasks:
-            self._unban_tasks[key].cancel()
-        await db.set_unban(
-            key, guild_id, user_id, datetime.now(timezone.utc).timestamp() + delay
-        )
-        self._unban_tasks[key] = asyncio.create_task(
-            self._auto_unban(guild_id, user_id, delay)
-        )
-
-    async def _schedule_unslow(self, channel_id, guild_id, delay):
-        if channel_id in self._slow_tasks:
-            self._slow_tasks[channel_id].cancel()
-        await db.set_slow(
-            channel_id, guild_id, datetime.now(timezone.utc).timestamp() + delay
-        )
-        self._slow_tasks[channel_id] = asyncio.create_task(
-            self._auto_unslow(channel_id, delay)
         )
 
     # ══════════════════════════════════════════════════════════════════════════
@@ -2130,7 +1929,3 @@ class Moderation(commands.Cog):
             f"modcheck: {h.user_log(ctx.author)} checked "
             f"{h.user_log(user)} in {ctx.guild}"
         )
-
-
-async def setup(bot):
-    await bot.add_cog(Moderation(bot))

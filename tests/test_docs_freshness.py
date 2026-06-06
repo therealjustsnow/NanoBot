@@ -17,8 +17,9 @@ HERE = os.path.dirname(__file__)
 COGS_DIR = os.path.join(HERE, "..", "cogs")
 
 # Cogs whose top-level commands are generated dynamically at runtime, so they
-# are intentionally not enumerated by name in the module docstring.
-_DOCSTRING_EXEMPT = {"fun.py"}
+# are intentionally not enumerated by name in the module docstring (matched by
+# path relative to cogs/, with forward slashes).
+_DOCSTRING_EXEMPT = {"fun/cog.py"}
 
 _CMD_DECORATORS = {"command", "group", "hybrid_command", "hybrid_group"}
 
@@ -56,16 +57,21 @@ def _top_level_command_names(tree: ast.Module) -> list[str]:
 def test_every_command_is_named_in_its_cog_docstring():
     """A new command must be added to the cog's module docstring too."""
     failures = []
-    for fname in sorted(os.listdir(COGS_DIR)):
-        if not fname.endswith(".py") or fname in {"__init__.py"}:
-            continue
-        if fname in _DOCSTRING_EXEMPT:
-            continue
-        tree = ast.parse(open(os.path.join(COGS_DIR, fname)).read(), filename=fname)
-        tokens = _module_docstring_tokens(tree)
-        for name in _top_level_command_names(tree):
-            if name.lower() not in tokens:
-                failures.append(f"  {fname}: command {name!r} not in module docstring")
+    for root, _dirs, files in os.walk(COGS_DIR):
+        for fname in sorted(files):
+            if not fname.endswith(".py") or fname == "__init__.py":
+                continue
+            path = os.path.join(root, fname)
+            label = os.path.relpath(path, COGS_DIR).replace(os.sep, "/")
+            if label in _DOCSTRING_EXEMPT:
+                continue
+            tree = ast.parse(open(path).read(), filename=fname)
+            tokens = _module_docstring_tokens(tree)
+            for name in _top_level_command_names(tree):
+                if name.lower() not in tokens:
+                    failures.append(
+                        f"  {label}: command {name!r} not in module docstring"
+                    )
     assert not failures, "Commands missing from their cog docstring:\n" + "\n".join(
         failures
     )
@@ -103,9 +109,15 @@ def test_automod_help_covers_all_rules_and_actions():
     rules = _dict_string_keys(automod, "RULE_LABELS")
     actions = _dict_string_keys(automod, "ACTION_LABELS")
 
-    help_text = open(os.path.join(COGS_DIR, "utility.py")).read().lower()
-    # The automod entry lives in _SLASH_GROUPS; checking the whole file is enough
-    # to catch a rule/action that was added to automod but never surfaced in help.
+    # The automod entry lives in _SLASH_GROUPS in the utility help engine;
+    # checking the whole utility package is enough to catch a rule/action that
+    # was added to automod but never surfaced in help.
+    util_dir = os.path.join(COGS_DIR, "utility")
+    help_text = "".join(
+        open(os.path.join(util_dir, f)).read()
+        for f in sorted(os.listdir(util_dir))
+        if f.endswith(".py")
+    ).lower()
     missing_rules = [
         r
         for r in rules
