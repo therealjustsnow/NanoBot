@@ -2700,6 +2700,13 @@ _GK_DEFAULTS = {
     "verify_message": None,
     "kick_timeout": 604800,  # 7 days
     "stock_threshold": 8,  # max dHash Hamming distance for a stock-avatar match
+    # How the account-age and bad-avatar checks combine, per guild:
+    #   "or"  → mute if young OR bad-avatar (original behaviour)
+    #   "and" → mute only if young AND (no-avatar or stock-avatar)
+    "match_mode": "or",
+    # When the account-age check is one of the mute reasons, auto-unmute once the
+    # account crosses unmute_age. Off → those members must verify to get out.
+    "age_unmute_enabled": True,
 }
 
 # Which columns are stored as 0/1 integers but exposed as Python bools.
@@ -2709,6 +2716,7 @@ _GK_BOOL_COLS = (
     "mute_default_avatar",
     "mute_stock_avatar",
     "verify_enabled",
+    "age_unmute_enabled",
 )
 # Ordered list of all config columns (used for the upsert in set_gatekeeper_config).
 _GK_COLS = (
@@ -2725,6 +2733,8 @@ _GK_COLS = (
     "verify_message",
     "kick_timeout",
     "stock_threshold",
+    "match_mode",
+    "age_unmute_enabled",
 )
 
 
@@ -2744,7 +2754,9 @@ async def _ensure_gatekeeper_tables() -> None:
             verify_enabled        INTEGER NOT NULL DEFAULT 1,
             verify_message        TEXT,
             kick_timeout          INTEGER NOT NULL DEFAULT 604800,
-            stock_threshold       INTEGER NOT NULL DEFAULT 8
+            stock_threshold       INTEGER NOT NULL DEFAULT 8,
+            match_mode            TEXT NOT NULL DEFAULT 'or',
+            age_unmute_enabled    INTEGER NOT NULL DEFAULT 1
         );
 
         CREATE TABLE IF NOT EXISTS gatekeeper_pending (
@@ -2761,7 +2773,12 @@ async def _ensure_gatekeeper_tables() -> None:
     await _conn().commit()
     # Added after the table's first cut — backfill for early-branch databases.
     await _ensure_columns(
-        "gatekeeper_config", {"stock_threshold": "INTEGER NOT NULL DEFAULT 8"}
+        "gatekeeper_config",
+        {
+            "stock_threshold": "INTEGER NOT NULL DEFAULT 8",
+            "match_mode": "TEXT NOT NULL DEFAULT 'or'",
+            "age_unmute_enabled": "INTEGER NOT NULL DEFAULT 1",
+        },
     )
 
 

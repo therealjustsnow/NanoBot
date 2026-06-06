@@ -2027,7 +2027,7 @@ class Moderation(commands.Cog):
             "short": "User info + warnings + notes in one embed",
             "usage": "modcheck <user>",
             "desc": (
-                "Combines !user + !warn list + !notes into a single compact embed. "
+                "Combines !user + !warnings + !notes into a single compact embed. "
                 "Designed for mobile mods who need a quick picture before taking action — "
                 "one command instead of three."
             ),

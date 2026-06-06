@@ -1488,7 +1488,7 @@ class Utility(commands.Cog):
                 e.add_field(
                     name="📜 Mod Notes",
                     value=str(_note_count)
-                    + " note(s) on file. Use `/notes @user` to view.",
+                    + " note(s) on file. Use `/note list` or `/modcheck` to view.",
                     inline=False,
                 )
 

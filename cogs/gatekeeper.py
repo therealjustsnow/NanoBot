@@ -6,7 +6,14 @@ On member join the bot mutes (via a "Muted (NanoBot)" role) accounts that look
 risky:
   • account younger than a configurable threshold (default 30 days)
   • no profile picture (Discord's auto-assigned logo avatar)
-  • a pickable "stock" avatar matched against a per-server image catalog
+  • a pickable "stock" avatar matched against a shared, system-wide image catalog
+
+How the age and avatar checks combine is per-guild (`match_mode`): "or" mutes on
+either signal (original behaviour), "and" mutes only when an account is both too
+young AND has a bad avatar. The stock-avatar catalog itself is global — every
+guild reads the same `assets/`+`data/gatekeeper_avatars/` images and any guild's
+`/gatekeeper learnavatar` contributes to it, so quiet servers benefit from busy
+ones.
 
 Muted members are sent a verification message (DM first, falling back to a
 quarantine channel) with a button. Pressing it opens a modal with a simple
@@ -335,6 +342,16 @@ class Gatekeeper(commands.Cog):
                         role, reason="Gatekeeper: account aged out"
                     )
                     log.info(f"Gatekeeper auto-unmute: {h.user_log(member)} in {guild}")
+                    await self._log(
+                        guild,
+                        cfg,
+                        h.mod_action_embed(
+                            "🔊 Gatekeeper Unmute",
+                            member,
+                            "Account aged past the threshold — auto-unmuted.",
+                            color=h.GREEN,
+                        ),
+                    )
                 except (discord.Forbidden, discord.HTTPException) as exc:
                     log.warning(f"Gatekeeper auto-unmute failed for {user_id}: {exc}")
         # Aging out clears the whole hold, including any pending kick.
@@ -486,10 +503,12 @@ class Gatekeeper(commands.Cog):
             log.warning(f"Gatekeeper mute failed for {h.user_log(member)}: {exc}")
             return
 
-        # Auto-unmute only when the *sole* reason is account age — a stock/empty
-        # avatar should not age out automatically; that member must verify.
+        # Auto-unmute whenever account age is one of the mute reasons and the
+        # guild leaves age-out on: once the account crosses unmute_age it's no
+        # longer "young", so the hold no longer applies. Turn age_unmute off to
+        # force every held member to verify instead.
         unmute_at: Optional[float] = None
-        if reasons == ["new account"]:
+        if "new account" in reasons and cfg["age_unmute_enabled"]:
             unmute_at = member.created_at.timestamp() + cfg["unmute_age"]
         kick_at: Optional[float] = None
         if cfg["verify_enabled"]:
@@ -527,18 +546,44 @@ class Gatekeeper(commands.Cog):
             await self._send_verification(member, cfg)
 
     async def _evaluate(self, member: discord.Member, cfg: dict) -> list[str]:
-        """Return the list of reasons this member should be muted (empty = allow)."""
-        reasons: list[str] = []
+        """Return the list of reasons this member should be muted (empty = allow).
+
+        Two checks run: account age ("young") and avatar ("no profile picture" or
+        a catalogued "default profile picture"). How they combine is per-guild via
+        ``match_mode``:
+          • "or"  → mute if young OR bad-avatar (original behaviour)
+          • "and" → mute only if young AND bad-avatar
+        """
+        mode = cfg.get("match_mode", "or")
+
+        young = False
         if cfg["mute_new_accounts"]:
             age = (discord.utils.utcnow() - member.created_at).total_seconds()
-            if age < cfg["min_account_age"]:
-                reasons.append("new account")
+            young = age < cfg["min_account_age"]
+
+        # In AND mode an old account can never be gated — skip the avatar check
+        # (and its network fetch) entirely.
+        if mode == "and" and not young:
+            return []
+
+        avatar_reason: Optional[str] = None
         if cfg["mute_default_avatar"] and member.avatar is None:
-            reasons.append("no profile picture")
+            avatar_reason = "no profile picture"
         elif cfg["mute_stock_avatar"] and member.avatar is not None:
             threshold = cfg.get("stock_threshold", _DHASH_THRESHOLD)
             if await self._matches_stock_avatar(member, threshold):
-                reasons.append("default profile picture")
+                avatar_reason = "default profile picture"
+
+        avatar_bad = avatar_reason is not None
+        gated = (young and avatar_bad) if mode == "and" else (young or avatar_bad)
+        if not gated:
+            return []
+
+        reasons: list[str] = []
+        if young:
+            reasons.append("new account")
+        if avatar_reason:
+            reasons.append(avatar_reason)
         return reasons
 
     def _resolve_mute_role(
@@ -700,9 +745,12 @@ class Gatekeeper(commands.Cog):
             f"**Quarantine channel:** {chan(cfg['quarantine_channel_id'])}",
             f"**Log channel:** {chan(cfg['log_channel_id'])}",
             "",
+            f"**Match mode:** {'🔗 AND' if cfg.get('match_mode', 'or') == 'and' else '➕ OR'} "
+            f"(age {'AND' if cfg.get('match_mode', 'or') == 'and' else 'OR'} avatar)",
             f"**Mute new accounts:** {'✅' if cfg['mute_new_accounts'] else '❌'} "
             f"(younger than {h.fmt_duration(cfg['min_account_age'])})",
-            f"**Auto-unmute age:** {h.fmt_duration(cfg['unmute_age'])}",
+            f"**Auto-unmute age:** {'✅' if cfg.get('age_unmute_enabled', True) else '❌'} "
+            f"(at {h.fmt_duration(cfg['unmute_age'])})",
             f"**Mute no-avatar (logo):** {'✅' if cfg['mute_default_avatar'] else '❌'}",
             f"**Mute stock avatars:** {'✅' if cfg['mute_stock_avatar'] else '❌'} "
             f"({len(self._catalog)} reference image(s), sensitivity "
@@ -1058,6 +1106,67 @@ class Gatekeeper(commands.Cog):
                 "Lower = stricter (near-exact only). Higher = looser (catches "
                 "recolours/variants, but more false positives).",
                 "🔧 Sensitivity",
+            ),
+            ephemeral=True,
+        )
+
+    @gk.command(
+        name="matchmode",
+        description="How the account-age and avatar checks combine to mute.",
+    )
+    @app_commands.describe(mode="AND = young and bad-avatar; OR = either one")
+    @app_commands.choices(
+        mode=[
+            app_commands.Choice(name="AND (young AND bad-avatar)", value="and"),
+            app_commands.Choice(name="OR (young OR bad-avatar)", value="or"),
+        ]
+    )
+    @app_commands.checks.has_permissions(manage_guild=True)
+    async def gk_matchmode(
+        self, interaction: discord.Interaction, mode: app_commands.Choice[str]
+    ):
+        await db.set_gatekeeper_config(interaction.guild_id, match_mode=mode.value)
+        if mode.value == "and":
+            blurb = (
+                "Members are muted only when the account is **younger than the min "
+                "age** *and* has **no avatar or a stock avatar**."
+            )
+        else:
+            blurb = (
+                "Members are muted when the account is **too young** *or* has **no "
+                "avatar / a stock avatar** (either one alone triggers a mute)."
+            )
+        await interaction.response.send_message(
+            embed=h.ok(
+                f"Match mode set to **{mode.value.upper()}**.\n{blurb}", "🔧 Match Mode"
+            ),
+            ephemeral=True,
+        )
+
+    @gk.command(
+        name="ageunmute",
+        description="Auto-unmute age-flagged members once they're old enough.",
+    )
+    @app_commands.describe(
+        enabled="On = age out automatically; Off = must verify to get unmuted"
+    )
+    @app_commands.checks.has_permissions(manage_guild=True)
+    async def gk_ageunmute(self, interaction: discord.Interaction, enabled: bool):
+        await db.set_gatekeeper_config(interaction.guild_id, age_unmute_enabled=enabled)
+        if enabled:
+            blurb = (
+                "Members muted for account age will **auto-unmute** once they cross "
+                "the unmute age, even without verifying."
+            )
+        else:
+            blurb = (
+                "Age-out is **off** — every held member must pass verification to be "
+                "unmuted (or they're kicked at the timeout)."
+            )
+        await interaction.response.send_message(
+            embed=h.ok(
+                f"Age auto-unmute **{'on' if enabled else 'off'}**.\n{blurb}",
+                "🔧 Age Unmute",
             ),
             ephemeral=True,
         )

@@ -199,8 +199,10 @@ export DISCORD_TOKEN=your_token_here
 Enable these **Privileged Gateway Intents** in your app's Bot settings:
 - ✅ **Server Members Intent**
 - ✅ **Message Content Intent**
+- ✅ **Presence Intent**
 
-Without these, prefix commands and most mod commands will silently fail.
+Without these, prefix commands and most mod commands will silently fail, and the
+`/user` card will show everyone as offline.
 
 ### 5. Migrating from JSON storage
 
@@ -317,7 +319,7 @@ Slash commands use the `/warn` group. Prefix commands stay flat.
 | Command | Description |
 |---------|-------------|
 | `/warn issue <user> [reason]` | Issue a warning. Configured auto-actions fire at thresholds. |
-| `/warn list <user>` | View all warnings for a user (last 8 shown with dates and moderators). |
+| `/warn list <user>` | View all warnings for a user (last 5 shown with dates and moderators). |
 | `/warn clear <user>` | Permanently wipe all warnings for a user. Admin only. |
 | `/warn config [kick_at] [ban_at] [dm_user]` | Configure per-server thresholds. No args shows current config. |
 
@@ -336,9 +338,9 @@ Slash commands use the `/warn` group. Prefix commands stay flat.
 
 | Command | Description |
 |---------|-------------|
-| `/note <user> <content>` | Add a private mod note. Never visible to the target user. |
-| `/notes <user>` | View notes for a user (last 8). Ephemeral. |
-| `/clearnotes <user>` | Wipe all notes for a user. Admin only. |
+| `/note add <user> <content>` | Add a private mod note. Never visible to the target user. |
+| `/note list <user>` | View notes for a user (last 5). Ephemeral. |
+| `/note clear <user>` | Wipe all notes for a user. Admin only. |
 | `/last` | Show who last sent a message here -- the auto-target for `/kick`, `/ban`, etc. |
 
 ---
@@ -394,7 +396,7 @@ Members with Manage Messages are always exempt. Additional exempt channels and r
 
 Posts a live feed of server events to a configurable channel. Fully opt-in -- nothing fires until you set a channel and enable it. All commands require **Manage Server**.
 
-**Twelve toggleable event types:** message delete, message edit, member join, member leave, member ban, member unban, nickname change, role update, channel create, channel delete, role create, role delete.
+**Thirteen toggleable event types:** message delete, message edit, member join, member leave, member ban, member unban, nickname change, role update, channel create, channel delete, role create, role delete, AutoMod action.
 
 Event selection uses a multi-select dropdown -- one interaction to enable or silence any combination. Bot events are filtered out.
 

@@ -807,6 +807,8 @@ async def test_gatekeeper_config_defaults_when_unset():
     assert cfg["verify_enabled"] is True
     assert cfg["kick_timeout"] == 604800
     assert cfg["stock_threshold"] == 8
+    assert cfg["match_mode"] == "or"
+    assert cfg["age_unmute_enabled"] is True
 
 
 async def test_gatekeeper_config_set_and_roundtrip():
@@ -836,6 +838,13 @@ async def test_gatekeeper_stock_threshold_roundtrip():
     assert cfg["stock_threshold"] == 14
     # Other defaults untouched.
     assert cfg["kick_timeout"] == 604800
+
+
+async def test_gatekeeper_match_mode_and_age_unmute_roundtrip():
+    await db.set_gatekeeper_config(123, match_mode="and", age_unmute_enabled=False)
+    cfg = await db.get_gatekeeper_config(123)
+    assert cfg["match_mode"] == "and"
+    assert cfg["age_unmute_enabled"] is False
 
 
 async def test_gatekeeper_pending_set_get_remove():

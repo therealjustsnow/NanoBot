@@ -1758,7 +1758,7 @@ class Fun(commands.Cog):
         return e
 
     # ══════════════════════════════════════════════════════════════════════════
-    #  SLASH: /fun group  (7 subcommands, 1 top-level slot)
+    #  SLASH: /fun group  (8 subcommands, 1 top-level slot)
     # ══════════════════════════════════════════════════════════════════════════
 
     fun_group = app_commands.Group(
