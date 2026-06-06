@@ -78,7 +78,7 @@ All features live in `cogs/` as discord.py cogs, hot-reloadable via `n!reload <c
 
 | Cog | Responsibility |
 |---|---|
-| `moderation.py` | Ban/kick/mute/purge/lock/slowmode, timed actions, last-sender targeting |
+| `moderation/` | Ban/kick/mute/purge/lock/slowmode, timed actions, last-sender targeting (a package — see "Moderation package layout" below) |
 | `warnings.py` | Warning tracking with configurable auto-kick/ban thresholds |
 | `automod.py` | Passive rule enforcement (spam, invites, links, caps, mentions, badwords, regex, word+attachment); actions: delete/warn/timeout/kick/softban |
 | `gatekeeper.py` | New-account gate: on join, role-mutes (`Muted (NanoBot)`) accounts younger than a threshold (default 30d, auto-unmute at 35d/5w), with no avatar (Discord logo default, `member.avatar is None`), or with a pickable "stock" avatar matched by perceptual (difference) hash against a **system-wide** catalog (`assets/gatekeeper_avatars/` bundled seeds + `data/gatekeeper_avatars/` runtime adds via `/gatekeeper learnavatar`; the catalog is global, so every guild reads the same images and any guild's `learnavatar` contributes to it). How the age and avatar checks combine is per-guild via `match_mode` (`or` = mute on either signal, default; `and` = mute only when an account is both too young AND has a bad avatar). Muted members get a verification prompt (DM first, fallback to a quarantine channel) with a persistent button → math-captcha modal; correct answer unmutes. Account-age mutes auto-unmute once the account ages out (per-guild `age_unmute_enabled`, on by default; off forces verification). Unverified members are kicked after a timeout (default 7d). Auto-unmute + auto-kick persist in SQLite and restore on restart via `on_restore_schedules` (mirrors `moderation.py`). Log-channel events are emoji-tagged: 🔇 mute, ✅ verify, 🔊 auto-unmute, 🚪 kick. `/gatekeeper` group (Manage Server): `setup`/`status`/`enable`/`disable`/`role`/`channel`/`logchannel`/`minage`/`unmuteage`/`kicktimeout`/`newaccounts`/`noavatar`/`stockavatar`/`sensitivity` (per-guild dHash match distance, default 8)/`matchmode` (and/or)/`ageunmute` (toggle age auto-unmute)/`verify`/`message`/`learnavatar`/`checkavatar`. Bulk-seed the stock-avatar catalog from a Figma file with `scripts/import_figma_avatars.py` (stdlib-only, needs a Figma token). |
@@ -113,6 +113,17 @@ All features live in `cogs/` as discord.py cogs, hot-reloadable via `n!reload <c
 | `cog.py` | The `Music` cog: command surface, listeners, config accessors, presence/rate-limit/metadata helpers. Instantiates `self.source = MusicSource(self)`. Carries the full module docstring (commands enumerated for `test_docs_freshness`). |
 
 The static scanners `test_no_duplicate_commands.py` and `test_docs_freshness.py` walk `cogs/` recursively so package submodules are covered.
+
+### Moderation package layout
+
+`cogs/moderation/` is a command-heavy cog, so the split keeps every command in one `Moderation` class (no command moved) and extracts only the supporting code. `load_extension("cogs.moderation")` works via `setup()` in `__init__.py`.
+
+| Module | Holds |
+|---|---|
+| `helpers.py` | Stateless module functions: `resolve_target`, `try_dm`, `can_target`, `can_bot_target`, `action_log`, `_chunked_sleep`. Commands call them as bare names. |
+| `views.py` | `NukeConfirm` confirm/cancel view for `/nuke`. |
+| `schedules.py` | `TimedActionsMixin`: auto-unban / auto-unslow scheduling + restore, persisted in SQLite. `Moderation` inherits it; the task dicts are created in `Moderation.__init__` and restore is driven by the cog's `on_restore_schedules` listener. |
+| `cog.py` | `Moderation(TimedActionsMixin, commands.Cog)`: `__init__`/`cog_unload`/`on_restore_schedules` + the full command surface. |
 
 ### Fun package layout
 
