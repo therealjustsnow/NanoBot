@@ -1380,6 +1380,14 @@ class Utility(commands.Cog):
     @commands.cooldown(1, 5, commands.BucketType.user)
     async def user(self, ctx: commands.Context, user: Optional[discord.Member] = None):
         target = user or ctx.author
+        # Member args resolved from a slash interaction come from Discord's
+        # `resolved` payload, which carries no presence — so target.status would
+        # always read "offline".  Swap in the cached guild member (populated by
+        # the presences intent) so status/activity are real.
+        if ctx.guild is not None:
+            cached = ctx.guild.get_member(target.id)
+            if cached is not None:
+                target = cached
         now = discord.utils.utcnow()
 
         created = discord.utils.format_dt(target.created_at, style="R")
