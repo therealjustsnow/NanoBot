@@ -474,8 +474,12 @@ class GuildPlayer:
                 self.current = track
                 self.skip_votes.clear()
 
-                # Accumulate smart autoplay seeds so the mix blends recent taste.
-                if track.webpage_url:
+                # Seed smart autoplay from what the *user* queued, not from
+                # autoplay's own picks. Feeding picks back in collapses the mix:
+                # the maxlen=5 deque evicts the real songs, every seed becomes a
+                # recent pick, and an artist's radio keeps surfacing that artist
+                # → autoplay locks onto one artist. User tracks keep it varied.
+                if track.webpage_url and not self._is_autoplay_track(track):
                     ytid = _extract_ytid(track.webpage_url)
                     if ytid:
                         self._smart_seeds.append(track.webpage_url)
@@ -592,11 +596,12 @@ class GuildPlayer:
     async def _smart_autoplay_pick(self) -> Optional[Track]:
         """Pick a related track using YouTube's RD radio mix.
 
-        Walks seeds newest-first. Most recent seed's mix reflects current taste;
-        older seeds are tried only when all 20 candidates from the first mix are
-        already in _smart_recent or the blocklist. This gives real multi-seed
-        blending (the playlist grows toward what you're listening to) without
-        extra network requests in the normal case.
+        Seeds are the user's recently queued tracks (autoplay's own picks are
+        never seeded — that would collapse the mix onto one artist). Walks seeds
+        newest-first: the most recent seed's mix reflects current taste; older
+        seeds are tried only when all 20 candidates from the first mix are
+        already in _smart_recent or the blocklist. Real multi-seed blending
+        without extra network requests in the normal case.
         """
         seed_ids = [_extract_ytid(u) for u in self._smart_seeds]
         seed_ids = [s for s in seed_ids if s]  # drop non-YouTube
@@ -634,12 +639,9 @@ class GuildPlayer:
                     continue
                 t = kept[0]
                 t.requester_name = _AUTOPLAY_REQUESTER
+                # Track recent picks to avoid repeats, but do NOT seed from them
+                # — seeding from picks collapses autoplay onto one artist.
                 self._smart_recent.append(url)
-                # Add to seeds so next pick builds on this pick too.
-                if t.webpage_url:
-                    pick_id = _extract_ytid(t.webpage_url)
-                    if pick_id:
-                        self._smart_seeds.append(t.webpage_url)
                 return t
             # All 20 candidates filtered — fall back to next seed's mix
 
