@@ -112,7 +112,7 @@ def get_prefix(bot: "NanoBot", message: discord.Message):
 
 
 # ── All cogs — single source of truth shared with admin.py ────────────────────
-# Keep this in sync with _ALL_COGS in cogs/admin.py.
+# Keep this in sync with _ALL_COGS in cogs/admin/constants.py.
 _ALL_COGS = (
     "cogs.moderation",
     "cogs.tags",

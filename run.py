@@ -102,7 +102,7 @@ def check_file_structure():
         "cogs/moderation/cog.py",
         "cogs/tags.py",
         "cogs/utility/cog.py",
-        "cogs/admin.py",
+        "cogs/admin/cog.py",
         "utils/__init__.py",
         "utils/db.py",
         "utils/helpers.py",

@@ -85,7 +85,7 @@ All features live in `cogs/` as discord.py cogs, hot-reloadable via `n!reload <c
 | `auditlog.py` | 13 toggleable event types (12 Discord server events + AutoMod action) logged to a configurable channel |
 | `roles.py` | Persistent button-based self-assign role panels |
 | `tags.py` | Personal and global text snippets; `n!tagname` shortcut fires any tag |
-| `admin.py` | Owner-only: reload cogs, restart, git pull update, full upgrade (pull+pip+restart), sync slash commands, `status` (set idle presence text / `clear` to auto-rotate) |
+| `admin/` | Owner-only: reload cogs, restart, git pull update, full upgrade (pull+pip+restart), sync slash commands, `status` (set idle presence text / `clear` to auto-rotate) (a package — see "Admin package layout" below) |
 | `reminders.py` / `recurring.py` | One-time and repeating reminders, restart-safe via SQLite |
 | `welcome.py` | Per-guild join/leave messages with template variables |
 | `utility/` | Info commands (`/server`, `/user`, `/help`; `serverinfo`/`userinfo` aliases) (a package — see "Utility package layout" below) |
@@ -113,6 +113,18 @@ All features live in `cogs/` as discord.py cogs, hot-reloadable via `n!reload <c
 | `cog.py` | The `Music` cog: command surface, listeners, config accessors, presence/rate-limit/metadata helpers. Instantiates `self.source = MusicSource(self)`. Carries the full module docstring (commands enumerated for `test_docs_freshness`). |
 
 The static scanners `test_no_duplicate_commands.py` and `test_docs_freshness.py` walk `cogs/` recursively so package submodules are covered.
+
+### Admin package layout
+
+`cogs/admin/` is command-heavy, so every command stays in one `Admin` class (no command moved); only the supporting code is extracted. `load_extension("cogs.admin")` works via `setup()` in `__init__.py`.
+
+| Module | Holds |
+|---|---|
+| `constants.py` | `_REPO_ROOT` (pinned subprocess cwd — **two** `dirname` levels up now the file lives in `cogs/admin/`), `_ALL_COGS` (the managed-cog list; keep in sync with `main.py`'s copy), `_VALID_LEVELS`. |
+| `helpers.py` | `_git_pull` (the git-pull subprocess wrapper). |
+| `views.py` | `ServersView` paginator for the `servers` command. |
+| `config_ops.py` | `ConfigMixin`: the DM-only `config` show/get/set operations (`_resolve_key`, `_display`, `_config_show/get/set`). `Admin` inherits it. |
+| `cog.py` | `Admin(ConfigMixin, commands.Cog)`: the full command surface. |
 
 ### Utility package layout
 

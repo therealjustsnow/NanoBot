@@ -1,5 +1,5 @@
 """
-cogs/utility.py
+cogs/utility/cog.py
 Bot utility & configuration commands.
 
 Commands:

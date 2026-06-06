@@ -1,5 +1,5 @@
 """
-cogs/music.py — Voice music player.
+cogs/music/cog.py — Voice music player.
 
 Streams audio from YouTube (and the many other sites yt-dlp supports) into a
 voice channel. Spotify track/album/playlist links are supported without an API

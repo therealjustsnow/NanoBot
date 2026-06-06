@@ -1,5 +1,5 @@
 """
-cogs/fun.py
+cogs/fun/cog.py
 Fun commands -- social interactions, solo reactions, ship, 8-ball, fml,
 thigh, would-you-rather.
 

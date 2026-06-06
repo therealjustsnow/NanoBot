@@ -1,5 +1,5 @@
 """
-cogs/moderation.py — v2.1.1
+cogs/moderation/cog.py — v2.1.1
 Core moderation commands — designed for speed on mobile.
 
 Commands:

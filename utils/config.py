@@ -581,7 +581,7 @@ FIELDS: tuple[Field, ...] = (
 _FIELD: dict[str, Field] = {f.key: f for f in FIELDS}
 
 # Derived lookup tables — kept for backwards compatibility with callers that
-# import them directly (cogs/admin.py, the test suite). Never edit by hand.
+# import them directly (cogs/admin/, the test suite). Never edit by hand.
 SECTION_MAP: dict[str, str] = {f.key: f.section for f in FIELDS}
 DEFAULTS: dict[str, object] = {f.key: f.default for f in FIELDS}
 SENSITIVE_KEYS: set[str] = {f.key for f in FIELDS if f.sensitive}
