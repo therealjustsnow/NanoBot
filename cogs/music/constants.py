@@ -87,3 +87,19 @@ _YTID_RE = re.compile(
 
 _GUILDPLAY_REQUESTER = "📻 Guild Play"
 _AUTOPLAY_REQUESTER = "✨ Autoplay"
+
+# ── SponsorBlock (skip non-music / sponsor segments via yt-dlp postprocessors) ──
+# Only the categories yt-dlp can remove. "music_offtopic" is the non-music
+# section of a music video (the default — what most people want skipped).
+_SPONSORBLOCK_CATEGORIES = {
+    "sponsor",
+    "intro",
+    "outro",
+    "selfpromo",
+    "preview",
+    "filler",
+    "interaction",
+    "music_offtopic",
+    "poi_highlight",
+}
+_SPONSORBLOCK_DEFAULT = ["music_offtopic"]

@@ -60,8 +60,13 @@ class GuildPlayer:
         self.audio_filter: str = "none"
         self.autoplay: bool = False  # smart: queue YouTube-related tracks
         self.guildplay: bool = False  # play random tracks from the guild playlist
-        self._smart_seeds: deque[str] = deque(maxlen=5)  # last N YouTube URLs played
-        self._smart_recent: deque[str] = deque(maxlen=25)
+        # Smart autoplay seed pools. User seeds anchor the mix to your taste and
+        # are never evicted by autoplay. Pick seeds carry the radio forward so
+        # the queue is endless; kept separate so they can't crowd out the user
+        # seeds (which is what made autoplay collapse onto one artist).
+        self._smart_seeds: deque[str] = deque(maxlen=8)  # user-queued YouTube URLs
+        self._smart_pick_seeds: deque[str] = deque(maxlen=5)  # recent autoplay picks
+        self._smart_recent: deque[str] = deque(maxlen=50)  # recent URLs (de-dupe)
         self.stay_connected: bool = False  # 24/7 mode: don't leave when empty/idle
         self.skip_votes: set[int] = set()
         self.follow_target: Optional[int] = None  # user id the bot follows
@@ -258,7 +263,11 @@ class GuildPlayer:
         populate it, since downloading only happens here.
         """
         if (
-            not (self.cog.predownload() or self.cog.save_videos())
+            not (
+                self.cog.predownload()
+                or self.cog.save_videos()
+                or self.cog.sponsorblock()
+            )
             or self.loop == LOOP_TRACK
         ):
             return
@@ -375,6 +384,25 @@ class GuildPlayer:
             if track.local_path and os.path.isfile(track.local_path)
             else None
         )
+        # SponsorBlock cuts only apply to a downloaded file (the postprocessor
+        # rewrites it). If this track wasn't predownloaded yet, fetch it now so
+        # its non-music segments are removed before playback — trading a little
+        # start latency for the skip. Live streams (no duration) can't download,
+        # so they fall through and stream uncut.
+        if not local and self.cog.sponsorblock() and track.duration:
+            try:
+                result = await self.cog.source.download_track(track, self.guild.id)
+            except Exception as exc:
+                log.debug(
+                    "SponsorBlock predownload failed for '%s': %s", track.title, exc
+                )
+                result = None
+            if result:
+                path, acodec = result
+                self._dl_files.add(path)
+                track.local_path = path
+                track.acodec = acodec
+                local = path
         if local:
             source_url = local
             before = ""
@@ -451,8 +479,12 @@ class GuildPlayer:
                 self.current = track
                 self.skip_votes.clear()
 
-                # Accumulate smart autoplay seeds so the mix blends recent taste.
-                if track.webpage_url:
+                # Seed smart autoplay from what the *user* queued, not from
+                # autoplay's own picks. Feeding picks back in collapses the mix:
+                # the maxlen=5 deque evicts the real songs, every seed becomes a
+                # recent pick, and an artist's radio keeps surfacing that artist
+                # → autoplay locks onto one artist. User tracks keep it varied.
+                if track.webpage_url and not self._is_autoplay_track(track):
                     ytid = _extract_ytid(track.webpage_url)
                     if ytid:
                         self._smart_seeds.append(track.webpage_url)
@@ -567,23 +599,31 @@ class GuildPlayer:
         return track
 
     async def _smart_autoplay_pick(self) -> Optional[Track]:
-        """Pick a related track using YouTube's RD radio mix.
+        """Pick a related track using YouTube's RD radio mix (endless queue).
 
-        Walks seeds newest-first. Most recent seed's mix reflects current taste;
-        older seeds are tried only when all 20 candidates from the first mix are
-        already in _smart_recent or the blocklist. This gives real multi-seed
-        blending (the playlist grows toward what you're listening to) without
-        extra network requests in the normal case.
+        Builds an endless YouTube-Music-style radio that stays varied:
+
+        - Seed pool = your queued tracks (anchor) + recent autoplay picks
+          (forward momentum). Picks evolve the mix so it never runs dry, but
+          they live in a separate deque so they can't evict the user anchors.
+        - The seed whose mix we pull from is chosen at random, not newest-first,
+          so it doesn't keep re-using the just-played track's radio.
+        - The track within that mix is chosen at random, not first-eligible.
+
+        Those three together stop autoplay collapsing onto a single artist while
+        keeping the queue effectively infinite.
         """
-        seed_ids = [_extract_ytid(u) for u in self._smart_seeds]
-        seed_ids = [s for s in seed_ids if s]  # drop non-YouTube
-        seed_ids_unique = list(dict.fromkeys(reversed(seed_ids)))  # dedup, newest first
-        if not seed_ids_unique:
+        pool = list(self._smart_seeds) + list(self._smart_pick_seeds)
+        seed_ids = [_extract_ytid(u) for u in pool]
+        seed_ids = list(dict.fromkeys(s for s in seed_ids if s))  # dedup, keep YT only
+        if not seed_ids:
             return None
 
-        seed_id_set = set(seed_ids_unique)
+        seed_id_set = set(seed_ids)
+        order = seed_ids[:]
+        random.shuffle(order)
 
-        for ytid in seed_ids_unique:
+        for ytid in order:
             mix_url = f"https://www.youtube.com/watch?v={ytid}&list=RD{ytid}"
             try:
                 tracks = await self.cog.source.search(
@@ -597,28 +637,33 @@ class GuildPlayer:
                 self.cog._note_ratelimit(exc)
                 continue  # try next seed
 
+            eligible = []
             for track in tracks:
                 url = track.webpage_url or track.query or ""
                 if not url:
                     continue
                 tid = _extract_ytid(url)
-                if tid in seed_id_set:
-                    continue  # skip all seed tracks
+                if tid and tid in seed_id_set:
+                    continue  # don't replay a seed track itself
                 if url in self._smart_recent:
-                    continue
-                kept, _ = await self.cog._filter_blocked_songs(self.guild.id, [track])
-                if not kept:
-                    continue
-                t = kept[0]
-                t.requester_name = _AUTOPLAY_REQUESTER
-                self._smart_recent.append(url)
-                # Add to seeds so next pick builds on this pick too.
-                if t.webpage_url:
-                    pick_id = _extract_ytid(t.webpage_url)
-                    if pick_id:
-                        self._smart_seeds.append(t.webpage_url)
-                return t
-            # All 20 candidates filtered — fall back to next seed's mix
+                    continue  # already played recently
+                eligible.append(track)
+            if not eligible:
+                continue  # this seed's mix is exhausted — try the next seed
+
+            kept, _ = await self.cog._filter_blocked_songs(self.guild.id, eligible)
+            if not kept:
+                continue
+
+            chosen = random.choice(kept)
+            chosen.requester_name = _AUTOPLAY_REQUESTER
+            url = chosen.webpage_url or chosen.query or ""
+            self._smart_recent.append(url)
+            # Carry the radio forward: this pick seeds the next round so the
+            # queue never runs dry (but only in the pick pool, never the anchor).
+            if chosen.webpage_url and _extract_ytid(chosen.webpage_url):
+                self._smart_pick_seeds.append(chosen.webpage_url)
+            return chosen
 
         return None
 

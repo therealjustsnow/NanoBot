@@ -44,6 +44,9 @@ Config ([music] section, all optional — see example_config.ini):
   music_apl_prune_on_error — drop dead guild playlist entries on playback error (true)
   music_save_history    — keep per-guild played history (true)
   music_metadata_lookup — fill missing artist via free iTunes Search API (true)
+  music_sponsorblock    — skip non-music/sponsor segments via SponsorBlock;
+                          downloads + cuts the track before play (false)
+  music_sponsorblock_categories — segments to remove (default music_offtopic)
 
 Commands (hybrid — slash + prefix), category "🎵 Music":
   play / p          — queue a song or playlist (URL, Spotify link, or search)
@@ -111,6 +114,8 @@ from .constants import (
     PAGE_SIZE_QUEUE,
     PAGE_SIZE_APL,
     _MUSIC_CACHE_DIR,
+    _SPONSORBLOCK_CATEGORIES,
+    _SPONSORBLOCK_DEFAULT,
 )
 from .helpers import (
     _apply_delta,
@@ -246,6 +251,22 @@ class Music(commands.Cog):
 
     def metadata_lookup(self) -> bool:
         return self._cfg_bool("music_metadata_lookup", True)
+
+    def sponsorblock(self) -> bool:
+        return self._cfg_bool("music_sponsorblock", False)
+
+    def sponsorblock_categories(self) -> list[str]:
+        """SponsorBlock segment categories to remove (validated, deduped).
+
+        Defaults to ["music_offtopic"] — the non-music part of a music video.
+        Accepts a comma/space-separated list in config; unknown names dropped.
+        """
+        raw = (self.bot.config.get("music_sponsorblock_categories") or "").strip()
+        if not raw:
+            return list(_SPONSORBLOCK_DEFAULT)
+        cats = [c.strip() for c in raw.replace(",", " ").split() if c.strip()]
+        cats = list(dict.fromkeys(c for c in cats if c in _SPONSORBLOCK_CATEGORIES))
+        return cats or list(_SPONSORBLOCK_DEFAULT)
 
     # ── metadata enrichment (free, keyless iTunes Search API) ───────────────────
     async def _enrich_metadata(self, track: Optional[Track]) -> None:

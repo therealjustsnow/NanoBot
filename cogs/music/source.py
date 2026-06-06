@@ -133,6 +133,24 @@ class MusicSource:
 
         return {"deno": {}}  # let yt-dlp try its own discovery
 
+    def _sponsorblock_pps(self) -> list[dict]:
+        """yt-dlp postprocessors that cut SponsorBlock segments out of a download.
+
+        SponsorBlock fetches the crowd-sourced segments and tags them as chapters;
+        ModifyChapters then removes those chapters from the file with FFmpeg. This
+        only works on downloads (a live stream is never cut), so it's wired into
+        download_track, not the stream path.
+        """
+        if not self.cog.sponsorblock():
+            return []
+        cats = self.cog.sponsorblock_categories()
+        if not cats:
+            return []
+        return [
+            {"key": "SponsorBlock", "categories": cats, "when": "after_filter"},
+            {"key": "ModifyChapters", "remove_sponsor_segments": cats},
+        ]
+
     def _ytdl_opts(self, **extra) -> dict:
         opts = {**_YTDL_BASE, **extra}
         cookie = self._cookie_file()
@@ -180,6 +198,9 @@ class MusicSource:
             paths={"home": guild_dir},
             outtmpl={"default": "%(id)s.%(ext)s"},
         )
+        sb_pps = self._sponsorblock_pps()
+        if sb_pps:
+            opts["postprocessors"] = [*opts.get("postprocessors", []), *sb_pps]
 
         def _work():
             with yt_dlp.YoutubeDL(opts) as ydl:
