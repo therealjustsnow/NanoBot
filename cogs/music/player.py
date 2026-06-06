@@ -258,7 +258,11 @@ class GuildPlayer:
         populate it, since downloading only happens here.
         """
         if (
-            not (self.cog.predownload() or self.cog.save_videos())
+            not (
+                self.cog.predownload()
+                or self.cog.save_videos()
+                or self.cog.sponsorblock()
+            )
             or self.loop == LOOP_TRACK
         ):
             return
@@ -375,6 +379,25 @@ class GuildPlayer:
             if track.local_path and os.path.isfile(track.local_path)
             else None
         )
+        # SponsorBlock cuts only apply to a downloaded file (the postprocessor
+        # rewrites it). If this track wasn't predownloaded yet, fetch it now so
+        # its non-music segments are removed before playback — trading a little
+        # start latency for the skip. Live streams (no duration) can't download,
+        # so they fall through and stream uncut.
+        if not local and self.cog.sponsorblock() and track.duration:
+            try:
+                result = await self.cog.source.download_track(track, self.guild.id)
+            except Exception as exc:
+                log.debug(
+                    "SponsorBlock predownload failed for '%s': %s", track.title, exc
+                )
+                result = None
+            if result:
+                path, acodec = result
+                self._dl_files.add(path)
+                track.local_path = path
+                track.acodec = acodec
+                local = path
         if local:
             source_url = local
             before = ""
