@@ -490,7 +490,7 @@ class GuildPlayer:
                         self._smart_seeds.append(track.webpage_url)
 
                 if not self.voice or not self.voice.is_connected():
-                    await self.destroy(reason="disconnected")
+                    await self.destroy(reason="disconnected", persist_clear=False)
                     return
 
                 try:

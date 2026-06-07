@@ -329,7 +329,7 @@ class Music(commands.Cog):
                     self._spawn_bg(
                         self._notify_ratelimit_leave(player.text_channel, mins)
                     )
-                    self._spawn_bg(player.destroy(reason="rate-limited"))
+                    self._spawn_bg(player.destroy(reason="rate-limited", persist_clear=False))
         return True
 
     async def _notify_ratelimit_leave(self, channel, mins: int) -> None:
