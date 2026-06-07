@@ -1243,13 +1243,23 @@ class Music(commands.Cog):
     @commands.guild_only()
     async def volume(self, ctx: commands.Context, amount: Optional[str] = None):
         player = self._active_player(ctx)
+        # Checking the volume should work even when nothing is playing — fall
+        # back to the configured default so /volume always answers.
+        if amount is None:
+            if player:
+                current = int(round(player.volume * 100))
+                return await ctx.reply(
+                    embed=h.info(f"Volume is **{current}%**.", "🔊 Volume")
+                )
+            current = int(round(self.default_volume() * 100))
+            return await ctx.reply(
+                embed=h.info(
+                    f"Default volume is **{current}%** (nothing playing).",
+                    "🔊 Volume",
+                )
+            )
         if not player:
             return await ctx.reply(embed=h.err("Nothing is playing."), ephemeral=True)
-        if amount is None:
-            current = int(round(player.volume * 100))
-            return await ctx.reply(
-                embed=h.info(f"Volume is **{current}%**.", "🔊 Volume")
-            )
         target = _apply_delta(amount, player.volume * 100)
         if target is None:
             return await ctx.reply(
