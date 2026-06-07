@@ -473,7 +473,7 @@ class GuildPlayer:
                 else:
                     track = await self._next_track()
                     if track is None:
-                        await self.destroy(reason="inactivity")
+                        await self.destroy(reason="inactivity", persist_clear=False)
                         return
 
                 self.current = track
