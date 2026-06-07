@@ -420,3 +420,30 @@ class TestPickItunesMatch:
             "The Weeknd",
             "Blinding Lights Remix",
         )
+
+    def test_title_prefix_hint_picks_right_artist(self):
+        # Same-title songs by different artists: the "NF - …" prefix disambiguates.
+        results = [
+            {"artistName": "*NSYNC", "trackName": "Let You Down"},
+            {"artistName": "NF", "trackName": "Let You Down"},
+        ]
+        assert _pick_itunes_match("NF - Let You Down", results) == (
+            "NF",
+            "Let You Down",
+        )
+
+    def test_hint_rejects_wrong_artist_only_result(self):
+        # Title prefix names NF; only a wrong-artist same-title song exists → None.
+        results = [{"artistName": "*NSYNC", "trackName": "Let You Down"}]
+        assert _pick_itunes_match("NF - Let You Down", results) is None
+
+    def test_uploader_hint_picks_right_artist(self):
+        # No "Artist - …" prefix, but the uploader name supplies the hint.
+        results = [
+            {"artistName": "*NSYNC", "trackName": "Let You Down"},
+            {"artistName": "NF", "trackName": "Let You Down"},
+        ]
+        assert _pick_itunes_match("Let You Down", results, uploader="NF - Topic") == (
+            "NF",
+            "Let You Down",
+        )
