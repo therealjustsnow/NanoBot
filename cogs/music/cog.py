@@ -67,7 +67,7 @@ Commands (hybrid — slash + prefix), category "🎵 Music":
   move              — reorder a track in the queue
   remove / clear    — remove one / all queued tracks
   shuffle           — shuffle the queue
-  volume / vol      — set playback volume (0-200)
+  volume / vol      — show or set playback volume (0-200)
   speed             — set playback speed (0.5-3.0)
   filter / fx       — apply an audio effect (bassboost, nightcore, …)
   loop              — cycle loop mode: off → track → queue
@@ -1221,27 +1221,35 @@ class Music(commands.Cog):
     @commands.hybrid_command(
         name="volume",
         aliases=["vol"],
-        description="Set or adjust the playback volume (0-200).",
+        description="Show, set, or adjust the playback volume (0-200).",
         extras={
             "category": "🎵 Music",
-            "short": "Set playback volume",
-            "usage": "volume <0-200 | +N | -N>",
+            "short": "Show or set playback volume",
+            "usage": "volume [0-200 | +N | -N]",
             "desc": (
-                "Sets playback volume as a percentage (100 is full source volume). "
-                "Use a leading + or - to adjust relative to the current volume, "
-                "e.g. `volume +10` or `volume -10`."
+                "With no argument, shows the current volume. "
+                "Give a number (0-200) to set it as a percentage (100 is full source "
+                "volume), or a leading + or - to adjust relative to the current volume, "
+                "e.g. `volume 80`, `volume +10`, or `volume -10`."
             ),
-            "args": [("amount", "0-200, or +N / -N to adjust")],
+            "args": [("amount", "0-200, or +N / -N to adjust (omit to check current)")],
             "perms": "None",
             "example": "{prefix}volume +10",
         },
     )
-    @app_commands.describe(amount="0-200, or +N / -N to adjust")
+    @app_commands.describe(
+        amount="0-200, or +N / -N to adjust (leave empty to check current)"
+    )
     @commands.guild_only()
-    async def volume(self, ctx: commands.Context, amount: str):
+    async def volume(self, ctx: commands.Context, amount: Optional[str] = None):
         player = self._active_player(ctx)
         if not player:
             return await ctx.reply(embed=h.err("Nothing is playing."), ephemeral=True)
+        if amount is None:
+            current = int(round(player.volume * 100))
+            return await ctx.reply(
+                embed=h.info(f"Volume is **{current}%**.", "🔊 Volume")
+            )
         target = _apply_delta(amount, player.volume * 100)
         if target is None:
             return await ctx.reply(
