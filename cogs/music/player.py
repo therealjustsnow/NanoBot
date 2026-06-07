@@ -165,9 +165,19 @@ class GuildPlayer:
         self._schedule_save()
         return n
 
-    def skip(self) -> None:
+    def skip(self) -> bool:
+        """Stop the current track so the player loop advances.
+
+        Returns True only when a live voice client was actually told to stop.
+        If the voice connection has gone away underneath us (e.g. Discord
+        re-established the voice session and discord.py lost the reference),
+        there's nothing to stop — return False so callers don't claim a skip
+        that never happened.
+        """
         if self.voice and (self.voice.is_playing() or self.voice.is_paused()):
             self.voice.stop()  # fires the after-callback → advances the loop
+            return True
+        return False
 
     def pause(self) -> None:
         if self.voice and self.voice.is_playing():
@@ -508,9 +518,22 @@ class GuildPlayer:
                     self.current = None
                     continue
 
+                # Re-check the voice client: building the source above awaited
+                # (yt-dlp extraction), and the connection can drop in that window
+                # — Discord force-disconnects, a failed reconnect, etc. The line
+                # 502 guard ran before the await, so don't trust it here. Reading
+                # self.voice twice could also return a live client then None, so
+                # snapshot it once and play through the snapshot.
+                vc = self.voice
+                if vc is None or not vc.is_connected():
+                    await self.destroy(
+                        reason="voice lost before play", persist_clear=False
+                    )
+                    return
+
                 self._play_started = time.monotonic()
                 self._paused_at = None
-                self.voice.play(source, after=self._after)
+                vc.play(source, after=self._after)
 
                 self._schedule_save()
                 self._start_predownload()
@@ -539,6 +562,15 @@ class GuildPlayer:
             raise
         except Exception as exc:  # pragma: no cover - safety net
             log.error("Player loop crashed in %s: %s", self.guild.id, exc, exc_info=exc)
+            # A crashed loop must not leave a half-dead player parked in
+            # cog.players: its voice client is gone but commands/buttons would
+            # still resolve it, no-op, and report success falsely. Tear it down
+            # so the next `play` builds a fresh player and reconnects cleanly.
+            if not self._destroyed:
+                try:
+                    await self.destroy(reason="loop crashed", persist_clear=False)
+                except Exception:
+                    self.cog.players.pop(self.guild.id, None)
 
     async def _next_track(self) -> Optional[Track]:
         """Pop the queue, fall back to autoplay/guildplay, or wait until something arrives."""
@@ -877,6 +909,11 @@ class GuildPlayer:
                 await self.voice.disconnect(force=True)
             except Exception:
                 pass
+        else:
+            # No VoiceClient to disconnect, but the gateway may still think we're
+            # in a channel (a crashed/timed-out handshake leaves that ghost).
+            # Clear it so the bot doesn't linger in voice after a stop/teardown.
+            await self.cog._clear_ghost_voice(self.guild)
 
         self.cog.players.pop(self.guild.id, None)
         await self.cog._refresh_presence()

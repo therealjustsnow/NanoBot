@@ -132,6 +132,15 @@ from .source import MusicSource, YTDLP_AVAILABLE
 
 log = logging.getLogger("NanoBot.music")
 
+# Shown when a control fires but the voice connection has gone away underneath
+# us (e.g. Discord re-established the voice session and discord.py lost the
+# client reference). The track may still be audible from a stale connection, so
+# tell the user how to recover instead of falsely reporting success.
+_LOST_VOICE_MSG = (
+    "I've lost track of the voice connection — try `stop` then `play` again "
+    "to reconnect."
+)
+
 
 class Music(commands.Cog):
     """Voice music player with an interactive Now Playing panel."""
@@ -417,6 +426,50 @@ class Music(commands.Cog):
             return None
         return player
 
+    async def _defer(self, ctx: commands.Context) -> None:
+        """Defer a slash interaction before a slow operation (idempotent).
+
+        No-op for prefix invocations and when the interaction was already
+        responded to/deferred, so it's safe to call from shared helpers.
+        """
+        itx = ctx.interaction
+        if itx is None or itx.response.is_done():
+            return
+        try:
+            await ctx.defer()
+        except discord.HTTPException as exc:
+            log.debug("Defer failed in %s: %s", getattr(ctx.guild, "id", "?"), exc)
+
+    async def _clear_ghost_voice(self, guild: discord.Guild) -> bool:
+        """Force-leave a voice channel the gateway still thinks we're in.
+
+        A failed/timed-out voice handshake can leave Discord believing the bot
+        is connected (it still shows in the channel) while discord.py holds no
+        VoiceClient — guild.voice_client is None. In that state destroy() can't
+        disconnect (nothing to call) and a fresh connect() often times out
+        because the server considers us already present. Sending a gateway
+        voice-state update with channel=None clears that ghost so we can recover.
+
+        Returns True when a ghost was found and a leave was issued.
+        """
+        me_voice = getattr(guild.me, "voice", None)
+        ghost = (
+            guild.voice_client is None
+            and me_voice is not None
+            and me_voice.channel is not None
+        )
+        if not ghost:
+            return False
+        try:
+            await guild.change_voice_state(channel=None)
+            # Give the gateway a moment to process the leave before any reconnect.
+            await asyncio.sleep(0.5)
+        except Exception as exc:
+            log.debug("Ghost voice cleanup failed in %s: %s", guild.id, exc)
+            return False
+        log.info("Cleared ghost voice connection in guild %s", guild.id)
+        return True
+
     async def _ensure_voice(
         self, ctx: commands.Context, *, join: bool = True
     ) -> Optional[GuildPlayer]:
@@ -465,15 +518,27 @@ class Music(commands.Cog):
                     embed=h.err("I'm not in a voice channel."), ephemeral=True
                 )
                 return None
+            # Connecting waits on the voice handshake (up to ~30s on a slow or
+            # failing region), well past the 3s slash-interaction window. Defer
+            # first so the reply below — success or error — doesn't 404 with
+            # 'Unknown interaction'.
+            await self._defer(ctx)
+            # Clear any ghost session first: a previous failed handshake can
+            # leave the gateway thinking we're connected, which makes connect()
+            # time out. Best-effort, then connect.
+            await self._clear_ghost_voice(ctx.guild)
             try:
                 await author_vc.connect(self_deaf=self.self_deafen())
             except Exception as exc:
                 log.warning("Connect failed in %s: %s", ctx.guild.id, exc)
+                # Leave no ghost behind on a failed/aborted handshake.
+                await self._clear_ghost_voice(ctx.guild)
                 await ctx.reply(
                     embed=h.err(f"Couldn't join the channel.\n`{exc}`"), ephemeral=True
                 )
                 return None
         elif voice.channel != author_vc:
+            await self._defer(ctx)
             try:
                 await voice.move_to(author_vc)
             except Exception as exc:
@@ -540,10 +605,13 @@ class Music(commands.Cog):
     async def _queue_query(
         self, ctx: commands.Context, query: str, *, front: bool, then_skip: bool
     ) -> None:
+        # Defer up front: both joining (voice handshake) and resolving (yt-dlp)
+        # can each blow past the 3s slash window. _defer is idempotent, so the
+        # second connect-path defer inside _ensure_voice is a no-op.
+        await self._defer(ctx)
         player = await self._ensure_voice(ctx, join=True)
         if player is None:
             return
-        await ctx.defer()
         tracks = await self._resolve_for(ctx, query)
         if tracks is None:
             return
@@ -683,10 +751,15 @@ class Music(commands.Cog):
             await db.clear_music_queue(guild.id)
             return False
 
+        # A handshake left over from before the restart can make Discord think
+        # we're still connected; clear it so connect() doesn't time out.
+        await self._clear_ghost_voice(guild)
         try:
             await voice_channel.connect(self_deaf=self.self_deafen())
         except Exception as exc:
             log.warning("Resume connect failed for guild %s: %s", guild.id, exc)
+            # Don't leave a half-open handshake behind for the next command.
+            await self._clear_ghost_voice(guild)
             return False
 
         player = self.get_player(guild)
@@ -773,10 +846,10 @@ class Music(commands.Cog):
     @commands.guild_only()
     async def play(self, ctx: commands.Context, *, query: str, mode: str = "normal"):
         if mode == "shuffle":
+            await self._defer(ctx)
             player = await self._ensure_voice(ctx, join=True)
             if player is None:
                 return
-            await ctx.defer()
             tracks = await self._resolve_for(ctx, query)
             if tracks is None:
                 return
@@ -907,7 +980,8 @@ class Music(commands.Cog):
         alone = len(listeners) <= 1
 
         if is_requester or is_mod or alone:
-            player.skip()
+            if not player.skip():
+                return await ctx.reply(embed=h.err(_LOST_VOICE_MSG), ephemeral=True)
             return await ctx.reply(embed=h.ok(f"Skipped **{title}**.", "⏭️ Skipped"))
 
         needed = max(1, math.ceil(self.skip_ratio() * len(listeners)))
@@ -916,7 +990,8 @@ class Music(commands.Cog):
         votes = len(player.skip_votes & present)
 
         if votes >= needed:
-            player.skip()
+            if not player.skip():
+                return await ctx.reply(embed=h.err(_LOST_VOICE_MSG), ephemeral=True)
             return await ctx.reply(
                 embed=h.ok(f"Vote passed — skipped **{title}**.", "⏭️ Skipped")
             )
@@ -949,7 +1024,8 @@ class Music(commands.Cog):
         if not player or player.current is None:
             return await ctx.reply(embed=h.err("Nothing is playing."), ephemeral=True)
         title = player.current.title
-        player.skip()
+        if not player.skip():
+            return await ctx.reply(embed=h.err(_LOST_VOICE_MSG), ephemeral=True)
         await ctx.reply(embed=h.ok(f"Force-skipped **{title}**.", "⏭️ Skipped"))
 
     @commands.hybrid_command(
@@ -1002,12 +1078,29 @@ class Music(commands.Cog):
     @commands.guild_only()
     async def stop(self, ctx: commands.Context):
         player = self._active_player(ctx)
-        if not player:
+        if player:
+            await player.destroy(reason="stop command")
             return await ctx.reply(
-                embed=h.err("I'm not playing anything."), ephemeral=True
+                embed=h.ok("Stopped and left the channel.", "⏹️ Stopped")
             )
-        await player.destroy(reason="stop command")
-        await ctx.reply(embed=h.ok("Stopped and left the channel.", "⏹️ Stopped"))
+        # No live player. There may still be a real voice client (loop crashed
+        # and left it behind) or a ghost session the gateway thinks we're in.
+        # Tear down whatever we can so the user isn't stuck with a bot that
+        # looks connected but won't respond.
+        vc = ctx.guild.voice_client
+        if vc is not None:
+            try:
+                await vc.disconnect(force=True)
+            except Exception as exc:
+                log.debug("Stop disconnect failed in %s: %s", ctx.guild.id, exc)
+            return await ctx.reply(
+                embed=h.ok("Stopped and left the channel.", "⏹️ Stopped")
+            )
+        if await self._clear_ghost_voice(ctx.guild):
+            return await ctx.reply(
+                embed=h.ok("Cleared a stuck voice connection.", "⏹️ Stopped")
+            )
+        await ctx.reply(embed=h.err("I'm not playing anything."), ephemeral=True)
 
     @commands.hybrid_command(
         name="pause",
@@ -1838,10 +1931,10 @@ class Music(commands.Cog):
     )
     @commands.guild_only()
     async def shuffleplay(self, ctx: commands.Context, *, query: str):
+        await self._defer(ctx)
         player = await self._ensure_voice(ctx, join=True)
         if player is None:
             return
-        await ctx.defer()
         tracks = await self._resolve_for(ctx, query)
         if tracks is None:
             return

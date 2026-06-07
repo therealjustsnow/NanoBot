@@ -43,6 +43,7 @@ Tests cover pure-Python utilities and the SQLite layer (in-memory), no live Disc
 - `tests/test_cache_db.py` — `utils/cache_db.py` against an in-memory SQLite database
 - `tests/test_storage.py` — sync and async JSON helpers in `utils/storage.py`
 - `tests/test_music_helpers.py` — pure helper functions imported directly from `cogs/music/helpers.py` (Discord/yt-dlp-free module); includes `_extract_ytid`
+- `tests/test_music_player.py` — voice-state recovery logic built via `__new__` (no live gateway): `GuildPlayer.skip()`'s honest bool return + `Music._clear_ghost_voice()`'s gateway-leave decision
 - `tests/test_leveling_helpers.py` — pure level-math helpers from `cogs/leveling.py` (XP curve, progress bar)
 - `tests/test_leveling_db.py` — leveling accessors in `utils/db.py` against in-memory SQLite
 - `tests/test_economy_helpers.py` — pure economy helpers from `cogs/economy.py` (coin formatting, daily/streak math)
