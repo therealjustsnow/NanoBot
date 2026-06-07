@@ -118,16 +118,44 @@ def _metadata_query(title: str) -> str:
     return re.sub(r"\s+", " ", q).strip(" -·|")
 
 
-def _pick_itunes_match(title: str, results: list) -> Optional[tuple[str, str]]:
+def _artist_hint(title: str, uploader: Optional[str]) -> set:
+    """Derive artist-name words from a 'Artist - Track' title prefix + uploader.
+
+    Used to disambiguate iTunes matches: a YouTube title like "NF - Let You Down"
+    or an uploader "NFrealmusic" tells us the real artist, so an unrelated song
+    that merely shares title words (e.g. an *NSYNC track) can be rejected.
+    """
+    hint: set = set()
+    if " - " in title:
+        prefix = title.split(" - ", 1)[0]
+        hint |= {w for w in re.findall(r"[a-z0-9]+", prefix.lower()) if len(w) > 1}
+    if uploader:
+        cand = re.sub(r"\s*-\s*topic\s*$", "", uploader, flags=re.IGNORECASE)
+        cand = re.sub(r"\bvevo\b|\bofficial\b|\bmusic\b", "", cand, flags=re.IGNORECASE)
+        hint |= {w for w in re.findall(r"[a-z0-9]+", cand.lower()) if len(w) > 1}
+    return hint
+
+
+def _pick_itunes_match(
+    title: str, results: list, uploader: Optional[str] = None
+) -> Optional[tuple[str, str]]:
     """Pick a confident (artist, track) from iTunes Search results for `title`.
 
     Only accepts a result whose track name substantially overlaps the original
     title (≥60% of its words appear in it) so an unrelated "closest" song is
-    never mislabelled onto the playing track. Returns None when nothing matches.
+    never mislabelled onto the playing track.
+
+    When an artist hint is available (from the title's "Artist - Track" prefix or
+    the uploader name), a candidate's artist must match that hint — this rejects
+    same-title songs by the wrong artist (e.g. labelling an NF track as *NSYNC).
+    If a hint exists but no candidate's artist matches it, returns None rather
+    than guessing. With no hint, falls back to the first title-overlap match.
+    Returns None when nothing matches.
     """
     want = {w for w in re.findall(r"[a-z0-9]+", title.lower()) if len(w) > 1}
     if not want:
         return None
+    hint = _artist_hint(title, uploader)
     for item in results:
         if not isinstance(item, dict):
             continue
@@ -138,8 +166,16 @@ def _pick_itunes_match(title: str, results: list) -> Optional[tuple[str, str]]:
         track_words = {w for w in re.findall(r"[a-z0-9]+", track.lower()) if len(w) > 1}
         if not track_words:
             continue
-        if len(track_words & want) / len(track_words) >= 0.6:
-            return artist, track
+        if len(track_words & want) / len(track_words) < 0.6:
+            continue
+        if not hint:
+            return artist, track  # no hint — best-effort first overlap
+        artist_words = {
+            w for w in re.findall(r"[a-z0-9]+", artist.lower()) if len(w) > 1
+        }
+        if artist_words & hint:
+            return artist, track  # artist confirmed by the hint
+    # Hint present but no candidate's artist matched it: don't guess.
     return None
 
 

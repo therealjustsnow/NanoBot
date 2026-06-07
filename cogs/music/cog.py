@@ -298,7 +298,9 @@ class Music(commands.Cog):
         except Exception as exc:
             log.debug("metadata lookup failed for '%s': %s", track.title, exc)
             return
-        match = _pick_itunes_match(track.title, data.get("results") or [])
+        match = _pick_itunes_match(
+            track.title, data.get("results") or [], track.uploader
+        )
         if match:
             track.artist = match[0]
             log.debug("metadata: '%s' → artist '%s'", track.title, match[0])
