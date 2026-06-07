@@ -132,6 +132,15 @@ from .source import MusicSource, YTDLP_AVAILABLE
 
 log = logging.getLogger("NanoBot.music")
 
+# Shown when a control fires but the voice connection has gone away underneath
+# us (e.g. Discord re-established the voice session and discord.py lost the
+# client reference). The track may still be audible from a stale connection, so
+# tell the user how to recover instead of falsely reporting success.
+_LOST_VOICE_MSG = (
+    "I've lost track of the voice connection — try `stop` then `play` again "
+    "to reconnect."
+)
+
 
 class Music(commands.Cog):
     """Voice music player with an interactive Now Playing panel."""
@@ -907,7 +916,8 @@ class Music(commands.Cog):
         alone = len(listeners) <= 1
 
         if is_requester or is_mod or alone:
-            player.skip()
+            if not player.skip():
+                return await ctx.reply(embed=h.err(_LOST_VOICE_MSG), ephemeral=True)
             return await ctx.reply(embed=h.ok(f"Skipped **{title}**.", "⏭️ Skipped"))
 
         needed = max(1, math.ceil(self.skip_ratio() * len(listeners)))
@@ -916,7 +926,8 @@ class Music(commands.Cog):
         votes = len(player.skip_votes & present)
 
         if votes >= needed:
-            player.skip()
+            if not player.skip():
+                return await ctx.reply(embed=h.err(_LOST_VOICE_MSG), ephemeral=True)
             return await ctx.reply(
                 embed=h.ok(f"Vote passed — skipped **{title}**.", "⏭️ Skipped")
             )
@@ -949,7 +960,8 @@ class Music(commands.Cog):
         if not player or player.current is None:
             return await ctx.reply(embed=h.err("Nothing is playing."), ephemeral=True)
         title = player.current.title
-        player.skip()
+        if not player.skip():
+            return await ctx.reply(embed=h.err(_LOST_VOICE_MSG), ephemeral=True)
         await ctx.reply(embed=h.ok(f"Force-skipped **{title}**.", "⏭️ Skipped"))
 
     @commands.hybrid_command(

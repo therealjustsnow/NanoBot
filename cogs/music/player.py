@@ -165,9 +165,19 @@ class GuildPlayer:
         self._schedule_save()
         return n
 
-    def skip(self) -> None:
+    def skip(self) -> bool:
+        """Stop the current track so the player loop advances.
+
+        Returns True only when a live voice client was actually told to stop.
+        If the voice connection has gone away underneath us (e.g. Discord
+        re-established the voice session and discord.py lost the reference),
+        there's nothing to stop — return False so callers don't claim a skip
+        that never happened.
+        """
         if self.voice and (self.voice.is_playing() or self.voice.is_paused()):
             self.voice.stop()  # fires the after-callback → advances the loop
+            return True
+        return False
 
     def pause(self) -> None:
         if self.voice and self.voice.is_playing():
