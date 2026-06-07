@@ -329,7 +329,9 @@ class Music(commands.Cog):
                     self._spawn_bg(
                         self._notify_ratelimit_leave(player.text_channel, mins)
                     )
-                    self._spawn_bg(player.destroy(reason="rate-limited"))
+                    self._spawn_bg(
+                        player.destroy(reason="rate-limited", persist_clear=False)
+                    )
         return True
 
     async def _notify_ratelimit_leave(self, channel, mins: int) -> None:
@@ -630,7 +632,7 @@ class Music(commands.Cog):
                     await player._announce(
                         h.info("Left the channel — everyone disconnected.", "👋 Bye")
                     )
-                    await player.destroy(reason="alone")
+                    await player.destroy(reason="alone", persist_clear=False)
 
     # ── resume persisted queues on startup ─────────────────────────────────────
     @commands.Cog.listener()
@@ -691,6 +693,33 @@ class Music(commands.Cog):
         if isinstance(text_channel, discord.abc.Messageable):
             player.text_channel = text_channel
         player.stay_connected = await db.get_music_stay(guild.id)
+        loop_mode = entry.get("loop_mode")
+        if loop_mode in (LOOP_OFF, LOOP_TRACK, LOOP_QUEUE):
+            player.loop = loop_mode
+        player.queue.extend(tracks)
+        player._added.set()
+        return True
+
+    async def _try_resume_saved_queue(self, player: GuildPlayer) -> bool:
+        """Populate an already-connected player from its saved queue (idle-resume)."""
+        if not self.persist_queue():
+            return False
+        try:
+            saved = await db.get_all_persisted_queues()
+        except Exception as exc:
+            log.warning(
+                "Could not load saved queue for guild %s: %s", player.guild.id, exc
+            )
+            return False
+        entry = next((e for e in saved if int(e["guild_id"]) == player.guild.id), None)
+        if not entry:
+            return False
+        tracks: list[Track] = []
+        if entry.get("current"):
+            tracks.append(Track.from_dict(entry["current"]))
+        tracks.extend(Track.from_dict(d) for d in entry.get("queue", []))
+        if not tracks:
+            return False
         loop_mode = entry.get("loop_mode")
         if loop_mode in (LOOP_OFF, LOOP_TRACK, LOOP_QUEUE):
             player.loop = loop_mode
@@ -2309,8 +2338,21 @@ class Music(commands.Cog):
         player = await self._ensure_voice(ctx, join=True)
         if player is None:
             return
-        await ctx.reply(
-            embed=h.ok(
-                f"Connected to **{ctx.author.voice.channel.name}**.", "🎤 Joined"
-            )
+        resumed = (
+            not player.queue
+            and not player.current
+            and await self._try_resume_saved_queue(player)
         )
+        if resumed:
+            await ctx.reply(
+                embed=h.ok(
+                    f"Connected to **{ctx.author.voice.channel.name}** and resuming your saved queue.",
+                    "🎤 Resumed",
+                )
+            )
+        else:
+            await ctx.reply(
+                embed=h.ok(
+                    f"Connected to **{ctx.author.voice.channel.name}**.", "🎤 Joined"
+                )
+            )

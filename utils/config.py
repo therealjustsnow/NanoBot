@@ -576,6 +576,20 @@ FIELDS: tuple[Field, ...] = (
         "Explicit path to deno/node/bun binary for yt-dlp JS (blank = auto-detect)",
         file_exists=True,
     ),
+    Field(
+        "music_sponsorblock",
+        "music",
+        "bool",
+        False,
+        "Skip non-music/sponsor segments via SponsorBlock (downloads + FFmpeg-cuts before play; true/false)",
+    ),
+    Field(
+        "music_sponsorblock_categories",
+        "music",
+        "str",
+        "music_offtopic",
+        "Comma/space-separated SponsorBlock categories to remove (sponsor intro outro selfpromo preview filler interaction music_offtopic poi_highlight)",
+    ),
 )
 
 _FIELD: dict[str, Field] = {f.key: f for f in FIELDS}

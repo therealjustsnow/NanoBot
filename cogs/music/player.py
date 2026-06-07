@@ -473,7 +473,7 @@ class GuildPlayer:
                 else:
                     track = await self._next_track()
                     if track is None:
-                        await self.destroy(reason="inactivity")
+                        await self.destroy(reason="inactivity", persist_clear=False)
                         return
 
                 self.current = track
@@ -490,7 +490,7 @@ class GuildPlayer:
                         self._smart_seeds.append(track.webpage_url)
 
                 if not self.voice or not self.voice.is_connected():
-                    await self.destroy(reason="disconnected")
+                    await self.destroy(reason="disconnected", persist_clear=False)
                     return
 
                 try:
