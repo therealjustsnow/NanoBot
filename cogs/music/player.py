@@ -909,6 +909,11 @@ class GuildPlayer:
                 await self.voice.disconnect(force=True)
             except Exception:
                 pass
+        else:
+            # No VoiceClient to disconnect, but the gateway may still think we're
+            # in a channel (a crashed/timed-out handshake leaves that ghost).
+            # Clear it so the bot doesn't linger in voice after a stop/teardown.
+            await self.cog._clear_ghost_voice(self.guild)
 
         self.cog.players.pop(self.guild.id, None)
         await self.cog._refresh_presence()
