@@ -705,7 +705,9 @@ class Music(commands.Cog):
         try:
             saved = await db.get_all_persisted_queues()
         except Exception as exc:
-            log.warning("Could not load saved queue for guild %s: %s", player.guild.id, exc)
+            log.warning(
+                "Could not load saved queue for guild %s: %s", player.guild.id, exc
+            )
             return False
         entry = next((e for e in saved if int(e["guild_id"]) == player.guild.id), None)
         if not entry:
@@ -2334,7 +2336,11 @@ class Music(commands.Cog):
         player = await self._ensure_voice(ctx, join=True)
         if player is None:
             return
-        resumed = not player.queue and not player.current and await self._try_resume_saved_queue(player)
+        resumed = (
+            not player.queue
+            and not player.current
+            and await self._try_resume_saved_queue(player)
+        )
         if resumed:
             await ctx.reply(
                 embed=h.ok(
