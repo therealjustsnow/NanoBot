@@ -40,7 +40,15 @@ async def init() -> None:
     _db = await aiosqlite.connect(_DB_PATH)
     _db.row_factory = aiosqlite.Row
 
+    # Same connection tuning as nanobot.db (see utils/db.py for rationale): WAL +
+    # relaxed sync + a lock-wait timeout widen throughput on the single shared
+    # connection at zero schema/code cost.
     await _db.execute("PRAGMA journal_mode=WAL")
+    await _db.execute("PRAGMA synchronous=NORMAL")
+    await _db.execute("PRAGMA busy_timeout=5000")
+    await _db.execute("PRAGMA temp_store=MEMORY")
+    await _db.execute("PRAGMA cache_size=-16000")
+    await _db.execute("PRAGMA mmap_size=268435456")
 
     await _db.executescript("""
         CREATE TABLE IF NOT EXISTS fml_stories (

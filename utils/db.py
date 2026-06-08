@@ -76,9 +76,29 @@ async def init() -> None:
     _db = await aiosqlite.connect(_DB_PATH)
     _db.row_factory = aiosqlite.Row
 
-    # WAL mode: readers never block writers, writers never block readers
+    # ── Connection tuning ─────────────────────────────────────────────────────
+    # All cheap, no schema/code impact — they widen write/read throughput so the
+    # single shared connection scales to many guilds before a connection pool
+    # would ever be worth its complexity.
+    #
+    #   journal_mode=WAL   readers never block writers, writers never block readers
+    #   synchronous=NORMAL safe under WAL (a crash can lose the last txn but never
+    #                      corrupts the DB) and skips an fsync per commit — the
+    #                      biggest single write-throughput win
+    #   busy_timeout=5000  wait up to 5s for a lock instead of erroring out
+    #                      immediately ("database is locked"); a safety net if a
+    #                      second connection (e.g. migrate.py) ever overlaps
+    #   foreign_keys=ON    enforce FK constraints
+    #   temp_store=MEMORY  keep temp tables / sort indices in RAM, not on disk
+    #   cache_size=-16000  ~16 MB page cache (negative = KiB), fewer disk reads
+    #   mmap_size=256 MiB  memory-mapped reads avoid a syscall per page
     await _db.execute("PRAGMA journal_mode=WAL")
+    await _db.execute("PRAGMA synchronous=NORMAL")
+    await _db.execute("PRAGMA busy_timeout=5000")
     await _db.execute("PRAGMA foreign_keys=ON")
+    await _db.execute("PRAGMA temp_store=MEMORY")
+    await _db.execute("PRAGMA cache_size=-16000")
+    await _db.execute("PRAGMA mmap_size=268435456")
 
     await _db.executescript("""
         CREATE TABLE IF NOT EXISTS tags (
