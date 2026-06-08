@@ -11,7 +11,6 @@ import pytest
 from utils.config import (
     DEFAULTS,
     SECTION_MAP,
-    ConfigIssue,
     _coerce,
     _format,
     assert_no_fatal,

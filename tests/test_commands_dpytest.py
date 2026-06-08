@@ -8,7 +8,6 @@ These complement the pure-logic suites; they're the only place command wiring
 (decorators, checks, argument parsing) is actually executed.
 """
 
-import discord
 import pytest
 from discord.ext import commands
 from discord.ext import test as dpytest

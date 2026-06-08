@@ -304,7 +304,7 @@ class Reminders(commands.Cog):
                 f"📬 Delivery: {'DM' if use_dm else 'channel ping'} "
                 f"(falls back to channel if DMs are closed)"
                 if use_dm
-                else f"📬 Delivery: channel ping"
+                else "📬 Delivery: channel ping"
             ),
         ]
         if not is_self:

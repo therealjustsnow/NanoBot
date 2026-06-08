@@ -11,9 +11,7 @@ Pure-logic tests (helpers, config, db, storage) do not need any of this and
 should stay free of the `bot` fixture.
 """
 
-import aiosqlite
 import discord
-import pytest
 import pytest_asyncio
 from discord.ext import test as dpytest
 from discord.ext.test import backend as dpy_backend

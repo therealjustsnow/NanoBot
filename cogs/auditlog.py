@@ -26,7 +26,6 @@ Commands (all require Manage Server):
 """
 
 import logging
-from typing import Optional
 
 import discord
 from discord import app_commands

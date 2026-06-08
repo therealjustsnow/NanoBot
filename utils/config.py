@@ -9,7 +9,7 @@ load — the old file is renamed to `config.json.bak` after migration.
 
 Sections:
     [bot]      token, default_prefix, owner_id, error_channel_id,
-               idle_status_message
+               idle_status_message, health_check_port
     [logging]  log_level, log_http, log_events_jsonl
     [votes]    top.gg / DBL / discord.bots.gg tokens, webhook port/secret,
                webhook_allowed_ips
@@ -252,6 +252,15 @@ FIELDS: tuple[Field, ...] = (
         "str",
         None,
         "Manual idle presence text (blank = auto-rotate 'Listening to /help | /<command>')",
+    ),
+    Field(
+        "health_check_port",
+        "bot",
+        "int",
+        0,
+        "Port for a plain-HTTP health-check endpoint (GET /health). 0 = disabled",
+        minimum=0,
+        maximum=65535,
     ),
     # ── [logging] ──
     Field(
