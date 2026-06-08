@@ -2,7 +2,6 @@
 Command-level tests for cogs/leveling.py under dpytest (parse → check → DB → reply).
 """
 
-import discord
 import pytest
 from discord.ext import commands
 from discord.ext import test as dpytest

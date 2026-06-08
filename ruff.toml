@@ -1,0 +1,15 @@
+# Ruff configuration for NanoBot.
+#
+# Scope is deliberately conservative: Black already owns formatting, so Ruff
+# here is a lint-only safety net for real defects (undefined names, unused
+# imports/variables, syntax errors) rather than a style police. Widen `select`
+# over time if the team wants more coverage.
+
+target-version = "py311"
+line-length = 88  # match Black
+
+[lint]
+# E9 = syntax / runtime errors   F = pyflakes (undefined names, unused imports
+# and variables, bad f-strings, …). Intentionally narrow so pre-commit blocks
+# only on genuine defects, not stylistic churn that Black doesn't already own.
+select = ["E9", "F"]

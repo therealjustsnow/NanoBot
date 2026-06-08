@@ -121,7 +121,6 @@ from .helpers import (
     _apply_delta,
     _fmt_time,
     _parse_seek,
-    _parse_timestamp,
     _metadata_query,
     _pick_itunes_match,
     _split_artist_title,

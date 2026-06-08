@@ -29,6 +29,8 @@ from utils import config as cfg_mod
 from utils import db
 from utils import helpers as h
 from utils import obs
+from utils import sqlite_timing
+from utils.health import HealthServer
 
 # ── Config (read once at module level so logging init can use it) ──────────────
 _CFG = cfg_mod.load()
@@ -95,6 +97,9 @@ def _setup_logging(cfg: dict) -> logging.Logger:
 
     # ── Structured JSONL event sink ───────────────────────────────────────────
     obs.setup_events_logger(bool(cfg.get("log_events_jsonl", True)))
+
+    # ── Slow-query logging threshold ──────────────────────────────────────────
+    sqlite_timing.set_threshold(cfg.get("db_slow_query_ms", 0))
 
     return logging.getLogger("NanoBot")
 
@@ -232,14 +237,28 @@ class NanoBot(commands.Bot):
         self._music_activity: discord.BaseActivity | None = None
         # Guard so the startup config dump prints once, not on every reconnect.
         self._config_printed: bool = False
+        # Optional health-check HTTP server (started in setup_hook when the
+        # health_check_port config key is non-zero).
+        self._health_server: HealthServer | None = None
 
-    def _spawn_bg(self, coro) -> None:
+    def _spawn_bg(self, coro, *, timeout: float | None = None) -> None:
+        """Fire-and-forget a coroutine, keeping a strong ref so it isn't GC'd.
+
+        Pass ``timeout`` (seconds) for short, self-contained work — a hung task
+        is then cancelled by asyncio.wait_for instead of lingering in
+        ``_bg_tasks`` forever. Leave it ``None`` (default) for genuinely
+        long-running coroutines (e.g. the daily scrape) that must not be capped.
+        """
+        run = asyncio.wait_for(coro, timeout) if timeout is not None else coro
         try:
-            task = asyncio.create_task(coro)
+            task = asyncio.create_task(run)
         except RuntimeError:
             # No running event loop (called during/after shutdown). Close the
-            # coroutine explicitly so Python doesn't warn about it being unawaited.
-            coro.close()
+            # coroutine(s) explicitly so Python doesn't warn about them being
+            # unawaited. If we wrapped in wait_for, close the inner coro too.
+            run.close()
+            if run is not coro:
+                coro.close()
             return
         self._bg_tasks.add(task)
         task.add_done_callback(self._on_bg_done)
@@ -249,7 +268,9 @@ class NanoBot(commands.Bot):
         if task.cancelled():
             return
         exc = task.exception()
-        if exc is not None:
+        if isinstance(exc, asyncio.TimeoutError):
+            log.warning("Background task exceeded its timeout and was cancelled")
+        elif exc is not None:
             log.error("Background task failed: %s", exc, exc_info=exc)
 
     async def close(self) -> None:
@@ -259,11 +280,30 @@ class NanoBot(commands.Bot):
         orig = getattr(self, "_orig_showwarning", None)
         if orig is not None:
             warnings.showwarning = orig
-        # Cancel fire-and-forget background tasks on shutdown. (Cog-owned tasks
-        # are cancelled by cog_unload on reload; on full shutdown they stop with
-        # the event loop.)
-        for task in list(self._bg_tasks):
+        # Tear down the health endpoint (if running) so its port is freed.
+        if self._health_server is not None:
+            try:
+                await self._health_server.stop()
+            except Exception as exc:
+                log.debug("Health server shutdown error: %s", exc)
+            self._health_server = None
+        # Cancel fire-and-forget background tasks on shutdown, then give them a
+        # brief window to unwind so an in-flight task isn't torn off mid-write.
+        # (Cog-owned tasks are cancelled by cog_unload on reload; on full
+        # shutdown they stop with the event loop.)
+        pending = list(self._bg_tasks)
+        for task in pending:
             task.cancel()
+        if pending:
+            try:
+                await asyncio.wait_for(
+                    asyncio.gather(*pending, return_exceptions=True), timeout=5
+                )
+            except asyncio.TimeoutError:
+                log.warning(
+                    "%d background task(s) didn't finish within shutdown grace period",
+                    sum(not t.done() for t in pending),
+                )
         await super().close()
 
     # ── Presence ──────────────────────────────────────────────────────────────
@@ -274,7 +314,7 @@ class NanoBot(commands.Bot):
     def set_music_activity(self, activity: discord.BaseActivity | None) -> None:
         """Called by the music cog. None reverts to the idle presence."""
         self._music_activity = activity
-        self._spawn_bg(self.apply_presence())
+        self._spawn_bg(self.apply_presence(), timeout=30)
 
     def _idle_activity(self) -> discord.Activity:
         if self.manual_status:
@@ -344,6 +384,7 @@ class NanoBot(commands.Bot):
         http_level = logging.DEBUG if new_cfg.get("log_http") else logging.WARNING
         logging.getLogger("discord.http").setLevel(http_level)
         obs.setup_events_logger(bool(new_cfg.get("log_events_jsonl", True)))
+        sqlite_timing.set_threshold(new_cfg.get("db_slow_query_ms", 0))
 
         self.dispatch("config_reloaded", self.config)
         return new_cfg
@@ -364,6 +405,22 @@ class NanoBot(commands.Bot):
                 log.warning(f"⚠️  Could not load {cog}: {exc}")
 
         await self._sync_commands_if_changed()
+        await self._start_health_server()
+
+    async def _start_health_server(self) -> None:
+        """Start the optional /health endpoint when a port is configured."""
+        try:
+            port = int(self.config.get("health_check_port") or 0)
+        except (TypeError, ValueError):
+            port = 0
+        if port <= 0:
+            return
+        server = HealthServer(self, port)
+        try:
+            await server.start()
+            self._health_server = server
+        except OSError as exc:
+            log.warning("Couldn't start health-check endpoint on :%d: %s", port, exc)
 
     async def _sync_commands_if_changed(self) -> None:
         """Sync the slash command tree only when it actually changed.
@@ -451,8 +508,11 @@ class NanoBot(commands.Bot):
             )
             embed.set_footer(text="NanoBot error log")
             await ch.send(embed=embed)
-        except Exception:
-            pass
+        except Exception as exc:
+            # Don't let the error-reporting path raise (it'd risk a feedback
+            # loop via the asyncio exception handler). Trace at debug so a
+            # broken error channel is still diagnosable from the logs.
+            log.debug("_post_error failed to deliver to error channel: %s", exc)
 
     def _install_error_hooks(self) -> None:
         """Hook Python warnings and asyncio unhandled exceptions into _post_error."""
@@ -466,7 +526,9 @@ class NanoBot(commands.Bot):
             if bot_ref.is_closed():
                 return
             text = warnings.formatwarning(message, category, filename, lineno, line)
-            bot_ref._spawn_bg(bot_ref._post_error(f"⚠️ {category.__name__}", text))
+            bot_ref._spawn_bg(
+                bot_ref._post_error(f"⚠️ {category.__name__}", text), timeout=30
+            )
 
         warnings.showwarning = _warn_hook
 
@@ -482,7 +544,9 @@ class NanoBot(commands.Bot):
                 body = msg
             log.error("asyncio unhandled: %s", msg, exc_info=exc)
             if not bot_ref.is_closed():
-                bot_ref._spawn_bg(bot_ref._post_error("🔴 asyncio exception", body))
+                bot_ref._spawn_bg(
+                    bot_ref._post_error("🔴 asyncio exception", body), timeout=30
+                )
 
         self.loop.set_exception_handler(_asyncio_exc_handler)
 
@@ -746,6 +810,16 @@ class NanoBot(commands.Bot):
             e.set_footer(text="NanoBot")
             return await _slash_error_response(interaction, e)
 
+        if isinstance(error, app_commands.CheckFailure):
+            # A custom check (not the permission ones handled above) blocked
+            # this slash command. Reply without logging a stack trace.
+            e = discord.Embed(
+                description="⛔ You can't use that command here.",
+                color=0xED4245,
+            )
+            e.set_footer(text="NanoBot")
+            return await _slash_error_response(interaction, e)
+
         # Catch-all for anything else
         log.error(f"Unhandled tree error in /{cmd_name}: {error}", exc_info=error)
 
@@ -849,6 +923,16 @@ class NanoBot(commands.Bot):
 
         if isinstance(error, commands.CommandNotFound):
             return
+
+        if isinstance(error, commands.CheckFailure):
+            # A custom check (not the permission/owner ones handled above)
+            # blocked this. Tell the user without dumping a stack trace.
+            e = discord.Embed(
+                description="⛔ You can't use that command here.",
+                color=0xED4245,
+            )
+            e.set_footer(text="NanoBot")
+            return await ctx.reply(embed=e, ephemeral=True)
 
         log.error(f"Unhandled error in {ctx.command}: {error}", exc_info=error)
 

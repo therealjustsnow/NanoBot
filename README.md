@@ -87,6 +87,27 @@ NanoBot fixes that.
 - Optional yt-dlp cookies support for age/region-locked or rate-limited sources
 - Auto-disconnect when idle or left alone in the channel
 
+**Leveling**
+- Per-server message XP and levels with a Mee6-style curve
+- `/rank` card and a `/level top` leaderboard
+- Role rewards granted automatically on level-up
+- Optional NanoCoin payout on level-up (ties into the economy)
+- Per-channel XP ignore list, configurable XP rate, and level-up announcements
+- Off by default -- enable per server with `/level toggle`
+
+**Economy**
+- Per-server NanoCoin currency (name and emoji are configurable)
+- `/balance`, `/daily` (24h cooldown with a consecutive-day streak bonus), and `/pay`
+- `/coin top` rich list and `/coin gamble` double-or-nothing
+- Admin grant / take / reset and per-server daily-amount + streak-bonus tuning
+
+**Gatekeeper**
+- New-account gate: on join, mutes accounts that are too young, have the default avatar, or use a known "stock" avatar (matched by perceptual hash)
+- Combine the age and avatar checks with `or` (either) or `and` (both) match modes
+- Muted members get a math-captcha verification prompt (DM first, quarantine channel fallback)
+- Account-age mutes auto-unmute once the account ages out; unverified members are auto-kicked after a timeout
+- Schedules persist in SQLite and restore on restart
+
 **AI**
 - `/eli5` -- plain-English explanations via Groq (Llama 3.1 8B, free tier)
 
@@ -100,6 +121,7 @@ NanoBot fixes that.
 - Owner-only admin: hot-reload, restart, git pull update, slash sync
 - Per-server custom prefix
 - Configurable log level (no restart needed)
+- Optional HTTP health-check endpoint (`GET /health`) for containers/orchestrators
 - GitHub Actions CI: Black auto-formatting, pytest suite, branch protection
 
 ---
@@ -588,6 +610,91 @@ Explain any topic in plain English using Groq's free API (Llama 3.1 8B). Respons
 | `/eli5 <topic>` | Get a plain-English explanation of any topic |
 
 Requires a Groq API key in config or the `GROQ_API_KEY` environment variable. Free at [console.groq.com](https://console.groq.com) (14,400 requests/day). Per-user cooldown: 1 use per 15 seconds. The command degrades gracefully if no key is set -- it tells the user and moves on.
+
+---
+
+### 📈 Leveling
+
+Per-server message XP and levels (Mee6-style curve). **Off by default** -- enable it with `/level toggle on`. Members earn XP per message (rate-limited by a per-member cooldown); reaching a level can grant a role reward and, optionally, NanoCoins.
+
+| Command | Description |
+|---------|-------------|
+| `/rank [user]` | Show a member's level, rank, and XP progress card |
+| `/level top [page]` | Server XP leaderboard |
+
+**Admin subcommands** *(Manage Server):*
+
+| Command | Description |
+|---------|-------------|
+| `/level toggle <on/off>` | Turn leveling on or off for the server |
+| `/level set <user> <xp>` | Set a member's XP to an exact amount |
+| `/level give <user> <xp>` | Add (or subtract) XP for a member |
+| `/level reset [user]` | Reset XP for one member, or the whole server |
+| `/level rate <xp> <cooldown>` | XP earned per message and the cooldown (seconds) |
+| `/level announce <...>` | Configure level-up announcements |
+| `/level reward <level> <role>` | Grant a role automatically at a level |
+| `/level coinreward <amount>` | Pay `amount × new level` NanoCoins on level-up (0 = off) |
+| `/level ignore <channel>` | Toggle a channel as XP-ignored |
+| `/level config` | Show the current leveling settings |
+
+---
+
+### 🪙 Economy
+
+Per-server **NanoCoin** currency. The currency name and emoji are configurable per server. Earn coins from `/daily` (and optionally from leveling up), then spend or gamble them.
+
+| Command | Description |
+|---------|-------------|
+| `/balance [user]` | Show a coin balance and rank |
+| `/daily` | Claim the daily reward (24h cooldown, consecutive-day streak bonus) |
+| `/pay <user> <amount>` | Transfer coins to another member |
+| `/coin top [page]` | Richest-members leaderboard |
+| `/coin gamble <amount>` | Double-or-nothing bet (~45% win) |
+
+**Admin subcommands** *(Manage Server):*
+
+| Command | Description |
+|---------|-------------|
+| `/coin grant <user> <amount>` | Add coins to a member's balance |
+| `/coin take <user> <amount>` | Remove coins from a member's balance |
+| `/coin reset [user]` | Reset coins for one member, or the whole server |
+| `/coin daily <amount>` | Set the daily reward amount |
+| `/coin streakbonus <amount>` | Set the per-day streak bonus |
+| `/coin name <name>` | Set the currency name (e.g. NanoCoin) |
+| `/coin emoji <emoji>` | Set the currency emoji |
+| `/coin config` | Show the current economy settings |
+
+---
+
+### 🚪 Gatekeeper
+
+New-account gate. On join, it can role-mute (`Muted (NanoBot)`) accounts that are **too young**, use the **default avatar**, or use a known **"stock" avatar** (matched by perceptual hash against a shared catalog). How the age and avatar checks combine is set per server via `matchmode` (`or` = mute on either signal, default; `and` = mute only when both are true).
+
+Muted members get a math-captcha verification prompt (DM first, falling back to a quarantine channel) with a persistent button. Correct answer unmutes. Account-age mutes auto-unmute once the account ages out; unverified members are kicked after a timeout. All schedules persist in SQLite and restore on restart.
+
+The `/gatekeeper` group requires **Manage Server**.
+
+| Command | Description |
+|---------|-------------|
+| `/gatekeeper setup` | Guided first-time setup |
+| `/gatekeeper status` | Show the current settings |
+| `/gatekeeper enable` / `disable` | Turn the gatekeeper on or off |
+| `/gatekeeper role <role>` | Use an existing role as the mute role |
+| `/gatekeeper channel <channel>` | Set the fallback quarantine channel |
+| `/gatekeeper logchannel <channel>` | Set the gatekeeper log channel |
+| `/gatekeeper minage <duration>` | Mute accounts younger than this |
+| `/gatekeeper unmuteage <duration>` | Auto-unmute once accounts reach this age |
+| `/gatekeeper kicktimeout <duration>` | Kick unverified members after this long |
+| `/gatekeeper newaccounts <on/off>` | Toggle muting by account age |
+| `/gatekeeper noavatar <on/off>` | Toggle muting members with no avatar |
+| `/gatekeeper stockavatar <on/off>` | Toggle muting catalogued stock avatars |
+| `/gatekeeper ageunmute <on/off>` | Toggle account-age auto-unmute |
+| `/gatekeeper matchmode <and/or>` | How the age and avatar checks combine |
+| `/gatekeeper sensitivity <distance>` | Stock-avatar match distance (default 8) |
+| `/gatekeeper verify <on/off>` | Toggle captcha verification |
+| `/gatekeeper message <text>` | Set the verification prompt text |
+| `/gatekeeper learnavatar <image>` | Add an image to the stock-avatar catalog |
+| `/gatekeeper checkavatar <user>` | Check whether a member's avatar matches the catalog |
 
 ---
 

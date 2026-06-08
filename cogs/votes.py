@@ -35,7 +35,6 @@ import ipaddress
 import json
 import logging
 import time
-from datetime import datetime, timezone
 from typing import Optional
 
 import aiohttp
@@ -342,7 +341,9 @@ class Votes(commands.Cog):
         if event_type == "vote.create":
             try:
                 user_id = int(data["data"]["user"]["platform_id"])
-                expires_at = data["data"].get("expires_at")  # ISO8601 — for future use
+                expires_at = data["data"].get(  # noqa: F841  ISO8601 — for future use
+                    "expires_at"
+                )
             except (KeyError, ValueError, TypeError):
                 log.warning("top.gg vote.create: malformed payload")
                 return aiohttp.web.Response(status=400)

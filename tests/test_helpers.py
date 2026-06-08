@@ -7,8 +7,6 @@ Note: helpers.py imports discord at module level, so discord.py must be installe
 (via requirements.txt) before running these tests.
 """
 
-import pytest
-
 from utils.helpers import (
     fmt_duration,
     fmt_interval,

@@ -3,7 +3,6 @@ Tests for utils/storage.py — sync and async JSON file storage.
 """
 
 import json
-import os
 
 import pytest
 

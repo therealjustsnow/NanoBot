@@ -25,6 +25,8 @@ import time
 
 import aiosqlite
 
+from utils import sqlite_timing
+
 log = logging.getLogger("NanoBot.cache_db")
 
 _DB_PATH = os.path.join("data", "cache.db")
@@ -39,8 +41,18 @@ async def init() -> None:
     os.makedirs("data", exist_ok=True)
     _db = await aiosqlite.connect(_DB_PATH)
     _db.row_factory = aiosqlite.Row
+    # Time queries when slow-query logging is on (zero overhead while disabled).
+    _db = sqlite_timing.wrap(_db, "cache")
 
+    # Same connection tuning as nanobot.db (see utils/db.py for rationale): WAL +
+    # relaxed sync + a lock-wait timeout widen throughput on the single shared
+    # connection at zero schema/code cost.
     await _db.execute("PRAGMA journal_mode=WAL")
+    await _db.execute("PRAGMA synchronous=NORMAL")
+    await _db.execute("PRAGMA busy_timeout=5000")
+    await _db.execute("PRAGMA temp_store=MEMORY")
+    await _db.execute("PRAGMA cache_size=-16000")
+    await _db.execute("PRAGMA mmap_size=268435456")
 
     await _db.executescript("""
         CREATE TABLE IF NOT EXISTS fml_stories (

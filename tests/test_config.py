@@ -5,8 +5,6 @@ Unit tests for utils/config.py validate().
 validate() is pure Python (no Discord dependency) — operates only on a dict.
 """
 
-import pytest
-
 from utils.config import validate
 
 # ══════════════════════════════════════════════════════════════════════════════
