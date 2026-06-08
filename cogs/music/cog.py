@@ -120,6 +120,7 @@ from .constants import (
 from .helpers import (
     _apply_delta,
     _fmt_time,
+    _parse_seek,
     _parse_timestamp,
     _metadata_query,
     _pick_itunes_match,
@@ -1481,43 +1482,64 @@ class Music(commands.Cog):
 
     @commands.hybrid_command(
         name="seek",
-        description="Jump to a position in the current track (e.g. 1:30 or 90).",
+        description="Jump to a position in the current track (e.g. 1:30, 90, or +30/-30).",
         extras={
             "category": "🎵 Music",
             "short": "Seek within the current track",
             "usage": "seek <position>",
             "desc": (
                 "Jumps to a position in the current track. Accepts `M:SS`, `H:MM:SS`, "
-                "or a plain number of seconds."
+                "or a plain number of seconds. Prefix with `+` or `-` to jump "
+                "forward/back from the current spot (e.g. `+30` fast-forwards 30s, "
+                "`-15` rewinds 15s)."
             ),
-            "args": [("position", "Timestamp like 1:30 or seconds like 90")],
+            "args": [
+                (
+                    "position",
+                    "Timestamp like 1:30, seconds like 90, or a relative "
+                    "+30 / -15 offset",
+                )
+            ],
             "perms": "None",
-            "example": "{prefix}seek 1:30",
+            "example": "{prefix}seek +30",
         },
     )
-    @app_commands.describe(position="Timestamp (1:30) or seconds (90)")
+    @app_commands.describe(
+        position="Timestamp (1:30), seconds (90), or offset (+30/-15)"
+    )
     @commands.guild_only()
     async def seek(self, ctx: commands.Context, position: str):
         player = self._active_player(ctx)
         if not player or player.current is None:
             return await ctx.reply(embed=h.err("Nothing is playing."), ephemeral=True)
-        secs = _parse_timestamp(position)
-        if secs is None:
+        parsed = _parse_seek(position)
+        if parsed is None:
             return await ctx.reply(
-                embed=h.err("Invalid timestamp. Use `1:30`, `0:45`, or `90`."),
+                embed=h.err(
+                    "Invalid timestamp. Use `1:30`, `0:45`, `90`, or a relative "
+                    "`+30` / `-15`."
+                ),
                 ephemeral=True,
             )
+        offset, relative = parsed
         dur = player.current.duration
-        if dur and secs >= dur:
-            return await ctx.reply(
-                embed=h.err(f"That's past the end (`{_fmt_time(dur)}`)."),
-                ephemeral=True,
-            )
-        if not await player.seek(secs):
+        if relative:
+            target = max(0, int(player.position()) + offset)
+            # A forward jump past the end just lands near the end instead of erroring.
+            if dur and target >= dur:
+                target = max(0, int(dur) - 1)
+        else:
+            target = offset
+            if dur and target >= dur:
+                return await ctx.reply(
+                    embed=h.err(f"That's past the end (`{_fmt_time(dur)}`)."),
+                    ephemeral=True,
+                )
+        if not await player.seek(target):
             return await ctx.reply(
                 embed=h.err("Couldn't seek right now."), ephemeral=True
             )
-        await ctx.reply(embed=h.ok(f"Seeking to `{_fmt_time(secs)}`.", "⏩ Seek"))
+        await ctx.reply(embed=h.ok(f"Seeking to `{_fmt_time(target)}`.", "⏩ Seek"))
 
     @commands.hybrid_command(
         name="replay",

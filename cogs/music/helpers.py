@@ -1,7 +1,7 @@
 """Pure helper functions for the music player (no Discord/yt-dlp deps)."""
 
 import re
-from typing import Optional
+from typing import Optional, Tuple
 
 from .constants import _YTID_RE, _LYRICS_NOISE
 
@@ -68,6 +68,28 @@ def _parse_timestamp(text: str) -> Optional[int]:
         return int(text)
     except ValueError:
         return None
+
+
+def _parse_seek(text: str) -> Optional[Tuple[int, bool]]:
+    """Parse a seek argument into ``(seconds, relative)``.
+
+    A leading ``+`` or ``-`` marks a jump relative to the current position
+    (the returned seconds are signed); otherwise the value is an absolute
+    target. Accepts ``H:MM:SS``, ``M:SS``, or plain seconds. Returns ``None``
+    on invalid input.
+    """
+    text = text.strip()
+    relative = False
+    sign = 1
+    if text[:1] in ("+", "-"):
+        relative = True
+        if text[0] == "-":
+            sign = -1
+        text = text[1:].strip()
+    secs = _parse_timestamp(text)
+    if secs is None or secs < 0:
+        return None
+    return sign * secs, relative
 
 
 def _spotify_cover(obj: dict) -> Optional[str]:
