@@ -29,6 +29,7 @@ from utils import config as cfg_mod
 from utils import db
 from utils import helpers as h
 from utils import obs
+from utils import sqlite_timing
 from utils.health import HealthServer
 
 # ── Config (read once at module level so logging init can use it) ──────────────
@@ -96,6 +97,9 @@ def _setup_logging(cfg: dict) -> logging.Logger:
 
     # ── Structured JSONL event sink ───────────────────────────────────────────
     obs.setup_events_logger(bool(cfg.get("log_events_jsonl", True)))
+
+    # ── Slow-query logging threshold ──────────────────────────────────────────
+    sqlite_timing.set_threshold(cfg.get("db_slow_query_ms", 0))
 
     return logging.getLogger("NanoBot")
 
@@ -380,6 +384,7 @@ class NanoBot(commands.Bot):
         http_level = logging.DEBUG if new_cfg.get("log_http") else logging.WARNING
         logging.getLogger("discord.http").setLevel(http_level)
         obs.setup_events_logger(bool(new_cfg.get("log_events_jsonl", True)))
+        sqlite_timing.set_threshold(new_cfg.get("db_slow_query_ms", 0))
 
         self.dispatch("config_reloaded", self.config)
         return new_cfg

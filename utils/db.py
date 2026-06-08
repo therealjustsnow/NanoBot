@@ -57,6 +57,8 @@ from typing import Any, Awaitable, Callable
 
 import aiosqlite
 
+from utils import sqlite_timing
+
 log = logging.getLogger("NanoBot.db")
 
 # Serializes read-modify-write cycles on the JSON columns of automod_config so
@@ -75,6 +77,9 @@ async def init() -> None:
     os.makedirs("data", exist_ok=True)
     _db = await aiosqlite.connect(_DB_PATH)
     _db.row_factory = aiosqlite.Row
+    # Wrap so every query is timed when slow-query logging is enabled (no-op /
+    # zero overhead while the threshold is 0). See utils/sqlite_timing.py.
+    _db = sqlite_timing.wrap(_db, "nanobot")
 
     # ── Connection tuning ─────────────────────────────────────────────────────
     # All cheap, no schema/code impact — they widen write/read throughput so the
