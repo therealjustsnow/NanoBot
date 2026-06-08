@@ -9,6 +9,7 @@ from cogs.music.helpers import (
     _extract_ytid,
     _fmt_time,
     _progress_bar,
+    _parse_seek,
     _parse_timestamp,
     _spotify_cover,
     _split_artist_title,
@@ -159,6 +160,47 @@ class TestParseTimestamp:
     def test_negative_accepted(self):
         # function does not reject negatives; callers are responsible for clamping
         assert _parse_timestamp("-5") == -5
+
+
+# ---------------------------------------------------------------------------
+# _parse_seek
+# ---------------------------------------------------------------------------
+
+
+class TestParseSeek:
+    def test_absolute_seconds(self):
+        assert _parse_seek("90") == (90, False)
+
+    def test_absolute_mm_ss(self):
+        assert _parse_seek("1:30") == (90, False)
+
+    def test_relative_forward(self):
+        assert _parse_seek("+30") == (30, True)
+
+    def test_relative_back(self):
+        assert _parse_seek("-15") == (-15, True)
+
+    def test_relative_mm_ss(self):
+        assert _parse_seek("+1:30") == (90, True)
+        assert _parse_seek("-1:30") == (-90, True)
+
+    def test_relative_whitespace(self):
+        assert _parse_seek("  + 30  ") == (30, True)
+
+    def test_zero_absolute(self):
+        assert _parse_seek("0") == (0, False)
+
+    def test_invalid_string(self):
+        assert _parse_seek("abc") is None
+
+    def test_double_sign_rejected(self):
+        assert _parse_seek("+-5") is None
+
+    def test_lone_sign_rejected(self):
+        assert _parse_seek("+") is None
+
+    def test_empty_rejected(self):
+        assert _parse_seek("") is None
 
 
 # ---------------------------------------------------------------------------
