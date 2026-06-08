@@ -237,13 +237,24 @@ class NanoBot(commands.Bot):
         # health_check_port config key is non-zero).
         self._health_server: HealthServer | None = None
 
-    def _spawn_bg(self, coro) -> None:
+    def _spawn_bg(self, coro, *, timeout: float | None = None) -> None:
+        """Fire-and-forget a coroutine, keeping a strong ref so it isn't GC'd.
+
+        Pass ``timeout`` (seconds) for short, self-contained work — a hung task
+        is then cancelled by asyncio.wait_for instead of lingering in
+        ``_bg_tasks`` forever. Leave it ``None`` (default) for genuinely
+        long-running coroutines (e.g. the daily scrape) that must not be capped.
+        """
+        run = asyncio.wait_for(coro, timeout) if timeout is not None else coro
         try:
-            task = asyncio.create_task(coro)
+            task = asyncio.create_task(run)
         except RuntimeError:
             # No running event loop (called during/after shutdown). Close the
-            # coroutine explicitly so Python doesn't warn about it being unawaited.
-            coro.close()
+            # coroutine(s) explicitly so Python doesn't warn about them being
+            # unawaited. If we wrapped in wait_for, close the inner coro too.
+            run.close()
+            if run is not coro:
+                coro.close()
             return
         self._bg_tasks.add(task)
         task.add_done_callback(self._on_bg_done)
@@ -253,7 +264,9 @@ class NanoBot(commands.Bot):
         if task.cancelled():
             return
         exc = task.exception()
-        if exc is not None:
+        if isinstance(exc, asyncio.TimeoutError):
+            log.warning("Background task exceeded its timeout and was cancelled")
+        elif exc is not None:
             log.error("Background task failed: %s", exc, exc_info=exc)
 
     async def close(self) -> None:
@@ -297,7 +310,7 @@ class NanoBot(commands.Bot):
     def set_music_activity(self, activity: discord.BaseActivity | None) -> None:
         """Called by the music cog. None reverts to the idle presence."""
         self._music_activity = activity
-        self._spawn_bg(self.apply_presence())
+        self._spawn_bg(self.apply_presence(), timeout=30)
 
     def _idle_activity(self) -> discord.Activity:
         if self.manual_status:
@@ -508,7 +521,9 @@ class NanoBot(commands.Bot):
             if bot_ref.is_closed():
                 return
             text = warnings.formatwarning(message, category, filename, lineno, line)
-            bot_ref._spawn_bg(bot_ref._post_error(f"⚠️ {category.__name__}", text))
+            bot_ref._spawn_bg(
+                bot_ref._post_error(f"⚠️ {category.__name__}", text), timeout=30
+            )
 
         warnings.showwarning = _warn_hook
 
@@ -524,7 +539,9 @@ class NanoBot(commands.Bot):
                 body = msg
             log.error("asyncio unhandled: %s", msg, exc_info=exc)
             if not bot_ref.is_closed():
-                bot_ref._spawn_bg(bot_ref._post_error("🔴 asyncio exception", body))
+                bot_ref._spawn_bg(
+                    bot_ref._post_error("🔴 asyncio exception", body), timeout=30
+                )
 
         self.loop.set_exception_handler(_asyncio_exc_handler)
 
