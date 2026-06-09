@@ -16,7 +16,9 @@ Runtime requirements (see requirements.txt):
 Config ([music] section, all optional — see example_config.ini):
   music_cookie_file     — path to a yt-dlp cookies.txt (age/region/rate limits)
   music_default_volume  — default volume 0-200 (default 50)
-  music_idle_timeout    — seconds idle/alone before disconnect (default 180)
+  music_idle_timeout    — seconds before disconnect when channel empties (pauses
+                          immediately; auto-resumes if someone returns within window)
+                          or queue goes idle; default 180
   music_skip_ratio      — percent of listeners needed to vote-skip (default 50)
   music_max_queue       — max tracks per queue (default 500)
   music_js_runtime_path — explicit path to deno/node/bun binary for yt-dlp JS
@@ -694,15 +696,39 @@ class Music(commands.Cog):
             return  # 24/7 mode — stay put even with an empty channel
 
         humans = [m for m in player.voice.channel.members if not m.bot]
-        if not humans:
-            await asyncio.sleep(20)
-            if player.voice and player.voice.is_connected():
-                still = [m for m in player.voice.channel.members if not m.bot]
-                if not still:
-                    await player._announce(
-                        h.info("Left the channel — everyone disconnected.", "👋 Bye")
-                    )
-                    await player.destroy(reason="alone", persist_clear=False)
+
+        if humans:
+            # Someone is here — cancel any pending disconnect and resume if
+            # playback was auto-paused because the channel went empty.
+            if player._alone_task and not player._alone_task.done():
+                player._alone_task.cancel()
+                player._alone_task = None
+            if player._auto_paused and player.voice and player.voice.is_paused():
+                player.resume()
+                player._auto_paused = False
+        else:
+            # Channel is now empty — pause immediately, then disconnect after
+            # idle_timeout seconds if nobody comes back.
+            if player.voice and player.voice.is_playing():
+                player.pause()
+                player._auto_paused = True
+            if player._alone_task and not player._alone_task.done():
+                player._alone_task.cancel()
+
+            async def _alone_disconnect(p=player):
+                await asyncio.sleep(p.cog.idle_timeout())
+                if p.voice and p.voice.is_connected():
+                    still = [m for m in p.voice.channel.members if not m.bot]
+                    if not still:
+                        p._auto_paused = False
+                        await p._announce(
+                            h.info(
+                                "Left the channel — everyone disconnected.", "👋 Bye"
+                            )
+                        )
+                        await p.destroy(reason="alone", persist_clear=False)
+
+            player._alone_task = asyncio.ensure_future(_alone_disconnect())
 
     # ── resume persisted queues on startup ─────────────────────────────────────
     @commands.Cog.listener()
@@ -749,6 +775,16 @@ class Music(commands.Cog):
             or not voice_channel.permissions_for(guild.me).speak
         ):
             await db.clear_music_queue(guild.id)
+            return False
+
+        # Skip resume if the channel is empty — keep the queue in DB so the
+        # next /join or /play picks it up once someone is there.
+        humans = [m for m in voice_channel.members if not m.bot]
+        if not humans:
+            log.info(
+                "Music: skipping resume for guild %s — voice channel is empty",
+                guild.id,
+            )
             return False
 
         # A handshake left over from before the restart can make Discord think

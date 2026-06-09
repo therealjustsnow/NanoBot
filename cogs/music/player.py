@@ -71,8 +71,6 @@ class GuildPlayer:
         self.skip_votes: set[int] = set()
         self.follow_target: Optional[int] = None  # user id the bot follows
 
-        self.idle_timeout: int = cog.idle_timeout()
-
         self.text_channel: Optional[discord.abc.Messageable] = None
         self.now_msg: Optional[discord.Message] = None
         self.now_view: Optional[Controls] = None
@@ -99,6 +97,8 @@ class GuildPlayer:
         self._dl_files: set[str] = set()  # predownloaded file paths to clean up
 
         self._destroyed = False
+        self._auto_paused: bool = False  # paused because channel went empty
+        self._alone_task: Optional[asyncio.Task] = None  # pending alone-disconnect
         # Strong refs to fire-and-forget tasks (history, presence, etc.) so they
         # aren't garbage-collected mid-flight, with their exceptions logged.
         self._bg_tasks: set[asyncio.Task] = set()
@@ -598,7 +598,9 @@ class GuildPlayer:
                 await self._added.wait()
                 continue
             try:
-                await asyncio.wait_for(self._added.wait(), timeout=self.idle_timeout)
+                await asyncio.wait_for(
+                    self._added.wait(), timeout=self.cog.idle_timeout()
+                )
             except asyncio.TimeoutError:
                 return None
         return None
@@ -892,6 +894,8 @@ class GuildPlayer:
 
         if self._predl_task and not self._predl_task.done():
             self._predl_task.cancel()
+        if self._alone_task and not self._alone_task.done():
+            self._alone_task.cancel()
         self._cleanup_downloads()
 
         for task in (self._loop_task, self._refresh_task):
