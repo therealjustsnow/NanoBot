@@ -16,7 +16,9 @@ Runtime requirements (see requirements.txt):
 Config ([music] section, all optional — see example_config.ini):
   music_cookie_file     — path to a yt-dlp cookies.txt (age/region/rate limits)
   music_default_volume  — default volume 0-200 (default 50)
-  music_idle_timeout    — seconds idle/alone before disconnect (default 180)
+  music_idle_timeout    — seconds before disconnect when channel empties (pauses
+                          immediately; auto-resumes if someone returns within window)
+                          or queue goes idle; default 180
   music_skip_ratio      — percent of listeners needed to vote-skip (default 50)
   music_max_queue       — max tracks per queue (default 500)
   music_js_runtime_path — explicit path to deno/node/bun binary for yt-dlp JS

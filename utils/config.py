@@ -425,7 +425,7 @@ FIELDS: tuple[Field, ...] = (
         "music",
         "int",
         180,
-        "Time idle/alone before auto-disconnect (e.g. 180, 3m, 3 minutes)",
+        "Seconds before disconnect when channel empties (pauses immediately; resumes if someone returns) or queue goes idle (e.g. 180, 3m)",
         minimum=0,
     ),
     Field(
