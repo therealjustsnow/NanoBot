@@ -94,6 +94,13 @@ def _setup_logging(cfg: dict) -> logging.Logger:
 
     http_level = logging.DEBUG if cfg.get("log_http") else logging.WARNING
     logging.getLogger("discord.http").setLevel(http_level)
+    if cfg.get("log_http"):
+        logging.getLogger("NanoBot").warning(
+            "log_http is ON: discord.http DEBUG logs include the Authorization "
+            "header (your bot token) and will be written to logs/nanobot.log "
+            "(readable via the owner !logs command). Use only for short-lived "
+            "local debugging — never leave it on in production."
+        )
 
     # ── Structured JSONL event sink ───────────────────────────────────────────
     obs.setup_events_logger(bool(cfg.get("log_events_jsonl", True)))
@@ -213,6 +220,12 @@ class NanoBot(commands.Bot):
             help_command=None,
             description="NanoBot — Small. Fast. Built for Mobile Mods.",
             tree_cls=ObsTree,
+            # Default-deny @everyone/@here and role pings on everything the bot
+            # sends. Stops stored or echoed user content (tags, /echo, …) from
+            # firing mass pings. Individual user mentions still resolve, and any
+            # send that legitimately needs broader pings can pass its own
+            # allowed_mentions to opt back in.
+            allowed_mentions=discord.AllowedMentions(everyone=False, roles=False),
         )
 
         # Route app command failures (including transformer errors) to our

@@ -33,10 +33,13 @@ bot can assign it — the bot cannot manage a role above its own.
 
 import asyncio
 import io
+import ipaddress
 import logging
 import os
 import random
+import socket
 from typing import Optional
+from urllib.parse import urlparse
 
 import aiohttp
 import discord
@@ -77,6 +80,38 @@ DEFAULT_VERIFY_MESSAGE = (
     "To get unmuted, press the **Verify** button below and solve the quick math "
     "problem. If you don't verify in time you'll be removed from the server."
 )
+
+
+def _is_safe_public_url(url: str) -> bool:
+    """True only for an http(s) URL whose host resolves entirely to public IPs.
+
+    Blocks SSRF via /gatekeeper learnavatar: a Manage-Server user could otherwise
+    point the fetch at loopback, link-local (cloud metadata at 169.254.169.254),
+    or private-range addresses to probe the host's internal network. Every
+    resolved address must be global, so a hostname that maps to a private IP is
+    rejected too.
+    """
+    try:
+        parsed = urlparse(url)
+    except ValueError:
+        return False
+    if parsed.scheme not in ("http", "https") or not parsed.hostname:
+        return False
+    try:
+        infos = socket.getaddrinfo(parsed.hostname, parsed.port or 0)
+    except (socket.gaierror, UnicodeError, ValueError):
+        return False
+    if not infos:
+        return False
+    for info in infos:
+        addr = info[4][0]
+        try:
+            ip = ipaddress.ip_address(addr)
+        except ValueError:
+            return False
+        if not ip.is_global or ip.is_reserved:
+            return False
+    return True
 
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -1017,11 +1052,20 @@ class Gatekeeper(commands.Cog):
             data = await self._fetch_avatar_bytes(user.avatar)
             label = f"{user.id}"
         else:
+            if not _is_safe_public_url(url):
+                await interaction.followup.send(
+                    embed=h.err(
+                        "That URL isn't allowed. Give a public http(s) image link "
+                        "(local, private, and metadata addresses are blocked)."
+                    ),
+                    ephemeral=True,
+                )
+                return
             if self._session is None:
                 self._session = aiohttp.ClientSession()
             try:
                 async with self._session.get(
-                    url, timeout=aiohttp.ClientTimeout(10)
+                    url, timeout=aiohttp.ClientTimeout(10), allow_redirects=False
                 ) as r:
                     if r.status == 200:
                         data = await r.read()

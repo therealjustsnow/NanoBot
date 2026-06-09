@@ -761,6 +761,14 @@ def save(cfg: dict, path: str = CONFIG_PATH) -> None:
     with open(path, "w", encoding="utf-8") as f:
         parser.write(f)
 
+    # Restrict to owner read/write — the file holds the bot token and API keys,
+    # so on a shared host it must not be world- or group-readable. Best-effort:
+    # chmod is a no-op semantics on Windows, so swallow failures there.
+    try:
+        os.chmod(path, 0o600)
+    except OSError:
+        pass
+
 
 def migrate_from_json(json_path: str, ini_path: str) -> bool:
     """

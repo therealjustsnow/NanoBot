@@ -62,6 +62,42 @@ def test_hamming_basic():
     assert gk._hamming(0xFF, 0x00) == 8
 
 
+# ── learnavatar SSRF guard (_is_safe_public_url) ──────────────────────────────
+# Only IP-literal hosts and scheme checks here — no hostname is resolved, so the
+# suite stays offline/CI-safe (no DNS dependency).
+
+
+@pytest.mark.parametrize(
+    "url",
+    [
+        "http://169.254.169.254/latest/meta-data/",  # cloud metadata (link-local)
+        "http://127.0.0.1/x.png",  # loopback
+        "http://10.0.0.5/x.png",  # private range
+        "http://192.168.1.1/a",  # private range
+        "http://172.16.0.1/a",  # private range
+        "http://[::1]/x.png",  # IPv6 loopback
+        "http://0.0.0.0/x",  # unspecified
+        "file:///etc/passwd",  # non-http scheme
+        "ftp://198.51.100.7/x",  # non-http scheme
+        "not a url",  # unparseable / no host
+        "http:///nohost.png",  # missing host
+    ],
+)
+def test_is_safe_public_url_rejects(url):
+    assert gk._is_safe_public_url(url) is False
+
+
+@pytest.mark.parametrize(
+    "url",
+    [
+        "http://8.8.8.8/avatar.png",  # public IP literal
+        "https://93.184.216.34/x.png",  # public IP literal
+    ],
+)
+def test_is_safe_public_url_allows_public_ip_literals(url):
+    assert gk._is_safe_public_url(url) is True
+
+
 # ── _evaluate detection logic ─────────────────────────────────────────────────
 
 
