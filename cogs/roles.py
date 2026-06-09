@@ -929,17 +929,11 @@ class Roles(commands.Cog):
                 ephemeral=True,
             )
         # Anyone can click a posted panel, so the button effectively hands the
-        # role to the whole server. Block adding a role above the adder's own
-        # rank (the bot would otherwise bypass Discord's hierarchy ceiling) and
-        # block roles that carry server-/member-control permissions outright, so
-        # a panel can never be turned into a self-serve admin button.
-        if not h.can_manage_role(interaction.user, role):
-            return await interaction.response.send_message(
-                embed=h.err(
-                    f"**{role.name}** isn't below your highest role — you can't put it on a panel."
-                ),
-                ephemeral=True,
-            )
+        # role to the whole server. A role's *position* doesn't matter here —
+        # colour roles often sit above mods (Discord shows the highest role's
+        # colour), and a position-only role grants no power. What matters is
+        # permissions: refuse any role carrying server-/member-control perms so a
+        # panel can never be turned into a self-serve admin button.
         risky = h.dangerous_role_perms(role)
         if risky:
             pretty = ", ".join(p.replace("_", " ").title() for p in risky)

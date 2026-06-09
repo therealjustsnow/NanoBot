@@ -106,6 +106,7 @@ class Votes(commands.Cog):
         self.dbl_token: str | None = cfg.get("dbl_token")
         self.botsgg_token: str | None = cfg.get("discordbotsgg_token")
         self.webhook_port: int = int(cfg.get("vote_webhook_port", 5000))
+        self.webhook_host: str = str(cfg.get("vote_webhook_host") or "0.0.0.0")
         self.webhook_secret: str | None = cfg.get("vote_webhook_secret")
         self._allowed_networks: list[ipaddress.IPv4Network | ipaddress.IPv6Network] = (
             self._parse_allowed_ips(cfg.get("webhook_allowed_ips", ""))
@@ -275,16 +276,19 @@ class Votes(commands.Cog):
 
         runner = aiohttp.web.AppRunner(app)
         await runner.setup()
-        site = aiohttp.web.TCPSite(runner, "0.0.0.0", self.webhook_port)
+        site = aiohttp.web.TCPSite(runner, self.webhook_host, self.webhook_port)
         await site.start()
         self._http_runner = runner
         if self._allowed_networks:
             log.info(
-                f"Vote webhook server listening on :{self.webhook_port} "
+                f"Vote webhook server listening on {self.webhook_host}:{self.webhook_port} "
                 f"(IP allowlist: {len(self._allowed_networks)} network(s))"
             )
         else:
-            log.info(f"Vote webhook server listening on :{self.webhook_port}")
+            log.info(
+                f"Vote webhook server listening on "
+                f"{self.webhook_host}:{self.webhook_port}"
+            )
 
     def _check_auth(self, request: aiohttp.web.Request) -> bool:
         """Validate the Authorization header against the configured secret (DBL / discord.bots.gg)."""

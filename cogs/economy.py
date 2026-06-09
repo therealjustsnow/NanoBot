@@ -50,6 +50,11 @@ STREAK_WINDOW = 172_800  # claim within 48h of the last to keep the streak
 GAMBLE_WIN_CHANCE = 0.45
 GAMBLE_MULTIPLIER = 2.0
 
+# Sanity ceiling for any single admin coin amount (grant / daily reward / streak
+# bonus). Stops a fat-fingered "give 1e18" from wrecking the economy or pushing
+# values toward integer limits. A billion is far above any real use.
+COIN_MAX = 1_000_000_000
+
 
 # ══════════════════════════════════════════════════════════════════════════════
 #  Pure helpers (no Discord deps — covered by tests/test_economy_helpers.py)
@@ -142,6 +147,7 @@ class Economy(commands.Cog):
     )
     @commands.guild_only()
     @app_commands.describe(member="Whose balance to show (defaults to you)")
+    @commands.cooldown(1, 5, commands.BucketType.user)
     async def balance(
         self, ctx: commands.Context, member: Optional[discord.Member] = None
     ):
@@ -231,6 +237,7 @@ class Economy(commands.Cog):
     )
     @commands.guild_only()
     @app_commands.describe(member="Who to pay", amount="How many coins to send")
+    @commands.cooldown(1, 5, commands.BucketType.user)
     async def pay(self, ctx: commands.Context, member: discord.Member, amount: int):
         cfg = await self._cfg(ctx.guild.id)
         if member.bot:
@@ -284,6 +291,7 @@ class Economy(commands.Cog):
     # ── /coin top ───────────────────────────────────────────────────────────
     @coin.command(name="top", description="Show the richest members.")
     @app_commands.describe(page="Page number (10 per page)")
+    @commands.cooldown(1, 5, commands.BucketType.user)
     async def coin_top(self, ctx: commands.Context, page: int = 1):
         await self._show_leaderboard(ctx, page)
 
@@ -324,19 +332,27 @@ class Economy(commands.Cog):
         description="Bet some coins for a chance to double them.",
     )
     @app_commands.describe(amount="How many coins to bet")
+    @commands.cooldown(1, 3, commands.BucketType.user)
     async def coin_gamble(self, ctx: commands.Context, amount: int):
         cfg = await self._cfg(ctx.guild.id)
         if amount <= 0:
             return await ctx.reply(embed=h.err("Bet must be positive."), ephemeral=True)
-        balance = await db.get_balance(ctx.guild.id, ctx.author.id)
-        if balance < amount:
+        # Atomically reserve the stake so two rapid bets can't spend the same
+        # coins. On a win we hand back the stake plus the net winnings.
+        if not await db.try_debit_coins(ctx.guild.id, ctx.author.id, amount):
+            balance = await db.get_balance(ctx.guild.id, ctx.author.id)
             return await ctx.reply(
                 embed=h.err(f"Not enough coins. You have {self._money(cfg, balance)}."),
                 ephemeral=True,
             )
 
         res = resolve_gamble(amount, random.random())
-        new_bal = await db.add_coins(ctx.guild.id, ctx.author.id, res["delta"])
+        if res["won"]:
+            new_bal = await db.add_coins(
+                ctx.guild.id, ctx.author.id, amount + res["delta"]
+            )
+        else:
+            new_bal = await db.get_balance(ctx.guild.id, ctx.author.id)
         if res["won"]:
             embed = h.ok(
                 f"🎰 You won {self._money(cfg, res['delta'])}!\n"
@@ -367,6 +383,10 @@ class Economy(commands.Cog):
         if amount <= 0:
             return await ctx.reply(
                 embed=h.err("Amount must be positive."), ephemeral=True
+            )
+        if amount > COIN_MAX:
+            return await ctx.reply(
+                embed=h.err(f"Amount can't exceed {COIN_MAX:,}."), ephemeral=True
             )
         new_bal = await db.add_coins(ctx.guild.id, member.id, amount)
         await ctx.reply(
@@ -424,6 +444,10 @@ class Economy(commands.Cog):
             return await ctx.reply(
                 embed=h.err("Amount can't be negative."), ephemeral=True
             )
+        if amount > COIN_MAX:
+            return await ctx.reply(
+                embed=h.err(f"Amount can't exceed {COIN_MAX:,}."), ephemeral=True
+            )
         await db.set_econ_config(ctx.guild.id, daily_amount=amount)
         cfg = await self._cfg(ctx.guild.id)
         await ctx.reply(embed=h.ok(f"Daily reward set to {self._money(cfg, amount)}."))
@@ -439,6 +463,10 @@ class Economy(commands.Cog):
         if amount < 0:
             return await ctx.reply(
                 embed=h.err("Bonus can't be negative."), ephemeral=True
+            )
+        if amount > COIN_MAX:
+            return await ctx.reply(
+                embed=h.err(f"Bonus can't exceed {COIN_MAX:,}."), ephemeral=True
             )
         await db.set_econ_config(ctx.guild.id, streak_bonus=amount)
         cfg = await self._cfg(ctx.guild.id)

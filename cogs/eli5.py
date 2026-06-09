@@ -84,7 +84,10 @@ class ELI5(commands.Cog):
         },
     )
     @app_commands.describe(topic="The thing you want explained simply.")
-    @commands.cooldown(rate=1, per=15, type=commands.BucketType.user)
+    # Per-user and per-guild caps: the Groq call costs real money, so throttle
+    # both an individual and a whole server hammering it.
+    @commands.cooldown(rate=1, per=30, type=commands.BucketType.user)
+    @commands.max_concurrency(3, per=commands.BucketType.guild, wait=False)
     async def eli5(self, ctx: commands.Context, *, topic: str):
         """
         Explain a topic in plain, simple language.

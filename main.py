@@ -505,6 +505,22 @@ class NanoBot(commands.Bot):
         await db.set_prefix(guild_id, prefix)
 
     # ── Error channel ──────────────────────────────────────────────────────────
+    def _scrub_secrets(self, text: str) -> str:
+        """Redact any configured secret value that appears in error text.
+
+        Tracebacks posted to the error channel can include local variables or
+        repr'd config, so strip the actual secret values (token, API keys,
+        webhook secret) before they leave the host. Longest-first so a secret
+        that contains another isn't partially missed.
+        """
+        secrets = [
+            str(self.config[k]) for k in cfg_mod.SENSITIVE_KEYS if self.config.get(k)
+        ]
+        for secret in sorted(secrets, key=len, reverse=True):
+            if len(secret) >= 6:  # skip trivially short values to avoid noise
+                text = text.replace(secret, "***REDACTED***")
+        return text
+
     async def _post_error(self, title: str, body: str) -> None:
         """Send a warning/error embed to the configured error channel."""
         raw = self.config.get("error_channel_id")
@@ -514,6 +530,7 @@ class NanoBot(commands.Bot):
             ch = self.get_channel(int(raw))
             if ch is None:
                 return
+            body = self._scrub_secrets(body)
             embed = discord.Embed(
                 title=title,
                 description=f"```\n{body[:3900]}\n```",
