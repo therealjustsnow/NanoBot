@@ -714,7 +714,7 @@ class Music(commands.Cog):
                 player._alone_task.cancel()
 
             async def _alone_disconnect(p=player):
-                await asyncio.sleep(p.idle_timeout)
+                await asyncio.sleep(p.cog.idle_timeout())
                 if p.voice and p.voice.is_connected():
                     still = [m for m in p.voice.channel.members if not m.bot]
                     if not still:
