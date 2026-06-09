@@ -99,6 +99,8 @@ class GuildPlayer:
         self._dl_files: set[str] = set()  # predownloaded file paths to clean up
 
         self._destroyed = False
+        self._auto_paused: bool = False  # paused because channel went empty
+        self._alone_task: Optional[asyncio.Task] = None  # pending alone-disconnect
         # Strong refs to fire-and-forget tasks (history, presence, etc.) so they
         # aren't garbage-collected mid-flight, with their exceptions logged.
         self._bg_tasks: set[asyncio.Task] = set()
@@ -892,6 +894,8 @@ class GuildPlayer:
 
         if self._predl_task and not self._predl_task.done():
             self._predl_task.cancel()
+        if self._alone_task and not self._alone_task.done():
+            self._alone_task.cancel()
         self._cleanup_downloads()
 
         for task in (self._loop_task, self._refresh_task):
