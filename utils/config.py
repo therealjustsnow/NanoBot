@@ -9,7 +9,7 @@ load — the old file is renamed to `config.json.bak` after migration.
 
 Sections:
     [bot]      token, default_prefix, owner_id, error_channel_id,
-               idle_status_message, health_check_port
+               idle_status_message, health_check_port, health_check_host
     [logging]  log_level, log_http, log_events_jsonl, db_slow_query_ms
     [votes]    top.gg / DBL / discord.bots.gg tokens, webhook port/secret,
                webhook_allowed_ips
@@ -261,6 +261,14 @@ FIELDS: tuple[Field, ...] = (
         "Port for a plain-HTTP health-check endpoint (GET /health). 0 = disabled",
         minimum=0,
         maximum=65535,
+    ),
+    Field(
+        "health_check_host",
+        "bot",
+        "str",
+        "0.0.0.0",
+        "Bind address for the health endpoint (0.0.0.0 = all interfaces; "
+        "127.0.0.1 = host-local only — the payload is unauthenticated)",
     ),
     # ── [logging] ──
     Field(

@@ -200,7 +200,7 @@ Tag shortcuts are detected in `on_message`: if a message matches no command but 
 
 `config.ini` (gitignored) at the repo root, split into six sections:
 
-* **`[bot]`** — `token`, `default_prefix`, `owner_id`, `error_channel_id`, `idle_status_message`, `health_check_port`
+* **`[bot]`** — `token`, `default_prefix`, `owner_id`, `error_channel_id`, `idle_status_message`, `health_check_port`, `health_check_host`
 * **`[logging]`** — `log_level`, `log_http`, `log_events_jsonl`, `db_slow_query_ms`
 * **`[votes]`** — `topgg_v1_token`, `dbl_token`, `discordbotsgg_token`, `vote_webhook_port`, `vote_webhook_secret`, `webhook_allowed_ips`
 * **`[groq]`** — `groq_api_key`

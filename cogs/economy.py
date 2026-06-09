@@ -27,6 +27,7 @@ Commands
   /coin config                   → show settings    (Manage Server)
 """
 
+import asyncio
 import logging
 import random
 import time
@@ -102,6 +103,19 @@ class Economy(commands.Cog):
 
     def __init__(self, bot: commands.Bot):
         self.bot = bot
+        # Per-(guild, user) locks serialize the read-check-write in /daily so two
+        # concurrent invocations can't both pass the cooldown check and
+        # double-claim. Created lazily; entries are tiny and bounded by the
+        # active user set.
+        self._daily_locks: dict[tuple[int, int], asyncio.Lock] = {}
+
+    def _daily_lock(self, guild_id: int, user_id: int) -> asyncio.Lock:
+        key = (guild_id, user_id)
+        lock = self._daily_locks.get(key)
+        if lock is None:
+            lock = asyncio.Lock()
+            self._daily_locks[key] = lock
+        return lock
 
     async def _cfg(self, guild_id: int) -> dict:
         return await db.get_econ_config(guild_id)
@@ -170,28 +184,29 @@ class Economy(commands.Cog):
     @commands.guild_only()
     async def daily(self, ctx: commands.Context):
         cfg = await self._cfg(ctx.guild.id)
-        last_daily, streak = await db.get_daily_state(ctx.guild.id, ctx.author.id)
-        res = compute_daily(
-            time.time(),
-            last_daily,
-            streak,
-            cfg["daily_amount"],
-            cfg["streak_bonus"],
-        )
-        if not res["ok"]:
-            return await ctx.reply(
-                embed=h.warn(
-                    f"You've already claimed today. Come back in "
-                    f"**{h.fmt_duration(res['retry_after'])}**.",
-                    "⏳ Not Yet",
-                ),
-                ephemeral=True,
+        async with self._daily_lock(ctx.guild.id, ctx.author.id):
+            last_daily, streak = await db.get_daily_state(ctx.guild.id, ctx.author.id)
+            res = compute_daily(
+                time.time(),
+                last_daily,
+                streak,
+                cfg["daily_amount"],
+                cfg["streak_bonus"],
             )
+            if not res["ok"]:
+                return await ctx.reply(
+                    embed=h.warn(
+                        f"You've already claimed today. Come back in "
+                        f"**{h.fmt_duration(res['retry_after'])}**.",
+                        "⏳ Not Yet",
+                    ),
+                    ephemeral=True,
+                )
 
-        new_bal = await db.add_coins(ctx.guild.id, ctx.author.id, res["total"])
-        await db.set_daily_state(
-            ctx.guild.id, ctx.author.id, time.time(), res["streak"]
-        )
+            new_bal = await db.add_coins(ctx.guild.id, ctx.author.id, res["total"])
+            await db.set_daily_state(
+                ctx.guild.id, ctx.author.id, time.time(), res["streak"]
+            )
         desc = f"You claimed {self._money(cfg, res['total'])}!"
         if res["streak"] > 1:
             desc += f"\n🔥 **{res['streak']}-day streak**"

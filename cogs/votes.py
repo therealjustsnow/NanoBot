@@ -291,7 +291,9 @@ class Votes(commands.Cog):
         if not self.webhook_secret:
             return True
         auth = request.headers.get("Authorization", "")
-        return auth == self.webhook_secret
+        # Constant-time comparison so the secret can't be recovered byte-by-byte
+        # via response-timing measurement.
+        return hmac.compare_digest(auth, self.webhook_secret)
 
     def _verify_topgg_signature(self, raw_body: bytes, sig_header: str) -> bool:
         """Verify top.gg v1 HMAC-SHA256 signature.

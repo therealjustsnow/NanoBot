@@ -428,7 +428,8 @@ class NanoBot(commands.Bot):
             port = 0
         if port <= 0:
             return
-        server = HealthServer(self, port)
+        host = str(self.config.get("health_check_host") or "0.0.0.0")
+        server = HealthServer(self, port, host)
         try:
             await server.start()
             self._health_server = server

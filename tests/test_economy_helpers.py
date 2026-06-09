@@ -5,10 +5,21 @@ Tests for the pure economy helpers in cogs/economy.py (no Discord deps).
 from cogs.economy import (
     DAILY_COOLDOWN,
     STREAK_WINDOW,
+    Economy,
     compute_daily,
     fmt_coins,
     resolve_gamble,
 )
+
+
+def test_daily_lock_is_stable_per_user_and_distinct_across_users():
+    cog = Economy(bot=None)
+    a = cog._daily_lock(1, 2)
+    # Same (guild, user) returns the same lock so the claim is serialized.
+    assert cog._daily_lock(1, 2) is a
+    # Different user (or guild) gets its own lock — claims don't block each other.
+    assert cog._daily_lock(1, 3) is not a
+    assert cog._daily_lock(9, 2) is not a
 
 
 def test_fmt_coins_singular_plural_and_commas():

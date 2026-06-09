@@ -33,7 +33,7 @@ NP_UP_NEXT = 5  # upcoming tracks shown on the Now Playing card
 _YTDL_BASE = {
     "format": "bestaudio[acodec!=none]/best[acodec!=none]/best",
     "noplaylist": False,
-    "nocheckcertificate": True,
+    "nocheckcertificate": False,
     "ignoreerrors": False,
     "quiet": True,
     "no_warnings": True,
