@@ -7,6 +7,7 @@ detection logic (_evaluate) and the perceptual hash helpers.
 """
 
 import io
+import time as time_module
 from datetime import timedelta
 
 import discord
@@ -96,6 +97,42 @@ def test_is_safe_public_url_rejects(url):
 )
 def test_is_safe_public_url_allows_public_ip_literals(url):
     assert gk._is_safe_public_url(url) is True
+
+
+# ── captcha brute-force throttle ──────────────────────────────────────────────
+
+
+def _bare_gatekeeper():
+    # Skip Cog.__init__ wiring; we only exercise the throttle bookkeeping.
+    cog = gk.Gatekeeper.__new__(gk.Gatekeeper)
+    cog._verify_attempts = {}
+    cog._verify_blocked_until = {}
+    return cog
+
+
+def test_verify_throttle_locks_after_max_wrong_answers():
+    cog = _bare_gatekeeper()
+    uid = 123
+    assert cog._verify_lockout_remaining(uid) == 0
+    # The first MAX-1 wrong answers don't lock.
+    for _ in range(gk._MAX_VERIFY_ATTEMPTS - 1):
+        assert cog._register_wrong_answer(uid) is False
+    # The MAX-th wrong answer trips the lockout.
+    assert cog._register_wrong_answer(uid) is True
+    assert cog._verify_lockout_remaining(uid) > 0
+    # Attempt counter is reset once locked out (cooldown is what gates now).
+    assert uid not in cog._verify_attempts
+
+
+def test_verify_throttle_clear_resets_state():
+    cog = _bare_gatekeeper()
+    uid = 7
+    cog._register_wrong_answer(uid)
+    cog._verify_blocked_until[uid] = time_module.time() + 999
+    cog._clear_verify_throttle(uid)
+    assert cog._verify_lockout_remaining(uid) == 0
+    assert uid not in cog._verify_attempts
+    assert uid not in cog._verify_blocked_until
 
 
 # ── _evaluate detection logic ─────────────────────────────────────────────────

@@ -263,6 +263,45 @@ def user_display(member: discord.Member | discord.User) -> str:
     return f"**{member.display_name}** (`{member.name}` · `{member.id}`)"
 
 
+# Permissions that effectively grant control over the server or its members.
+# A self-assign role panel must never hand these out, and they mark a role as
+# too sensitive to manage from below in the hierarchy.
+DANGEROUS_ROLE_PERMS: tuple[str, ...] = (
+    "administrator",
+    "manage_guild",
+    "manage_roles",
+    "manage_channels",
+    "manage_webhooks",
+    "manage_messages",
+    "manage_nicknames",
+    "manage_emojis_and_stickers",
+    "kick_members",
+    "ban_members",
+    "moderate_members",
+    "mention_everyone",
+)
+
+
+def can_manage_role(actor: discord.Member, role: discord.Role) -> bool:
+    """Whether `actor` is allowed to hand out / take `role`.
+
+    The guild owner can manage anything. Otherwise the role must sit strictly
+    below the actor's top role — Discord enforces this for actions a member
+    performs directly, but NOT for actions a bot performs on their behalf, so we
+    re-check it here to stop a Manage-Roles holder from using the bot to grant
+    roles above their own rank.
+    """
+    if actor.guild.owner_id == actor.id:
+        return True
+    return actor.top_role > role
+
+
+def dangerous_role_perms(role: discord.Role) -> list[str]:
+    """Return the names of any server-/member-control permissions `role` grants."""
+    perms = role.permissions
+    return [name for name in DANGEROUS_ROLE_PERMS if getattr(perms, name, False)]
+
+
 def mod_action_embed(
     title: str,
     target: discord.Member | discord.User,

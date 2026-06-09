@@ -7,7 +7,11 @@ Note: helpers.py imports discord at module level, so discord.py must be installe
 (via requirements.txt) before running these tests.
 """
 
+import discord
+
 from utils.helpers import (
+    can_manage_role,
+    dangerous_role_perms,
     fmt_duration,
     fmt_interval,
     parse_duration,
@@ -16,6 +20,63 @@ from utils.helpers import (
     parse_interval,
     user_log,
 )
+
+
+class _FakeRole:
+    def __init__(self, position, permissions=None):
+        self.position = position
+        self.permissions = permissions or discord.Permissions.none()
+
+    def __gt__(self, other):
+        return self.position > other.position
+
+
+class _FakeGuild:
+    def __init__(self, owner_id):
+        self.owner_id = owner_id
+
+
+class _FakeMember:
+    def __init__(self, id, owner_id, top_position):
+        self.id = id
+        self.guild = _FakeGuild(owner_id)
+        self.top_role = _FakeRole(top_position)
+
+
+class TestCanManageRole:
+    def test_owner_can_manage_any_role(self):
+        owner = _FakeMember(id=1, owner_id=1, top_position=5)
+        assert can_manage_role(owner, _FakeRole(99)) is True
+
+    def test_role_below_actor_top_is_allowed(self):
+        actor = _FakeMember(id=2, owner_id=1, top_position=10)
+        assert can_manage_role(actor, _FakeRole(5)) is True
+
+    def test_role_equal_to_actor_top_is_denied(self):
+        actor = _FakeMember(id=2, owner_id=1, top_position=10)
+        assert can_manage_role(actor, _FakeRole(10)) is False
+
+    def test_role_above_actor_top_is_denied(self):
+        actor = _FakeMember(id=2, owner_id=1, top_position=3)
+        assert can_manage_role(actor, _FakeRole(8)) is False
+
+
+class TestDangerousRolePerms:
+    def test_plain_role_has_none(self):
+        assert dangerous_role_perms(_FakeRole(1)) == []
+
+    def test_administrator_flagged(self):
+        role = _FakeRole(1, discord.Permissions(administrator=True))
+        assert dangerous_role_perms(role) == ["administrator"]
+
+    def test_multiple_flagged_in_catalog_order(self):
+        role = _FakeRole(1, discord.Permissions(ban_members=True, manage_guild=True))
+        # Order follows DANGEROUS_ROLE_PERMS, not the kwargs.
+        assert dangerous_role_perms(role) == ["manage_guild", "ban_members"]
+
+    def test_harmless_perm_not_flagged(self):
+        role = _FakeRole(1, discord.Permissions(send_messages=True, add_reactions=True))
+        assert dangerous_role_perms(role) == []
 
 
 class _FakeUser:
