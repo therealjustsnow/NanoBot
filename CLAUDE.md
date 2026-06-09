@@ -14,7 +14,13 @@ NanoBot is a lightweight Discord moderation bot (Python 3.11+) built with discor
 
 ## Commands
 
-**Install and run:**
+**Install and run (scripted):**
+```bash
+./install.sh        # Linux/macOS setup: system deps, ./venv, pip, config.ini (Windows: install.bat → install.ps1, WinGet)
+./run.sh            # launcher: prefers ./venv, finds Python 3.11+, runs run.py (Windows: run.bat)
+```
+
+**Install and run (manual):**
 ```bash
 pip install -r requirements.txt
 cp example_config.ini config.ini     # then edit with your bot token
