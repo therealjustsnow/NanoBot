@@ -136,6 +136,24 @@ NanoBot fixes that.
 
 ### 2. Install
 
+**Scripted (recommended)** — installs system dependencies (Git, FFmpeg, Python 3.11+),
+creates a `./venv` virtual environment, installs Python requirements, and creates
+`config.ini` from the example:
+
+```bash
+# Linux / macOS
+git clone https://github.com/therealjustsnow/NanoBot.git
+cd NanoBot
+./install.sh              # add --no-system to skip apt/dnf/pacman/zypper/brew
+
+# Windows — double-click install.bat, or from PowerShell:
+.\install.ps1             # add -NoSystem to skip the WinGet installs
+```
+
+Both are safe to re-run; existing venvs and an existing `config.ini` are left untouched.
+
+**Manual:**
+
 ```bash
 git clone https://github.com/therealjustsnow/NanoBot.git
 cd NanoBot
@@ -144,7 +162,8 @@ pip install -r requirements.txt
 
 ### 3. Config
 
-Copy `example_config.ini` to `config.ini` and fill in your values:
+The install scripts create `config.ini` for you; otherwise copy `example_config.ini`
+to `config.ini`. Then fill in your values:
 
 ```ini
 [bot]
@@ -239,12 +258,19 @@ This imports all existing JSON data into SQLite. Your JSON files are left untouc
 ### 6. Run
 
 ```bash
-# Recommended -- pre-flight check then launch
+# Recommended -- finds Python (prefers ./venv), pre-flight check, then launch
+./run.sh         # Linux / macOS
+run.bat          # Windows (double-click works too)
+
+# Same thing, calling Python yourself
 python run.py
 
-# Or launch directly
+# Or launch directly, skipping the pre-flight check
 python main.py
 ```
+
+Both launchers pass arguments through, so `./run.sh --check` runs the pre-flight
+check without starting the bot.
 
 Logs are written to `logs/nanobot.log` (rotating, max 50 KB x 5 files).
 
@@ -767,6 +793,10 @@ Logs: `logs/nanobot.log` (50 KB rotating, 5 files kept).
 NanoBot/
 ├── main.py                ← Bot core, prefix resolution, event handlers, tag shortcuts
 ├── run.py                 ← Pre-flight checker + launcher
+├── run.sh / run.bat       ← Platform launchers (find Python, prefer ./venv, run run.py)
+├── install.sh             ← Linux/macOS setup (system deps, venv, pip, config)
+├── install.ps1            ← Windows setup (WinGet deps, venv, pip, config)
+├── install.bat            ← Double-click wrapper for install.ps1
 ├── migrate.py             ← One-time JSON → SQLite migration script
 ├── example_config.ini     ← Config template (copy to config.ini)
 ├── config.ini             ← Your config (gitignored)

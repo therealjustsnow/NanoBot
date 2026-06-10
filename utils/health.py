@@ -29,9 +29,10 @@ log = logging.getLogger("NanoBot.health")
 class HealthServer:
     """A tiny aiohttp server exposing GET /health for liveness/readiness probes."""
 
-    def __init__(self, bot: "NanoBot", port: int):
+    def __init__(self, bot: "NanoBot", port: int, host: str = "0.0.0.0"):
         self.bot = bot
         self.port = port
+        self.host = host
         self._runner: web.AppRunner | None = None
 
     async def _handle(self, request: web.Request) -> web.Response:
@@ -53,10 +54,14 @@ class HealthServer:
         app.router.add_get("/health", self._handle)
         self._runner = web.AppRunner(app)
         await self._runner.setup()
-        # Bind all interfaces so a container orchestrator can reach the probe.
-        site = web.TCPSite(self._runner, host="0.0.0.0", port=self.port)
+        # Defaults to all interfaces so a container orchestrator can reach the
+        # probe; set health_check_host=127.0.0.1 to keep it host-local (the
+        # payload exposes guild count + latency without auth).
+        site = web.TCPSite(self._runner, host=self.host, port=self.port)
         await site.start()
-        log.info("🩺 Health-check endpoint listening on :%d/health", self.port)
+        log.info(
+            "🩺 Health-check endpoint listening on %s:%d/health", self.host, self.port
+        )
 
     async def stop(self) -> None:
         if self._runner is not None:

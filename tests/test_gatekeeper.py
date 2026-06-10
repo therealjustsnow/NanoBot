@@ -7,6 +7,7 @@ detection logic (_evaluate) and the perceptual hash helpers.
 """
 
 import io
+import time as time_module
 from datetime import timedelta
 
 import discord
@@ -60,6 +61,78 @@ def test_dhash_garbage_bytes_returns_none():
 def test_hamming_basic():
     assert gk._hamming(0b1010, 0b0000) == 2
     assert gk._hamming(0xFF, 0x00) == 8
+
+
+# ── learnavatar SSRF guard (_is_safe_public_url) ──────────────────────────────
+# Only IP-literal hosts and scheme checks here — no hostname is resolved, so the
+# suite stays offline/CI-safe (no DNS dependency).
+
+
+@pytest.mark.parametrize(
+    "url",
+    [
+        "http://169.254.169.254/latest/meta-data/",  # cloud metadata (link-local)
+        "http://127.0.0.1/x.png",  # loopback
+        "http://10.0.0.5/x.png",  # private range
+        "http://192.168.1.1/a",  # private range
+        "http://172.16.0.1/a",  # private range
+        "http://[::1]/x.png",  # IPv6 loopback
+        "http://0.0.0.0/x",  # unspecified
+        "file:///etc/passwd",  # non-http scheme
+        "ftp://198.51.100.7/x",  # non-http scheme
+        "not a url",  # unparseable / no host
+        "http:///nohost.png",  # missing host
+    ],
+)
+def test_is_safe_public_url_rejects(url):
+    assert gk._is_safe_public_url(url) is False
+
+
+@pytest.mark.parametrize(
+    "url",
+    [
+        "http://8.8.8.8/avatar.png",  # public IP literal
+        "https://93.184.216.34/x.png",  # public IP literal
+    ],
+)
+def test_is_safe_public_url_allows_public_ip_literals(url):
+    assert gk._is_safe_public_url(url) is True
+
+
+# ── captcha brute-force throttle ──────────────────────────────────────────────
+
+
+def _bare_gatekeeper():
+    # Skip Cog.__init__ wiring; we only exercise the throttle bookkeeping.
+    cog = gk.Gatekeeper.__new__(gk.Gatekeeper)
+    cog._verify_attempts = {}
+    cog._verify_blocked_until = {}
+    return cog
+
+
+def test_verify_throttle_locks_after_max_wrong_answers():
+    cog = _bare_gatekeeper()
+    uid = 123
+    assert cog._verify_lockout_remaining(uid) == 0
+    # The first MAX-1 wrong answers don't lock.
+    for _ in range(gk._MAX_VERIFY_ATTEMPTS - 1):
+        assert cog._register_wrong_answer(uid) is False
+    # The MAX-th wrong answer trips the lockout.
+    assert cog._register_wrong_answer(uid) is True
+    assert cog._verify_lockout_remaining(uid) > 0
+    # Attempt counter is reset once locked out (cooldown is what gates now).
+    assert uid not in cog._verify_attempts
+
+
+def test_verify_throttle_clear_resets_state():
+    cog = _bare_gatekeeper()
+    uid = 7
+    cog._register_wrong_answer(uid)
+    cog._verify_blocked_until[uid] = time_module.time() + 999
+    cog._clear_verify_throttle(uid)
+    assert cog._verify_lockout_remaining(uid) == 0
+    assert uid not in cog._verify_attempts
+    assert uid not in cog._verify_blocked_until
 
 
 # ── _evaluate detection logic ─────────────────────────────────────────────────

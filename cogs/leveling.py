@@ -40,6 +40,10 @@ from utils import helpers as h
 
 log = logging.getLogger("NanoBot.leveling")
 
+# Per-level coin-reward ceiling. The reward is multiplied by the level reached,
+# so this keeps even high-level payouts reasonable and clear of integer limits.
+_COIN_REWARD_MAX = 1_000_000
+
 
 # ══════════════════════════════════════════════════════════════════════════════
 #  Pure level math (no Discord deps — covered by tests/test_leveling_helpers.py)
@@ -421,6 +425,13 @@ class Leveling(commands.Cog):
         if amount < 0:
             return await ctx.reply(
                 embed=h.err("Amount can't be negative."), ephemeral=True
+            )
+        # Reward is multiplied by the new level, so cap the per-level rate to keep
+        # high-level payouts sane and well clear of integer limits.
+        if amount > _COIN_REWARD_MAX:
+            return await ctx.reply(
+                embed=h.err(f"Amount can't exceed {_COIN_REWARD_MAX:,} per level."),
+                ephemeral=True,
             )
         await db.set_level_config(ctx.guild.id, coin_reward=amount)
         if amount == 0:

@@ -928,6 +928,22 @@ class Roles(commands.Cog):
                 ),
                 ephemeral=True,
             )
+        # Anyone can click a posted panel, so the button effectively hands the
+        # role to the whole server. A role's *position* doesn't matter here —
+        # colour roles often sit above mods (Discord shows the highest role's
+        # colour), and a position-only role grants no power. What matters is
+        # permissions: refuse any role carrying server-/member-control perms so a
+        # panel can never be turned into a self-serve admin button.
+        risky = h.dangerous_role_perms(role)
+        if risky:
+            pretty = ", ".join(p.replace("_", " ").title() for p in risky)
+            return await interaction.response.send_message(
+                embed=h.err(
+                    f"**{role.name}** grants powerful permissions ({pretty}) and can't be "
+                    "added to a self-assign panel. Anyone could click to grant it themselves."
+                ),
+                ephemeral=True,
+            )
 
         await db.add_role_to_panel(
             panel_id,

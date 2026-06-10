@@ -55,6 +55,48 @@ async def test_transfer_rejects_nonpositive():
     assert await db.transfer_coins(G, A, B, -5) is False
 
 
+async def test_try_debit_success_and_balance():
+    await db.add_coins(G, A, 100)
+    assert await db.try_debit_coins(G, A, 40) is True
+    assert await db.get_balance(G, A) == 60
+
+
+async def test_try_debit_insufficient_leaves_balance():
+    await db.add_coins(G, A, 30)
+    assert await db.try_debit_coins(G, A, 40) is False
+    assert await db.get_balance(G, A) == 30
+
+
+async def test_try_debit_no_account_is_false():
+    assert await db.try_debit_coins(G, A, 10) is False
+
+
+async def test_try_debit_rejects_nonpositive():
+    await db.add_coins(G, A, 50)
+    assert await db.try_debit_coins(G, A, 0) is False
+    assert await db.try_debit_coins(G, A, -5) is False
+    assert await db.get_balance(G, A) == 50
+
+
+async def test_try_debit_exact_balance_allowed():
+    await db.add_coins(G, A, 40)
+    assert await db.try_debit_coins(G, A, 40) is True
+    assert await db.get_balance(G, A) == 0
+    # A second debit of the now-empty account fails.
+    assert await db.try_debit_coins(G, A, 1) is False
+
+
+async def test_concurrent_debits_cannot_overdraw():
+    import asyncio
+
+    await db.add_coins(G, A, 100)
+    # Fire five 40-coin debits at once against a 100 balance: at most two can
+    # succeed (the atomic conditional UPDATE serializes them), never overdrawing.
+    results = await asyncio.gather(*(db.try_debit_coins(G, A, 40) for _ in range(5)))
+    assert sum(results) == 2
+    assert await db.get_balance(G, A) == 20
+
+
 async def test_rank_and_leaderboard():
     await db.add_coins(G, A, 100)
     await db.add_coins(G, B, 300)

@@ -9,9 +9,9 @@ load — the old file is renamed to `config.json.bak` after migration.
 
 Sections:
     [bot]      token, default_prefix, owner_id, error_channel_id,
-               idle_status_message, health_check_port
+               idle_status_message, health_check_port, health_check_host
     [logging]  log_level, log_http, log_events_jsonl, db_slow_query_ms
-    [votes]    top.gg / DBL / discord.bots.gg tokens, webhook port/secret,
+    [votes]    top.gg / DBL / discord.bots.gg tokens, webhook port/host/secret,
                webhook_allowed_ips
     [groq]     groq_api_key
     [scraper]  fml_pages_per_scrape, wyr_requests_per_scrape,
@@ -262,6 +262,14 @@ FIELDS: tuple[Field, ...] = (
         minimum=0,
         maximum=65535,
     ),
+    Field(
+        "health_check_host",
+        "bot",
+        "str",
+        "0.0.0.0",
+        "Bind address for the health endpoint (0.0.0.0 = all interfaces; "
+        "127.0.0.1 = host-local only — the payload is unauthenticated)",
+    ),
     # ── [logging] ──
     Field(
         "log_level",
@@ -320,6 +328,14 @@ FIELDS: tuple[Field, ...] = (
         "Open port for the vote webhook",
         minimum=1,
         maximum=65535,
+    ),
+    Field(
+        "vote_webhook_host",
+        "votes",
+        "str",
+        "0.0.0.0",
+        "Bind address for the vote webhook (0.0.0.0 = all interfaces; "
+        "127.0.0.1 = host-local, e.g. behind a reverse proxy)",
     ),
     Field(
         "vote_webhook_secret",
@@ -760,6 +776,14 @@ def save(cfg: dict, path: str = CONFIG_PATH) -> None:
 
     with open(path, "w", encoding="utf-8") as f:
         parser.write(f)
+
+    # Restrict to owner read/write — the file holds the bot token and API keys,
+    # so on a shared host it must not be world- or group-readable. Best-effort:
+    # chmod is a no-op semantics on Windows, so swallow failures there.
+    try:
+        os.chmod(path, 0o600)
+    except OSError:
+        pass
 
 
 def migrate_from_json(json_path: str, ini_path: str) -> bool:

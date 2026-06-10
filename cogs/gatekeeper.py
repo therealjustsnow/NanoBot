@@ -33,10 +33,14 @@ bot can assign it — the bot cannot manage a role above its own.
 
 import asyncio
 import io
+import ipaddress
 import logging
 import os
 import random
+import socket
+import time
 from typing import Optional
+from urllib.parse import urlparse
 
 import aiohttp
 import discord
@@ -72,11 +76,51 @@ MUTE_ROLE_NAME = "Muted (NanoBot)"
 
 _VERIFY_BUTTON_CID = "gk:verify:button"
 
+# The math captcha is deliberately easy for humans, so the answer space is tiny
+# (sums of 2..9 → 4..18). Without an attempt cap a script could blind-guess past
+# it in a handful of tries, so lock a user out for a short cooldown after this
+# many wrong answers. In-memory only — a restart resets it, which is fine for a
+# speed bump.
+_MAX_VERIFY_ATTEMPTS = 5
+_VERIFY_LOCKOUT_SECONDS = 60
+
 DEFAULT_VERIFY_MESSAGE = (
     "You've been temporarily muted in **{server}** while we check new accounts.\n\n"
     "To get unmuted, press the **Verify** button below and solve the quick math "
     "problem. If you don't verify in time you'll be removed from the server."
 )
+
+
+def _is_safe_public_url(url: str) -> bool:
+    """True only for an http(s) URL whose host resolves entirely to public IPs.
+
+    Blocks SSRF via /gatekeeper learnavatar: a Manage-Server user could otherwise
+    point the fetch at loopback, link-local (cloud metadata at 169.254.169.254),
+    or private-range addresses to probe the host's internal network. Every
+    resolved address must be global, so a hostname that maps to a private IP is
+    rejected too.
+    """
+    try:
+        parsed = urlparse(url)
+    except ValueError:
+        return False
+    if parsed.scheme not in ("http", "https") or not parsed.hostname:
+        return False
+    try:
+        infos = socket.getaddrinfo(parsed.hostname, parsed.port or 0)
+    except (socket.gaierror, UnicodeError, ValueError):
+        return False
+    if not infos:
+        return False
+    for info in infos:
+        addr = info[4][0]
+        try:
+            ip = ipaddress.ip_address(addr)
+        except ValueError:
+            return False
+        if not ip.is_global or ip.is_reserved:
+            return False
+    return True
 
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -137,11 +181,16 @@ class VerifyModal(discord.ui.Modal):
         except ValueError:
             given = None
         if given != self.answer:
+            locked_out = self.cog._register_wrong_answer(interaction.user.id)
+            if locked_out:
+                msg = (
+                    f"That's not right, and you've had too many tries. "
+                    f"Wait **{_VERIFY_LOCKOUT_SECONDS}s** before trying again."
+                )
+            else:
+                msg = "That's not the right answer. Press **Verify** to try again."
             await interaction.response.send_message(
-                embed=h.err(
-                    "That's not the right answer. Press **Verify** to try again.",
-                    "❌ Incorrect",
-                ),
+                embed=h.err(msg, "❌ Incorrect"),
                 ephemeral=True,
             )
             return
@@ -164,6 +213,16 @@ class VerifyView(discord.ui.View):
     async def verify(
         self, interaction: discord.Interaction, _button: discord.ui.Button
     ):
+        locked = self.cog._verify_lockout_remaining(interaction.user.id)
+        if locked:
+            await interaction.response.send_message(
+                embed=h.warn(
+                    f"Too many wrong answers. Try again in **{locked}s**.",
+                    "⏳ Slow Down",
+                ),
+                ephemeral=True,
+            )
+            return
         if interaction.guild is None:
             # Button pressed in a DM — resolve the pending guild from the DB.
             pending = await self.cog._find_pending_for_user(interaction.user.id)
@@ -195,6 +254,28 @@ class Gatekeeper(commands.Cog):
         self._unmute_tasks: dict[str, asyncio.Task] = {}
         self._kick_tasks: dict[str, asyncio.Task] = {}
         self._catalog: list[int] = []
+        # Captcha brute-force throttle, keyed by user id.
+        self._verify_attempts: dict[int, int] = {}
+        self._verify_blocked_until: dict[int, float] = {}
+
+    def _verify_lockout_remaining(self, user_id: int) -> int:
+        """Seconds left on a captcha lockout for this user (0 if not locked)."""
+        remaining = self._verify_blocked_until.get(user_id, 0.0) - time.time()
+        return int(remaining) if remaining > 0 else 0
+
+    def _register_wrong_answer(self, user_id: int) -> bool:
+        """Count a wrong captcha answer. Returns True if it triggers a lockout."""
+        attempts = self._verify_attempts.get(user_id, 0) + 1
+        if attempts >= _MAX_VERIFY_ATTEMPTS:
+            self._verify_blocked_until[user_id] = time.time() + _VERIFY_LOCKOUT_SECONDS
+            self._verify_attempts.pop(user_id, None)
+            return True
+        self._verify_attempts[user_id] = attempts
+        return False
+
+    def _clear_verify_throttle(self, user_id: int) -> None:
+        self._verify_attempts.pop(user_id, None)
+        self._verify_blocked_until.pop(user_id, None)
 
     async def cog_load(self):
         self._session = aiohttp.ClientSession()
@@ -443,6 +524,7 @@ class Gatekeeper(commands.Cog):
 
         self._cancel_tasks(key)
         await db.remove_gatekeeper_pending(key)
+        self._clear_verify_throttle(interaction.user.id)
         log.info(f"Gatekeeper verified: {interaction.user} in {guild}")
         await interaction.response.send_message(
             embed=h.ok(
@@ -1017,11 +1099,20 @@ class Gatekeeper(commands.Cog):
             data = await self._fetch_avatar_bytes(user.avatar)
             label = f"{user.id}"
         else:
+            if not _is_safe_public_url(url):
+                await interaction.followup.send(
+                    embed=h.err(
+                        "That URL isn't allowed. Give a public http(s) image link "
+                        "(local, private, and metadata addresses are blocked)."
+                    ),
+                    ephemeral=True,
+                )
+                return
             if self._session is None:
                 self._session = aiohttp.ClientSession()
             try:
                 async with self._session.get(
-                    url, timeout=aiohttp.ClientTimeout(10)
+                    url, timeout=aiohttp.ClientTimeout(10), allow_redirects=False
                 ) as r:
                     if r.status == 200:
                         data = await r.read()

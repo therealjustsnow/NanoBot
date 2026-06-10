@@ -14,7 +14,13 @@ NanoBot is a lightweight Discord moderation bot (Python 3.11+) built with discor
 
 ## Commands
 
-**Install and run:**
+**Install and run (scripted):**
+```bash
+./install.sh        # Linux/macOS setup: system deps, ./venv, pip, config.ini (Windows: install.bat → install.ps1, WinGet)
+./run.sh            # launcher: prefers ./venv, finds Python 3.11+, runs run.py (Windows: run.bat)
+```
+
+**Install and run (manual):**
 ```bash
 pip install -r requirements.txt
 cp example_config.ini config.ini     # then edit with your bot token
@@ -194,9 +200,9 @@ Tag shortcuts are detected in `on_message`: if a message matches no command but 
 
 `config.ini` (gitignored) at the repo root, split into six sections:
 
-* **`[bot]`** — `token`, `default_prefix`, `owner_id`, `error_channel_id`, `idle_status_message`, `health_check_port`
+* **`[bot]`** — `token`, `default_prefix`, `owner_id`, `error_channel_id`, `idle_status_message`, `health_check_port`, `health_check_host`
 * **`[logging]`** — `log_level`, `log_http`, `log_events_jsonl`, `db_slow_query_ms`
-* **`[votes]`** — `topgg_v1_token`, `dbl_token`, `discordbotsgg_token`, `vote_webhook_port`, `vote_webhook_secret`, `webhook_allowed_ips`
+* **`[votes]`** — `topgg_v1_token`, `dbl_token`, `discordbotsgg_token`, `vote_webhook_port`, `vote_webhook_host`, `vote_webhook_secret`, `webhook_allowed_ips`
 * **`[groq]`** — `groq_api_key`
 * **`[scraper]`** — `fml_pages_per_scrape`, `wyr_requests_per_scrape`, `nekos_per_endpoint`, `nekosia_per_tag`, `revalidate_age`, `revalidate_batch`, `groq_wyr_system`
 * **`[music]`** — playback/queue knobs read live from `bot.config` so `!reloadconfig` applies without a cog reload: `music_cookie_file`, `music_default_volume`, `music_idle_timeout`, `music_skip_ratio`, `music_max_queue`, `music_use_opus`, `music_persist_queue`, `music_predownload`, `music_self_deafen`, `music_default_speed`, `music_search_service` (ytsearch/ytmsearch/scsearch), `music_status_message` ({title} presence template), `music_proxy`, `music_user_agent`, `music_source_address`, `music_js_runtime_path` (deno/node/bun binary for yt-dlp JS challenges), `music_autoplay_autoskip`, `music_save_videos` + `music_cache_max_mb`/`music_cache_max_age_days` (cache caps), `music_ratelimit_cooldown`/`music_ratelimit_leave` (429 back-off), `music_apl_prune_on_error`, `music_save_history`, `music_metadata_lookup` (iTunes Search artist enrichment), `music_sponsorblock` + `music_sponsorblock_categories` (skip non-music/sponsor segments via SponsorBlock — downloads + FFmpeg-cuts the track before play; off by default, default category `music_offtopic`).

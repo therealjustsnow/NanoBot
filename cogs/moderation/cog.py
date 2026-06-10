@@ -1082,6 +1082,13 @@ class Moderation(TimedActionsMixin, commands.Cog):
                 embed=h.info(f"**{user.display_name}** already has **{role.name}**."),
                 ephemeral=True,
             )
+        if not h.can_manage_role(ctx.author, role):
+            return await ctx.reply(
+                embed=h.err(
+                    f"You can't assign **{role.name}** — it's not below your highest role."
+                ),
+                ephemeral=True,
+            )
         if role >= ctx.guild.me.top_role:
             return await ctx.reply(
                 embed=h.err(f"I can't assign **{role.name}** — it outranks me."),
@@ -1129,6 +1136,13 @@ class Moderation(TimedActionsMixin, commands.Cog):
         if role not in user.roles:
             return await ctx.reply(
                 embed=h.info(f"**{user.display_name}** doesn't have **{role.name}**."),
+                ephemeral=True,
+            )
+        if not h.can_manage_role(ctx.author, role):
+            return await ctx.reply(
+                embed=h.err(
+                    f"You can't remove **{role.name}** — it's not below your highest role."
+                ),
                 ephemeral=True,
             )
         if role >= ctx.guild.me.top_role:

@@ -2562,19 +2562,48 @@ async def set_coins(guild_id: int, user_id: int, amount: int) -> None:
 
 
 async def add_coins(guild_id: int, user_id: int, amount: int) -> int:
-    """Add (or subtract) coins. Clamps at 0. Returns the new balance."""
-    new_bal = max(0, await get_balance(guild_id, user_id) + int(amount))
-    await set_coins(guild_id, user_id, new_bal)
-    return new_bal
+    """Add (or subtract) coins atomically. Clamps at 0. Returns the new balance.
+
+    The mutation is a single SQL statement so concurrent callers can't lose an
+    update or race a stale read (the old read-modify-write could create or drop
+    coins under concurrent /gamble, /pay, level-ups, etc.).
+    """
+    amount = int(amount)
+    await _conn().execute(
+        "INSERT INTO economy (guild_id, user_id, coins) VALUES (?,?,MAX(0,?)) "
+        "ON CONFLICT(guild_id, user_id) DO UPDATE SET coins=MAX(0, coins + ?)",
+        (str(guild_id), str(user_id), amount, amount),
+    )
+    await _conn().commit()
+    return await get_balance(guild_id, user_id)
+
+
+async def try_debit_coins(guild_id: int, user_id: int, amount: int) -> bool:
+    """Atomically subtract `amount` only if the balance covers it.
+
+    Returns True on success, False if amount <= 0 or funds are insufficient. The
+    conditional UPDATE makes the check-and-debit a single atomic step, so two
+    concurrent debits (e.g. rapid /gamble) can't both spend the same coins.
+    """
+    if amount <= 0:
+        return False
+    cur = await _conn().execute(
+        "UPDATE economy SET coins = coins - ? "
+        "WHERE guild_id=? AND user_id=? AND coins >= ?",
+        (int(amount), str(guild_id), str(user_id), int(amount)),
+    )
+    await _conn().commit()
+    return cur.rowcount > 0
 
 
 async def transfer_coins(guild_id: int, from_id: int, to_id: int, amount: int) -> bool:
-    """Move coins between two members. Returns False if amount <= 0 or low funds."""
-    if amount <= 0:
+    """Move coins between two members. Returns False if amount <= 0 or low funds.
+
+    The debit is an atomic conditional UPDATE, so concurrent transfers can't
+    overdraw the sender.
+    """
+    if not await try_debit_coins(guild_id, from_id, amount):
         return False
-    if await get_balance(guild_id, from_id) < amount:
-        return False
-    await add_coins(guild_id, from_id, -amount)
     await add_coins(guild_id, to_id, amount)
     return True
 
