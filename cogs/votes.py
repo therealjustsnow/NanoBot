@@ -268,8 +268,10 @@ class Votes(commands.Cog):
                     except ValueError:
                         return aiohttp.web.Response(status=403)
                     if not any(addr in net for net in nets):
-                        log.debug(
-                            f"Webhook: blocked {request.remote} — not in allowlist"
+                        log.warning(
+                            f"Webhook blocked: {request.remote} not in "
+                            f"webhook_allowed_ips ({request.method} {request.path}) — "
+                            f"vote webhooks from this sender will not be processed"
                         )
                         return aiohttp.web.Response(status=403)
             return await handler(request)
