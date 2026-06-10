@@ -30,7 +30,8 @@ from utils import db
 from utils import helpers as h
 from utils import obs
 from utils import sqlite_timing
-from utils.health import HealthServer
+from utils.health import health_routes, HEALTH_OWNER
+from utils.webserver import HttpServer
 
 # ── Config (read once at module level so logging init can use it) ──────────────
 _CFG = cfg_mod.load()
@@ -250,9 +251,9 @@ class NanoBot(commands.Bot):
         self._music_activity: discord.BaseActivity | None = None
         # Guard so the startup config dump prints once, not on every reconnect.
         self._config_printed: bool = False
-        # Optional health-check HTTP server (started in setup_hook when the
-        # health_check_port config key is non-zero).
-        self._health_server: HealthServer | None = None
+        # Shared HTTP server: the health probe and the vote webhook register
+        # their routes here, sharing a port when only one is available.
+        self.web: HttpServer = HttpServer()
 
     def _spawn_bg(self, coro, *, timeout: float | None = None) -> None:
         """Fire-and-forget a coroutine, keeping a strong ref so it isn't GC'd.
@@ -293,13 +294,11 @@ class NanoBot(commands.Bot):
         orig = getattr(self, "_orig_showwarning", None)
         if orig is not None:
             warnings.showwarning = orig
-        # Tear down the health endpoint (if running) so its port is freed.
-        if self._health_server is not None:
-            try:
-                await self._health_server.stop()
-            except Exception as exc:
-                log.debug("Health server shutdown error: %s", exc)
-            self._health_server = None
+        # Tear down the shared HTTP server (if running) so its port is freed.
+        try:
+            await self.web.stop()
+        except Exception as exc:
+            log.debug("HTTP server shutdown error: %s", exc)
         # Cancel fire-and-forget background tasks on shutdown, then give them a
         # brief window to unwind so an in-flight task isn't torn off mid-write.
         # (Cog-owned tasks are cancelled by cog_unload on reload; on full
@@ -418,23 +417,23 @@ class NanoBot(commands.Bot):
                 log.warning(f"⚠️  Could not load {cog}: {exc}")
 
         await self._sync_commands_if_changed()
-        await self._start_health_server()
+        await self._start_web_server()
 
-    async def _start_health_server(self) -> None:
-        """Start the optional /health endpoint when a port is configured."""
+    async def _start_web_server(self) -> None:
+        """Register the /health route (if enabled) and bind the shared server.
+
+        Cogs (e.g. votes) may already have registered their own routes during
+        load; restart() binds everything — same-port registrations share one
+        listener, so /health and /webhook/* can ride a single allocation.
+        """
         try:
             port = int(self.config.get("health_check_port") or 0)
         except (TypeError, ValueError):
             port = 0
-        if port <= 0:
-            return
-        host = str(self.config.get("health_check_host") or "0.0.0.0")
-        server = HealthServer(self, port, host)
-        try:
-            await server.start()
-            self._health_server = server
-        except OSError as exc:
-            log.warning("Couldn't start health-check endpoint on :%d: %s", port, exc)
+        if port > 0:
+            host = str(self.config.get("health_check_host") or "0.0.0.0")
+            self.web.register(HEALTH_OWNER, host, port, health_routes(self))
+        await self.web.restart()
 
     async def _sync_commands_if_changed(self) -> None:
         """Sync the slash command tree only when it actually changed.
