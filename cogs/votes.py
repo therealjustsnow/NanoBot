@@ -96,6 +96,10 @@ def _fmt_cooldown(secs: float) -> str:
     return f"{m_part}m"
 
 
+# Registration key used with the shared HttpServer (utils/webserver.py).
+WEBHOOK_OWNER = "votes_webhook"
+
+
 # ══════════════════════════════════════════════════════════════════════════════
 class Votes(commands.Cog):
     """Bot list integrations — stat posting, vote webhooks, rewards."""
@@ -111,14 +115,13 @@ class Votes(commands.Cog):
         self._allowed_networks: list[ipaddress.IPv4Network | ipaddress.IPv6Network] = (
             self._parse_allowed_ips(cfg.get("webhook_allowed_ips", ""))
         )
-        self._http_runner: aiohttp.web.AppRunner | None = None
         self._session: aiohttp.ClientSession | None = None
         self._startup_tasks: list[asyncio.Task] = []
 
     # ── Lifecycle ──────────────────────────────────────────────────────────────
     async def cog_load(self):
         self._session = aiohttp.ClientSession(timeout=aiohttp.ClientTimeout(total=10))
-        await self._start_webhook_server()
+        await self._register_webhook()
         self.post_stats.start()
         self.notify_loop.start()
         # Sync commands to applicable sites once the bot is ready — fire-and-forget
@@ -200,11 +203,14 @@ class Votes(commands.Cog):
         for task in self._startup_tasks:
             task.cancel()
         self._startup_tasks.clear()
-        if self._http_runner:
+        # Drop our webhook routes from the shared server and rebind so the port
+        # reflects the change (no-op if the server isn't running).
+        self.bot.web.unregister(WEBHOOK_OWNER)
+        if self.bot.web.is_running:
             try:
-                await asyncio.wait_for(self._http_runner.cleanup(), timeout=5.0)
-            except asyncio.TimeoutError:
-                log.warning("Votes webhook server cleanup timed out — forcing close")
+                await self.bot.web.restart()
+            except Exception as exc:
+                log.debug("Web server restart on votes unload failed: %s", exc)
         if self._session and not self._session.closed:
             await self._session.close()
         log.info("Votes cog unloaded")
@@ -234,61 +240,82 @@ class Votes(commands.Cog):
         self.topgg_v1_token = cfg.get("topgg_v1_token")
         self.dbl_token = cfg.get("dbl_token")
         self.botsgg_token = cfg.get("discordbotsgg_token")
-        new_port = int(cfg.get("vote_webhook_port", 5000))
-        if new_port != self.webhook_port:
-            log.warning(
-                f"vote_webhook_port changed to {new_port} — reload votes cog "
-                f"to rebind (server still on :{self.webhook_port})"
-            )
+        self.webhook_host = str(cfg.get("vote_webhook_host") or "0.0.0.0")
+        self.webhook_port = int(cfg.get("vote_webhook_port", 5000))
+        # Re-register and rebind so host/port/allowlist/secret changes apply
+        # without a cog reload (shares the port with /health as needed).
+        await self._register_webhook()
         log.info(
             f"Votes config reloaded — {len(self._allowed_networks)} allowlist network(s)"
         )
 
-    async def _start_webhook_server(self):
-        # Refuse to expose an unauthenticated webhook: with no secret AND no IP
-        # allowlist, anyone who can reach the port could forge vote payloads.
-        if not self.webhook_secret and not self._allowed_networks:
-            log.warning(
-                "Vote webhook server NOT started: no vote_webhook_secret and no "
-                "webhook_allowed_ips configured. Set one to enable vote webhooks."
-            )
-            return
+    def _webhook_ip_filter(self):
+        """Middleware that enforces the IP allowlist on /webhook/* only.
+
+        It's mounted on the shared app, so it must leave other routes (e.g.
+        /health, which may share the port) untouched.
+        """
 
         @aiohttp.web.middleware
         async def ip_filter(
             request: aiohttp.web.Request, handler
         ) -> aiohttp.web.StreamResponse:
-            nets = self._allowed_networks
-            if nets:
-                try:
-                    addr = ipaddress.ip_address(request.remote)
-                except ValueError:
-                    return aiohttp.web.Response(status=403)
-                if not any(addr in net for net in nets):
-                    log.debug(f"Webhook: blocked {request.remote} — not in allowlist")
-                    return aiohttp.web.Response(status=403)
+            if request.path.startswith("/webhook/"):
+                nets = self._allowed_networks
+                if nets:
+                    try:
+                        addr = ipaddress.ip_address(request.remote)
+                    except ValueError:
+                        return aiohttp.web.Response(status=403)
+                    if not any(addr in net for net in nets):
+                        log.debug(
+                            f"Webhook: blocked {request.remote} — not in allowlist"
+                        )
+                        return aiohttp.web.Response(status=403)
             return await handler(request)
 
-        app = aiohttp.web.Application(middlewares=[ip_filter])
-        app.router.add_post("/webhook/topgg", self._handle_topgg)
-        app.router.add_post("/webhook/dbl", self._handle_dbl)
-        app.router.add_post("/webhook/botsgg", self._handle_botsgg)
+        return ip_filter
 
-        runner = aiohttp.web.AppRunner(app)
-        await runner.setup()
-        site = aiohttp.web.TCPSite(runner, self.webhook_host, self.webhook_port)
-        await site.start()
-        self._http_runner = runner
-        if self._allowed_networks:
-            log.info(
-                f"Vote webhook server listening on {self.webhook_host}:{self.webhook_port} "
-                f"(IP allowlist: {len(self._allowed_networks)} network(s))"
+    async def _register_webhook(self):
+        """Register webhook routes with the shared HTTP server (or drop them).
+
+        Refuses to expose an unauthenticated webhook: with no secret AND no IP
+        allowlist anyone reaching the port could forge vote payloads. Only binds
+        if the shared server is already running (a cog reload) — at first boot
+        the bot starts the shared server once after all cogs load.
+        """
+        if not self.webhook_secret and not self._allowed_networks:
+            self.bot.web.unregister(WEBHOOK_OWNER)
+            log.warning(
+                "Vote webhook NOT enabled: no vote_webhook_secret and no "
+                "webhook_allowed_ips configured. Set one to enable vote webhooks."
             )
-        else:
-            log.info(
-                f"Vote webhook server listening on "
-                f"{self.webhook_host}:{self.webhook_port}"
+            if self.bot.web.is_running:
+                await self.bot.web.restart()
+            return
+
+        routes = [
+            aiohttp.web.post("/webhook/topgg", self._handle_topgg),
+            aiohttp.web.post("/webhook/dbl", self._handle_dbl),
+            aiohttp.web.post("/webhook/botsgg", self._handle_botsgg),
+        ]
+        self.bot.web.register(
+            WEBHOOK_OWNER,
+            self.webhook_host,
+            self.webhook_port,
+            routes,
+            middlewares=[self._webhook_ip_filter()],
+        )
+        log.info(
+            f"Vote webhook routes registered for {self.webhook_host}:{self.webhook_port}"
+            + (
+                f" (IP allowlist: {len(self._allowed_networks)} network(s))"
+                if self._allowed_networks
+                else ""
             )
+        )
+        if self.bot.web.is_running:
+            await self.bot.web.restart()
 
     def _check_auth(self, request: aiohttp.web.Request) -> bool:
         """Validate the Authorization header against the configured secret (DBL / discord.bots.gg)."""
