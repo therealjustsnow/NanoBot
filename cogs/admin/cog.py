@@ -18,6 +18,7 @@ Commands:
   logs [lines]       — tail the log file right in Discord
   scrape             — manually trigger the daily content cache scrape
   cachestats         — show cache DB statistics (FML, WYR, images)
+  health             — probe the HTTP /health endpoint and show the response
   fmlpurge           — wipe all cached FML stories (forces re-scrape)
   reloadconfig       — re-read config.ini without restarting
   config             — DM-only: show/get/set config values
@@ -31,6 +32,7 @@ import subprocess
 import sys
 from typing import Optional
 
+import aiohttp
 import discord
 from discord.ext import commands
 
@@ -910,6 +912,58 @@ class Admin(ConfigMixin, commands.Cog):
         )
         e.set_footer(text="data/cache.db \u00b7 NanoBot Admin")
         await ctx.reply(embed=e)
+
+    # ══════════════════════════════════════════════════════════════════════════
+    #  health
+    # ══════════════════════════════════════════════════════════════════════════
+    @commands.command(
+        name="health",
+        help=(
+            "Probe the bot's HTTP /health endpoint and show the response.\n\n"
+            "Makes a real HTTP request to the configured health check port,\n"
+            "verifying the endpoint is actually reachable from outside the\n"
+            "bot process. Requires health_check_port in config.ini."
+        ),
+    )
+    async def health(self, ctx: commands.Context):
+        try:
+            port = int(self.bot.config.get("health_check_port") or 0)
+        except (TypeError, ValueError):
+            port = 0
+        if port <= 0:
+            return await ctx.reply(
+                embed=h.err(
+                    "The health endpoint is disabled.\n"
+                    "Set `health_check_port` in `config.ini`, then `!restart` "
+                    "to bind the HTTP server."
+                )
+            )
+
+        host = str(self.bot.config.get("health_check_host") or "0.0.0.0")
+        # Wildcard bind addresses aren't connectable — probe via loopback.
+        if host in ("0.0.0.0", "::"):
+            host = "127.0.0.1"
+        url = f"http://{host}:{port}/health"
+
+        try:
+            timeout = aiohttp.ClientTimeout(total=5)
+            async with aiohttp.ClientSession(timeout=timeout) as session:
+                async with session.get(url) as resp:
+                    status = resp.status
+                    data = await resp.json()
+        except (aiohttp.ClientError, asyncio.TimeoutError, ValueError) as exc:
+            return await ctx.reply(
+                embed=h.err(
+                    f"Could not reach `{url}`:\n```{exc}```\n"
+                    "The HTTP server may have failed to bind — check `!logs`."
+                )
+            )
+
+        lines = [f"**HTTP {status}** from `{url}`", ""]
+        lines.extend(f"**{key}:** `{value}`" for key, value in data.items())
+        make_embed = h.ok if status == 200 else h.warn
+        await ctx.reply(embed=make_embed("\n".join(lines), "🩺 Health Check"))
+        log.info(f"health probe by {h.user_log(ctx.author)} — HTTP {status}")
 
     # ══════════════════════════════════════════════════════════════════════════
     #  fmlpurge
