@@ -106,6 +106,32 @@ def _v_token(v) -> list[ConfigIssue]:
     return []
 
 
+def _v_db_encryption_key(v) -> list[ConfigIssue]:
+    if not v:
+        return []  # blank = encryption off
+    try:
+        import sqlcipher3  # noqa: F401
+    except ImportError:
+        return [
+            ConfigIssue(
+                "db_encryption_key",
+                "db_encryption_key is set but the sqlcipher3 driver is not "
+                "installed. Install it with: pip install sqlcipher3-binary",
+                True,
+            )
+        ]
+    if len(str(v)) < 12:
+        return [
+            ConfigIssue(
+                "db_encryption_key",
+                f"Passphrase is only {len(str(v))} chars — use at least 12 "
+                "for a meaningful level of protection",
+                False,
+            )
+        ]
+    return []
+
+
 def _v_prefix(v) -> list[ConfigIssue]:
     if v is None:
         return []  # unset → falls back to the built-in default
@@ -221,6 +247,17 @@ FIELDS: tuple[Field, ...] = (
         required=True,
         sensitive=True,
         validator=_v_token,
+    ),
+    Field(
+        "db_encryption_key",
+        "bot",
+        "str",
+        None,
+        "Passphrase that encrypts the SQLite databases at rest via SQLCipher "
+        "(blank = no encryption; needs `pip install sqlcipher3-binary`; the "
+        "NANOBOT_DB_KEY env var overrides this; losing the key loses the data)",
+        sensitive=True,
+        validator=_v_db_encryption_key,
     ),
     Field(
         "default_prefix",
