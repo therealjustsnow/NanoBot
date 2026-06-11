@@ -6,6 +6,10 @@ pytest>=9.0.3
 pytest-asyncio>=1.4.0
 dpytest>=0.7.0
 
+# Exercises the encrypted-DB path in tests/test_db_crypto.py (optional at
+# runtime — see the commented line in requirements.txt)
+sqlcipher3-binary>=0.6.0
+
 # Linting / formatting (also wired into .pre-commit-config.yaml)
 black>=26.5.1
 ruff>=0.15.16

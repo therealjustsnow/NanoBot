@@ -27,6 +27,7 @@ from discord.ext import commands, tasks
 from utils import cache_db
 from utils import config as cfg_mod
 from utils import db
+from utils import db_crypto
 from utils import helpers as h
 from utils import obs
 from utils import sqlite_timing
@@ -404,8 +405,11 @@ class NanoBot(commands.Bot):
     # ── Startup ────────────────────────────────────────────────────────────────
     async def setup_hook(self):
         os.makedirs("data", exist_ok=True)
-        await db.init()
-        await cache_db.init()
+        db_key = db_crypto.resolve_key(self.config)
+        if db_key:
+            log.info("🔐 Database encryption at rest: enabled (SQLCipher)")
+        await db.init(db_key)
+        await cache_db.init(db_key)
         await self._load_prefixes()
 
         for cog in _ALL_COGS:

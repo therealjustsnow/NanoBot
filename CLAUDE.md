@@ -46,6 +46,7 @@ Tests cover pure-Python utilities and the SQLite layer (in-memory), no live Disc
 - `tests/test_config.py` — `validate()` from `utils/config.py`
 - `tests/test_config_io.py` — load, save, migrate, `set_value`, `_coerce`, `_format`, `assert_no_fatal`, `example_ini` from `utils/config.py`
 - `tests/test_db.py` — `utils/db.py` against an in-memory SQLite database
+- `tests/test_db_crypto.py` — `utils/db_crypto.py` key resolution + header sniffing; the encrypted round-trip/migration tests need `sqlcipher3-binary` (in requirements-dev.txt) and self-skip without it
 - `tests/test_cache_db.py` — `utils/cache_db.py` against an in-memory SQLite database
 - `tests/test_storage.py` — sync and async JSON helpers in `utils/storage.py`
 - `tests/test_music_helpers.py` — pure helper functions imported directly from `cogs/music/helpers.py` (Discord/yt-dlp-free module); includes `_extract_ytid`
@@ -174,7 +175,9 @@ Two SQLite databases, both opened once at startup via `setup_hook()` and shared 
 - **`data/nanobot.db`** — All persistent bot data. Managed by `utils/db.py`. Tables include: `tags`, `notes`, `prefixes`, `unban_schedules`, `slow_schedules`, `reminders`, `automod_config`, `automod_badwords`, `automod_regex_patterns`, `automod_attachment_words`, warnings, auditlog settings, role panels, welcome/leave config, recurring reminders, vote history, the music tables (`music_settings`, `music_queue`, `music_history`, `music_autoplaylist`, `music_song_blocklist`, `music_user_blocklist`), the leveling tables (`user_levels`, `level_config`, `level_rewards`, `level_ignored_channels`), the economy tables (`economy`, `economy_config`), and the gatekeeper tables (`gatekeeper_config`, `gatekeeper_pending`).
 - **`data/cache.db`** — External content cache (anime images, stories). Managed by `utils/cache_db.py`.
 
-Both use WAL mode (`PRAGMA journal_mode=WAL`) for concurrent read/write. All queries are async via `aiosqlite`. Initialize with `await db.init()` and `await cache_db.init()` in `NanoBot.setup_hook()`.
+Both use WAL mode (`PRAGMA journal_mode=WAL`) for concurrent read/write. All queries are async via `aiosqlite`. Initialize with `await db.init()` and `await cache_db.init()` in `NanoBot.setup_hook()` (both take the optional SQLCipher key).
+
+**Encryption at rest (optional):** when `db_encryption_key` (config) or `NANOBOT_DB_KEY` (env, wins) is set, `utils/db_crypto.py` opens both files through the `sqlcipher3` driver instead of stdlib sqlite3 — install `sqlcipher3-binary`. A plaintext DB is auto-migrated on the first keyed start (`sqlcipher_export`, plus a manual `PRAGMA user_version` copy since the header isn't exported; original kept as `*.plain.bak`). sqlcipher3 raises its own exception classes, so constraint handlers catch `db_crypto.INTEGRITY_ERRORS` — never `aiosqlite.IntegrityError` directly. Wrong key / encrypted-file-without-key fail fast at startup with clear `RuntimeError`s. Key changes don't re-key an existing DB.
 
 **Schema changes:** the `CREATE TABLE IF NOT EXISTS` / `_ensure_columns()` calls in `db.init()` are the version-0 baseline (idempotent on every start). Adding a column to an existing table uses `_ensure_columns(table, {col: definition})`. For anything more involved, register a forward-only migration with `@db.migration(N)` — these run in ascending order on startup, tracked by `PRAGMA user_version`, which advances only after a migration succeeds (so a failure retries next start; write migrations to be safe to re-run). Don't scatter ad-hoc `ALTER TABLE` blocks through `init()`.
 
@@ -200,7 +203,7 @@ Tag shortcuts are detected in `on_message`: if a message matches no command but 
 
 `config.ini` (gitignored) at the repo root, split into six sections:
 
-* **`[bot]`** — `token`, `default_prefix`, `owner_id`, `error_channel_id`, `idle_status_message`, `health_check_port`, `health_check_host`
+* **`[bot]`** — `token`, `db_encryption_key`, `default_prefix`, `owner_id`, `error_channel_id`, `idle_status_message`, `health_check_port`, `health_check_host`
 * **`[logging]`** — `log_level`, `log_http`, `log_events_jsonl`, `db_slow_query_ms`
 * **`[votes]`** — `topgg_v1_token`, `dbl_token`, `discordbotsgg_token`, `vote_webhook_port`, `vote_webhook_host`, `vote_webhook_secret`, `webhook_allowed_ips`
 * **`[groq]`** — `groq_api_key`

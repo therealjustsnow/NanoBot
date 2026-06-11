@@ -57,7 +57,7 @@ from typing import Any, Awaitable, Callable
 
 import aiosqlite
 
-from utils import sqlite_timing
+from utils import db_crypto, sqlite_timing
 
 log = logging.getLogger("NanoBot.db")
 
@@ -71,12 +71,15 @@ _DB_PATH = os.path.join("data", "nanobot.db")
 _db: aiosqlite.Connection | None = None
 
 
-async def init() -> None:
-    """Open the database and create all tables. Call once at bot startup."""
+async def init(encryption_key: str | None = None) -> None:
+    """Open the database and create all tables. Call once at bot startup.
+
+    When `encryption_key` is set the file is opened through SQLCipher
+    (encrypted at rest); see utils/db_crypto.py.
+    """
     global _db
     os.makedirs("data", exist_ok=True)
-    _db = await aiosqlite.connect(_DB_PATH)
-    _db.row_factory = aiosqlite.Row
+    _db = await db_crypto.connect(_DB_PATH, encryption_key)
     # Wrap so every query is timed when slow-query logging is enabled (no-op /
     # zero overhead while the threshold is 0). See utils/sqlite_timing.py.
     _db = sqlite_timing.wrap(_db, "nanobot")
@@ -1707,7 +1710,7 @@ async def add_automod_badword(guild_id: int, word: str) -> bool:
         )
         await _conn().commit()
         return True
-    except aiosqlite.IntegrityError:
+    except db_crypto.INTEGRITY_ERRORS:
         return False
 
 
@@ -1782,7 +1785,7 @@ async def add_automod_regex(
         )
         await _conn().commit()
         return True
-    except aiosqlite.IntegrityError:
+    except db_crypto.INTEGRITY_ERRORS:
         return False
 
 
@@ -1816,7 +1819,7 @@ async def add_automod_attachment_word(guild_id: int, word: str) -> bool:
         )
         await _conn().commit()
         return True
-    except aiosqlite.IntegrityError:
+    except db_crypto.INTEGRITY_ERRORS:
         return False
 
 
@@ -1953,7 +1956,7 @@ async def add_autoplaylist_entry(
         )
         await _conn().commit()
         return True
-    except aiosqlite.IntegrityError:
+    except db_crypto.INTEGRITY_ERRORS:
         return False
 
 
@@ -2144,7 +2147,7 @@ async def add_music_song_block(
         )
         await _conn().commit()
         return True
-    except aiosqlite.IntegrityError:
+    except db_crypto.INTEGRITY_ERRORS:
         return False
 
 
@@ -2178,7 +2181,7 @@ async def add_music_user_block(
         )
         await _conn().commit()
         return True
-    except aiosqlite.IntegrityError:
+    except db_crypto.INTEGRITY_ERRORS:
         return False
 
 

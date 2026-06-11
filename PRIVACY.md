@@ -104,6 +104,10 @@ All persistent data is stored in a local SQLite database file on the machine
 that hosts the bot, operated by the bot owner. There is no cloud replication
 and no third-party hosting of bot data. Access is limited to the bot operator.
 
+The official hosted instance encrypts its databases at rest using SQLCipher
+(AES-256). Self-hosted instances can enable the same protection by setting
+`db_encryption_key` in their configuration.
+
 ## Data retention and deletion
 
 - Most records are kept until a moderator or user deletes them through bot

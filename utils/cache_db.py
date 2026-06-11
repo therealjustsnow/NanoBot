@@ -25,7 +25,7 @@ import time
 
 import aiosqlite
 
-from utils import sqlite_timing
+from utils import db_crypto, sqlite_timing
 
 log = logging.getLogger("NanoBot.cache_db")
 
@@ -35,12 +35,15 @@ _DB_PATH = os.path.join("data", "cache.db")
 _db: aiosqlite.Connection | None = None
 
 
-async def init() -> None:
-    """Open the cache database and create all tables. Call once at bot startup."""
+async def init(encryption_key: str | None = None) -> None:
+    """Open the cache database and create all tables. Call once at bot startup.
+
+    When `encryption_key` is set the file is opened through SQLCipher
+    (encrypted at rest); see utils/db_crypto.py.
+    """
     global _db
     os.makedirs("data", exist_ok=True)
-    _db = await aiosqlite.connect(_DB_PATH)
-    _db.row_factory = aiosqlite.Row
+    _db = await db_crypto.connect(_DB_PATH, encryption_key)
     # Time queries when slow-query logging is on (zero overhead while disabled).
     _db = sqlite_timing.wrap(_db, "cache")
 
@@ -246,7 +249,7 @@ async def add_images(
                 ),
             )
             added += 1
-        except aiosqlite.IntegrityError:
+        except db_crypto.INTEGRITY_ERRORS:
             # Already cached -- update verified_at to mark it as still valid
             await _conn().execute(
                 "UPDATE image_cache SET verified_at=? WHERE hash=?",

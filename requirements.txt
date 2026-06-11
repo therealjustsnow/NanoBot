@@ -10,3 +10,7 @@ Pillow>=12.2.0
 # Music player (cogs/music.py) — also requires the FFmpeg binary on PATH
 PyNaCl>=1.6.2
 yt-dlp[default]>=2026.6.9
+
+# Optional: database encryption at rest (only needed when db_encryption_key /
+# NANOBOT_DB_KEY is set — see example_config.ini)
+# sqlcipher3-binary>=0.6.0
