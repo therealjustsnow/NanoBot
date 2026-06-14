@@ -438,15 +438,29 @@ class GuildPlayer:
             self._seek_to = None
         self._base_offset = offset
 
+        # Quiet FFmpeg's per-packet chatter. YouTube streams often hand the
+        # encoder slightly non-monotonic timestamps, which spams the log with
+        # "Queue input is backward in time" warnings from libopus; they're
+        # cosmetic (FFmpeg auto-corrects) but noisy. Errors still print.
+        before = f"-loglevel error {before}".strip()
+        # Resample to a monotonic PTS so the encoder never sees backward
+        # timestamps (the root cause of the warning above). Prepended to any
+        # other audio filters.
+        resample = "aresample=async=1:first_pts=0"
+
         use_opus = self.cog.use_opus()
 
         if use_opus:
             parts = self._filter_parts(include_volume=True)
-            options = "-vn -af " + ",".join(parts) if parts else "-vn"
             # An already-Opus source with no -af processing is handed straight to
             # Discord (codec="opus" → ffmpeg "-c:a copy"), skipping a lossy
             # decode→re-encode. Otherwise re-encode with libopus.
             passthrough = not parts and src_codec in ("opus", "libopus")
+            if passthrough:
+                # Stream-copied: no decode/encode, so no filter chain to fix.
+                options = "-vn"
+            else:
+                options = "-vn -af " + ",".join([resample, *parts])
             self._source = discord.FFmpegOpusAudio(
                 source_url,
                 bitrate=target_kb,
@@ -458,7 +472,7 @@ class GuildPlayer:
             # PCM path: discord.py encodes Opus itself; volume rides a live
             # PCMVolumeTransformer so changing it doesn't re-stream the track.
             parts = self._filter_parts(include_volume=False)
-            options = "-vn -af " + ",".join(parts) if parts else "-vn"
+            options = "-vn -af " + ",".join([resample, *parts])
             pcm = discord.FFmpegPCMAudio(
                 source_url,
                 before_options=before or None,
