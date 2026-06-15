@@ -687,6 +687,33 @@ class Utility(commands.Cog):
         )
         e.add_field(name="👥 Members", value=members_val, inline=True)
 
+        # Presence breakdown (requires the privileged presences intent; without it
+        # every member reads as offline). Bots are excluded so the counts reflect
+        # real people. Members the gateway hasn't chunked yet read as offline too.
+        online = idle = dnd = 0
+        for m in g.members:
+            if m.bot:
+                continue
+            if m.status is discord.Status.online:
+                online += 1
+            elif m.status is discord.Status.idle:
+                idle += 1
+            elif m.status is discord.Status.dnd:
+                dnd += 1
+        offline = max(0, humans - online - idle - dnd)
+        presence_val = (
+            "🟢 "
+            + str(online)
+            + " online · 🟡 "
+            + str(idle)
+            + " idle\n🔴 "
+            + str(dnd)
+            + " dnd · ⚫ "
+            + str(offline)
+            + " offline"
+        )
+        e.add_field(name="📡 Presence", value=presence_val, inline=True)
+
         channels_val = (
             "📝 "
             + str(text_ch)

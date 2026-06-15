@@ -31,6 +31,7 @@ _ALL_COGS = (
     "cogs.leveling",
     "cogs.economy",
     "cogs.gatekeeper",
+    "cogs.liverole",
     "cogs.debug",
 )
 
