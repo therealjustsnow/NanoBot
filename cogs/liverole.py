@@ -70,6 +70,50 @@ def _fill(template: str, member: discord.Member, activity) -> str:
 class LiveRole(commands.Cog):
     def __init__(self, bot: commands.Bot):
         self.bot = bot
+        # on_ready can fire more than once (reconnects); reconcile only the first.
+        self._reconciled = False
+
+    # ── Startup reconciliation ────────────────────────────────────────────────
+    @commands.Cog.listener()
+    async def on_ready(self) -> None:
+        # A member can start/stop streaming while the bot is down, so the
+        # PRESENCE_UPDATE transition is never seen. Sweep every guild once at
+        # startup and bring the live role in line with current presence. Roles
+        # only — no go-live announcements fire here, or a restart would re-ping
+        # everyone who is already live.
+        if self._reconciled:
+            return
+        self._reconciled = True
+        for guild in self.bot.guilds:
+            try:
+                await self._reconcile_guild(guild)
+            except Exception:
+                log.exception("Live-role reconcile failed for guild %s", guild.id)
+
+    async def _reconcile_guild(self, guild: discord.Guild) -> None:
+        cfg = await db.get_liverole_config(guild.id)
+        if not cfg or not cfg["enabled"]:
+            return
+        role = self._resolve_role(guild, cfg)
+        if role is None:
+            return
+        for member in guild.members:
+            if member.bot:
+                continue
+            live = _is_streaming(member)
+            has_role = role in member.roles
+            if live and not has_role:
+                try:
+                    await member.add_roles(role, reason="Live-role reconcile (startup)")
+                except (discord.Forbidden, discord.HTTPException):
+                    pass
+            elif has_role and not live:
+                try:
+                    await member.remove_roles(
+                        role, reason="Live-role reconcile (startup)"
+                    )
+                except (discord.Forbidden, discord.HTTPException):
+                    pass
 
     # ── Presence listener ─────────────────────────────────────────────────────
     @commands.Cog.listener()
