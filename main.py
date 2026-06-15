@@ -147,6 +147,7 @@ _ALL_COGS = (
     "cogs.leveling",
     "cogs.economy",
     "cogs.gatekeeper",
+    "cogs.liverole",
     "cogs.debug",
 )
 
@@ -211,9 +212,12 @@ class NanoBot(commands.Bot):
         intents = discord.Intents.default()
         intents.message_content = True
         intents.members = True
-        # Privileged intent: without it member.status is always "offline", so the
-        # /user (n!user) info card can't show real presence. Must also be toggled
-        # on in the Discord Developer Portal → Bot → Presence Intent.
+        # Privileged intent: powers every presence-aware feature — the /user info
+        # card status/activity, the /server online breakdown, and the liverole cog
+        # (streaming auto-role + go-live notifications, both driven by
+        # PRESENCE_UPDATE). Without it member.status is always "offline" and no
+        # presence events fire. Must also be toggled on in the Discord Developer
+        # Portal → Bot → Presence Intent.
         intents.presences = True
 
         super().__init__(

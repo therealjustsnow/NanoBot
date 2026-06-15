@@ -22,6 +22,7 @@ _CATEGORY_ORDER: list[str] = [
     "📋 Audit Log",
     "🛡️ Auto Mod",
     "🎛️ Role Panels",
+    "🔴 Live Roles",
     "🗳️ Voting",
     "🎵 Music",
     "🎉 Fun",
@@ -132,6 +133,34 @@ _SLASH_GROUPS: list[dict] = [
         ],
         "perms": "Manage Roles",
         "example": "/roles panel create Colours Pick your colour!\n/roles add Colours @Red 🔴\n/roles panel post Colours #roles",
+    },
+    {
+        "name": "liverole",
+        "aliases": [],
+        "category": "🔴 Live Roles",
+        "short": "Auto-role + notifications when members go live",
+        "usage": "/liverole <setup|enable|disable|role|channel|announce|message|status>",
+        "desc": (
+            "Watches member presence and reacts when someone starts streaming "
+            "(Twitch/YouTube live, sets a Streaming status).\n\n"
+            "**Live role:** assign a role while a member is live, remove it when they stop.\n"
+            "**Go-live notifications:** post an announcement to a channel when a member goes live.\n\n"
+            "**Setup:** /liverole setup @Live #go-live → /liverole enable"
+        ),
+        "args": [
+            ("setup [role] [channel]", "Set the live role and/or announcement channel"),
+            ("enable / disable", "Master on/off switch (config is preserved)"),
+            ("role <role>", "Set the role granted while a member is live"),
+            ("channel <channel>", "Set the go-live announcement channel"),
+            ("announce <on/off>", "Toggle go-live announcements"),
+            (
+                "message <text>",
+                "Customize the announcement ({mention} {user} {title} {url} {game})",
+            ),
+            ("status", "Show current configuration"),
+        ],
+        "perms": "Manage Roles",
+        "example": "/liverole setup @Live #go-live\n/liverole enable\n/liverole message {mention} is now live: {title} {url}",
     },
 ]
 
