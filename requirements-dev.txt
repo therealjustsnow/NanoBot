@@ -2,7 +2,7 @@
 # Install with: pip install -r requirements-dev.txt
 # Requires requirements.txt to already be installed (discord.py is needed by utils/helpers.py)
 
-pytest>=9.0.3
+pytest>=9.1.0
 pytest-asyncio>=1.4.0
 dpytest>=0.7.0
 
