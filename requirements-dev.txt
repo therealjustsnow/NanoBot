@@ -12,5 +12,5 @@ sqlcipher3-binary>=0.6.0
 
 # Linting / formatting (also wired into .pre-commit-config.yaml)
 black>=26.5.1
-ruff>=0.15.16
+ruff>=0.15.17
 pre-commit>=4.6.0
