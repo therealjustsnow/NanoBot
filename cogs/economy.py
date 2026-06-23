@@ -4,17 +4,18 @@ Per-guild NanoCoin economy.
 
 Members hold a coin balance, claim a daily reward (with a consecutive-day
 streak bonus), and pay each other. They also reward co-op activity: /report
-tags a partner who confirms with a button, granting both spendable coins and a
-lifetime contribution stat that drives a separate contributor leaderboard and
-rank titles. Coins are spent in a per-guild shop on Discord roles (granted
-instantly) or custom rewards (queued for a mod to fulfil), with optional stock
-counts, per-user limits, and cooldowns. Admins grant/take coins, view a rich
-list, and customise the currency name, emoji, daily amount, streak bonus, and
-co-op reward.
+tags a partner who confirms with a button, and /raid opens a join board for a
+whole group (the host or a mod presses Finish to pay the party) — both grant
+spendable coins and a lifetime contribution stat that drives a separate
+contributor leaderboard and rank titles. Coins are spent in a per-guild shop on
+Discord roles (granted instantly) or custom rewards (queued for a mod to
+fulfil), with optional stock counts, per-user limits, and cooldowns. Admins
+grant/take coins, view a rich list, and customise the currency name, emoji,
+daily amount, streak bonus, co-op reward, and raid reward/party size.
 
-Slash command budget: four flat commands (/balance, /daily, /pay, /report)
-plus two groups (/coin …, /shop …) whose subcommands cost no extra top-level
-slots.
+Slash command budget: five flat commands (/balance, /daily, /pay, /report,
+/raid) plus two groups (/coin …, /shop …) whose subcommands cost no extra
+top-level slots.
 
 ──────────────────────────────────────────────────────
 Commands
@@ -23,6 +24,7 @@ Commands
   /daily                         → claim the daily reward
   /pay <member> <amount>         → send coins to someone
   /report <member> [activity]    → co-op reward, partner confirms (alias: coop)
+  /raid [activity]               → group co-op join board (alias: event)
   /coin top [page]               → richest members
   /coin contrib [page]           → top contributors (alias: contributions)
   /coin gamble <amount>          → bet coins to double them (alias: bet)
@@ -32,6 +34,8 @@ Commands
   /coin daily <amount>           → set daily reward (Manage Server)
   /coin streakbonus <amount>     → per-day bonus    (Manage Server)
   /coin coop <amount>            → set co-op reward (Manage Server)
+  /coin raid <amount>            → set raid reward  (Manage Server)
+  /coin raidsize <min> <max>     → set party size   (Manage Server)
   /coin name <text>              → currency name    (Manage Server)
   /coin emoji <emoji>            → currency emoji   (Manage Server)
   /coin config                   → show settings    (Manage Server)
@@ -74,6 +78,9 @@ COIN_MAX = 1_000_000_000
 
 # How long a /report co-op reward waits for the partner to confirm.
 COOP_CONFIRM_TIMEOUT = 120
+
+# How long an open /raid board stays joinable before it auto-expires unpaid.
+RAID_TIMEOUT = 1800  # 30 min
 
 # Contribution rank titles, awarded by leaderboard position. The first match
 # (lowest threshold the rank meets) wins; everyone ranked gets at least Member.
@@ -220,6 +227,149 @@ class ReportView(discord.ui.View):
             child.disabled = True
         await interaction.response.edit_message(
             embed=h.warn("Co-op report declined.", "✖️ Declined"), view=self
+        )
+        self.stop()
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+#  /raid  group-co-op join board
+# ══════════════════════════════════════════════════════════════════════════════
+class RaidView(discord.ui.View):
+    """Open join board for a group co-op (raid, event, big dungeon).
+
+    Anyone in the server can Join (clicking is their own confirmation) up to the
+    guild's party cap; the host or a Manage-Server mod presses Finish to pay
+    everyone who joined, or Cancel to scrap it. Short-lived and in-memory — an
+    open board simply expires on bot restart or after RAID_TIMEOUT.
+    """
+
+    def __init__(self, cog: "Economy", host_id: int, activity: str):
+        super().__init__(timeout=RAID_TIMEOUT)
+        self.cog = cog
+        self.host_id = host_id
+        self.activity = activity
+        # Host counts as the first participant; dict keeps stable join order.
+        self.participants: dict[int, None] = {host_id: None}
+        self.message: Optional[discord.Message] = None
+        self.resolved = False
+
+    def _can_manage(self, user: discord.Member) -> bool:
+        return user.id == self.host_id or user.guild_permissions.manage_guild
+
+    async def _embed(self, cfg: dict) -> discord.Embed:
+        what = f"\n**Activity:** {self.activity}" if self.activity else ""
+        names = "\n".join(f"• <@{uid}>" for uid in self.participants)
+        reward = self.cog._money(cfg, cfg["raid_reward"])
+        need = cfg["raid_min"]
+        body = (
+            f"Hosted by <@{self.host_id}>.{what}\n\n"
+            f"Press **Join** to take part — everyone who joins earns {reward} "
+            f"+ contribution when the host presses **Finish**.\n"
+            f"*Need at least {need} members · {len(self.participants)}/"
+            f"{cfg['raid_max']} joined.*\n\n"
+            f"**Party ({len(self.participants)}):**\n{names}"
+        )
+        return h.embed("⚔️ Raid Party", body, h.BLUE)
+
+    async def _refresh(self, interaction: discord.Interaction, cfg: dict):
+        await interaction.response.edit_message(embed=await self._embed(cfg), view=self)
+
+    async def on_timeout(self):
+        if self.resolved or self.message is None:
+            return
+        for child in self.children:
+            child.disabled = True
+        try:
+            await self.message.edit(
+                embed=h.warn(
+                    "Raid expired — host didn't finish it in time.", "⏳ Expired"
+                ),
+                view=self,
+            )
+        except discord.HTTPException:
+            pass
+
+    @discord.ui.button(label="Join", style=discord.ButtonStyle.primary, emoji="⚔️")
+    async def join(self, interaction: discord.Interaction, button: discord.ui.Button):
+        if interaction.user.bot:
+            return
+        cfg = await self.cog._cfg(interaction.guild.id)
+        if interaction.user.id in self.participants:
+            return await interaction.response.send_message(
+                embed=h.warn("You're already in the party."), ephemeral=True
+            )
+        if len(self.participants) >= cfg["raid_max"]:
+            return await interaction.response.send_message(
+                embed=h.err(f"Party is full ({cfg['raid_max']})."), ephemeral=True
+            )
+        self.participants[interaction.user.id] = None
+        await self._refresh(interaction, cfg)
+
+    @discord.ui.button(label="Leave", style=discord.ButtonStyle.secondary, emoji="🚪")
+    async def leave(self, interaction: discord.Interaction, button: discord.ui.Button):
+        cfg = await self.cog._cfg(interaction.guild.id)
+        if interaction.user.id == self.host_id:
+            return await interaction.response.send_message(
+                embed=h.warn("The host can't leave — use **Cancel** to scrap it."),
+                ephemeral=True,
+            )
+        if interaction.user.id not in self.participants:
+            return await interaction.response.send_message(
+                embed=h.warn("You're not in the party."), ephemeral=True
+            )
+        del self.participants[interaction.user.id]
+        await self._refresh(interaction, cfg)
+
+    @discord.ui.button(label="Finish", style=discord.ButtonStyle.success, emoji="✅")
+    async def finish(self, interaction: discord.Interaction, button: discord.ui.Button):
+        if not self._can_manage(interaction.user):
+            return await interaction.response.send_message(
+                embed=h.err("Only the host or a server manager can finish the raid."),
+                ephemeral=True,
+            )
+        cfg = await self.cog._cfg(interaction.guild.id)
+        if len(self.participants) < cfg["raid_min"]:
+            return await interaction.response.send_message(
+                embed=h.err(
+                    f"Need at least {cfg['raid_min']} members to pay out "
+                    f"(only {len(self.participants)} joined)."
+                ),
+                ephemeral=True,
+            )
+        self.resolved = True
+        reward = cfg["raid_reward"]
+        guild_id = interaction.guild.id
+        for uid in self.participants:
+            await db.add_coins(guild_id, uid, reward)
+            await db.add_contribution(guild_id, uid, reward)
+        for child in self.children:
+            child.disabled = True
+        what = f" for **{self.activity}**" if self.activity else ""
+        roster = ", ".join(f"<@{uid}>" for uid in self.participants)
+        await interaction.response.edit_message(
+            embed=h.ok(
+                f"⚔️ Raid complete{what}! **{len(self.participants)}** members "
+                f"each earned {self.cog._money(cfg, reward)} + "
+                f"**{reward:,}** contribution.\n\n{roster}",
+                "Raid Rewards Paid",
+            ),
+            view=self,
+        )
+        self.stop()
+
+    @discord.ui.button(label="Cancel", style=discord.ButtonStyle.danger, emoji="✖️")
+    async def cancel(self, interaction: discord.Interaction, button: discord.ui.Button):
+        if not self._can_manage(interaction.user):
+            return await interaction.response.send_message(
+                embed=h.err("Only the host or a server manager can cancel the raid."),
+                ephemeral=True,
+            )
+        self.resolved = True
+        for child in self.children:
+            child.disabled = True
+        await interaction.response.edit_message(
+            embed=h.warn("Raid cancelled — no coins awarded.", "✖️ Cancelled"),
+            view=self,
         )
         self.stop()
 
@@ -657,6 +807,16 @@ class Economy(commands.Cog):
             value=f"{cfg['coop_reward']:,}/person",
             inline=True,
         )
+        embed.add_field(
+            name="Raid reward",
+            value=f"{cfg['raid_reward']:,}/person",
+            inline=True,
+        )
+        embed.add_field(
+            name="Raid party",
+            value=f"{cfg['raid_min']}–{cfg['raid_max']} members",
+            inline=True,
+        )
         await ctx.reply(embed=embed)
 
     # ── /coin contrib ─────────────────────────────────────────────────────────────
@@ -724,6 +884,59 @@ class Economy(commands.Cog):
             )
         )
 
+    # ── /coin raid (set raid reward) ──────────────────────────────────────────────
+    @coin.command(
+        name="raid",
+        description="Set the coins each member earns per finished /raid.",
+    )
+    @app_commands.describe(amount="Coins awarded to EACH participant per finished raid")
+    @commands.has_permissions(manage_guild=True)
+    async def coin_raid(self, ctx: commands.Context, amount: int):
+        if amount < 0:
+            return await ctx.reply(
+                embed=h.err("Amount can't be negative."), ephemeral=True
+            )
+        if amount > COIN_MAX:
+            return await ctx.reply(
+                embed=h.err(f"Amount can't exceed {COIN_MAX:,}."), ephemeral=True
+            )
+        await db.set_econ_config(ctx.guild.id, raid_reward=amount)
+        cfg = await self._cfg(ctx.guild.id)
+        await ctx.reply(
+            embed=h.ok(
+                f"Raid reward set to {self._money(cfg, amount)} per person.\n"
+                f"Set to **0** to disable `/raid`."
+            )
+        )
+
+    # ── /coin raidsize (set party bounds) ─────────────────────────────────────────
+    @coin.command(
+        name="raidsize",
+        description="Set the minimum and maximum raid party size.",
+    )
+    @app_commands.describe(
+        minimum="Fewest members needed to pay out a raid",
+        maximum="Most members who can join a raid",
+    )
+    @commands.has_permissions(manage_guild=True)
+    async def coin_raidsize(self, ctx: commands.Context, minimum: int, maximum: int):
+        if minimum < 2:
+            return await ctx.reply(
+                embed=h.err("Minimum must be at least 2."), ephemeral=True
+            )
+        if maximum < minimum:
+            return await ctx.reply(
+                embed=h.err("Maximum can't be below the minimum."), ephemeral=True
+            )
+        if maximum > 100:
+            return await ctx.reply(
+                embed=h.err("Maximum can't exceed 100."), ephemeral=True
+            )
+        await db.set_econ_config(ctx.guild.id, raid_min=minimum, raid_max=maximum)
+        await ctx.reply(
+            embed=h.ok(f"Raid party size set to **{minimum}–{maximum}** members.")
+        )
+
     # ══════════════════════════════════════════════════════════════════════════
     #  /report  — flat, co-op activity reward
     # ══════════════════════════════════════════════════════════════════════════
@@ -787,6 +1000,44 @@ class Economy(commands.Cog):
             h.BLUE,
         )
         msg = await ctx.reply(content=member.mention, embed=embed, view=view)
+        view.message = msg
+
+    # ══════════════════════════════════════════════════════════════════════════
+    #  /raid  — flat, group-co-op join board
+    # ══════════════════════════════════════════════════════════════════════════
+    @commands.hybrid_command(
+        name="raid",
+        aliases=["event"],
+        description="Start a group co-op anyone can join — the whole party earns coins!",
+        extras={
+            "category": "🪙 Economy",
+            "short": "Group co-op reward board",
+            "usage": "raid [activity]",
+            "desc": "Opens a join board for a big group activity (a raid, an event, a "
+            "world boss). Members press Join to take part; you (the host) or a "
+            "server manager press Finish to pay the whole party coins + contribution.",
+            "args": ["activity — what the group is doing (optional)"],
+            "perms": "None to start; Finish/Cancel is host or Manage Server",
+            "example": "{prefix}raid molten core run",
+        },
+    )
+    @commands.guild_only()
+    @app_commands.describe(activity="What the group is doing (optional)")
+    @commands.cooldown(1, 15, commands.BucketType.user)
+    async def raid(self, ctx: commands.Context, *, activity: Optional[str] = None):
+        cfg = await self._cfg(ctx.guild.id)
+        if cfg["raid_reward"] <= 0:
+            return await ctx.reply(
+                embed=h.warn(
+                    "Raid rewards are disabled. An admin can enable them with "
+                    "`/coin raid <amount>`.",
+                    "Disabled",
+                ),
+                ephemeral=True,
+            )
+        activity = (activity or "").strip()[:200]
+        view = RaidView(self, ctx.author.id, activity)
+        msg = await ctx.reply(embed=await view._embed(cfg), view=view)
         view.message = msg
 
     # ══════════════════════════════════════════════════════════════════════════

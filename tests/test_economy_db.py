@@ -150,6 +150,24 @@ async def test_config_defaults_and_partial_update():
     assert cfg["daily_amount"] == 100  # untouched
 
 
+async def test_coop_and_raid_config_defaults_and_update():
+    cfg = await db.get_econ_config(G)
+    assert cfg["coop_reward"] == 50
+    assert cfg["raid_reward"] == 100
+    assert cfg["raid_min"] == 3
+    assert cfg["raid_max"] == 20
+
+    await db.set_econ_config(
+        G, coop_reward=75, raid_reward=500, raid_min=5, raid_max=40
+    )
+    cfg = await db.get_econ_config(G)
+    assert cfg["coop_reward"] == 75
+    assert cfg["raid_reward"] == 500
+    assert cfg["raid_min"] == 5
+    assert cfg["raid_max"] == 40
+    assert cfg["daily_amount"] == 100  # untouched
+
+
 # ── Contribution (lifetime co-op stat) ───────────────────────────────────────────
 async def test_contribution_accumulates_independent_of_coins():
     assert await db.get_contribution(G, A) == 0

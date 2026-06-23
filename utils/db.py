@@ -2551,7 +2551,14 @@ async def _ensure_economy_tables():
     # the per-confirmed-co-op reward knob — added after the baseline tables.
     await _ensure_columns("economy", {"contribution": "INTEGER NOT NULL DEFAULT 0"})
     await _ensure_columns(
-        "economy_config", {"coop_reward": "INTEGER NOT NULL DEFAULT 50"}
+        "economy_config",
+        {
+            "coop_reward": "INTEGER NOT NULL DEFAULT 50",
+            # Group-raid reward (per participant) + party-size bounds.
+            "raid_reward": "INTEGER NOT NULL DEFAULT 100",
+            "raid_min": "INTEGER NOT NULL DEFAULT 3",
+            "raid_max": "INTEGER NOT NULL DEFAULT 20",
+        },
     )
     await _conn().execute(
         "CREATE INDEX IF NOT EXISTS economy_guild_contrib "
@@ -2751,7 +2758,8 @@ async def set_daily_state(
 # ── Config ─────────────────────────────────────────────────────────────────────
 async def get_econ_config(guild_id: int) -> dict:
     async with _conn().execute(
-        "SELECT daily_amount, streak_bonus, currency_name, currency_emoji, coop_reward "
+        "SELECT daily_amount, streak_bonus, currency_name, currency_emoji, "
+        "coop_reward, raid_reward, raid_min, raid_max "
         "FROM economy_config WHERE guild_id=?",
         (str(guild_id),),
     ) as cur:
@@ -2763,6 +2771,9 @@ async def get_econ_config(guild_id: int) -> dict:
             "currency_name": row["currency_name"],
             "currency_emoji": row["currency_emoji"],
             "coop_reward": row["coop_reward"],
+            "raid_reward": row["raid_reward"],
+            "raid_min": row["raid_min"],
+            "raid_max": row["raid_max"],
         }
     return {
         "daily_amount": 100,
@@ -2770,6 +2781,9 @@ async def get_econ_config(guild_id: int) -> dict:
         "currency_name": "NanoCoin",
         "currency_emoji": "🪙",
         "coop_reward": 50,
+        "raid_reward": 100,
+        "raid_min": 3,
+        "raid_max": 20,
     }
 
 
@@ -2779,11 +2793,13 @@ async def set_econ_config(guild_id: int, **kwargs) -> None:
     await _conn().execute(
         "INSERT INTO economy_config "
         "(guild_id, daily_amount, streak_bonus, currency_name, currency_emoji, "
-        "coop_reward) "
-        "VALUES (?,?,?,?,?,?) "
+        "coop_reward, raid_reward, raid_min, raid_max) "
+        "VALUES (?,?,?,?,?,?,?,?,?) "
         "ON CONFLICT(guild_id) DO UPDATE SET daily_amount=excluded.daily_amount, "
         "streak_bonus=excluded.streak_bonus, currency_name=excluded.currency_name, "
-        "currency_emoji=excluded.currency_emoji, coop_reward=excluded.coop_reward",
+        "currency_emoji=excluded.currency_emoji, coop_reward=excluded.coop_reward, "
+        "raid_reward=excluded.raid_reward, raid_min=excluded.raid_min, "
+        "raid_max=excluded.raid_max",
         (
             str(guild_id),
             int(current["daily_amount"]),
@@ -2791,6 +2807,9 @@ async def set_econ_config(guild_id: int, **kwargs) -> None:
             str(current["currency_name"]),
             str(current["currency_emoji"]),
             int(current["coop_reward"]),
+            int(current["raid_reward"]),
+            int(current["raid_min"]),
+            int(current["raid_max"]),
         ),
     )
     await _conn().commit()
