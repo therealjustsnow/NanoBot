@@ -543,7 +543,12 @@ class Birthday(commands.Cog):
         today: date,
         gif_url: str | None = None,
     ) -> discord.Embed:
-        age = age_on(bd["month"], bd["day"], bd.get("year"), today)
+        # The announcement celebrates the birthday itself, so report the age the
+        # member turns on that day — not their age as of `today`. On the real
+        # announce `today` is the birthday (next occurrence == today); for a
+        # `/birthday test` preview before the day this still shows the upcoming age.
+        bday = next_birthday_date(bd["month"], bd["day"], today)
+        age = age_on(bd["month"], bd["day"], bd.get("year"), bday)
         template = cfg["message"] or _DEFAULT_MESSAGE
         e = h.embed(
             "🎂 Happy Birthday!",
