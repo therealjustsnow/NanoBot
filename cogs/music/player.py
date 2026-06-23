@@ -906,32 +906,40 @@ class GuildPlayer:
         self._next.set()
         self._added.set()
 
-        if self._predl_task and not self._predl_task.done():
-            self._predl_task.cancel()
-        if self._alone_task and not self._alone_task.done():
-            self._alone_task.cancel()
-        self._cleanup_downloads()
+        # Everything below can await/raise (task cancels, voice disconnect). Wrap
+        # it so the player is always removed from the registry and the presence is
+        # refreshed even if teardown half-fails — otherwise a stale "Streaming"
+        # status would stick after the bot leaves voice.
+        try:
+            if self._predl_task and not self._predl_task.done():
+                self._predl_task.cancel()
+            if self._alone_task and not self._alone_task.done():
+                self._alone_task.cancel()
+            self._cleanup_downloads()
 
-        for task in (self._loop_task, self._refresh_task):
-            if task and task is not asyncio.current_task():
-                task.cancel()
+            for task in (self._loop_task, self._refresh_task):
+                if task and task is not asyncio.current_task():
+                    task.cancel()
 
-        for task in list(self._bg_tasks):
-            if task is not asyncio.current_task():
-                task.cancel()
+            for task in list(self._bg_tasks):
+                if task is not asyncio.current_task():
+                    task.cancel()
 
-        await self._retire_now_playing(delete=False)
+            await self._retire_now_playing(delete=False)
 
-        if self.voice and self.voice.is_connected():
+            if self.voice and self.voice.is_connected():
+                try:
+                    await self.voice.disconnect(force=True)
+                except Exception:
+                    pass
+            else:
+                # No VoiceClient to disconnect, but the gateway may still think
+                # we're in a channel (a crashed/timed-out handshake leaves that
+                # ghost). Clear it so the bot doesn't linger in voice.
+                await self.cog._clear_ghost_voice(self.guild)
+        finally:
+            self.cog.players.pop(self.guild.id, None)
             try:
-                await self.voice.disconnect(force=True)
+                await self.cog._refresh_presence()
             except Exception:
-                pass
-        else:
-            # No VoiceClient to disconnect, but the gateway may still think we're
-            # in a channel (a crashed/timed-out handshake leaves that ghost).
-            # Clear it so the bot doesn't linger in voice after a stop/teardown.
-            await self.cog._clear_ghost_voice(self.guild)
-
-        self.cog.players.pop(self.guild.id, None)
-        await self.cog._refresh_presence()
+                log.debug("Presence refresh failed during destroy", exc_info=True)

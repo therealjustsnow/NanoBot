@@ -10,6 +10,8 @@ with light fakes — no live gateway (which dpytest can't simulate anyway):
 - ``Music._clear_ghost_voice()`` issues a gateway voice-state leave only when
   Discord still thinks the bot is connected while discord.py holds no
   VoiceClient (the "ghost" state).
+- ``Music.on_voice_state_update`` tears the player down when the bot itself is
+  disconnected from voice, so a stale "Streaming" presence can't stick.
 
 Both objects are built with ``__new__`` to skip ``__init__`` (which spins up
 asyncio loop tasks and needs a live bot).
@@ -148,3 +150,60 @@ class TestClearGhostVoice:
             change_voice_state=boom,
         )
         assert await cog._clear_ghost_voice(guild) is False
+
+
+# ---------------------------------------------------------------------------
+# Music.on_voice_state_update — bot's own disconnect tears the player down so a
+# stale Streaming presence can't stick after the bot leaves voice.
+# ---------------------------------------------------------------------------
+
+
+def _make_cog_with_bot(players):
+    cog = Music.__new__(Music)
+    cog.bot = types.SimpleNamespace(user=types.SimpleNamespace(id=999))
+    cog.players = players
+    refreshed = {"count": 0}
+
+    async def _refresh():
+        refreshed["count"] += 1
+
+    cog._refresh_presence = _refresh
+    return cog, refreshed
+
+
+def _vs(channel):
+    return types.SimpleNamespace(channel=channel)
+
+
+class TestSelfDisconnectTeardown:
+    async def test_bot_disconnect_destroys_live_player(self):
+        destroyed = {"called": False}
+
+        async def _destroy(*_a, **_k):
+            destroyed["called"] = True
+
+        player = types.SimpleNamespace(_destroyed=False, destroy=_destroy)
+        cog, _ = _make_cog_with_bot({7: player})
+        member = types.SimpleNamespace(id=999, guild=types.SimpleNamespace(id=7))
+        await cog.on_voice_state_update(member, _vs(object()), _vs(None))
+        assert destroyed["called"] is True
+
+    async def test_bot_disconnect_without_player_refreshes_presence(self):
+        cog, refreshed = _make_cog_with_bot({})
+        member = types.SimpleNamespace(id=999, guild=types.SimpleNamespace(id=7))
+        await cog.on_voice_state_update(member, _vs(object()), _vs(None))
+        assert refreshed["count"] == 1
+
+    async def test_bot_move_between_channels_is_not_a_teardown(self):
+        destroyed = {"called": False}
+
+        async def _destroy(*_a, **_k):
+            destroyed["called"] = True
+
+        player = types.SimpleNamespace(_destroyed=False, destroy=_destroy)
+        cog, refreshed = _make_cog_with_bot({7: player})
+        member = types.SimpleNamespace(id=999, guild=types.SimpleNamespace(id=7))
+        # after.channel is not None → moved, not disconnected.
+        await cog.on_voice_state_update(member, _vs(object()), _vs(object()))
+        assert destroyed["called"] is False
+        assert refreshed["count"] == 0
