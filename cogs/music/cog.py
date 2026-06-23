@@ -674,6 +674,24 @@ class Music(commands.Cog):
     # ── follow + auto-disconnect when left alone ────────────────────────────────
     @commands.Cog.listener()
     async def on_voice_state_update(self, member, before, after):
+        # The bot's own voice state: if it was disconnected (kicked, moved out,
+        # or a gateway drop) the player can be left alive with a track still
+        # "current", which pins the global Streaming presence on forever. Tear it
+        # down so the presence resets. (destroy() is guarded against re-entry, so
+        # this is a no-op when we disconnected ourselves via stop/idle.)
+        if member.id == self.bot.user.id:
+            if before.channel is not None and after.channel is None:
+                player = self.players.get(member.guild.id)
+                if player and not player._destroyed:
+                    await player.destroy(
+                        reason="voice disconnected", persist_clear=False
+                    )
+                else:
+                    # No live player to tear down — make sure a stale streaming
+                    # presence from a previous session is still cleared.
+                    await self._refresh_presence()
+            return
+
         if member.bot:
             return
         player = self.players.get(member.guild.id)
