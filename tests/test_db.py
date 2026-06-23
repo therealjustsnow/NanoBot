@@ -81,6 +81,7 @@ async def database(monkeypatch):
     await db._migrate_auditlog_null_events()
     await db._ensure_automod_tables()
     await db._ensure_gatekeeper_tables()
+    await db._ensure_birthday_tables()
 
     yield conn
 

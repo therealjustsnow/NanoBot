@@ -148,6 +148,7 @@ _ALL_COGS = (
     "cogs.economy",
     "cogs.gatekeeper",
     "cogs.liverole",
+    "cogs.birthday",
     "cogs.debug",
 )
 
