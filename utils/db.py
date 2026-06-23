@@ -2547,6 +2547,62 @@ async def _ensure_economy_tables():
         )
     """)
     await _conn().commit()
+    # Lifetime co-op contribution stat (never decreases when coins are spent) and
+    # the per-confirmed-co-op reward knob — added after the baseline tables.
+    await _ensure_columns("economy", {"contribution": "INTEGER NOT NULL DEFAULT 0"})
+    await _ensure_columns(
+        "economy_config", {"coop_reward": "INTEGER NOT NULL DEFAULT 50"}
+    )
+    await _conn().execute(
+        "CREATE INDEX IF NOT EXISTS economy_guild_contrib "
+        "ON economy (guild_id, contribution DESC)"
+    )
+    # Shop: redeemable rewards mods configure, and a purchase ledger that backs
+    # per-user limits, cooldowns, stock counts, and custom-reward fulfilment.
+    await _conn().execute("""
+        CREATE TABLE IF NOT EXISTS shop_items (
+            id              INTEGER PRIMARY KEY AUTOINCREMENT,
+            guild_id        TEXT NOT NULL,
+            name            TEXT NOT NULL,
+            description     TEXT NOT NULL DEFAULT '',
+            price           INTEGER NOT NULL,
+            kind            TEXT NOT NULL,
+            role_id         TEXT,
+            payload         TEXT NOT NULL DEFAULT '',
+            stock           INTEGER NOT NULL DEFAULT -1,
+            per_user_limit  INTEGER NOT NULL DEFAULT 0,
+            cooldown        INTEGER NOT NULL DEFAULT 0,
+            enabled         INTEGER NOT NULL DEFAULT 1,
+            created_at      REAL NOT NULL DEFAULT 0,
+            UNIQUE (guild_id, name)
+        )
+    """)
+    await _conn().execute(
+        "CREATE INDEX IF NOT EXISTS shop_items_guild ON shop_items (guild_id)"
+    )
+    await _conn().execute("""
+        CREATE TABLE IF NOT EXISTS shop_purchases (
+            id            INTEGER PRIMARY KEY AUTOINCREMENT,
+            guild_id      TEXT NOT NULL,
+            item_id       INTEGER NOT NULL,
+            user_id       TEXT NOT NULL,
+            item_name     TEXT NOT NULL,
+            kind          TEXT NOT NULL,
+            price         INTEGER NOT NULL,
+            bought_at     REAL NOT NULL,
+            fulfilled     INTEGER NOT NULL DEFAULT 0,
+            fulfilled_by  TEXT
+        )
+    """)
+    await _conn().execute(
+        "CREATE INDEX IF NOT EXISTS shop_purchases_user "
+        "ON shop_purchases (guild_id, item_id, user_id)"
+    )
+    await _conn().execute(
+        "CREATE INDEX IF NOT EXISTS shop_purchases_pending "
+        "ON shop_purchases (guild_id, kind, fulfilled)"
+    )
+    await _conn().commit()
 
 
 # ── Balances ───────────────────────────────────────────────────────────────────
@@ -2695,7 +2751,7 @@ async def set_daily_state(
 # ── Config ─────────────────────────────────────────────────────────────────────
 async def get_econ_config(guild_id: int) -> dict:
     async with _conn().execute(
-        "SELECT daily_amount, streak_bonus, currency_name, currency_emoji "
+        "SELECT daily_amount, streak_bonus, currency_name, currency_emoji, coop_reward "
         "FROM economy_config WHERE guild_id=?",
         (str(guild_id),),
     ) as cur:
@@ -2706,12 +2762,14 @@ async def get_econ_config(guild_id: int) -> dict:
             "streak_bonus": row["streak_bonus"],
             "currency_name": row["currency_name"],
             "currency_emoji": row["currency_emoji"],
+            "coop_reward": row["coop_reward"],
         }
     return {
         "daily_amount": 100,
         "streak_bonus": 0,
         "currency_name": "NanoCoin",
         "currency_emoji": "🪙",
+        "coop_reward": 50,
     }
 
 
@@ -2720,20 +2778,377 @@ async def set_econ_config(guild_id: int, **kwargs) -> None:
     current.update(kwargs)
     await _conn().execute(
         "INSERT INTO economy_config "
-        "(guild_id, daily_amount, streak_bonus, currency_name, currency_emoji) "
-        "VALUES (?,?,?,?,?) "
+        "(guild_id, daily_amount, streak_bonus, currency_name, currency_emoji, "
+        "coop_reward) "
+        "VALUES (?,?,?,?,?,?) "
         "ON CONFLICT(guild_id) DO UPDATE SET daily_amount=excluded.daily_amount, "
         "streak_bonus=excluded.streak_bonus, currency_name=excluded.currency_name, "
-        "currency_emoji=excluded.currency_emoji",
+        "currency_emoji=excluded.currency_emoji, coop_reward=excluded.coop_reward",
         (
             str(guild_id),
             int(current["daily_amount"]),
             int(current["streak_bonus"]),
             str(current["currency_name"]),
             str(current["currency_emoji"]),
+            int(current["coop_reward"]),
         ),
     )
     await _conn().commit()
+
+
+# ── Contribution (lifetime co-op stat) ───────────────────────────────────────────
+async def add_contribution(guild_id: int, user_id: int, amount: int) -> int:
+    """Add to a member's lifetime contribution total. Returns the new total.
+
+    Single atomic statement (mirrors add_coins) so concurrent co-op confirms
+    can't lose an update. Contribution never decreases on spend.
+    """
+    amount = int(amount)
+    await _conn().execute(
+        "INSERT INTO economy (guild_id, user_id, contribution) VALUES (?,?,MAX(0,?)) "
+        "ON CONFLICT(guild_id, user_id) DO UPDATE SET "
+        "contribution=MAX(0, contribution + ?)",
+        (str(guild_id), str(user_id), amount, amount),
+    )
+    await _conn().commit()
+    return await get_contribution(guild_id, user_id)
+
+
+async def get_contribution(guild_id: int, user_id: int) -> int:
+    async with _conn().execute(
+        "SELECT contribution FROM economy WHERE guild_id=? AND user_id=?",
+        (str(guild_id), str(user_id)),
+    ) as cur:
+        row = await cur.fetchone()
+    return row["contribution"] if row else 0
+
+
+async def get_contrib_rank(guild_id: int, user_id: int) -> tuple[int, int] | None:
+    """Return (rank, contribution) for a member; None if they have no points."""
+    points = await get_contribution(guild_id, user_id)
+    if points <= 0:
+        return None
+    async with _conn().execute(
+        "SELECT COUNT(*) FROM economy WHERE guild_id=? AND contribution > ?",
+        (str(guild_id), points),
+    ) as cur:
+        ahead = (await cur.fetchone())[0]
+    return ahead + 1, points
+
+
+async def get_contrib_leaderboard(
+    guild_id: int, limit: int = 10, offset: int = 0
+) -> list[dict]:
+    async with _conn().execute(
+        "SELECT user_id, contribution FROM economy "
+        "WHERE guild_id=? AND contribution > 0 "
+        "ORDER BY contribution DESC, user_id ASC LIMIT ? OFFSET ?",
+        (str(guild_id), int(limit), int(offset)),
+    ) as cur:
+        rows = await cur.fetchall()
+    return [
+        {"user_id": int(r["user_id"]), "contribution": r["contribution"]} for r in rows
+    ]
+
+
+async def count_contrib(guild_id: int) -> int:
+    async with _conn().execute(
+        "SELECT COUNT(*) FROM economy WHERE guild_id=? AND contribution > 0",
+        (str(guild_id),),
+    ) as cur:
+        return (await cur.fetchone())[0]
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+#  Shop (redeemable rewards + purchase ledger)
+# ══════════════════════════════════════════════════════════════════════════════
+
+
+def _shop_row(row) -> dict:
+    return {
+        "id": row["id"],
+        "name": row["name"],
+        "description": row["description"],
+        "price": row["price"],
+        "kind": row["kind"],
+        "role_id": int(row["role_id"]) if row["role_id"] else None,
+        "payload": row["payload"],
+        "stock": row["stock"],
+        "per_user_limit": row["per_user_limit"],
+        "cooldown": row["cooldown"],
+        "enabled": bool(row["enabled"]),
+    }
+
+
+async def add_shop_item(
+    guild_id: int,
+    name: str,
+    price: int,
+    kind: str,
+    *,
+    description: str = "",
+    role_id: int | None = None,
+    payload: str = "",
+    stock: int = -1,
+    per_user_limit: int = 0,
+    cooldown: int = 0,
+) -> int | None:
+    """Create a shop item. Returns the new item id, or None if the name is taken."""
+    try:
+        cur = await _conn().execute(
+            "INSERT INTO shop_items (guild_id, name, description, price, kind, "
+            "role_id, payload, stock, per_user_limit, cooldown, enabled, created_at) "
+            "VALUES (?,?,?,?,?,?,?,?,?,?,1,?)",
+            (
+                str(guild_id),
+                name,
+                description,
+                int(price),
+                kind,
+                str(role_id) if role_id else None,
+                payload,
+                int(stock),
+                int(per_user_limit),
+                int(cooldown),
+                time.time(),
+            ),
+        )
+    except db_crypto.INTEGRITY_ERRORS:
+        return None
+    await _conn().commit()
+    return cur.lastrowid
+
+
+async def edit_shop_item(guild_id: int, item_id: int, **fields) -> bool:
+    """Update mutable fields of an item. Returns False if nothing matched."""
+    allowed = {
+        "name",
+        "description",
+        "price",
+        "role_id",
+        "payload",
+        "stock",
+        "per_user_limit",
+        "cooldown",
+        "enabled",
+    }
+    sets, params = [], []
+    for key, val in fields.items():
+        if key not in allowed:
+            continue
+        sets.append(f"{key}=?")
+        if key == "role_id":
+            params.append(str(val) if val else None)
+        elif key == "enabled":
+            params.append(1 if val else 0)
+        else:
+            params.append(val)
+    if not sets:
+        return False
+    params += [str(guild_id), int(item_id)]
+    try:
+        cur = await _conn().execute(
+            f"UPDATE shop_items SET {', '.join(sets)} WHERE guild_id=? AND id=?",
+            params,
+        )
+    except db_crypto.INTEGRITY_ERRORS:
+        return False
+    await _conn().commit()
+    return cur.rowcount > 0
+
+
+async def remove_shop_item(guild_id: int, item_id: int) -> bool:
+    cur = await _conn().execute(
+        "DELETE FROM shop_items WHERE guild_id=? AND id=?",
+        (str(guild_id), int(item_id)),
+    )
+    await _conn().commit()
+    return cur.rowcount > 0
+
+
+async def get_shop_item(guild_id: int, item_id: int) -> dict | None:
+    async with _conn().execute(
+        "SELECT * FROM shop_items WHERE guild_id=? AND id=?",
+        (str(guild_id), int(item_id)),
+    ) as cur:
+        row = await cur.fetchone()
+    return _shop_row(row) if row else None
+
+
+async def get_shop_item_by_name(guild_id: int, name: str) -> dict | None:
+    """Case-insensitive name lookup (shop names are unique per guild)."""
+    async with _conn().execute(
+        "SELECT * FROM shop_items WHERE guild_id=? AND name=? COLLATE NOCASE",
+        (str(guild_id), name),
+    ) as cur:
+        row = await cur.fetchone()
+    return _shop_row(row) if row else None
+
+
+async def list_shop_items(
+    guild_id: int, *, enabled_only: bool = False, limit: int = 100, offset: int = 0
+) -> list[dict]:
+    sql = "SELECT * FROM shop_items WHERE guild_id=?"
+    if enabled_only:
+        sql += " AND enabled=1"
+    sql += " ORDER BY price ASC, id ASC LIMIT ? OFFSET ?"
+    async with _conn().execute(sql, (str(guild_id), int(limit), int(offset))) as cur:
+        rows = await cur.fetchall()
+    return [_shop_row(r) for r in rows]
+
+
+async def count_shop_items(guild_id: int, *, enabled_only: bool = False) -> int:
+    sql = "SELECT COUNT(*) FROM shop_items WHERE guild_id=?"
+    if enabled_only:
+        sql += " AND enabled=1"
+    async with _conn().execute(sql, (str(guild_id),)) as cur:
+        return (await cur.fetchone())[0]
+
+
+async def count_user_purchases(guild_id: int, item_id: int, user_id: int) -> int:
+    async with _conn().execute(
+        "SELECT COUNT(*) FROM shop_purchases "
+        "WHERE guild_id=? AND item_id=? AND user_id=?",
+        (str(guild_id), int(item_id), str(user_id)),
+    ) as cur:
+        return (await cur.fetchone())[0]
+
+
+async def last_purchase_time(guild_id: int, item_id: int, user_id: int) -> float:
+    async with _conn().execute(
+        "SELECT MAX(bought_at) FROM shop_purchases "
+        "WHERE guild_id=? AND item_id=? AND user_id=?",
+        (str(guild_id), int(item_id), str(user_id)),
+    ) as cur:
+        row = await cur.fetchone()
+    return row[0] or 0.0
+
+
+async def purchase_item(guild_id: int, item_id: int, user_id: int) -> dict:
+    """Atomically attempt a purchase, enforcing stock, per-user limit, cooldown,
+    and funds.
+
+    Returns a dict with "ok" plus a "reason" on failure
+    ("missing"/"disabled"/"limit"/"cooldown"/"out_of_stock"/"funds"), a
+    "retry_after" for cooldown failures, and on success "item" + "new_balance".
+    Stock is decremented with an atomic conditional UPDATE and refunded if the
+    coin debit then fails, so a sold-out race can never overspend or oversell.
+    """
+    item = await get_shop_item(guild_id, item_id)
+    if not item:
+        return {"ok": False, "reason": "missing"}
+    if not item["enabled"]:
+        return {"ok": False, "reason": "disabled"}
+
+    if item["per_user_limit"] > 0:
+        bought = await count_user_purchases(guild_id, item_id, user_id)
+        if bought >= item["per_user_limit"]:
+            return {"ok": False, "reason": "limit", "item": item}
+    if item["cooldown"] > 0:
+        last = await last_purchase_time(guild_id, item_id, user_id)
+        elapsed = time.time() - last
+        if last and elapsed < item["cooldown"]:
+            return {
+                "ok": False,
+                "reason": "cooldown",
+                "retry_after": int(item["cooldown"] - elapsed),
+                "item": item,
+            }
+
+    # Reserve stock first (atomic), so two buyers can't claim the last unit.
+    if item["stock"] != -1:
+        cur = await _conn().execute(
+            "UPDATE shop_items SET stock=stock-1 "
+            "WHERE guild_id=? AND id=? AND stock>0",
+            (str(guild_id), int(item_id)),
+        )
+        await _conn().commit()
+        if cur.rowcount == 0:
+            return {"ok": False, "reason": "out_of_stock", "item": item}
+
+    # Charge the buyer; refund the reserved stock if they can't afford it.
+    if not await try_debit_coins(guild_id, user_id, item["price"]):
+        if item["stock"] != -1:
+            await _conn().execute(
+                "UPDATE shop_items SET stock=stock+1 WHERE guild_id=? AND id=?",
+                (str(guild_id), int(item_id)),
+            )
+            await _conn().commit()
+        return {"ok": False, "reason": "funds", "item": item}
+
+    await _conn().execute(
+        "INSERT INTO shop_purchases (guild_id, item_id, user_id, item_name, kind, "
+        "price, bought_at, fulfilled) VALUES (?,?,?,?,?,?,?,?)",
+        (
+            str(guild_id),
+            int(item_id),
+            str(user_id),
+            item["name"],
+            item["kind"],
+            item["price"],
+            time.time(),
+            # Role rewards are granted immediately; custom rewards await a mod.
+            1 if item["kind"] == "role" else 0,
+        ),
+    )
+    await _conn().commit()
+    new_balance = await get_balance(guild_id, user_id)
+    return {"ok": True, "item": item, "new_balance": new_balance}
+
+
+async def list_pending_purchases(
+    guild_id: int, limit: int = 25, offset: int = 0
+) -> list[dict]:
+    """Unfulfilled custom-reward purchases, oldest first (the mod fulfil queue)."""
+    async with _conn().execute(
+        "SELECT id, item_id, user_id, item_name, price, bought_at FROM shop_purchases "
+        "WHERE guild_id=? AND kind='custom' AND fulfilled=0 "
+        "ORDER BY bought_at ASC LIMIT ? OFFSET ?",
+        (str(guild_id), int(limit), int(offset)),
+    ) as cur:
+        rows = await cur.fetchall()
+    return [
+        {
+            "id": r["id"],
+            "item_id": r["item_id"],
+            "user_id": int(r["user_id"]),
+            "item_name": r["item_name"],
+            "price": r["price"],
+            "bought_at": r["bought_at"],
+        }
+        for r in rows
+    ]
+
+
+async def count_pending_purchases(guild_id: int) -> int:
+    async with _conn().execute(
+        "SELECT COUNT(*) FROM shop_purchases "
+        "WHERE guild_id=? AND kind='custom' AND fulfilled=0",
+        (str(guild_id),),
+    ) as cur:
+        return (await cur.fetchone())[0]
+
+
+async def fulfill_purchase(guild_id: int, purchase_id: int, mod_id: int) -> dict | None:
+    """Mark a pending custom purchase fulfilled. Returns the purchase, or None."""
+    async with _conn().execute(
+        "SELECT id, user_id, item_name FROM shop_purchases "
+        "WHERE guild_id=? AND id=? AND fulfilled=0",
+        (str(guild_id), int(purchase_id)),
+    ) as cur:
+        row = await cur.fetchone()
+    if not row:
+        return None
+    await _conn().execute(
+        "UPDATE shop_purchases SET fulfilled=1, fulfilled_by=? WHERE id=?",
+        (str(mod_id), int(purchase_id)),
+    )
+    await _conn().commit()
+    return {
+        "id": row["id"],
+        "user_id": int(row["user_id"]),
+        "item_name": row["item_name"],
+    }
 
 
 # ══════════════════════════════════════════════════════════════════════════════
