@@ -7,9 +7,11 @@ from datetime import date
 from cogs.birthday import (
     _ffmpeg_song_cmd,
     _HB_NOTES,
+    _TZ_CHOICES,
     age_on,
     days_until_birthday,
     fmt_birthday,
+    guess_timezone_from_regions,
     is_birthday_today,
     next_birthday_date,
     parse_birthday,
@@ -98,6 +100,35 @@ def test_age_before_birthday_this_year_subtracts_one():
 
 def test_age_unknown_when_no_year():
     assert age_on(3, 5, None, date(2026, 3, 5)) is None
+
+
+# ── song command builder ───────────────────────────────────────────────────────
+
+
+# ── timezone guessing + choices ────────────────────────────────────────────────
+
+
+def test_guess_timezone_picks_most_common_region():
+    assert (
+        guess_timezone_from_regions(["us-central", "us-central", "us-east"])
+        == "America/Chicago"
+    )
+
+
+def test_guess_timezone_ignores_unknown_and_none():
+    assert guess_timezone_from_regions(["mars", None, "europe"]) == "Europe/Paris"
+    assert guess_timezone_from_regions([]) is None
+    assert guess_timezone_from_regions(["nope", None]) is None
+
+
+def test_tz_choices_are_valid_iana_and_within_select_limit():
+    from zoneinfo import available_timezones
+
+    valid = available_timezones()
+    assert 0 < len(_TZ_CHOICES) <= 25  # Discord select-menu cap
+    for label, iana, _emoji in _TZ_CHOICES:
+        assert iana in valid, f"{iana} is not a valid IANA timezone"
+        assert label and len(label) <= 100
 
 
 # ── song command builder ───────────────────────────────────────────────────────

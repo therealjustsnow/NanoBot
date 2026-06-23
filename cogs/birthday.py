@@ -3,11 +3,13 @@ cogs/birthday.py
 Per-server birthday tracker.
 
 Members register their birthday once; NanoBot announces it in a configured
-channel on the day (with a festive GIF), and — if the birthday person happens
-to be in a voice channel at announce time — hops in, plays "Happy Birthday"
-once, and leaves. The song fires exactly once per birthday: a per-guild
-"singing" guard plus the per-row last-announced date stamp stop it from
-looping or re-joining.
+channel on the day (always with a festive, reachability-checked GIF), and plays
+"Happy Birthday" in voice for the birthday person. The song fires whenever they
+join a voice channel on their birthday (via on_voice_state_update), not only at
+announcement time — but at most once per person per local day: an in-memory
+"sung today" set (recorded only on a successful play) plus a per-guild "singing"
+guard stop it from looping or re-joining. The bot never hijacks an existing
+voice client, so it won't fight the music cog.
 
 The announcement is driven by a 15-minute background check (not a live event),
 so it survives restarts. Each birthday fires once per year: the row's
@@ -27,7 +29,7 @@ Commands  (group: /birthday, aliases: bday, birthdays)
   Manage Server only:
   /birthday channel <channel>   → set the announcement channel (turns the feature on)
   /birthday disable             → turn announcements off
-  /birthday timezone <tz>       → set the IANA timezone used to decide "today" (default UTC)
+  /birthday timezone [tz]       → set the timezone (no arg opens a dropdown of common zones; auto-guessed from voice region at setup)
   /birthday hour <0-23>         → local hour the announcement fires (default 9)
   /birthday message <text>      → customize the announcement (vars below; "default" resets)
   /birthday gifs <on|off>       → toggle the festive GIF
@@ -51,10 +53,11 @@ import os
 import random
 import re
 import subprocess
-from datetime import date, datetime
+from datetime import date, datetime, timedelta
 from typing import Optional
 from zoneinfo import available_timezones, ZoneInfo
 
+import aiohttp
 import discord
 from discord import app_commands
 from discord.ext import commands, tasks
@@ -87,6 +90,115 @@ _BIRTHDAY_GIFS = [
     "https://media.giphy.com/media/l0MYt5jPR6QX5pnqM/giphy.gif",
     "https://media.giphy.com/media/IRsBljLW2bWPYTb1IY/giphy.gif",
 ]
+
+# ── Timezone picker ────────────────────────────────────────────────────────────
+# Friendly label → IANA name. zoneinfo applies the right offset *and* DST from
+# the name, so e.g. US Central is correct year-round (UTC-6 winter / -5 summer) —
+# never hardcode a fixed offset. Offsets in the labels are winter-standard hints.
+# Kept at 25 entries max (Discord select-menu limit).
+_TZ_CHOICES: list[tuple[str, str, str]] = [
+    # (label, IANA name, emoji)
+    ("Hawaii (UTC−10)", "Pacific/Honolulu", "🏝️"),
+    ("Alaska (UTC−9)", "America/Anchorage", "❄️"),
+    ("US Pacific — LA, Seattle (UTC−8)", "America/Los_Angeles", "🌉"),
+    ("US Mountain — Denver (UTC−7)", "America/Denver", "⛰️"),
+    ("US Arizona (UTC−7, no DST)", "America/Phoenix", "🌵"),
+    ("US Central — Chicago, Iowa, Texas (UTC−6)", "America/Chicago", "🌽"),
+    ("US Eastern — New York, Miami (UTC−5)", "America/New_York", "🗽"),
+    ("Atlantic — Halifax (UTC−4)", "America/Halifax", "🦞"),
+    ("Brazil — São Paulo (UTC−3)", "America/Sao_Paulo", "🇧🇷"),
+    ("Argentina — Buenos Aires (UTC−3)", "America/Argentina/Buenos_Aires", "🇦🇷"),
+    ("UTC / GMT", "UTC", "🌐"),
+    ("UK — London, Dublin (UTC+0)", "Europe/London", "🇬🇧"),
+    ("Central Europe — Paris, Berlin (UTC+1)", "Europe/Paris", "🇪🇺"),
+    ("Eastern Europe — Athens, Helsinki (UTC+2)", "Europe/Athens", "🏛️"),
+    ("Moscow, Istanbul (UTC+3)", "Europe/Moscow", "🇷🇺"),
+    ("Gulf — Dubai (UTC+4)", "Asia/Dubai", "🏜️"),
+    ("India — Mumbai, Delhi (UTC+5:30)", "Asia/Kolkata", "🇮🇳"),
+    ("SE Asia — Bangkok, Jakarta (UTC+7)", "Asia/Bangkok", "🛺"),
+    ("China, Singapore (UTC+8)", "Asia/Singapore", "🇸🇬"),
+    ("Japan, Korea (UTC+9)", "Asia/Tokyo", "🗾"),
+    ("Australia East — Sydney (UTC+10)", "Australia/Sydney", "🦘"),
+    ("New Zealand — Auckland (UTC+12)", "Pacific/Auckland", "🇳🇿"),
+    ("South Africa — Johannesburg (UTC+2)", "Africa/Johannesburg", "🇿🇦"),
+    ("West Africa — Lagos (UTC+1)", "Africa/Lagos", "🇳🇬"),
+]
+
+# Discord voice region code → best-effort IANA tz, used to pre-fill a guild's
+# timezone at setup when a mod hasn't picked one. Rough (a region spans many
+# zones) — only a starting guess the mod can override.
+_REGION_TZ: dict[str, str] = {
+    "us-west": "America/Los_Angeles",
+    "us-east": "America/New_York",
+    "us-central": "America/Chicago",
+    "us-south": "America/Chicago",
+    "brazil": "America/Sao_Paulo",
+    "europe": "Europe/Paris",
+    "rotterdam": "Europe/Amsterdam",
+    "russia": "Europe/Moscow",
+    "singapore": "Asia/Singapore",
+    "hongkong": "Asia/Hong_Kong",
+    "japan": "Asia/Tokyo",
+    "south-korea": "Asia/Seoul",
+    "india": "Asia/Kolkata",
+    "dubai": "Asia/Dubai",
+    "southafrica": "Africa/Johannesburg",
+    "sydney": "Australia/Sydney",
+}
+
+
+def guess_timezone_from_regions(regions: list[str]) -> str | None:
+    """Pick the most common mappable IANA tz from a list of voice-region codes."""
+    tallies: dict[str, int] = {}
+    for code in regions:
+        tz = _REGION_TZ.get((code or "").lower())
+        if tz:
+            tallies[tz] = tallies.get(tz, 0) + 1
+    if not tallies:
+        return None
+    return max(tallies, key=tallies.get)
+
+
+class TimezoneView(discord.ui.View):
+    """Dropdown of common timezones for /birthday timezone (no arg)."""
+
+    def __init__(self, cog: "Birthday", author_id: int, guild_id: int):
+        super().__init__(timeout=120)
+        self.cog = cog
+        self.author_id = author_id
+        self.guild_id = guild_id
+        self.add_item(_TimezoneSelect())
+
+    async def interaction_check(self, interaction: discord.Interaction) -> bool:
+        if interaction.user.id != self.author_id:
+            await interaction.response.send_message(
+                "Only the person who opened this menu can use it.", ephemeral=True
+            )
+            return False
+        return True
+
+
+class _TimezoneSelect(discord.ui.Select):
+    def __init__(self):
+        options = [
+            discord.SelectOption(label=label[:100], value=iana, emoji=emoji)
+            for label, iana, emoji in _TZ_CHOICES
+        ]
+        super().__init__(placeholder="Pick your server's timezone…", options=options)
+
+    async def callback(self, interaction: discord.Interaction):
+        view: TimezoneView = self.view  # type: ignore[assignment]
+        tz = self.values[0]
+        await db.set_birthday_config(view.guild_id, timezone=tz)
+        view.cog._tz_cache.pop(tz, None)
+        for child in view.children:
+            child.disabled = True
+        await interaction.response.edit_message(
+            embed=h.ok(f"Timezone set to **{tz}**.", "🕐 Timezone Set"),
+            view=view,
+        )
+        view.stop()
+
 
 # ── Date helpers (pure — imported directly by tests) ───────────────────────────
 
@@ -267,10 +379,56 @@ class Birthday(commands.Cog):
         # one is in flight (belt-and-braces with the last_announced stamp).
         self._singing: set[int] = set()
         self._tz_cache: dict[str, ZoneInfo] = {}
+        # (guild_id, user_id, local_date) tuples already serenaded in voice today.
+        # In-memory (resets on restart) — stops the voice listener re-singing on
+        # every re-join. Pruned daily in _check_loop.
+        self._vc_sung: set[tuple[int, int, str]] = set()
+        self._session: aiohttp.ClientSession | None = None
+        self._good_gifs: list[str] = []
+        self._gifs_checked = False
+        self._gif_lock = asyncio.Lock()
+
+    async def cog_load(self):
+        self._session = aiohttp.ClientSession()
         self._check_loop.start()
 
-    def cog_unload(self):
+    async def cog_unload(self):
         self._check_loop.cancel()
+        if self._session and not self._session.closed:
+            await self._session.close()
+
+    # ── GIFs (validated so an announcement always shows a working one) ──────────
+
+    async def _validate_gifs(self) -> None:
+        """HEAD-check the gif list, keeping only the ones that resolve to images."""
+        if not self._session or self._session.closed:
+            return
+        good: list[str] = []
+        for url in _BIRTHDAY_GIFS:
+            try:
+                async with self._session.head(
+                    url,
+                    timeout=aiohttp.ClientTimeout(total=5),
+                    allow_redirects=True,
+                ) as resp:
+                    ctype = resp.headers.get("Content-Type", "")
+                    if resp.status == 200 and ctype.startswith("image"):
+                        good.append(url)
+            except Exception:
+                continue  # network/HEAD-unsupported — just skip this one
+        self._good_gifs = good
+        log.info(
+            "Birthday: %d/%d gifs verified reachable", len(good), len(_BIRTHDAY_GIFS)
+        )
+
+    async def _pick_gif(self) -> str:
+        """Return a verified-working gif URL (falls back to the raw list if the
+        check couldn't reach any — Discord still drops a dead image gracefully)."""
+        async with self._gif_lock:
+            if not self._gifs_checked:
+                await self._validate_gifs()
+                self._gifs_checked = True
+        return random.choice(self._good_gifs or list(_BIRTHDAY_GIFS))
 
     # ── Timezone ────────────────────────────────────────────────────────────────
 
@@ -289,6 +447,7 @@ class Birthday(commands.Cog):
 
     @tasks.loop(minutes=15)
     async def _check_loop(self):
+        self._prune_vc_sung()
         try:
             configs = await db.get_enabled_birthday_configs()
         except Exception:
@@ -303,9 +462,44 @@ class Birthday(commands.Cog):
             except Exception:
                 log.exception("Birthday check failed for guild %s", guild_id)
 
+    def _prune_vc_sung(self) -> None:
+        """Drop voice-sung markers older than yesterday so the set can't grow
+        without bound (dates are local strings; UTC-yesterday is a safe floor)."""
+        if not self._vc_sung:
+            return
+        floor = (date.today() - timedelta(days=1)).isoformat()
+        self._vc_sung = {k for k in self._vc_sung if k[2] >= floor}
+
     @_check_loop.before_loop
     async def _before_check_loop(self):
         await self.bot.wait_until_ready()
+
+    # ── Voice listener: sing whenever the birthday person joins a channel ──────
+
+    @commands.Cog.listener()
+    async def on_voice_state_update(
+        self,
+        member: discord.Member,
+        before: discord.VoiceState,
+        after: discord.VoiceState,
+    ) -> None:
+        # Only react to *joining* a channel (ignore leaves and in-channel state
+        # changes like mute/deafen, which would otherwise re-trigger endlessly).
+        if member.bot or after.channel is None:
+            return
+        if before.channel is not None and before.channel.id == after.channel.id:
+            return
+
+        cfg = await db.get_birthday_config(member.guild.id)
+        if not cfg["enabled"] or not cfg["vc_enabled"]:
+            return
+        bd = await db.get_birthday(member.guild.id, member.id)
+        if bd is None:
+            return
+        today = datetime.now(self._tz(cfg["timezone"])).date()
+        if not is_birthday_today(bd["month"], bd["day"], today):
+            return
+        await self._sing_for(member, cfg, today)
 
     async def _check_guild(self, guild: discord.Guild, cfg: dict) -> None:
         now = datetime.now(self._tz(cfg["timezone"]))
@@ -342,7 +536,12 @@ class Birthday(commands.Cog):
         )
 
     def _build_embed(
-        self, member: discord.Member, bd: dict, cfg: dict, today: date
+        self,
+        member: discord.Member,
+        bd: dict,
+        cfg: dict,
+        today: date,
+        gif_url: str | None = None,
     ) -> discord.Embed:
         age = age_on(bd["month"], bd["day"], bd.get("year"), today)
         template = cfg["message"] or _DEFAULT_MESSAGE
@@ -357,8 +556,8 @@ class Birthday(commands.Cog):
             e.set_thumbnail(url=member.display_avatar.url)
         except Exception:
             pass
-        if cfg["gif_enabled"]:
-            e.set_image(url=random.choice(_BIRTHDAY_GIFS))
+        if cfg["gif_enabled"] and gif_url:
+            e.set_image(url=gif_url)
         return e
 
     async def _announce(
@@ -369,7 +568,8 @@ class Birthday(commands.Cog):
         channel: discord.abc.Messageable,
         today: date,
     ) -> None:
-        embed = self._build_embed(member, bd, cfg, today)
+        gif_url = await self._pick_gif() if cfg["gif_enabled"] else None
+        embed = self._build_embed(member, bd, cfg, today, gif_url)
         content = member.mention if cfg["ping_enabled"] else None
         try:
             await channel.send(
@@ -382,7 +582,7 @@ class Birthday(commands.Cog):
         log.info("Birthday announced for %s in %s", h.user_log(member), member.guild.id)
 
         if cfg["vc_enabled"]:
-            await self._maybe_sing(member, cfg)
+            await self._sing_for(member, cfg, today)
 
     # ── Voice-channel song (plays once, then leaves) ───────────────────────────
 
@@ -415,25 +615,37 @@ class Birthday(commands.Cog):
             return None
         return _SONG_PATH
 
-    async def _maybe_sing(self, member: discord.Member, cfg: dict) -> None:
+    async def _sing_for(self, member: discord.Member, cfg: dict, today: date) -> None:
+        """Sing once per member per local day, recording it only if it played
+        (so a skip while music is busy still lets a later re-join get the song)."""
+        key = (member.guild.id, member.id, today.isoformat())
+        if key in self._vc_sung:
+            return
+        if await self._maybe_sing(member, cfg):
+            self._vc_sung.add(key)
+
+    async def _maybe_sing(self, member: discord.Member, cfg: dict) -> bool:
+        """Join the member's voice channel, play the song once, leave. Returns
+        True only if the song actually started playing."""
         voice = member.voice
         if voice is None or voice.channel is None:
-            return  # not in a voice channel — nothing to do
+            return False  # not in a voice channel — nothing to do
         guild = member.guild
         # Don't hijack an existing connection (music cog, or a sing already going).
         if guild.voice_client is not None or guild.id in self._singing:
-            return
+            return False
         channel = voice.channel
         perms = channel.permissions_for(guild.me)
         if not (perms.connect and perms.speak):
-            return
+            return False
 
         self._singing.add(guild.id)
         vc: discord.VoiceClient | None = None
+        played = False
         try:
             path = await self._ensure_song(cfg)
             if not path:
-                return
+                return False
             vc = await channel.connect(self_deaf=True, timeout=20)
             done = asyncio.Event()
 
@@ -443,6 +655,7 @@ class Birthday(commands.Cog):
                 self.bot.loop.call_soon_threadsafe(done.set)
 
             vc.play(discord.FFmpegPCMAudio(path), after=_after)
+            played = True
             # Song is ~13s; cap the wait so a stuck stream can't pin the bot in VC.
             try:
                 await asyncio.wait_for(done.wait(), timeout=45)
@@ -457,6 +670,7 @@ class Birthday(commands.Cog):
                 except Exception:
                     pass
             self._singing.discard(guild.id)
+        return played
 
     # ══════════════════════════════════════════════════════════════════════════
     #  /birthday  group
@@ -692,18 +906,38 @@ class Birthday(commands.Cog):
     async def birthday_channel(
         self, ctx: commands.Context, channel: discord.TextChannel
     ):
-        await db.set_birthday_config(
-            ctx.guild.id, enabled=True, channel_id=str(channel.id)
-        )
         cfg = await db.get_birthday_config(ctx.guild.id)
-        await ctx.reply(
-            embed=h.ok(
-                f"Birthday announcements are **on** in {channel.mention}.\n"
-                f"Firing daily around **{cfg['hour']:02d}:00 {cfg['timezone']}**.\n"
-                "Members register with `/birthday set <date>`.",
-                "🎂 Birthdays Enabled",
+        updates = {"enabled": True, "channel_id": str(channel.id)}
+
+        # First-time setup with the default UTC still in place: try to pre-fill a
+        # timezone from the guild's voice-channel regions. Best-effort guess only.
+        guessed = None
+        if cfg["timezone"] == "UTC":
+            regions = [
+                vc.rtc_region for vc in ctx.guild.voice_channels if vc.rtc_region
+            ]
+            guessed = guess_timezone_from_regions(regions)
+            if guessed:
+                updates["timezone"] = guessed
+
+        await db.set_birthday_config(ctx.guild.id, **updates)
+        cfg = await db.get_birthday_config(ctx.guild.id)
+
+        lines = [
+            f"Birthday announcements are **on** in {channel.mention}.",
+            f"Firing daily around **{cfg['hour']:02d}:00 {cfg['timezone']}**.",
+        ]
+        if guessed:
+            lines.append(
+                f"_Auto-detected timezone **{guessed}** from your voice region — "
+                "change it with `/birthday timezone`._"
             )
-        )
+        else:
+            lines.append(
+                "_Set your timezone with `/birthday timezone` (defaults to UTC)._"
+            )
+        lines.append("Members register with `/birthday set <date>`.")
+        await ctx.reply(embed=h.ok("\n".join(lines), "🎂 Birthdays Enabled"))
 
     @birthday.command(
         name="disable",
@@ -723,24 +957,44 @@ class Birthday(commands.Cog):
     @birthday.command(
         name="timezone",
         aliases=["tz"],
-        description="Set the IANA timezone used to decide when 'today' is.",
+        description="Set the timezone used to decide 'today' (no arg = pick from a menu).",
     )
     @commands.has_permissions(manage_guild=True)
     @app_commands.describe(
-        timezone="IANA name, e.g. America/New_York, Europe/London, UTC"
+        timezone="IANA name (e.g. America/New_York). Leave empty to pick from a dropdown."
     )
-    async def birthday_timezone(self, ctx: commands.Context, timezone: str):
+    async def birthday_timezone(
+        self, ctx: commands.Context, *, timezone: Optional[str] = None
+    ):
+        # No argument → open the friendly dropdown of common timezones.
+        if not timezone:
+            view = TimezoneView(self, ctx.author.id, ctx.guild.id)
+            return await ctx.reply(
+                embed=h.info(
+                    "Pick your server's timezone from the menu below.\n"
+                    "Names handle daylight saving automatically — Iowa is "
+                    "**US Central**, not a fixed offset.\n"
+                    "Know the exact IANA name? Pass it directly: "
+                    "`/birthday timezone America/Chicago`.",
+                    "🕐 Choose a Timezone",
+                ),
+                view=view,
+                ephemeral=True,
+            )
+
         timezone = timezone.strip()
         if timezone not in available_timezones():
             return await ctx.reply(
                 embed=h.err(
                     f"`{timezone}` isn't a valid timezone.\n"
-                    "Use an IANA name like `America/New_York`, `Europe/London`, or `UTC`.\n"
+                    "Use an IANA name like `America/New_York`, `Europe/London`, or `UTC` "
+                    "— or run `/birthday timezone` with no argument to pick from a menu.\n"
                     "Full list: <https://en.wikipedia.org/wiki/List_of_tz_database_time_zones>"
                 ),
                 ephemeral=True,
             )
         await db.set_birthday_config(ctx.guild.id, timezone=timezone)
+        self._tz_cache.pop(timezone, None)
         await ctx.reply(
             embed=h.ok(f"Timezone set to **{timezone}**.", "🕐 Timezone Set")
         )
@@ -878,7 +1132,8 @@ class Birthday(commands.Cog):
             today = datetime.now(self._tz(cfg["timezone"])).date()
             bd = {"month": today.month, "day": today.day, "year": None}
         today = datetime.now(self._tz(cfg["timezone"])).date()
-        embed = self._build_embed(member, bd, cfg, today)
+        gif_url = await self._pick_gif() if cfg["gif_enabled"] else None
+        embed = self._build_embed(member, bd, cfg, today, gif_url)
         await ctx.reply(
             content="**Preview** (this is what the announcement looks like):",
             embed=embed,
