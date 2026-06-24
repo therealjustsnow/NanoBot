@@ -148,3 +148,179 @@ async def test_config_defaults_and_partial_update():
     assert cfg["currency_name"] == "Gold"
     assert cfg["streak_bonus"] == 25
     assert cfg["daily_amount"] == 100  # untouched
+
+
+async def test_coop_and_raid_config_defaults_and_update():
+    cfg = await db.get_econ_config(G)
+    assert cfg["coop_reward"] == 50
+    assert cfg["raid_reward"] == 100
+    assert cfg["raid_min"] == 3
+    assert cfg["raid_max"] == 20
+
+    await db.set_econ_config(
+        G, coop_reward=75, raid_reward=500, raid_min=5, raid_max=40
+    )
+    cfg = await db.get_econ_config(G)
+    assert cfg["coop_reward"] == 75
+    assert cfg["raid_reward"] == 500
+    assert cfg["raid_min"] == 5
+    assert cfg["raid_max"] == 40
+    assert cfg["daily_amount"] == 100  # untouched
+
+
+# ── Contribution (lifetime co-op stat) ───────────────────────────────────────────
+async def test_contribution_accumulates_independent_of_coins():
+    assert await db.get_contribution(G, A) == 0
+    assert await db.add_contribution(G, A, 50) == 50
+    assert await db.add_contribution(G, A, 50) == 100
+    # Spending coins must not touch contribution.
+    await db.add_coins(G, A, 100)
+    await db.add_coins(G, A, -100)
+    assert await db.get_contribution(G, A) == 100
+
+
+async def test_contribution_rank_and_leaderboard():
+    await db.add_contribution(G, A, 100)
+    await db.add_contribution(G, B, 300)
+    await db.add_contribution(G, C, 200)
+    assert await db.get_contrib_rank(G, B) == (1, 300)
+    assert await db.get_contrib_rank(G, A) == (3, 100)
+    assert await db.count_contrib(G) == 3
+    top = await db.get_contrib_leaderboard(G, limit=10)
+    assert [r["user_id"] for r in top] == [B, C, A]
+
+
+async def test_contribution_rank_none_without_points():
+    await db.add_coins(G, A, 500)  # has coins, no contribution
+    assert await db.get_contrib_rank(G, A) is None
+    assert await db.count_contrib(G) == 0
+
+
+# ── Shop ─────────────────────────────────────────────────────────────────────────
+async def test_shop_add_get_and_unique_name():
+    iid = await db.add_shop_item(G, "VIP Role", 500, "role", role_id=42)
+    assert iid is not None
+    item = await db.get_shop_item(G, iid)
+    assert item["name"] == "VIP Role"
+    assert item["price"] == 500
+    assert item["role_id"] == 42
+    assert item["enabled"] is True
+    # Duplicate name (case-insensitive lookup, exact-insert clash) → None.
+    assert await db.add_shop_item(G, "VIP Role", 100, "role", role_id=7) is None
+    assert (await db.get_shop_item_by_name(G, "vip role"))["id"] == iid
+
+
+async def test_shop_edit_and_remove():
+    iid = await db.add_shop_item(G, "Loot", 100, "custom", payload="gold")
+    assert await db.edit_shop_item(G, iid, price=250, enabled=False) is True
+    item = await db.get_shop_item(G, iid)
+    assert item["price"] == 250
+    assert item["enabled"] is False
+    assert await db.edit_shop_item(G, iid, bogus=1) is False  # no valid fields
+    assert await db.remove_shop_item(G, iid) is True
+    assert await db.get_shop_item(G, iid) is None
+
+
+async def test_shop_list_enabled_filter():
+    a = await db.add_shop_item(G, "Cheap", 10, "custom", payload="x")
+    await db.add_shop_item(G, "Hidden", 20, "custom", payload="y")
+    await db.edit_shop_item(G, await _name_id(G, "Hidden"), enabled=False)
+    all_items = await db.list_shop_items(G)
+    assert len(all_items) == 2
+    visible = await db.list_shop_items(G, enabled_only=True)
+    assert [i["id"] for i in visible] == [a]
+    assert await db.count_shop_items(G, enabled_only=True) == 1
+
+
+async def _name_id(guild, name):
+    return (await db.get_shop_item_by_name(guild, name))["id"]
+
+
+async def test_purchase_success_debits_and_records():
+    await db.add_coins(G, A, 1000)
+    iid = await db.add_shop_item(G, "Color", 300, "role", role_id=9)
+    res = await db.purchase_item(G, iid, A)
+    assert res["ok"] is True
+    assert res["new_balance"] == 700
+    assert await db.count_user_purchases(G, iid, A) == 1
+
+
+async def test_purchase_insufficient_funds():
+    await db.add_coins(G, A, 100)
+    iid = await db.add_shop_item(G, "Pricey", 300, "custom", payload="z")
+    res = await db.purchase_item(G, iid, A)
+    assert res["ok"] is False
+    assert res["reason"] == "funds"
+    assert await db.get_balance(G, A) == 100  # not charged
+
+
+async def test_purchase_stock_decrements_and_sells_out():
+    await db.add_coins(G, A, 1000)
+    await db.add_coins(G, B, 1000)
+    iid = await db.add_shop_item(G, "Limited", 100, "custom", payload="z", stock=1)
+    assert (await db.purchase_item(G, iid, A))["ok"] is True
+    assert (await db.get_shop_item(G, iid))["stock"] == 0
+    res = await db.purchase_item(G, iid, B)
+    assert res["ok"] is False
+    assert res["reason"] == "out_of_stock"
+    assert await db.get_balance(G, B) == 1000  # not charged when sold out
+
+
+async def test_purchase_stock_refunded_when_funds_short():
+    await db.add_coins(G, A, 50)
+    iid = await db.add_shop_item(G, "Spendy", 100, "custom", payload="z", stock=2)
+    res = await db.purchase_item(G, iid, A)
+    assert res["ok"] is False and res["reason"] == "funds"
+    # Reserved stock must be returned when the debit fails.
+    assert (await db.get_shop_item(G, iid))["stock"] == 2
+
+
+async def test_purchase_per_user_limit():
+    await db.add_coins(G, A, 1000)
+    iid = await db.add_shop_item(
+        G, "OnePer", 100, "custom", payload="z", per_user_limit=1
+    )
+    assert (await db.purchase_item(G, iid, A))["ok"] is True
+    res = await db.purchase_item(G, iid, A)
+    assert res["ok"] is False and res["reason"] == "limit"
+
+
+async def test_purchase_cooldown():
+    await db.add_coins(G, A, 1000)
+    iid = await db.add_shop_item(
+        G, "Cooldown", 100, "custom", payload="z", cooldown=999
+    )
+    assert (await db.purchase_item(G, iid, A))["ok"] is True
+    res = await db.purchase_item(G, iid, A)
+    assert res["ok"] is False and res["reason"] == "cooldown"
+    assert res["retry_after"] > 0
+
+
+async def test_purchase_disabled_item():
+    await db.add_coins(G, A, 1000)
+    iid = await db.add_shop_item(G, "Off", 100, "custom", payload="z")
+    await db.edit_shop_item(G, iid, enabled=False)
+    res = await db.purchase_item(G, iid, A)
+    assert res["ok"] is False and res["reason"] == "disabled"
+
+
+async def test_custom_purchase_pending_then_fulfilled():
+    await db.add_coins(G, A, 1000)
+    iid = await db.add_shop_item(G, "Manual", 100, "custom", payload="loot")
+    await db.purchase_item(G, iid, A)
+    assert await db.count_pending_purchases(G) == 1
+    pending = await db.list_pending_purchases(G)
+    pid = pending[0]["id"]
+    res = await db.fulfill_purchase(G, pid, mod_id=999)
+    assert res["item_name"] == "Manual"
+    assert await db.count_pending_purchases(G) == 0
+    # Re-fulfilling the same purchase is a no-op.
+    assert await db.fulfill_purchase(G, pid, mod_id=999) is None
+
+
+async def test_role_purchase_not_in_pending_queue():
+    await db.add_coins(G, A, 1000)
+    iid = await db.add_shop_item(G, "AutoRole", 100, "role", role_id=5)
+    await db.purchase_item(G, iid, A)
+    # Role rewards are auto-fulfilled, so they never enter the mod queue.
+    assert await db.count_pending_purchases(G) == 0

@@ -6,6 +6,7 @@ from cogs.economy import (
     DAILY_COOLDOWN,
     STREAK_WINDOW,
     Economy,
+    _rank_title,
     compute_daily,
     fmt_coins,
     resolve_gamble,
@@ -79,3 +80,14 @@ def test_gamble_boundary_is_a_loss():
 def test_gamble_multiplier_scales_winnings():
     res = resolve_gamble(100, roll=0.0, win_chance=1.0, multiplier=3.0)
     assert res == {"won": True, "delta": 200}
+
+
+def test_rank_title_thresholds():
+    assert _rank_title(1) == "🏆 Guild Legend"
+    assert _rank_title(2) == "💎 Veteran"
+    assert _rank_title(3) == "💎 Veteran"
+    assert _rank_title(4) == "⭐ Trusted"
+    assert _rank_title(10) == "⭐ Trusted"
+    assert _rank_title(25) == "🤝 Contributor"
+    assert _rank_title(26) == "🌱 Member"
+    assert _rank_title(9999) == "🌱 Member"
