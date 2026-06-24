@@ -257,13 +257,16 @@ class Admin(ConfigMixin, commands.Cog):
 
         await asyncio.sleep(0.5)
 
-        # Spawn a fresh process BEFORE closing so it can start initialising
-        # while this one finishes its shutdown.  subprocess.Popen works
-        # correctly on all platforms (os.execv silently fails on Windows).
-        subprocess.Popen([sys.executable] + sys.argv, cwd=_REPO_ROOT)
-        log.info("Spawned new process — shutting down this one")
-
+        # Close THIS process fully before spawning the replacement. Overlapping
+        # the two leaves both briefly connected to the gateway under the same
+        # token, so a message sent during the window is delivered to both and
+        # every command in it runs twice (the /daily double-claim bug). Closing
+        # first costs a few seconds of extra downtime but guarantees one bot is
+        # online at a time. subprocess.Popen works on all platforms (os.execv
+        # silently fails on Windows).
         await self.bot.close()
+        subprocess.Popen([sys.executable] + sys.argv, cwd=_REPO_ROOT)
+        log.info("Closed this process — spawned the replacement")
 
     # ══════════════════════════════════════════════════════════════════════════
     #  update
@@ -480,7 +483,7 @@ class Admin(ConfigMixin, commands.Cog):
         else:
             log.warning(f"upgrade: pip install failed — {pip_output[:200]}")
 
-        # ── Step 3: build embed, spawn new process, close ─────────────────────
+        # ── Step 3: build embed, close, spawn new process ─────────────────────
         colour = h.GREEN if pip_ok else h.YELLOW
         e = h.embed(title="🚀 Upgrade Complete — Restarting", color=colour)
         e.add_field(name="📥 Git Pull", value=f"```\n{git_output}\n```", inline=False)
@@ -501,11 +504,14 @@ class Admin(ConfigMixin, commands.Cog):
         await ctx.reply(embed=e)
         await asyncio.sleep(0.5)
 
+        # Close before spawning so the two processes never share the gateway
+        # session — an overlap would deliver in-flight messages to both and run
+        # each command twice. See the matching note in restart().
+        await self.bot.close()
         subprocess.Popen([sys.executable] + sys.argv, cwd=_REPO_ROOT)
         log.info(
-            f"upgrade: spawned new process — shutting down (by {h.user_log(ctx.author)})"
+            f"upgrade: closed this process — spawned the replacement (by {h.user_log(ctx.author)})"
         )
-        await self.bot.close()
 
     # ══════════════════════════════════════════════════════════════════════════
     #  sync
