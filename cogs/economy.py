@@ -66,6 +66,13 @@ log = logging.getLogger("NanoBot.economy")
 DAILY_COOLDOWN = 86_400  # 24h between claims
 STREAK_WINDOW = 172_800  # claim within 48h of the last to keep the streak
 
+# A daily reject arriving within this many seconds of the last successful claim
+# isn't a genuine "come back tomorrow" — it's the same claim dispatched twice
+# (e.g. a gateway redelivery, or two bot processes briefly online during a
+# restart). Flagged as a duplicate so the command can swallow the contradictory
+# second reply instead of telling the user they already claimed.
+DAILY_DUP_WINDOW = 10
+
 # Gamble odds: win chance under 0.5 gives the "house" a slight edge so coins
 # aren't trivially farmed. A win pays the bet back plus (multiplier - 1)x.
 GAMBLE_WIN_CHANCE = 0.45
@@ -113,7 +120,11 @@ def compute_daily(
     """
     elapsed = now - last_daily
     if last_daily and elapsed < DAILY_COOLDOWN:
-        return {"ok": False, "retry_after": int(DAILY_COOLDOWN - elapsed)}
+        return {
+            "ok": False,
+            "retry_after": int(DAILY_COOLDOWN - elapsed),
+            "duplicate": elapsed < DAILY_DUP_WINDOW,
+        }
     if last_daily and elapsed < STREAK_WINDOW:
         new_streak = streak + 1
     else:
@@ -479,6 +490,12 @@ class Economy(commands.Cog):
                 cfg["streak_bonus"],
             )
             if not res["ok"]:
+                if res.get("duplicate"):
+                    # Same claim dispatched twice (one user action delivered to
+                    # the bot more than once — e.g. a restart left two processes
+                    # briefly online). Drop the contradictory "already claimed"
+                    # so one /daily yields exactly one reply.
+                    return
                 return await ctx.reply(
                     embed=h.warn(
                         f"You've already claimed today. Come back in "

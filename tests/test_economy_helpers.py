@@ -42,6 +42,23 @@ def test_daily_on_cooldown():
     assert res["retry_after"] == DAILY_COOLDOWN - 100
 
 
+def test_daily_reject_flags_duplicate_within_window():
+    now = 1_000_000.0
+    # Claimed 2s ago: a double-fired invocation (one user action delivered
+    # twice), not a real cooldown hit. The command swallows the second reply.
+    res = compute_daily(now=now, last_daily=now - 2, streak=1, base=100, bonus=10)
+    assert res["ok"] is False
+    assert res["duplicate"] is True
+
+
+def test_daily_reject_not_duplicate_after_window():
+    now = 1_000_000.0
+    # Claimed an hour ago: a genuine "come back tomorrow", shown to the user.
+    res = compute_daily(now=now, last_daily=now - 3600, streak=1, base=100, bonus=10)
+    assert res["ok"] is False
+    assert res["duplicate"] is False
+
+
 def test_daily_keeps_streak_inside_window():
     now = 1_000_000.0
     # Claimed 25h ago: past cooldown, still within the 48h streak window.
