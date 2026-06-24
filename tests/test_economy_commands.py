@@ -28,9 +28,11 @@ async def test_daily_grants_then_blocks(bot):
     dpytest.get_message()
     assert await db.get_balance(guild.id, author.id) == 100  # default daily
 
-    # Second claim same day is on cooldown — balance unchanged.
+    # An immediate second claim is the double-fire case (one user action
+    # delivered twice). Balance is unchanged AND the contradictory "already
+    # claimed" reply is swallowed, so the user sees exactly one message.
     await dpytest.message("!daily", member=author)
-    dpytest.get_message()
+    assert dpytest.verify().message().nothing()
     assert await db.get_balance(guild.id, author.id) == 100
 
 

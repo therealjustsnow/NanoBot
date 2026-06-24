@@ -299,7 +299,18 @@ class NanoBot(commands.Bot):
         # don't trigger _spawn_bg on a closing loop and cascade into more warnings.
         orig = getattr(self, "_orig_showwarning", None)
         if orig is not None:
-            warnings.showwarning = orig
+            # As the loop tears down it stops awaiting already-scheduled event
+            # coroutines, so Python GC-warns "coroutine '...' was never awaited".
+            # That's expected shutdown noise, not a bug — swallow just those and
+            # keep forwarding every other warning to the original hook.
+            def _quiet_teardown_warn(
+                message, category, filename, lineno, file=None, line=None
+            ):
+                if category is RuntimeWarning and "never awaited" in str(message):
+                    return
+                orig(message, category, filename, lineno, file, line)
+
+            warnings.showwarning = _quiet_teardown_warn
         # Tear down the shared HTTP server (if running) so its port is freed.
         try:
             await self.web.stop()
