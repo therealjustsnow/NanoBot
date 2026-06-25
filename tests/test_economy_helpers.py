@@ -3,14 +3,43 @@ Tests for the pure economy helpers in cogs/economy.py (no Discord deps).
 """
 
 from cogs.economy import (
+    COIN_MAX,
     DAILY_COOLDOWN,
     STREAK_WINDOW,
     Economy,
+    _DEFAULT_SHOP_ITEMS,
     _rank_title,
+    _scaled_price,
     compute_daily,
     fmt_coins,
     resolve_gamble,
 )
+
+
+def test_scaled_price_matches_base_at_default_daily():
+    # Defaults are tuned to the 100-coin daily, so scaling is a no-op there.
+    for spec in _DEFAULT_SHOP_ITEMS:
+        assert _scaled_price(spec["price"], 100) == spec["price"]
+
+
+def test_scaled_price_tracks_daily_and_clamps():
+    assert _scaled_price(500, 200) == 1000  # 2x daily → 2x price
+    assert _scaled_price(500, 50) == 250  # half daily → half price
+    assert _scaled_price(500, 0) == 500  # disabled daily → base
+    assert _scaled_price(500, 1) == 10  # rounds/clamps up to the 10-coin floor
+    assert _scaled_price(COIN_MAX, 1_000_000) == COIN_MAX  # clamped to ceiling
+
+
+def test_default_shop_items_are_well_formed():
+    names = [spec["name"] for spec in _DEFAULT_SHOP_ITEMS]
+    # Unique names — /shop seed relies on the UNIQUE(guild_id, name) constraint.
+    assert len(names) == len(set(names))
+    for spec in _DEFAULT_SHOP_ITEMS:
+        assert 1 <= len(spec["name"]) <= 80
+        assert 0 <= spec["price"] <= COIN_MAX
+        assert spec["reward"].strip()  # custom items need fulfilment text
+        assert len(spec["description"]) <= 200
+        assert spec.get("limit", 0) >= 0
 
 
 def test_daily_lock_is_stable_per_user_and_distinct_across_users():

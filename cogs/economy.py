@@ -41,6 +41,7 @@ Commands
   /coin config                   → show settings    (Manage Server)
   /shop list [page]              → browse rewards
   /shop buy <id|name>            → redeem an item
+  /shop seed                     → add starter rewards (Manage Server)
   /shop add …                    → create an item   (Manage Server)
   /shop edit <id|name> …         → edit an item     (Manage Server)
   /shop remove <id|name>         → delete an item   (Manage Server)
@@ -88,6 +89,84 @@ COOP_CONFIRM_TIMEOUT = 120
 
 # How long an open /raid board stays joinable before it auto-expires unpaid.
 RAID_TIMEOUT = 1800  # 30 min
+
+# Starter shop catalogue. A fresh guild's shop is empty, which reads as broken,
+# so /shop seed drops in this curated set of generic community rewards. They're
+# all `custom` kind (a mod fulfils them) because role rewards need a guild's own
+# role id, which we can't know ahead of time. Prices are scaled to the default
+# 100-coin daily reward (a few days' to a couple weeks' saving). Mods are meant
+# to edit prices, remove ones that don't fit, and add their own role rewards.
+_DEFAULT_SHOP_ITEMS = [
+    {
+        "name": "Custom Color Role",
+        "price": 1500,
+        "description": "Pick your own name color.",
+        "reward": "Tell a mod the hex color you want and they'll set up your "
+        "personal colored role.",
+        "limit": 1,
+    },
+    {
+        "name": "Custom Voice Channel",
+        "price": 800,
+        "description": "Get a temporary personal voice channel.",
+        "reward": "Tell a mod the name you want and they'll spin up a personal "
+        "voice channel for you.",
+    },
+    {
+        "name": "Server Shoutout",
+        "price": 500,
+        "description": "Get a shoutout in the announcements channel.",
+        "reward": "A mod will post a shoutout for you in the announcements channel.",
+    },
+    {
+        "name": "Pin a Message",
+        "price": 400,
+        "description": "Pin one message of your choice for a week.",
+        "reward": "Link the message you want pinned and a mod will pin it for a week.",
+    },
+    {
+        "name": "VIP for a Day",
+        "price": 750,
+        "description": "24 hours of VIP perks.",
+        "reward": "A mod will grant you VIP perks for the next 24 hours.",
+    },
+    {
+        "name": "Pick the Next Event",
+        "price": 1000,
+        "description": "Choose the theme of the next server event.",
+        "reward": "Share your event idea — the next server event will run with "
+        "your theme.",
+    },
+    {
+        "name": "Movie Night Pick",
+        "price": 600,
+        "description": "Choose the next watch-party title.",
+        "reward": "Tell a mod your pick and it becomes the next movie/watch-party.",
+    },
+    {
+        "name": "Add a Server Emoji",
+        "price": 2000,
+        "description": "Submit an emoji to be added to the server.",
+        "reward": "Send a mod the image and name for an emoji to add to the server.",
+        "limit": 1,
+    },
+]
+
+
+def _scaled_price(base: int, daily_amount: int) -> int:
+    """Scale a starter price to a guild's daily reward.
+
+    The _DEFAULT_SHOP_ITEMS prices are tuned to the default 100-coin daily, so a
+    server running a much bigger/smaller daily would find them trivially cheap or
+    impossibly dear. Scale by daily/100 to keep the same "days of saving" feel,
+    rounded to a clean multiple of 10 and clamped to [10, COIN_MAX]. A daily of 0
+    (disabled) falls back to the base price.
+    """
+    if daily_amount <= 0:
+        return base
+    scaled = round(base * daily_amount / 100 / 10) * 10
+    return max(10, min(COIN_MAX, scaled))
+
 
 # Contribution rank titles, awarded by leaderboard position. The first match
 # (lowest threshold the rank meets) wins; everyone ranked gets at least Member.
@@ -1095,7 +1174,8 @@ class Economy(commands.Cog):
         if total == 0:
             return await ctx.reply(
                 embed=h.info(
-                    "The shop is empty. Admins can add rewards with `/shop add`.",
+                    "The shop is empty. Admins can drop in starter rewards with "
+                    "`/shop seed`, or add their own with `/shop add`.",
                     "🛒 Shop",
                 )
             )
@@ -1275,6 +1355,48 @@ class Economy(commands.Cog):
             embed=h.ok(
                 f"Added **{name}** (`#{item_id}`) for {self._money(cfg, price)}.",
                 "🛒 Item Added",
+            )
+        )
+
+    # ── /shop seed ────────────────────────────────────────────────────────────────
+    @shop.command(
+        name="seed",
+        description="Fill an empty shop with starter rewards (Manage Server).",
+    )
+    @commands.has_permissions(manage_guild=True)
+    async def shop_seed(self, ctx: commands.Context):
+        cfg = await self._cfg(ctx.guild.id)
+        added, skipped = 0, 0
+        for spec in _DEFAULT_SHOP_ITEMS:
+            item_id = await db.add_shop_item(
+                ctx.guild.id,
+                spec["name"],
+                _scaled_price(spec["price"], cfg["daily_amount"]),
+                "custom",
+                description=spec["description"],
+                payload=spec["reward"],
+                per_user_limit=spec.get("limit", 0),
+            )
+            if item_id is None:
+                skipped += 1  # name already exists — leave the mod's version alone
+            else:
+                added += 1
+        if added == 0:
+            return await ctx.reply(
+                embed=h.warn(
+                    "All starter items already exist — nothing added. "
+                    "Use `/shop add` to create your own.",
+                    "🛒 Shop",
+                )
+            )
+        note = f" ({skipped} already existed, left as-is)" if skipped else ""
+        await ctx.reply(
+            embed=h.ok(
+                f"Added **{added}** starter reward(s) to the shop{note}.\n\n"
+                "These are generic examples a mod fulfils by hand — edit prices "
+                "with `/shop edit`, remove ones you don't want with `/shop remove`, "
+                "and add role rewards with `/shop add`.",
+                "🛒 Shop Seeded",
             )
         )
 
