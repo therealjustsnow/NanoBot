@@ -3,14 +3,28 @@ Tests for the pure economy helpers in cogs/economy.py (no Discord deps).
 """
 
 from cogs.economy import (
+    COIN_MAX,
     DAILY_COOLDOWN,
     STREAK_WINDOW,
     Economy,
+    _DEFAULT_SHOP_ITEMS,
     _rank_title,
     compute_daily,
     fmt_coins,
     resolve_gamble,
 )
+
+
+def test_default_shop_items_are_well_formed():
+    names = [spec["name"] for spec in _DEFAULT_SHOP_ITEMS]
+    # Unique names — /shop seed relies on the UNIQUE(guild_id, name) constraint.
+    assert len(names) == len(set(names))
+    for spec in _DEFAULT_SHOP_ITEMS:
+        assert 1 <= len(spec["name"]) <= 80
+        assert 0 <= spec["price"] <= COIN_MAX
+        assert spec["reward"].strip()  # custom items need fulfilment text
+        assert len(spec["description"]) <= 200
+        assert spec.get("limit", 0) >= 0
 
 
 def test_daily_lock_is_stable_per_user_and_distinct_across_users():
