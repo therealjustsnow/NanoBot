@@ -153,6 +153,21 @@ _DEFAULT_SHOP_ITEMS = [
 ]
 
 
+def _scaled_price(base: int, daily_amount: int) -> int:
+    """Scale a starter price to a guild's daily reward.
+
+    The _DEFAULT_SHOP_ITEMS prices are tuned to the default 100-coin daily, so a
+    server running a much bigger/smaller daily would find them trivially cheap or
+    impossibly dear. Scale by daily/100 to keep the same "days of saving" feel,
+    rounded to a clean multiple of 10 and clamped to [10, COIN_MAX]. A daily of 0
+    (disabled) falls back to the base price.
+    """
+    if daily_amount <= 0:
+        return base
+    scaled = round(base * daily_amount / 100 / 10) * 10
+    return max(10, min(COIN_MAX, scaled))
+
+
 # Contribution rank titles, awarded by leaderboard position. The first match
 # (lowest threshold the rank meets) wins; everyone ranked gets at least Member.
 _RANK_TITLES = [
@@ -1356,7 +1371,7 @@ class Economy(commands.Cog):
             item_id = await db.add_shop_item(
                 ctx.guild.id,
                 spec["name"],
-                spec["price"],
+                _scaled_price(spec["price"], cfg["daily_amount"]),
                 "custom",
                 description=spec["description"],
                 payload=spec["reward"],

@@ -7,6 +7,7 @@ from discord.ext import commands
 from discord.ext import test as dpytest
 
 import utils.db as db
+from cogs.economy import _DEFAULT_SHOP_ITEMS
 from tests.conftest import config, grant_perms
 
 
@@ -109,6 +110,32 @@ async def test_gamble_loss(bot, monkeypatch):
     sent = dpytest.get_message()
     assert "Bust" in sent.embeds[0].title
     assert await db.get_balance(guild.id, author.id) == 50
+
+
+@pytest.mark.cogs("cogs.economy")
+async def test_shop_seed_denied_without_manage_guild(bot):
+    author = config().members[0]
+    with pytest.raises(commands.MissingPermissions):
+        await dpytest.message("!shop seed", member=author)
+
+
+@pytest.mark.cogs("cogs.economy")
+async def test_shop_seed_populates_then_idempotent(bot):
+    guild = config().guilds[0]
+    author = config().members[0]
+    await grant_perms(author, manage_guild=True)
+
+    # First seed fills the empty shop with the full starter set.
+    await dpytest.message("!shop seed", member=author)
+    sent = dpytest.get_message()
+    assert "Seeded" in sent.embeds[0].title
+    assert await db.count_shop_items(guild.id) == len(_DEFAULT_SHOP_ITEMS)
+
+    # Re-seeding adds nothing (idempotent by name) and says so.
+    await dpytest.message("!shop seed", member=author)
+    sent = dpytest.get_message()
+    assert "already exist" in sent.embeds[0].description
+    assert await db.count_shop_items(guild.id) == len(_DEFAULT_SHOP_ITEMS)
 
 
 @pytest.mark.cogs("cogs.economy")
