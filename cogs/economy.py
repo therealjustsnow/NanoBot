@@ -106,10 +106,11 @@ _DEFAULT_SHOP_ITEMS = [
         "limit": 1,
     },
     {
-        "name": "Custom Nickname",
-        "price": 300,
-        "description": "Request a nickname a mod will apply.",
-        "reward": "Reply with the nickname you'd like and a mod will set it for you.",
+        "name": "Custom Voice Channel",
+        "price": 800,
+        "description": "Get a temporary personal voice channel.",
+        "reward": "Tell a mod the name you want and they'll spin up a personal "
+        "voice channel for you.",
     },
     {
         "name": "Server Shoutout",
