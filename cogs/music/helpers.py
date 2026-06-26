@@ -12,6 +12,27 @@ def _extract_ytid(url: str) -> Optional[str]:
     return m.group(1) if m else None
 
 
+def _mask_proxy(proxy: str) -> str:
+    """Hide credentials in a proxy URL for safe display.
+
+    "http://user:pass@host:port" -> "http://***:***@host:port". A proxy with no
+    embedded credentials is returned unchanged. Used by the music-health probe
+    so the host:port stays visible while the username/password never leak into a
+    Discord embed.
+    """
+    proxy = (proxy or "").strip()
+    if not proxy or "@" not in proxy:
+        return proxy
+    scheme, _, rest = proxy.partition("://")
+    if not rest:  # no scheme — treat the whole thing as creds@host
+        creds, _, host = proxy.rpartition("@")
+        return f"***:***@{host}" if creds else proxy
+    creds, _, host = rest.rpartition("@")
+    if not creds:
+        return proxy
+    return f"{scheme}://***:***@{host}"
+
+
 def _apply_delta(arg: str, current: float) -> Optional[float]:
     """Parse a numeric command arg as absolute ("80") or relative ("+10"/"-10").
 

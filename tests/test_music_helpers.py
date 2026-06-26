@@ -17,7 +17,30 @@ from cogs.music.helpers import (
     _ellipsize,
     _metadata_query,
     _pick_itunes_match,
+    _mask_proxy,
 )
+
+
+class TestMaskProxy:
+    def test_masks_credentials(self):
+        assert (
+            _mask_proxy("http://user:pass@203.0.113.10:8080")
+            == "http://***:***@203.0.113.10:8080"
+        )
+
+    def test_socks_scheme(self):
+        assert _mask_proxy("socks5h://u:p@host:1080") == "socks5h://***:***@host:1080"
+
+    def test_no_credentials_unchanged(self):
+        assert _mask_proxy("http://203.0.113.10:8080") == "http://203.0.113.10:8080"
+
+    def test_empty(self):
+        assert _mask_proxy("") == ""
+        assert _mask_proxy(None) == ""
+
+    def test_creds_without_scheme(self):
+        assert _mask_proxy("user:pass@host:1080") == "***:***@host:1080"
+
 
 # ---------------------------------------------------------------------------
 # _apply_delta
