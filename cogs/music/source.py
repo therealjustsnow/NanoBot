@@ -156,6 +156,18 @@ class MusicSource:
         cookie = self._cookie_file()
         if cookie:
             opts["cookiefile"] = cookie
+            # Cookies scoped to one account/channel make YouTube's playlist
+            # "authcheck" half-fail, which silently truncates large playlists
+            # (the classic "283 songs, only 100 queued" symptom) or aborts with
+            # an auth error. yt-dlp's documented fix is to skip that check.
+            ea = dict(opts.get("extractor_args") or {})
+            tab = dict(ea.get("youtubetab") or {})
+            skip = list(tab.get("skip") or [])
+            if "authcheck" not in skip:
+                skip.append("authcheck")
+            tab["skip"] = skip
+            ea["youtubetab"] = tab
+            opts["extractor_args"] = ea
         opts["js_runtimes"] = self._js_runtimes()
         opts["source_address"] = (
             self.cog.bot.config.get("music_source_address") or "0.0.0.0"
