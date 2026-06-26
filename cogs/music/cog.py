@@ -84,6 +84,7 @@ Commands (hybrid — slash + prefix), category "🎵 Music":
   blocksong / unblocksong / blockedsongs — song block list (Manage Server)
   blockuser / unblockuser — bar a member from music (Manage Server)
   join / summon     — connect the bot to your voice channel
+  musichealth / mhealth — probe yt-dlp/proxy/cookies, diagnose 403/429 (owner)
 """
 
 import asyncio
@@ -122,6 +123,7 @@ from .constants import (
 from .helpers import (
     _apply_delta,
     _fmt_time,
+    _mask_proxy,
     _parse_seek,
     _metadata_query,
     _pick_itunes_match,
@@ -1667,6 +1669,84 @@ class Music(commands.Cog):
         await ctx.reply(
             embed=h.ok("Sent it to your DMs.", "🔖 Grabbed"), ephemeral=True
         )
+
+    @commands.command(
+        name="musichealth",
+        aliases=["mhealth", "ythealth"],
+        extras={
+            "category": "🎵 Music",
+            "short": "Probe yt-dlp + proxy/cookies health (owner)",
+            "usage": "musichealth",
+            "desc": (
+                "Owner-only. Resolves a known YouTube video through the bot's live "
+                "yt-dlp config (proxy, cookies, source address) and reports the "
+                "result — diagnose 403/429 blocks from Discord without SSH."
+            ),
+            "args": [],
+            "perms": "Bot owner",
+            "example": "{prefix}musichealth",
+        },
+    )
+    @commands.is_owner()
+    async def pfx_musichealth(self, ctx: commands.Context):
+        await ctx.defer()
+
+        # ── Config snapshot (proxy creds masked) ───────────────────────────────
+        cfg = self.bot.config
+        proxy_raw = (cfg.get("music_proxy") or "").strip()
+        cookie = (cfg.get("music_cookie_file") or "").strip()
+        cookie_disp = (
+            f"`{cookie}` ({'✅ exists' if os.path.isfile(cookie) else '❌ missing'})"
+            if cookie
+            else "_(none)_"
+        )
+        src_addr = (cfg.get("music_source_address") or "0.0.0.0").strip()
+
+        lines = [
+            f"**yt-dlp:** {'✅ available' if YTDLP_AVAILABLE else '❌ not installed'}",
+            f"**Proxy:** {_mask_proxy(proxy_raw) if proxy_raw else '_(none)_'}",
+            f"**Cookies:** {cookie_disp}",
+            f"**Source address:** `{src_addr}`",
+            f"**Search service:** `{self.search_service()}`",
+        ]
+
+        if not YTDLP_AVAILABLE:
+            return await ctx.reply(embed=h.err("\n".join(lines), "🩺 Music Health"))
+
+        # ── Live probe through the real playback path ──────────────────────────
+        # Uses resolve_stream so the test exercises the exact opts playback does
+        # (proxy + cookies + source_address + authcheck skip), not a fresh config.
+        test_url = "https://www.youtube.com/watch?v=dQw4w9WgXcQ"
+        t0 = time.monotonic()
+        try:
+            info = await self.source.resolve_stream(test_url)
+        except Exception as exc:
+            dur_ms = int((time.monotonic() - t0) * 1000)
+            text = str(exc).lower()
+            if any(s in text for s in ("429", "too many requests", "rate")):
+                verdict = "⛔ **HTTP 429 — rate-limited.** Back off, or set a proxy."
+            elif any(s in text for s in ("403", "forbidden")):
+                verdict = (
+                    "⛔ **HTTP 403 — IP blocked.** Set/rotate `music_proxy` "
+                    "(residential, not datacenter)."
+                )
+            else:
+                verdict = "❌ probe failed"
+            err = str(exc)
+            if len(err) > 400:
+                err = err[:400] + "…"
+            lines.append(f"\n**Probe:** {verdict} ({dur_ms} ms)\n```\n{err}\n```")
+            return await ctx.reply(embed=h.err("\n".join(lines), "🩺 Music Health"))
+
+        dur_ms = int((time.monotonic() - t0) * 1000)
+        title = (info or {}).get("title")
+        if info and (info.get("url") or info.get("formats")):
+            lines.append(
+                f"\n**Probe:** ✅ resolved **{title or 'video'}** in {dur_ms} ms"
+            )
+            return await ctx.reply(embed=h.ok("\n".join(lines), "🩺 Music Health"))
+        lines.append(f"\n**Probe:** ⚠️ no playable stream returned ({dur_ms} ms)")
+        await ctx.reply(embed=h.warn("\n".join(lines), "🩺 Music Health"))
 
     @commands.command(
         name="lyrics",

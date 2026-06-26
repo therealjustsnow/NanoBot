@@ -422,6 +422,15 @@ class GuildPlayer:
             info = await self.cog.source.resolve_stream(track.query)
             source_url = info["url"]
             before = _FFMPEG_BEFORE
+            # The resolved googlevideo URL is IP-locked to whoever requested it.
+            # yt-dlp resolved it through music_proxy, so FFmpeg must fetch the
+            # bytes through the SAME proxy — otherwise YouTube sees a different
+            # (and possibly blocked) source IP and 403s. FFmpeg's -http_proxy
+            # only handles HTTP(S) proxies, so socks proxies are left alone
+            # (they'd make FFmpeg error); HTTP is the common case here.
+            proxy = (self.cog.bot.config.get("music_proxy") or "").strip()
+            if proxy and proxy.lower().startswith(("http://", "https://")):
+                before = f"{before} -http_proxy {shlex.quote(proxy)}"
             # yt-dlp provides headers (User-Agent, etc.) required for the stream
             # URL; without them YouTube returns 403 / throttles → silent failure.
             http_headers = info.get("http_headers") or {}
