@@ -15,6 +15,29 @@ case "$(uname -s)" in
         ;;
 esac
 
+# ── Optional: bgutil PO-token provider ──────────────────────────────────────
+# YouTube gates audio formats behind a GVS PO token; the music cog's yt-dlp
+# fetches one from a local bgutil provider (see the Self-Hosting wiki). The
+# provider is a separate process, so start it here — before exec hands off to
+# the bot — or it dies on every restart and playback 403s. This is a no-op
+# unless the provider is installed (deno + the cloned server), so it stays
+# harmless on hosts that don't use it. Override the paths/port with the env
+# vars below if your layout differs.
+POT_DIR="${BGUTIL_POT_DIR:-$HOME/bgutil-pot/server}"
+POT_PORT="${BGUTIL_POT_PORT:-4416}"
+DENO_BIN="${DENO_BIN:-$HOME/.deno/bin/deno}"
+if [ -d "${POT_DIR}/node_modules" ] && [ -x "${DENO_BIN}" ]; then
+    # Only start it if nothing already answers on the port (idempotent).
+    if ! curl -fsS "http://127.0.0.1:${POT_PORT}/ping" > /dev/null 2>&1; then
+        echo "Starting bgutil PO-token provider on :${POT_PORT}…"
+        (
+            cd "${POT_DIR}/node_modules" \
+                && setsid "${DENO_BIN}" run -A ../src/main.ts --port "${POT_PORT}" \
+                    > "${HOME}/potserver.log" 2>&1 &
+        )
+    fi
+fi
+
 # Prefer a project-local virtual environment when one exists.
 for venv_dir in venv .venv; do
     if [ -x "${venv_dir}/bin/python" ]; then
