@@ -6,6 +6,9 @@ Commands:
   sh      [--disable-timeout] <command>  — run a shell command, get stdout/stderr back
   shkill                                 — kill the active --disable-timeout shell process
   py      [--disable-timeout] <code>     — evaluate Python in the bot process (supports await)
+
+When output is too long for the embed it's truncated to the tail there and the
+full, untruncated log is attached as a .txt file.
 """
 
 import asyncio
@@ -24,6 +27,7 @@ log = logging.getLogger("NanoBot.debug")
 
 _SHELL_TIMEOUT = 60  # seconds before a shell/py process is killed (default)
 _OUTPUT_CAP = 900  # chars per section before truncation
+_FILE_CAP = 1_000_000  # max chars written to an attached file (keeps the tail)
 _DISABLE_TIMEOUT_FLAG = "--disable-timeout"
 
 
@@ -31,6 +35,25 @@ def _trim(text: str) -> str:
     if len(text) <= _OUTPUT_CAP:
         return text
     return "…(truncated)\n" + text[-_OUTPUT_CAP:]
+
+
+def _overflows(*texts: str) -> bool:
+    """True when any section is long enough that the embed truncated it."""
+    return any(len(t) > _OUTPUT_CAP for t in texts)
+
+
+def _as_file(sections: list[tuple[str, str]], filename: str) -> discord.File:
+    """Pack the full (untruncated) sections into a single .txt attachment.
+
+    Each section is headered so stdout/stderr (or output/return/error) stay
+    distinguishable. The body keeps the tail if it somehow exceeds _FILE_CAP.
+    """
+    body = "\n\n".join(f"===== {name} =====\n{text}" for name, text in sections if text)
+    if not body:
+        body = "(no output)"
+    if len(body) > _FILE_CAP:
+        body = "…(truncated)\n" + body[-_FILE_CAP:]
+    return discord.File(io.BytesIO(body.encode("utf-8", "replace")), filename=filename)
 
 
 class Debug(commands.Cog):
@@ -53,7 +76,8 @@ class Debug(commands.Cog):
         aliases=["shell", "exec"],
         help=(
             "Run a shell command and see stdout + stderr.\n\n"
-            "Owner-only. 60-second timeout by default. Both streams shown.\n\n"
+            "Owner-only. 60-second timeout by default. Both streams shown.\n"
+            "Long output is truncated in the embed and attached in full as a file.\n\n"
             "Flags:\n"
             "  --disable-timeout  — no timeout (use for long downloads etc.)\n\n"
             "Examples:\n"
@@ -121,6 +145,13 @@ class Debug(commands.Cog):
         if not parts:
             parts.append("_(no output)_")
 
+        attachment = None
+        if _overflows(stdout, stderr):
+            attachment = _as_file(
+                [("stdout", stdout), ("stderr", stderr)], "sh-output.txt"
+            )
+            parts.append("📄 Output was truncated above — full log attached.")
+
         label = command if len(command) <= 60 else command[:57] + "…"
         e = h.embed(
             title=f"{'✅' if rc == 0 else '❌'} sh: {label}",
@@ -128,7 +159,7 @@ class Debug(commands.Cog):
             color=h.GREEN if rc == 0 else h.RED,
         )
         e.set_footer(text=f"exit {rc}  ·  NanoBot Debug")
-        await ctx.reply(embed=e)
+        await ctx.reply(embed=e, **({"file": attachment} if attachment else {}))
 
     # ══════════════════════════════════════════════════════════════════════════
     #  shkill
@@ -172,7 +203,8 @@ class Debug(commands.Cog):
         help=(
             "Evaluate Python code inside the running bot process.\n\n"
             "Owner-only. 60-second timeout by default. Top-level `await` works.\n"
-            "Code block backticks are stripped.\n\n"
+            "Code block backticks are stripped. Long output is truncated in the "
+            "embed and attached in full as a file.\n\n"
             "Flags:\n"
             "  --disable-timeout  — no timeout (use for long-running async code)\n\n"
             "Locals: bot, ctx, guild, channel, author, discord, asyncio\n\n"
@@ -233,16 +265,25 @@ class Debug(commands.Cog):
 
         printed = stdout_buf.getvalue().strip()
 
+        r = repr(result) if result is not None else ""
+
         parts = []
         if printed:
             parts.append(f"**output**\n```\n{_trim(printed)}\n```")
-        if result is not None:
-            r = repr(result)
+        if r:
             parts.append(f"**return**\n```py\n{_trim(r)}\n```")
         if error:
             parts.append(f"**error**\n```py\n{_trim(error)}\n```")
         if not parts:
             parts.append("_(no output)_")
+
+        attachment = None
+        if _overflows(printed, r, error or ""):
+            attachment = _as_file(
+                [("output", printed), ("return", r), ("error", error or "")],
+                "py-output.txt",
+            )
+            parts.append("📄 Output was truncated above — full log attached.")
 
         e = h.embed(
             title="❌ Python Error" if error else "✅ Python",
@@ -250,7 +291,7 @@ class Debug(commands.Cog):
             color=h.RED if error else h.GREEN,
         )
         e.set_footer(text="NanoBot Debug")
-        await ctx.reply(embed=e)
+        await ctx.reply(embed=e, **({"file": attachment} if attachment else {}))
 
 
 # ── Registration ───────────────────────────────────────────────────────────────
