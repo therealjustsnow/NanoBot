@@ -573,6 +573,15 @@ FIELDS: tuple[Field, ...] = (
         "Local IP yt-dlp binds to (default 0.0.0.0)",
     ),
     Field(
+        "music_request_throttle",
+        "music",
+        "str",
+        "0",
+        "Seconds between yt-dlp HTTP requests; paces the bot so a proxy IP flags slower (0 = off, try 1)",
+        numeric_str=True,
+        minimum=0,
+    ),
+    Field(
         "music_autoplay_autoskip",
         "music",
         "bool",

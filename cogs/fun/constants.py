@@ -23,7 +23,7 @@ _KAGGLE_WYR_URL = (
 
 # ── Groq WYR generation ──────────────────────────────────────────────────────
 _GROQ_API_URL = "https://api.groq.com/openai/v1/chat/completions"
-_GROQ_MODEL = "llama-3.1-8b-instant"
+_GROQ_MODEL = "openai/gpt-oss-20b"
 _GROQ_WYR_COUNT = 20  # questions to generate per daily scrape
 
 # ── WYR API ratings to scrape (separate question pools) ──────────────────────
