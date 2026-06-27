@@ -17,6 +17,11 @@ An old `config.json` is auto-migrated to `config.ini` on first start (the legacy
 | `token` | `YOUR_BOT_TOKEN_HERE` | Bot token from the Discord Developer Portal. |
 | `default_prefix` | `n!` | Default command prefix (max 5 chars, no spaces). |
 | `owner_id` | *(blank)* | Discord user ID of the bot owner. Leave blank to use the application owner. |
+| `db_encryption_key` | *(blank)* | Passphrase that encrypts the SQLite databases at rest via SQLCipher (blank = no encryption; needs `pip install sqlcipher3-binary`). The NANOBOT_DB_KEY environment variable overrides this. Losing the key loses the data. |
+| `error_channel_id` | *(blank)* | Channel ID to receive Python warnings and unhandled asyncio errors. |
+| `idle_status_message` | *(blank)* | Manual idle presence text. Blank = auto-rotate "Listening to /help \| /<command>" hourly. |
+| `health_check_port` | `0` | Port for a plain-HTTP health-check endpoint (GET /health). 0 = disabled. |
+| `health_check_host` | `0.0.0.0` | Bind address for the health endpoint. 0.0.0.0 = all interfaces; 127.0.0.1 = host-local only (the payload is unauthenticated). |
 
 ## `[logging]`
 
@@ -24,6 +29,8 @@ An old `config.json` is auto-migrated to `config.ini` on first start (the legacy
 |---|---|---|
 | `log_level` | `INFO` | DEBUG / INFO / WARNING / ERROR / CRITICAL |
 | `log_http` | `false` | true = log every raw HTTP request (very noisy). |
+| `log_events_jsonl` | `true` | Write structured command-lifecycle events to logs/events.jsonl. |
+| `db_slow_query_ms` | `0` | Log any SQLite query slower than this many ms (0 = disabled). |
 
 ## `[votes]`
 
@@ -34,7 +41,9 @@ An old `config.json` is auto-migrated to `config.ini` on first start (the legacy
 | `dbl_token` | *(blank)* | discordbotlist.com bot token. |
 | `discordbotsgg_token` | *(blank)* | discord.bots.gg bot token. |
 | `vote_webhook_port` | `5000` | Local port the vote webhook listens on. |
+| `vote_webhook_host` | `0.0.0.0` | Bind address for the vote webhook. 0.0.0.0 = all interfaces; 127.0.0.1 = host-local (e.g. behind a reverse proxy). |
 | `vote_webhook_secret` | *(blank)* | Shared secret used by bot lists to authenticate webhooks. |
+| `webhook_allowed_ips` | *(blank)* | Comma-separated IPs or CIDR ranges allowed to POST vote webhooks. Blank = allow all. |
 
 ## `[groq]`
 
@@ -70,11 +79,18 @@ An old `config.json` is auto-migrated to `config.ini` on first start (the legacy
 | `music_self_deafen` | `true` | Self-deafen when joining a voice channel. |
 | `music_default_speed` | `1.0` | Default playback speed (0.5–3.0). |
 | `music_search_service` | `ytsearch` | Search service for non-URL queries: ytsearch, ytmsearch, or scsearch. |
+| `music_status_message` | *(blank)* | Presence text while playing; `{title}` = song. YouTube/Twitch tracks show a Watch button. Blank = song title. |
 | `music_proxy` | *(blank)* | HTTP/HTTPS proxy URL for yt-dlp. Example: http://user:pass@host:port. |
+| `music_user_agent` | *(blank)* | Static User-Agent header for yt-dlp. Blank = yt-dlp default. |
+| `music_source_address` | `0.0.0.0` | Local IP address yt-dlp binds outbound requests to. |
 | `music_request_throttle` | `0` | Seconds to sleep between yt-dlp HTTP requests (decimals OK). Paces the bot so a proxy IP gets rate-limited more slowly. 0 = off; try 1 if a residential proxy IP keeps getting 403'd. |
+| `music_autoplay_autoskip` | `true` | When autoplay is filling a quiet queue and a user queues a real song, skip the autoplay track immediately. |
 | `music_save_videos` | `false` | Keep downloaded audio in data/music_cache/ for instant replays. Pair with cache limits below. |
 | `music_cache_max_mb` | `0` | Max cache size in MB (0 = unlimited). Only used when music_save_videos is on. |
 | `music_cache_max_age_days` | `0` | Delete cached audio older than this many days (0 = never). |
+| `music_ratelimit_cooldown` | `600` | Back-off time (seconds; accepts 10m, 10 minutes) after a YouTube rate-limit (HTTP 429). |
+| `music_ratelimit_leave` | `false` | Leave voice channels when YouTube rate-limits the bot. |
+| `music_apl_prune_on_error` | `true` | Remove autoplaylist entries that fail to play. |
 | `music_save_history` | `true` | Save a per-server played-track history (for the n!history command). |
 | `music_metadata_lookup` | `true` | Fill missing artist info via Apple's free iTunes Search API. |
 | `music_sponsorblock` | `false` | Skip sponsor/non-music segments using the crowd-sourced SponsorBlock database. Forces a download before playback; live streams are unaffected. |
