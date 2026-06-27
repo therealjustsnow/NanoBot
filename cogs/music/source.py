@@ -192,6 +192,17 @@ class MusicSource:
             throttle = 0.0
         if throttle > 0:
             opts["sleep_interval_requests"] = throttle
+        # Optionally pin a yt-dlp YouTube player client. With cookies, yt-dlp can
+        # fall back to the "tv" client, which serves HLS (m3u8) — and the HLS
+        # media fetch 403s through some proxies where a progressive client (e.g.
+        # web_safari / android_vr) downloads cleanly. Blank = let yt-dlp choose.
+        client = (self.cog.bot.config.get("music_player_client") or "").strip()
+        if client:
+            ea = dict(opts.get("extractor_args") or {})
+            yt = dict(ea.get("youtube") or {})
+            yt["player_client"] = [c.strip() for c in client.split(",") if c.strip()]
+            ea["youtube"] = yt
+            opts["extractor_args"] = ea
         return opts
 
     # ── extraction (runs in a thread to avoid blocking the loop) ───────────────
