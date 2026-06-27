@@ -1707,6 +1707,7 @@ class Music(commands.Cog):
             else "_(none)_"
         )
         src_addr = (cfg.get("music_source_address") or "0.0.0.0").strip()
+        pot_status = await self._potoken_status()
 
         lines = [
             f"**yt-dlp:** {'✅ available' if YTDLP_AVAILABLE else '❌ not installed'}",
@@ -1714,6 +1715,7 @@ class Music(commands.Cog):
             f"**Cookies:** {cookie_disp}",
             f"**Source address:** `{src_addr}`",
             f"**Search service:** `{self.search_service()}`",
+            f"**PO-token provider:** {pot_status}",
         ]
 
         if not YTDLP_AVAILABLE:
@@ -1753,6 +1755,36 @@ class Music(commands.Cog):
             return await ctx.reply(embed=h.ok("\n".join(lines), "🩺 Music Health"))
         lines.append(f"\n**Probe:** ⚠️ no playable stream returned ({dur_ms} ms)")
         await ctx.reply(embed=h.warn("\n".join(lines), "🩺 Music Health"))
+
+    async def _potoken_status(self) -> str:
+        """Ping the bgutil PO-token provider; report up/down for musichealth.
+
+        Uses music_pot_provider_url when set, else the plugin's default
+        127.0.0.1:4416. YouTube gates audio formats behind a GVS PO token, so a
+        down provider is the usual cause of "format not available" / 403.
+        """
+        base = (self.bot.config.get("music_pot_provider_url") or "").strip()
+        base = base.rstrip("/") or "http://127.0.0.1:4416"
+        try:
+            async with aiohttp.ClientSession() as session:
+                async with session.get(
+                    f"{base}/ping", timeout=aiohttp.ClientTimeout(total=4)
+                ) as resp:
+                    if resp.status != 200:
+                        return f"⚠️ HTTP {resp.status} at `{base}`"
+                    try:
+                        data = await resp.json()
+                    except Exception:
+                        data = {}
+        except Exception:
+            return f"❌ not reachable at `{base}` — start the provider"
+        parts = []
+        if data.get("version"):
+            parts.append(f"v{data['version']}")
+        if isinstance(data.get("server_uptime"), (int, float)):
+            parts.append(f"up {int(data['server_uptime'])}s")
+        suffix = f" ({', '.join(parts)})" if parts else ""
+        return f"✅ running at `{base}`{suffix}"
 
     @commands.command(
         name="lyrics",
