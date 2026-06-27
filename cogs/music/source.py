@@ -203,6 +203,14 @@ class MusicSource:
             yt["player_client"] = [c.strip() for c in client.split(",") if c.strip()]
             ea["youtube"] = yt
             opts["extractor_args"] = ea
+        # Point the bgutil PO-token plugin at a non-default provider URL. The
+        # plugin auto-detects a provider on http://127.0.0.1:4416, so this is
+        # only needed when the provider server runs on a different host/port.
+        pot_url = (self.cog.bot.config.get("music_pot_provider_url") or "").strip()
+        if pot_url:
+            ea = dict(opts.get("extractor_args") or {})
+            ea["youtubepot-bgutilhttp"] = {"base_url": [pot_url]}
+            opts["extractor_args"] = ea
         return opts
 
     # ── extraction (runs in a thread to avoid blocking the loop) ───────────────

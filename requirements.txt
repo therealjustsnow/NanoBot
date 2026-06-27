@@ -10,6 +10,10 @@ Pillow>=12.2.0
 # Music player (cogs/music.py) — also requires the FFmpeg binary on PATH
 PyNaCl>=1.6.2
 yt-dlp[default]>=2026.6.9
+# yt-dlp plugin: fetches YouTube GVS PO tokens to avoid "format not available" /
+# HTTP 403 on gated formats. Needs a running provider server (Docker, or Node/Deno
+# via `music_pot_provider_url`) — see example_config.ini + the Configuration wiki.
+bgutil-ytdlp-pot-provider>=1.2.0
 
 # Optional: database encryption at rest (only needed when db_encryption_key /
 # NANOBOT_DB_KEY is set — see example_config.ini)
