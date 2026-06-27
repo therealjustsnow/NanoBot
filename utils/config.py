@@ -590,6 +590,15 @@ FIELDS: tuple[Field, ...] = (
         "(blank = yt-dlp picks; set one if playback 403s on m3u8/HLS)",
     ),
     Field(
+        "music_pot_provider_url",
+        "music",
+        "str",
+        None,
+        "Base URL of a running bgutil PO-token provider (e.g. http://127.0.0.1:4416). "
+        "Fixes GVS 'format not available'/403. Blank = default 127.0.0.1:4416 if the "
+        "provider runs there; set only for a non-default host/port",
+    ),
+    Field(
         "music_autoplay_autoskip",
         "music",
         "bool",
