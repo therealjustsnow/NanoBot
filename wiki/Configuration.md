@@ -84,6 +84,7 @@ An old `config.json` is auto-migrated to `config.ini` on first start (the legacy
 | `music_user_agent` | *(blank)* | Static User-Agent header for yt-dlp. Blank = yt-dlp default. |
 | `music_source_address` | `0.0.0.0` | Local IP address yt-dlp binds outbound requests to. |
 | `music_request_throttle` | `0` | Seconds to sleep between yt-dlp HTTP requests (decimals OK). Paces the bot so a proxy IP gets rate-limited more slowly. 0 = off; try 1 if a residential proxy IP keeps getting 403'd. |
+| `music_player_client` | *(blank)* | Force a yt-dlp YouTube player client (comma-separated for fallbacks). With cookies yt-dlp may pick the `tv` client, which serves HLS/m3u8 that 403s through some proxies; a progressive client (`web_safari`, `mweb`, `android_vr`, `web`) streams cleanly. Blank = yt-dlp chooses. |
 | `music_autoplay_autoskip` | `true` | When autoplay is filling a quiet queue and a user queues a real song, skip the autoplay track immediately. |
 | `music_save_videos` | `false` | Keep downloaded audio in data/music_cache/ for instant replays. Pair with cache limits below. |
 | `music_cache_max_mb` | `0` | Max cache size in MB (0 = unlimited). Only used when music_save_videos is on. |

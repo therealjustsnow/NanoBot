@@ -582,6 +582,14 @@ FIELDS: tuple[Field, ...] = (
         minimum=0,
     ),
     Field(
+        "music_player_client",
+        "music",
+        "str",
+        None,
+        "Force a yt-dlp YouTube player client, e.g. web_safari / mweb / android_vr "
+        "(blank = yt-dlp picks; set one if playback 403s on m3u8/HLS)",
+    ),
+    Field(
         "music_autoplay_autoskip",
         "music",
         "bool",
