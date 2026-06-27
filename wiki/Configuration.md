@@ -71,6 +71,7 @@ An old `config.json` is auto-migrated to `config.ini` on first start (the legacy
 | `music_default_speed` | `1.0` | Default playback speed (0.5–3.0). |
 | `music_search_service` | `ytsearch` | Search service for non-URL queries: ytsearch, ytmsearch, or scsearch. |
 | `music_proxy` | *(blank)* | HTTP/HTTPS proxy URL for yt-dlp. Example: http://user:pass@host:port. |
+| `music_request_throttle` | `0` | Seconds to sleep between yt-dlp HTTP requests (decimals OK). Paces the bot so a proxy IP gets rate-limited more slowly. 0 = off; try 1 if a residential proxy IP keeps getting 403'd. |
 | `music_save_videos` | `false` | Keep downloaded audio in data/music_cache/ for instant replays. Pair with cache limits below. |
 | `music_cache_max_mb` | `0` | Max cache size in MB (0 = unlimited). Only used when music_save_videos is on. |
 | `music_cache_max_age_days` | `0` | Delete cached audio older than this many days (0 = never). |
