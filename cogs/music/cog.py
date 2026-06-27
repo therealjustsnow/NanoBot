@@ -39,6 +39,8 @@ Config ([music] section, all optional — see example_config.ini):
   music_proxy           — HTTP/HTTPS proxy for yt-dlp (blank)
   music_user_agent      — static yt-dlp User-Agent (blank)
   music_source_address  — local bind IP for yt-dlp (default 0.0.0.0)
+  music_request_throttle — seconds between yt-dlp HTTP requests; paces the bot
+                          so a proxy IP flags slower (0 = off, try 1; default 0)
   music_autoplay_autoskip — skip autoplay/guild-play filler when a user queues (true)
   music_save_videos     — keep downloads cached for replays (false)
   music_cache_max_mb / music_cache_max_age_days — cache caps (0 = off)
