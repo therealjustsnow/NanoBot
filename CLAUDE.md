@@ -101,7 +101,7 @@ All features live in `cogs/` as discord.py cogs, hot-reloadable via `n!reload <c
 | `utility/` | Info commands (`/server`, `/user`, `/help`; `serverinfo`/`userinfo` aliases) (a package — see "Utility package layout" below) |
 | `fun/` | 26 social + 33 reaction GIF commands via nekos.best (a package — see "Fun package layout" below) |
 | `votes.py` | top.gg / DBL / discord.bots.gg stat posting and vote webhooks |
-| `eli5.py` | Plain-English AI explanations via Groq (Llama 3.1 8B) |
+| `eli5.py` | Plain-English AI explanations via Groq (GPT-OSS 20B) |
 | `images.py` | Anime image commands (husbando, kitsune, neko, waifu) via nekos.best |
 | `debug.py` | Owner-only debug REPL / shell evaluation |
 | `leveling.py` | Per-guild message XP + levels (Mee6-style curve). `/rank` card (flat hybrid) + `/level` group: `top` leaderboard, plus Manage-Server admin subcommands `set`/`give`/`reset`/`toggle`/`rate`/`announce`/`reward`/`ignore`/`coinreward`/`config`. In-memory per-member XP cooldown; role rewards granted on level-up; optional coin reward on level-up (`coin_reward` × new level, written via `db.add_coins`); off by default. |

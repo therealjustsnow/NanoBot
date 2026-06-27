@@ -2,7 +2,7 @@
 cogs/eli5.py
 ELI5 — Explain It Like I'm 5.
 
-Sends a topic to Groq (Llama 3.1 8B) and returns a plain-English
+Sends a topic to Groq (GPT-OSS 20B) and returns a plain-English
 explanation short enough to read comfortably on mobile.
 
 ──────────────────────────────────────────────────────
@@ -35,7 +35,7 @@ from utils import helpers as h
 log = logging.getLogger("NanoBot.eli5")
 
 _GROQ_URL = "https://api.groq.com/openai/v1/chat/completions"
-_MODEL = "llama-3.1-8b-instant"
+_MODEL = "openai/gpt-oss-20b"
 _MAX_TOKENS = 300  # ~200 words; tight enough for mobile, enough for a clear explanation
 
 _SYSTEM_PROMPT = (
@@ -54,7 +54,7 @@ def _get_api_key(bot: commands.Bot) -> str | None:
 
 # ══════════════════════════════════════════════════════════════════════════════
 class ELI5(commands.Cog):
-    """Explain anything in plain language using Groq / Llama 3."""
+    """Explain anything in plain language using Groq / GPT-OSS."""
 
     def __init__(self, bot: commands.Bot):
         self.bot = bot
@@ -75,7 +75,7 @@ class ELI5(commands.Cog):
             "category": "⚙️ Config & Info",
             "short": "Explain any topic in plain, simple language",
             "usage": "eli5 <topic>",
-            "desc": "Sends your topic to an AI and returns a plain-English explanation short enough to read on mobile. Powered by Groq / Llama 3. Requires GROQ_API_KEY in config.",
+            "desc": "Sends your topic to an AI and returns a plain-English explanation short enough to read on mobile. Powered by Groq / GPT-OSS. Requires GROQ_API_KEY in config.",
             "args": [
                 ("topic", "What you want explained simply (max 300 chars)"),
             ],

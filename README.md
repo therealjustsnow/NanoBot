@@ -109,7 +109,7 @@ NanoBot fixes that.
 - Schedules persist in SQLite and restore on restart
 
 **AI**
-- `/eli5` -- plain-English explanations via Groq (Llama 3.1 8B, free tier)
+- `/eli5` -- plain-English explanations via Groq (GPT-OSS 20B, free tier)
 
 **Bot Lists**
 - top.gg, discordbotlist.com, discord.bots.gg integration
@@ -629,7 +629,7 @@ Also available as prefix: `!husbando`, `!kitsune`, `!neko`, `!waifu`.
 
 ### 🧒 ELI5
 
-Explain any topic in plain English using Groq's free API (Llama 3.1 8B). Responses are kept short enough to read comfortably on a phone screen.
+Explain any topic in plain English using Groq's free API (GPT-OSS 20B). Responses are kept short enough to read comfortably on a phone screen.
 
 | Command | Description |
 |---------|-------------|
@@ -828,7 +828,7 @@ NanoBot/
 │   │                         user / avatar / banner / roleinfo / uptime / stats
 │   ├── fun.py             ← 26 social + 33 reaction commands, ship, 8-ball (nekos.best)
 │   ├── images.py          ← husbando / kitsune / neko / waifu (nekos.best)
-│   ├── eli5.py            ← AI explanations via Groq (Llama 3.1 8B)
+│   ├── eli5.py            ← AI explanations via Groq (GPT-OSS 20B)
 │   ├── music.py           ← Voice player: yt-dlp streaming, queue, autoplay, 24/7
 │   ├── votes.py           ← Bot list integrations (top.gg, DBL, discord.bots.gg)
 │   └── debug.py           ← Owner-only debug REPL / shell
