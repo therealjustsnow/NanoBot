@@ -181,6 +181,17 @@ class MusicSource:
             headers = dict(opts.get("http_headers") or {})
             headers["User-Agent"] = ua
             opts["http_headers"] = headers
+        # Optional per-request pacing: a small sleep between yt-dlp's HTTP
+        # requests makes the bot look less aggressive, so a residential proxy IP
+        # gets flagged/rate-limited more slowly. Won't rescue an already-burned
+        # IP — it just stretches a good one. Off (0) by default.
+        throttle = self.cog.bot.config.get("music_request_throttle")
+        try:
+            throttle = float(throttle) if throttle not in (None, "") else 0.0
+        except (TypeError, ValueError):
+            throttle = 0.0
+        if throttle > 0:
+            opts["sleep_interval_requests"] = throttle
         return opts
 
     # ── extraction (runs in a thread to avoid blocking the loop) ───────────────
