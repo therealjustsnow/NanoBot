@@ -36,6 +36,35 @@ SQLite and logs stay local. No cloud database required.
 
 `discord.py >= 2.3.0, aiosqlite >= 0.19.0, aiohttp >= 3.9.0, psutil >= 5.9.0, Pillow >= 10.0.0`
 
+## YouTube PO-token provider (optional, fixes music 403s)
+
+YouTube gates audio formats behind a **GVS PO token**. Without one, yt-dlp returns `Requested format is not available` or `HTTP 403` and music won't play — common when running from a flagged/datacenter IP. The fix is a local **[bgutil PO-token provider](https://github.com/Brainicism/bgutil-ytdlp-pot-provider)** that the music cog's yt-dlp pulls tokens from.
+
+Two pieces:
+
+1. **Plugin** — already in `requirements.txt` (`bgutil-ytdlp-pot-provider`); installed by `install.sh` / `!upgrade`.
+2. **Provider server** — a separate process on `127.0.0.1:4416`. Set it up once:
+
+   ```bash
+   # clone the matching version next to the bot
+   git clone --single-branch --branch 1.3.1 \
+     https://github.com/Brainicism/bgutil-ytdlp-pot-provider.git ~/bgutil-pot
+   # build with Deno (no Node needed; canvas pulls a prebuilt binary)
+   cd ~/bgutil-pot/server && deno install --allow-scripts=npm:canvas --frozen
+   ```
+
+   Docker and Node setups are in the provider's README; the Deno path above avoids a native `canvas` compile, which is handy on minimal/ARM containers.
+
+**Auto-start:** `run.sh` launches the provider before handing off to the bot, so it survives restarts. It is a **no-op unless installed** (checks for `$HOME/bgutil-pot/server/node_modules` and `$HOME/.deno/bin/deno`) and skips launch if something already answers on the port. Override the defaults with env vars if your layout differs:
+
+| Env var | Default | Purpose |
+|---|---|---|
+| `BGUTIL_POT_DIR` | `$HOME/bgutil-pot/server` | Provider `server/` directory. |
+| `BGUTIL_POT_PORT` | `4416` | Port the provider listens on. |
+| `DENO_BIN` | `$HOME/.deno/bin/deno` | Deno binary used to run it. |
+
+The plugin auto-detects a provider at `127.0.0.1:4416`. For a different host/port, set `music_pot_provider_url` (see [Configuration](Configuration)). Verify with `yt-dlp -v <url>` — look for `PO Token Providers: bgutil:http-… (external)`.
+
 ## Owner maintenance commands
 
 Commands in `cogs/admin/` and `cogs/debug.py` require bot ownership. They are prefix-only by design (slash admin commands would appear in every user's slash menu).
