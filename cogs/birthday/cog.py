@@ -29,7 +29,7 @@ Commands  (group: /birthday, aliases: bday, birthdays)
   Manage Server only:
   /birthday channel <channel>   → set the announcement channel (turns the feature on)
   /birthday disable             → turn announcements off
-  /birthday timezone [tz]       → set the timezone (no arg opens a dropdown of common zones; auto-guessed from voice region at setup)
+  /birthday timezone <tz>       → set the timezone (start typing to search via autocomplete; auto-guessed from voice region at setup)
   /birthday hour <0-23>         → local hour the announcement fires (default 9)
   /birthday message <text>      → customize the announcement (vars below; "default" resets)
   /birthday gifs <on|off>       → toggle the festive GIF
@@ -70,6 +70,7 @@ from .constants import (
     _DEFAULT_MESSAGE,
     _SONG_DIR,
     _SONG_PATH,
+    _TZ_CHOICES,
     _VARS_HELP,
 )
 from .helpers import (
@@ -82,7 +83,6 @@ from .helpers import (
     parse_birthday,
     _ffmpeg_song_cmd,
 )
-from .views import TimezoneView
 
 log = logging.getLogger("NanoBot.birthday")
 
@@ -679,38 +679,21 @@ class Birthday(commands.Cog):
     @birthday.command(
         name="timezone",
         aliases=["tz"],
-        description="Set the timezone used to decide 'today' (no arg = pick from a menu).",
+        description="Set the timezone used to decide 'today' (start typing to search).",
     )
     @commands.has_permissions(manage_guild=True)
     @app_commands.describe(
-        timezone="IANA name (e.g. America/New_York). Leave empty to pick from a dropdown."
+        timezone="Start typing a city or region to search, e.g. 'New York', 'London', 'UTC'."
     )
-    async def birthday_timezone(
-        self, ctx: commands.Context, *, timezone: Optional[str] = None
-    ):
-        # No argument → open the friendly dropdown of common timezones.
-        if not timezone:
-            view = TimezoneView(self, ctx.author.id, ctx.guild.id)
-            return await ctx.reply(
-                embed=h.info(
-                    "Pick your server's timezone from the menu below.\n"
-                    "Names handle daylight saving automatically — Iowa is "
-                    "**US Central**, not a fixed offset.\n"
-                    "Know the exact IANA name? Pass it directly: "
-                    "`/birthday timezone America/Chicago`.",
-                    "🕐 Choose a Timezone",
-                ),
-                view=view,
-                ephemeral=True,
-            )
-
+    async def birthday_timezone(self, ctx: commands.Context, *, timezone: str):
         timezone = timezone.strip()
         if timezone not in available_timezones():
             return await ctx.reply(
                 embed=h.err(
                     f"`{timezone}` isn't a valid timezone.\n"
-                    "Use an IANA name like `America/New_York`, `Europe/London`, or `UTC` "
-                    "— or run `/birthday timezone` with no argument to pick from a menu.\n"
+                    "Start typing in the **timezone** option to search — names handle "
+                    "daylight saving automatically (Iowa is **America/Chicago**, not a "
+                    "fixed offset).\n"
                     "Full list: <https://en.wikipedia.org/wiki/List_of_tz_database_time_zones>"
                 ),
                 ephemeral=True,
@@ -720,6 +703,40 @@ class Birthday(commands.Cog):
         await ctx.reply(
             embed=h.ok(f"Timezone set to **{timezone}**.", "🕐 Timezone Set")
         )
+
+    @birthday_timezone.autocomplete("timezone")
+    async def _timezone_autocomplete(
+        self, interaction: discord.Interaction, current: str
+    ) -> list[app_commands.Choice[str]]:
+        """Suggest timezones as the user types.
+
+        Empty query shows the curated common zones (friendly labels); typing
+        filters those plus the full IANA database by substring. Capped at 25.
+        """
+        q = current.strip().lower()
+        out: list[app_commands.Choice[str]] = []
+        seen: set[str] = set()
+
+        # Curated common zones first — friendly labels for quick picking.
+        for label, iana, emoji in _TZ_CHOICES:
+            if not q or q in label.lower() or q in iana.lower():
+                out.append(
+                    app_commands.Choice(name=f"{emoji} {label}"[:100], value=iana)
+                )
+                seen.add(iana)
+                if len(out) >= 25:
+                    return out
+
+        # Then any other IANA zone matching the query (so every zone is reachable).
+        if q:
+            for iana in sorted(available_timezones()):
+                if iana in seen:
+                    continue
+                if q in iana.lower():
+                    out.append(app_commands.Choice(name=iana[:100], value=iana))
+                    if len(out) >= 25:
+                        break
+        return out[:25]
 
     @birthday.command(
         name="hour",
