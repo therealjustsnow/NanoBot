@@ -29,7 +29,7 @@ Commands  (group: /birthday, aliases: bday, birthdays)
   Manage Server only:
   /birthday channel <channel>   → set the announcement channel (turns the feature on)
   /birthday disable             → turn announcements off
-  /birthday timezone [tz]       → set the timezone (no arg opens a dropdown of common zones; auto-guessed from voice region at setup)
+  /birthday timezone <tz>       → set the timezone (start typing to search via autocomplete; auto-guessed from voice region at setup)
   /birthday hour <0-23>         → local hour the announcement fires (default 9)
   /birthday message <text>      → customize the announcement (vars below; "default" resets)
   /birthday gifs <on|off>       → toggle the festive GIF
@@ -51,11 +51,10 @@ import asyncio
 import logging
 import os
 import random
-import re
 import subprocess
 from datetime import date, datetime, timedelta
 from typing import Optional
-from zoneinfo import available_timezones, ZoneInfo
+from zoneinfo import ZoneInfo, available_timezones
 
 import aiohttp
 import discord
@@ -65,311 +64,29 @@ from discord.ext import commands, tasks
 from utils import db
 from utils import helpers as h
 
+from .constants import (
+    BIRTHDAY_COLOR,
+    _BIRTHDAY_GIFS,
+    _DEFAULT_MESSAGE,
+    _SONG_DIR,
+    _SONG_PATH,
+    _TZ_CHOICES,
+    _VARS_HELP,
+)
+from .helpers import (
+    age_on,
+    days_until_birthday,
+    fmt_birthday,
+    guess_timezone_from_regions,
+    is_birthday_today,
+    next_birthday_date,
+    parse_birthday,
+    _ffmpeg_song_cmd,
+)
+
 log = logging.getLogger("NanoBot.birthday")
 
-# Pink, festive — distinct from the brand blue.
-BIRTHDAY_COLOR = 0xFF6FB5
 
-_DEFAULT_MESSAGE = (
-    "🎉 It's {mention}'s birthday today! Everybody wish them a happy birthday! 🎂🎈"
-)
-
-_VARS_HELP = (
-    "`{mention}` — ping  ·  `{user}` — display name  ·  "
-    "`{username}` — full username  ·  `{server}` — server name  ·  "
-    "`{age}` — age turning (if year known)"
-)
-
-# A handful of festive GIFs, picked at random per announcement. If one ever
-# 404s Discord just drops the image — the text still lands.
-_BIRTHDAY_GIFS = [
-    "https://media.giphy.com/media/Os4Mk2lDWNXMI/giphy.gif",
-    "https://media.giphy.com/media/7Js6gSMQVgT5C/giphy.gif",
-    "https://media.giphy.com/media/26u4cqiYI30juCOGY/giphy.gif",
-    "https://media.giphy.com/media/g5R9dok94mrIvplmZd/giphy.gif",
-    "https://media.giphy.com/media/l0MYt5jPR6QX5pnqM/giphy.gif",
-    "https://media.giphy.com/media/IRsBljLW2bWPYTb1IY/giphy.gif",
-]
-
-# ── Timezone picker ────────────────────────────────────────────────────────────
-# Friendly label → IANA name. zoneinfo applies the right offset *and* DST from
-# the name, so e.g. US Central is correct year-round (UTC-6 winter / -5 summer) —
-# never hardcode a fixed offset. Offsets in the labels are winter-standard hints.
-# Kept at 25 entries max (Discord select-menu limit).
-_TZ_CHOICES: list[tuple[str, str, str]] = [
-    # (label, IANA name, emoji)
-    ("Hawaii (UTC−10)", "Pacific/Honolulu", "🏝️"),
-    ("Alaska (UTC−9)", "America/Anchorage", "❄️"),
-    ("US Pacific — LA, Seattle (UTC−8)", "America/Los_Angeles", "🌉"),
-    ("US Mountain — Denver (UTC−7)", "America/Denver", "⛰️"),
-    ("US Arizona (UTC−7, no DST)", "America/Phoenix", "🌵"),
-    ("US Central — Chicago, Iowa, Texas (UTC−6)", "America/Chicago", "🌽"),
-    ("US Eastern — New York, Miami (UTC−5)", "America/New_York", "🗽"),
-    ("Atlantic — Halifax (UTC−4)", "America/Halifax", "🦞"),
-    ("Brazil — São Paulo (UTC−3)", "America/Sao_Paulo", "🇧🇷"),
-    ("Argentina — Buenos Aires (UTC−3)", "America/Argentina/Buenos_Aires", "🇦🇷"),
-    ("UTC / GMT", "UTC", "🌐"),
-    ("UK — London, Dublin (UTC+0)", "Europe/London", "🇬🇧"),
-    ("Central Europe — Paris, Berlin (UTC+1)", "Europe/Paris", "🇪🇺"),
-    ("Eastern Europe — Athens, Helsinki (UTC+2)", "Europe/Athens", "🏛️"),
-    ("Moscow, Istanbul (UTC+3)", "Europe/Moscow", "🇷🇺"),
-    ("Gulf — Dubai (UTC+4)", "Asia/Dubai", "🏜️"),
-    ("India — Mumbai, Delhi (UTC+5:30)", "Asia/Kolkata", "🇮🇳"),
-    ("SE Asia — Bangkok, Jakarta (UTC+7)", "Asia/Bangkok", "🛺"),
-    ("China, Singapore (UTC+8)", "Asia/Singapore", "🇸🇬"),
-    ("Japan, Korea (UTC+9)", "Asia/Tokyo", "🗾"),
-    ("Australia East — Sydney (UTC+10)", "Australia/Sydney", "🦘"),
-    ("New Zealand — Auckland (UTC+12)", "Pacific/Auckland", "🇳🇿"),
-    ("South Africa — Johannesburg (UTC+2)", "Africa/Johannesburg", "🇿🇦"),
-    ("West Africa — Lagos (UTC+1)", "Africa/Lagos", "🇳🇬"),
-]
-
-# Discord voice region code → best-effort IANA tz, used to pre-fill a guild's
-# timezone at setup when a mod hasn't picked one. Rough (a region spans many
-# zones) — only a starting guess the mod can override.
-_REGION_TZ: dict[str, str] = {
-    "us-west": "America/Los_Angeles",
-    "us-east": "America/New_York",
-    "us-central": "America/Chicago",
-    "us-south": "America/Chicago",
-    "brazil": "America/Sao_Paulo",
-    "europe": "Europe/Paris",
-    "rotterdam": "Europe/Amsterdam",
-    "russia": "Europe/Moscow",
-    "singapore": "Asia/Singapore",
-    "hongkong": "Asia/Hong_Kong",
-    "japan": "Asia/Tokyo",
-    "south-korea": "Asia/Seoul",
-    "india": "Asia/Kolkata",
-    "dubai": "Asia/Dubai",
-    "southafrica": "Africa/Johannesburg",
-    "sydney": "Australia/Sydney",
-}
-
-
-def guess_timezone_from_regions(regions: list[str]) -> str | None:
-    """Pick the most common mappable IANA tz from a list of voice-region codes."""
-    tallies: dict[str, int] = {}
-    for code in regions:
-        tz = _REGION_TZ.get((code or "").lower())
-        if tz:
-            tallies[tz] = tallies.get(tz, 0) + 1
-    if not tallies:
-        return None
-    return max(tallies, key=tallies.get)
-
-
-class TimezoneView(discord.ui.View):
-    """Dropdown of common timezones for /birthday timezone (no arg)."""
-
-    def __init__(self, cog: "Birthday", author_id: int, guild_id: int):
-        super().__init__(timeout=120)
-        self.cog = cog
-        self.author_id = author_id
-        self.guild_id = guild_id
-        self.add_item(_TimezoneSelect())
-
-    async def interaction_check(self, interaction: discord.Interaction) -> bool:
-        if interaction.user.id != self.author_id:
-            await interaction.response.send_message(
-                "Only the person who opened this menu can use it.", ephemeral=True
-            )
-            return False
-        return True
-
-
-class _TimezoneSelect(discord.ui.Select):
-    def __init__(self):
-        options = [
-            discord.SelectOption(label=label[:100], value=iana, emoji=emoji)
-            for label, iana, emoji in _TZ_CHOICES
-        ]
-        super().__init__(placeholder="Pick your server's timezone…", options=options)
-
-    async def callback(self, interaction: discord.Interaction):
-        view: TimezoneView = self.view  # type: ignore[assignment]
-        tz = self.values[0]
-        await db.set_birthday_config(view.guild_id, timezone=tz)
-        view.cog._tz_cache.pop(tz, None)
-        for child in view.children:
-            child.disabled = True
-        await interaction.response.edit_message(
-            embed=h.ok(f"Timezone set to **{tz}**.", "🕐 Timezone Set"),
-            view=view,
-        )
-        view.stop()
-
-
-# ── Date helpers (pure — imported directly by tests) ───────────────────────────
-
-_MONTH_NAMES = [
-    "January", "February", "March", "April", "May", "June",
-    "July", "August", "September", "October", "November", "December",
-]  # fmt: skip
-
-_MONTHS = {
-    "january": 1, "jan": 1,
-    "february": 2, "feb": 2,
-    "march": 3, "mar": 3,
-    "april": 4, "apr": 4,
-    "may": 5,
-    "june": 6, "jun": 6,
-    "july": 7, "jul": 7,
-    "august": 8, "aug": 8,
-    "september": 9, "sep": 9, "sept": 9,
-    "october": 10, "oct": 10,
-    "november": 11, "nov": 11,
-    "december": 12, "dec": 12,
-}  # fmt: skip
-
-# Max day per month (February allows 29 so leap-day birthdays register).
-_MAX_DAY = (31, 29, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31)
-
-
-def _is_leap(year: int) -> bool:
-    return year % 4 == 0 and (year % 100 != 0 or year % 400 == 0)
-
-
-def parse_birthday(s: str) -> tuple[int, int, int | None] | None:
-    """Parse a birthday string into ``(month, day, year_or_None)`` or ``None``.
-
-    Accepts month-name forms ("March 5", "5 Mar 1998", "March 5, 1998"),
-    numeric month-first forms ("03/05", "3-5-1998") and ISO ("1998-03-05").
-    Ordinal suffixes (5th) are tolerated. Years must be four digits.
-    """
-    if not s:
-        return None
-    s = s.strip()
-    month = day = year = None
-
-    low = s.lower().replace(",", " ")
-    # Strip ordinal suffixes: "5th" → "5".
-    tokens = [re.sub(r"^(\d+)(st|nd|rd|th)$", r"\1", t) for t in low.split()]
-
-    name_idx = next((i for i, t in enumerate(tokens) if t in _MONTHS), None)
-    if name_idx is not None:
-        month = _MONTHS[tokens[name_idx]]
-        nums = [int(t) for t in tokens if t.isdigit()]
-        days = [n for n in nums if 1 <= n <= 31]
-        years = [n for n in nums if 1000 <= n <= 9999]
-        if not days:
-            return None
-        day = days[0]
-        year = years[0] if years else None
-    else:
-        iso = re.fullmatch(r"(\d{4})[-/.](\d{1,2})[-/.](\d{1,2})", s)
-        if iso:
-            year, month, day = int(iso[1]), int(iso[2]), int(iso[3])
-        else:
-            m = re.fullmatch(r"(\d{1,2})[-/.](\d{1,2})(?:[-/.](\d{4}))?", s)
-            if not m:
-                return None
-            month, day = int(m[1]), int(m[2])
-            year = int(m[3]) if m[3] else None
-
-    if not (1 <= month <= 12):
-        return None
-    if not (1 <= day <= _MAX_DAY[month - 1]):
-        return None
-    if year is not None and not (1900 <= year <= 2100):
-        return None
-    return month, day, year
-
-
-def fmt_birthday(month: int, day: int, year: int | None = None) -> str:
-    """'March 5' or 'March 5, 1998'."""
-    out = f"{_MONTH_NAMES[month - 1]} {day}"
-    if year:
-        out += f", {year}"
-    return out
-
-
-def next_birthday_date(month: int, day: int, today: date) -> date:
-    """The next calendar date this birthday lands on (today counts as itself).
-
-    A Feb 29 birthday falls back to Feb 28 in non-leap years.
-    """
-
-    def _make(year: int) -> date:
-        try:
-            return date(year, month, day)
-        except ValueError:
-            return date(year, month, 28)  # Feb 29 → Feb 28
-
-    d = _make(today.year)
-    if d < today:
-        d = _make(today.year + 1)
-    return d
-
-
-def days_until_birthday(month: int, day: int, today: date) -> int:
-    return (next_birthday_date(month, day, today) - today).days
-
-
-def is_birthday_today(month: int, day: int, today: date) -> bool:
-    if month == today.month and day == today.day:
-        return True
-    # Feb 29 birthday celebrated on Feb 28 when the year isn't a leap year.
-    if month == 2 and day == 29 and today.month == 2 and today.day == 28:
-        return not _is_leap(today.year)
-    return False
-
-
-def age_on(month: int, day: int, year: int | None, on_date: date) -> int | None:
-    """Age the person reaches on/by ``on_date`` (None when birth year unknown)."""
-    if year is None:
-        return None
-    age = on_date.year - year
-    if (on_date.month, on_date.day) < (month, day):
-        age -= 1
-    return age
-
-
-# ── "Happy Birthday" melody (synthesized, no asset/network needed) ─────────────
-# C-major, public-domain melody rendered as plain sine tones by FFmpeg the first
-# time it's needed, then cached on disk. (freq_hz, duration_seconds).
-_HB_NOTES = [
-    (392, 0.25), (392, 0.25), (440, 0.50), (392, 0.50), (523, 0.50), (494, 1.00),
-    (392, 0.25), (392, 0.25), (440, 0.50), (392, 0.50), (587, 0.50), (523, 1.00),
-    (392, 0.25), (392, 0.25), (784, 0.50), (659, 0.50), (523, 0.50), (494, 0.50), (440, 1.00),
-    (698, 0.25), (698, 0.25), (659, 0.50), (523, 0.50), (587, 0.50), (523, 1.00),
-]  # fmt: skip
-
-_SONG_DIR = os.path.join("data", "birthday_cache")
-_SONG_PATH = os.path.join(_SONG_DIR, "happy_birthday.wav")
-
-
-def _ffmpeg_song_cmd(path: str) -> list[str]:
-    """Build the FFmpeg command that renders _HB_NOTES to a stereo WAV at *path*."""
-    inputs: list[str] = []
-    chain: list[str] = []
-    labels: list[str] = []
-    for i, (freq, dur) in enumerate(_HB_NOTES):
-        inputs += [
-            "-f", "lavfi", "-t", f"{dur:.3f}",
-            "-i", f"sine=frequency={freq}:sample_rate=48000",
-        ]  # fmt: skip
-        fade_out = max(dur - 0.07, 0.0)
-        chain.append(
-            f"[{i}]afade=t=in:st=0:d=0.02,"
-            f"afade=t=out:st={fade_out:.3f}:d=0.07,volume=0.25[a{i}]"
-        )
-        labels.append(f"[a{i}]")
-    filtergraph = (
-        ";".join(chain)
-        + ";"
-        + "".join(labels)
-        + f"concat=n={len(_HB_NOTES)}:v=0:a=1[out]"
-    )
-    return [
-        "ffmpeg", "-hide_banner", "-loglevel", "error",
-        *inputs,
-        "-filter_complex", filtergraph,
-        "-map", "[out]", "-ac", "2", "-ar", "48000", "-y", path,
-    ]  # fmt: skip
-
-
-# ══════════════════════════════════════════════════════════════════════════════
 class Birthday(commands.Cog):
     """Birthday registration + per-server announcements."""
 
@@ -962,38 +679,21 @@ class Birthday(commands.Cog):
     @birthday.command(
         name="timezone",
         aliases=["tz"],
-        description="Set the timezone used to decide 'today' (no arg = pick from a menu).",
+        description="Set the timezone used to decide 'today' (start typing to search).",
     )
     @commands.has_permissions(manage_guild=True)
     @app_commands.describe(
-        timezone="IANA name (e.g. America/New_York). Leave empty to pick from a dropdown."
+        timezone="Start typing a city or region to search, e.g. 'New York', 'London', 'UTC'."
     )
-    async def birthday_timezone(
-        self, ctx: commands.Context, *, timezone: Optional[str] = None
-    ):
-        # No argument → open the friendly dropdown of common timezones.
-        if not timezone:
-            view = TimezoneView(self, ctx.author.id, ctx.guild.id)
-            return await ctx.reply(
-                embed=h.info(
-                    "Pick your server's timezone from the menu below.\n"
-                    "Names handle daylight saving automatically — Iowa is "
-                    "**US Central**, not a fixed offset.\n"
-                    "Know the exact IANA name? Pass it directly: "
-                    "`/birthday timezone America/Chicago`.",
-                    "🕐 Choose a Timezone",
-                ),
-                view=view,
-                ephemeral=True,
-            )
-
+    async def birthday_timezone(self, ctx: commands.Context, *, timezone: str):
         timezone = timezone.strip()
         if timezone not in available_timezones():
             return await ctx.reply(
                 embed=h.err(
                     f"`{timezone}` isn't a valid timezone.\n"
-                    "Use an IANA name like `America/New_York`, `Europe/London`, or `UTC` "
-                    "— or run `/birthday timezone` with no argument to pick from a menu.\n"
+                    "Start typing in the **timezone** option to search — names handle "
+                    "daylight saving automatically (Iowa is **America/Chicago**, not a "
+                    "fixed offset).\n"
                     "Full list: <https://en.wikipedia.org/wiki/List_of_tz_database_time_zones>"
                 ),
                 ephemeral=True,
@@ -1003,6 +703,40 @@ class Birthday(commands.Cog):
         await ctx.reply(
             embed=h.ok(f"Timezone set to **{timezone}**.", "🕐 Timezone Set")
         )
+
+    @birthday_timezone.autocomplete("timezone")
+    async def _timezone_autocomplete(
+        self, interaction: discord.Interaction, current: str
+    ) -> list[app_commands.Choice[str]]:
+        """Suggest timezones as the user types.
+
+        Empty query shows the curated common zones (friendly labels); typing
+        filters those plus the full IANA database by substring. Capped at 25.
+        """
+        q = current.strip().lower()
+        out: list[app_commands.Choice[str]] = []
+        seen: set[str] = set()
+
+        # Curated common zones first — friendly labels for quick picking.
+        for label, iana, emoji in _TZ_CHOICES:
+            if not q or q in label.lower() or q in iana.lower():
+                out.append(
+                    app_commands.Choice(name=f"{emoji} {label}"[:100], value=iana)
+                )
+                seen.add(iana)
+                if len(out) >= 25:
+                    return out
+
+        # Then any other IANA zone matching the query (so every zone is reachable).
+        if q:
+            for iana in sorted(available_timezones()):
+                if iana in seen:
+                    continue
+                if q in iana.lower():
+                    out.append(app_commands.Choice(name=iana[:100], value=iana))
+                    if len(out) >= 25:
+                        break
+        return out[:25]
 
     @birthday.command(
         name="hour",

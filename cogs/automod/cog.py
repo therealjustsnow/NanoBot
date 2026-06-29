@@ -50,12 +50,9 @@ Commands (all /automod, require Manage Server):
   /automod ignore               — Add / remove exempt channels or roles
 """
 
-import asyncio
 import logging
 import re
 import time
-from collections import defaultdict, deque
-from datetime import datetime, timedelta, timezone
 from typing import Optional
 
 import discord
@@ -66,427 +63,27 @@ from utils import db
 from utils import helpers as h
 from utils.checks import has_admin_perms
 
+from .constants import ACTION_LABELS, RULE_LABELS, TIMEOUT_SECONDS, _spam_tracker
+from .helpers import (
+    _all_matches_regex_safe,
+    _caps_percent,
+    _check_spam,
+    _clear_spam,
+    _has_badword,
+    _has_invite,
+    _has_link,
+    _is_risky_regex,
+    _matches_regex_safe,
+    _mention_count,
+)
+from .actions import _execute_action
+from .autocomplete import (
+    _action_autocomplete,
+    _regex_pattern_autocomplete,
+    _rule_autocomplete,
+)
+
 log = logging.getLogger("NanoBot.automod")
-
-# ── Constants ──────────────────────────────────────────────────────────────────
-TIMEOUT_SECONDS = 600  # 10 minutes for the "timeout" action
-
-RULE_LABELS: dict[str, str] = {
-    "spam": "💬 Spam",
-    "invites": "📨 Invite Links",
-    "links": "🔗 External Links",
-    "caps": "🔠 Caps Abuse",
-    "mentions": "📣 Mass Mentions",
-    "badwords": "🤬 Bad Words",
-    "regex": "🔍 Regex Filter",
-    "attachment_word": "📎 Word + Attachment",
-}
-
-ACTION_LABELS: dict[str, str] = {
-    "delete": "🗑️ Delete",
-    "warn": "⚠️ Delete + Warn",
-    "timeout": "🔇 Delete + Timeout",
-    "kick": "👢 Delete + Kick",
-    "softban": "🔨 Delete + Softban",
-}
-
-# Pre-compiled regex patterns
-_RE_INVITE = re.compile(
-    r"(discord\.(gg|com/invite)|discordapp\.com/invite)/[a-zA-Z0-9\-]+",
-    re.IGNORECASE,
-)
-_RE_URL = re.compile(
-    r"https?://[^\s<>\"]+|www\.[^\s<>\"]+",
-    re.IGNORECASE,
-)
-
-# Cache for user-defined per-guild regex patterns (keyed by raw pattern string).
-# Avoids recompiling the same pattern on every incoming message. Bounded so a
-# guild that churns through many patterns can't grow it without limit.
-_user_regex_cache: dict[str, re.Pattern] = {}
-_REGEX_CACHE_MAX = 512
-
-# Guard against catastrophic backtracking (ReDoS) from admin-supplied patterns:
-# matching runs in a worker thread with a hard wall-clock timeout, and we only
-# scan a bounded slice of the message so the event loop can never freeze.
-_REGEX_TIMEOUT = 0.5
-_MAX_REGEX_INPUT = 2000
-
-
-# ── In-memory spam tracker ─────────────────────────────────────────────────────
-# Structure: {guild_id: {user_id: deque[float(timestamp)]}}
-# Timestamps older than the window are pruned on every check.
-_spam_tracker: dict[int, dict[int, deque]] = defaultdict(lambda: defaultdict(deque))
-
-
-def _check_spam(guild_id: int, user_id: int, count: int, window: int) -> bool:
-    """
-    Record this message and return True if the user has exceeded the spam threshold
-    (sent `count` or more messages within the last `window` seconds).
-    """
-    now = time.monotonic()
-    q = _spam_tracker[guild_id][user_id]
-    q.append(now)
-    cutoff = now - window
-    while q and q[0] < cutoff:
-        q.popleft()
-    return len(q) >= count
-
-
-def _clear_spam(guild_id: int, user_id: int) -> None:
-    """Reset the spam counter for a user after taking action."""
-    _spam_tracker[guild_id].pop(user_id, None)
-
-
-# ── Rule-check helpers ─────────────────────────────────────────────────────────
-
-
-def _has_invite(content: str) -> bool:
-    return bool(_RE_INVITE.search(content))
-
-
-def _has_link(content: str) -> bool:
-    return bool(_RE_URL.search(content))
-
-
-def _caps_percent(content: str) -> float:
-    letters = [c for c in content if c.isalpha()]
-    if not letters:
-        return 0.0
-    return sum(1 for c in letters if c.isupper()) / len(letters) * 100
-
-
-def _mention_count(message: discord.Message) -> int:
-    return len(message.mentions) + len(message.role_mentions)
-
-
-def _has_badword(content: str, words: list[str]) -> str | None:
-    """Return the first matched bad word (whole-word, case-insensitive), or None."""
-    for word in words:
-        if re.search(r"\b" + re.escape(word) + r"\b", content, re.IGNORECASE):
-            return word
-    return None
-
-
-def _matches_regex(content: str, patterns: list[dict]) -> str | None:
-    """
-    Test content against each stored regex pattern (case-insensitive).
-    Returns the label or pattern string of the first match, or None.
-    Silently skips any pattern that fails to compile (shouldn't happen since
-    we validate on add, but safe to guard here too).
-
-    Compiled patterns are cached in _user_regex_cache to avoid recompiling
-    the same pattern string on every incoming message.
-    """
-    for p in patterns:
-        raw = p["pattern"]
-        try:
-            compiled = _user_regex_cache.get(raw)
-            if compiled is None:
-                compiled = re.compile(raw, re.IGNORECASE)
-                if len(_user_regex_cache) >= _REGEX_CACHE_MAX:
-                    _user_regex_cache.clear()
-                _user_regex_cache[raw] = compiled
-            if compiled.search(content):
-                return p["label"] or p["pattern"]
-        except re.error:
-            pass
-    return None
-
-
-# Catches the most common catastrophic-backtracking shape: a quantifier applied
-# to a group that itself ends in a quantifier, e.g. (a+)+ , (a*)* , ([a-z]+)* .
-# Not exhaustive, but blocks the easy footguns at add-time.
-_REDOS_RE = re.compile(r"\([^)]*[+*}]\s*\)\s*[+*{]")
-_MAX_PATTERN_LEN = 400
-
-
-def _is_risky_regex(pattern: str) -> bool:
-    """Heuristic: True if the pattern looks prone to catastrophic backtracking."""
-    return len(pattern) > _MAX_PATTERN_LEN or bool(_REDOS_RE.search(pattern))
-
-
-async def _matches_regex_safe(content: str, patterns: list[dict]) -> str | None:
-    """Run _matches_regex in a worker thread under a wall-clock timeout.
-
-    A malicious or accidental catastrophic-backtracking pattern can hang the
-    regex engine; offloading to a thread keeps the event loop responsive, and
-    the timeout bounds how long any single check can run.
-    """
-    if not patterns:
-        return None
-    snippet = content[:_MAX_REGEX_INPUT]
-    loop = asyncio.get_running_loop()
-    try:
-        return await asyncio.wait_for(
-            loop.run_in_executor(None, _matches_regex, snippet, patterns),
-            timeout=_REGEX_TIMEOUT,
-        )
-    except asyncio.TimeoutError:
-        log.warning(
-            "automod: regex match exceeded %.1fs — skipping (possible ReDoS pattern)",
-            _REGEX_TIMEOUT,
-        )
-        return None
-
-
-# ── Log channel resolution ─────────────────────────────────────────────────────
-
-
-async def _get_automod_log_channel(
-    bot: commands.Bot,
-    guild: discord.Guild,
-    am_cfg: dict,
-) -> discord.TextChannel | None:
-    """Resolve the channel for automod action logs.
-
-    Priority:
-      1. Dedicated automod log channel (am_cfg["log_channel_id"])
-      2. Audit log channel, if the automod_action event is toggled on there
-    """
-    log_ch_id = am_cfg.get("log_channel_id")
-    if log_ch_id:
-        ch = guild.get_channel(int(log_ch_id))
-        if isinstance(ch, discord.TextChannel):
-            return ch
-
-    # Fall back to audit log if automod_action event is enabled
-    al_cfg = await db.get_auditlog_config(guild.id)
-    if not al_cfg or not al_cfg["enabled"]:
-        return None
-    if "automod_action" not in al_cfg["events"]:
-        return None
-    if not al_cfg["channel_id"]:
-        return None
-    ch = guild.get_channel(int(al_cfg["channel_id"]))
-    return ch if isinstance(ch, discord.TextChannel) else None
-
-
-async def _send_action_log(
-    bot: commands.Bot,
-    message: discord.Message,
-    action: str,
-    rule: str,
-    detail: str,
-) -> None:
-    """Post an automod action embed to the configured log channel."""
-    am_cfg = await db.get_automod_config(message.guild.id)
-    if am_cfg is None:
-        return
-    ch = await _get_automod_log_channel(bot, message.guild, am_cfg)
-    if ch is None:
-        return
-    member = message.author
-    e = discord.Embed(title="🛡️ AutoMod Action", color=h.YELLOW)
-    e.add_field(
-        name="User",
-        value=f"{member.mention} (`{member.id}`)",
-        inline=True,
-    )
-    e.add_field(name="Channel", value=message.channel.mention, inline=True)
-    e.add_field(name="Rule", value=RULE_LABELS.get(rule, rule), inline=True)
-    e.add_field(name="Action", value=ACTION_LABELS.get(action, action), inline=True)
-    e.add_field(name="Reason", value=detail[:512], inline=False)
-    e.add_field(name="Moderator", value="NanoBot (automated)", inline=True)
-    e.set_footer(text=f"NanoBot AutoMod  •  User ID: {member.id}")
-    e.timestamp = discord.utils.utcnow()
-    try:
-        await ch.send(embed=e)
-    except (discord.Forbidden, discord.HTTPException) as exc:
-        log.debug("AutoMod log send failed in #%s: %s", ch, exc)
-
-
-# ── Action executor ────────────────────────────────────────────────────────────
-
-
-async def _execute_action(
-    message: discord.Message,
-    action: str,
-    rule: str,
-    detail: str,
-    timeout_seconds: int = TIMEOUT_SECONDS,
-    dm_message: Optional[str] = None,
-    bot: Optional[commands.Bot] = None,
-) -> None:
-    """
-    Delete the offending message and optionally warn/timeout the author.
-    Silently handles permission errors so a missing perm never crashes the listener.
-    """
-    member = message.author
-    guild = message.guild
-
-    # Always delete first
-    try:
-        await message.delete()
-    except (discord.Forbidden, discord.NotFound, discord.HTTPException):
-        pass
-
-    # DM the user if configured — sent before any further action so kick/ban
-    # don't close the DM channel before we can reach them.
-    if dm_message:
-        try:
-            await member.send(dm_message)
-        except (discord.Forbidden, discord.HTTPException):
-            pass
-
-    try:
-        if action == "delete":
-            return
-
-        # Notify the user with a short ephemeral-style message that auto-deletes
-        reason_text = f"AutoMod ({RULE_LABELS.get(rule, rule)}): {detail}"
-        try:
-            notice = await message.channel.send(
-                embed=discord.Embed(
-                    description=f"⚠️ {member.mention} — your message was removed.\n`{detail}`",
-                    color=h.YELLOW,
-                )
-            )
-            _spawn_soft_delete(notice, 6.0)
-        except (discord.Forbidden, discord.HTTPException):
-            pass
-
-        if action in ("warn", "timeout"):
-            now = datetime.now(timezone.utc)
-            try:
-                count = await db.add_warning(
-                    guild.id,
-                    member.id,
-                    reason_text,
-                    "AutoMod",
-                    "AutoMod",
-                    now.isoformat(),
-                )
-                log.info(
-                    f"AutoMod warned {h.user_log(member)} in {guild} "
-                    f"— {rule}: {detail} (warning #{count})"
-                )
-
-                # Respect warnconfig auto-kick/ban thresholds
-                warn_cfg = await db.get_warn_config(guild.id)
-                if warn_cfg["ban_at"] and count >= warn_cfg["ban_at"]:
-                    try:
-                        await guild.ban(
-                            member,
-                            reason=f"NanoBot auto-ban: {count} warnings (AutoMod)",
-                            delete_message_days=0,
-                        )
-                    except discord.Forbidden:
-                        pass
-                elif warn_cfg["kick_at"] and count >= warn_cfg["kick_at"]:
-                    try:
-                        await guild.kick(
-                            member,
-                            reason=f"NanoBot auto-kick: {count} warnings (AutoMod)",
-                        )
-                    except discord.Forbidden:
-                        pass
-
-            except Exception as exc:
-                log.error(f"AutoMod warn failed: {exc}", exc_info=exc)
-
-        if action == "timeout":
-            try:
-                until = discord.utils.utcnow() + timedelta(seconds=timeout_seconds)
-                await member.timeout(until, reason=reason_text)
-                log.info(f"AutoMod timed out {h.user_log(member)} in {guild} — {rule}")
-            except discord.Forbidden:
-                pass
-            except Exception as exc:
-                log.error(f"AutoMod timeout failed: {exc}", exc_info=exc)
-            return
-
-        if action == "kick":
-            try:
-                await guild.kick(member, reason=reason_text)
-                log.info(f"AutoMod kicked {h.user_log(member)} in {guild} — {rule}")
-            except discord.Forbidden:
-                pass
-            except Exception as exc:
-                log.error(f"AutoMod kick failed: {exc}", exc_info=exc)
-            return
-
-        if action == "softban":
-            try:
-                await guild.ban(
-                    member,
-                    reason=f"{reason_text} (softban)",
-                    delete_message_days=1,
-                )
-                await guild.unban(member, reason=f"{reason_text} (softban release)")
-                log.info(f"AutoMod softbanned {h.user_log(member)} in {guild} — {rule}")
-            except discord.Forbidden:
-                pass
-            except Exception as exc:
-                log.error(f"AutoMod softban failed: {exc}", exc_info=exc)
-
-    finally:
-        if bot is not None:
-            await _send_action_log(bot, message, action, rule, detail)
-
-
-# Strong refs to fire-and-forget soft-delete tasks. Without this the event loop
-# only holds a weak reference and may garbage-collect the task before it runs.
-_bg_tasks: set[asyncio.Task] = set()
-
-
-def _spawn_soft_delete(message: discord.Message, delay: float) -> None:
-    task = asyncio.create_task(_soft_delete_after(message, delay))
-    _bg_tasks.add(task)
-    task.add_done_callback(_bg_tasks.discard)
-
-
-async def _soft_delete_after(message: discord.Message, delay: float) -> None:
-    """Delete *message* after *delay* seconds, ignoring any errors."""
-    await asyncio.sleep(delay)
-    try:
-        await message.delete()
-    except (discord.NotFound, discord.HTTPException):
-        pass
-
-
-# ── Autocomplete helpers ───────────────────────────────────────────────────────
-
-
-async def _rule_autocomplete(
-    interaction: discord.Interaction,
-    current: str,
-) -> list[app_commands.Choice[str]]:
-    return [
-        app_commands.Choice(name=label, value=key)
-        for key, label in RULE_LABELS.items()
-        if current.lower() in key or current.lower() in label.lower()
-    ]
-
-
-async def _action_autocomplete(
-    interaction: discord.Interaction,
-    current: str,
-) -> list[app_commands.Choice[str]]:
-    return [
-        app_commands.Choice(name=label, value=key)
-        for key, label in ACTION_LABELS.items()
-        if current.lower() in key or current.lower() in label.lower()
-    ]
-
-
-async def _regex_pattern_autocomplete(
-    interaction: discord.Interaction,
-    current: str,
-) -> list[app_commands.Choice[str]]:
-    """Autocomplete for regex remove — display label (or pattern) as name, pattern as value."""
-    patterns = await db.get_automod_regex_patterns(interaction.guild_id)
-    choices = []
-    for p in patterns:
-        display = p["label"] or p["pattern"]
-        if (
-            current.lower() in display.lower()
-            or current.lower() in p["pattern"].lower()
-        ):
-            choices.append(
-                app_commands.Choice(name=display[:100], value=p["pattern"][:100])
-            )
-    return choices[:25]
 
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -1186,14 +783,13 @@ class AutoMod(commands.Cog):
             )
             return
 
-        matched = []
-        for p in patterns:
-            try:
-                if re.search(p["pattern"], text, re.IGNORECASE):
-                    label_part = f" ({p['label']})" if p["label"] else ""
-                    matched.append(f"`{p['pattern']}`{label_part}")
-            except re.error:
-                pass
+        # Route through the same thread + wall-clock timeout the listener uses, so
+        # a catastrophic-backtracking pattern can't freeze the event loop here.
+        hits = await _all_matches_regex_safe(text, patterns)
+        matched = [
+            f"`{p['pattern']}`" + (f" ({p['label']})" if p["label"] else "")
+            for p in hits
+        ]
 
         preview = text[:200] + ("…" if len(text) > 200 else "")
 

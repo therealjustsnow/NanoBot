@@ -105,7 +105,7 @@ def _dict_string_keys(tree: ast.Module, var_name: str) -> set[str]:
 
 def test_automod_help_covers_all_rules_and_actions():
     """The /help AutoMod entry must mention every rule and action the cog enforces."""
-    automod = ast.parse(open(os.path.join(COGS_DIR, "automod.py")).read())
+    automod = ast.parse(open(os.path.join(COGS_DIR, "automod", "constants.py")).read())
     rules = _dict_string_keys(automod, "RULE_LABELS")
     actions = _dict_string_keys(automod, "ACTION_LABELS")
 

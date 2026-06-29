@@ -1,5 +1,5 @@
 """
-Tests for cogs/gatekeeper.py — pure logic and perceptual hashing.
+Tests for cogs/gatekeeper/ — pure logic and perceptual hashing.
 
 The slash-only /gatekeeper command group can't be dispatched through dpytest
 (dpytest drives prefix/text commands), so coverage here focuses on the

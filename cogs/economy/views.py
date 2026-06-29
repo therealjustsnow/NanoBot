@@ -1,0 +1,240 @@
+"""discord.ui views for the economy cog: /report co-op confirm + /raid join board."""
+
+from __future__ import annotations
+
+from typing import TYPE_CHECKING, Optional
+
+import discord
+
+from utils import db
+from utils import helpers as h
+
+from .constants import COOP_CONFIRM_TIMEOUT, RAID_TIMEOUT
+
+if TYPE_CHECKING:
+    from .cog import Economy
+
+
+class ReportView(discord.ui.View):
+    """Partner-confirm gate for a co-op activity reward.
+
+    Only the named partner can confirm; either party can decline. Coins +
+    contribution are awarded to both members on confirm. Short-lived (no
+    persistence) — a pending report simply expires on bot restart.
+    """
+
+    def __init__(self, cog: "Economy", author_id: int, partner_id: int, activity: str):
+        super().__init__(timeout=COOP_CONFIRM_TIMEOUT)
+        self.cog = cog
+        self.author_id = author_id
+        self.partner_id = partner_id
+        self.activity = activity
+        self.message: Optional[discord.Message] = None
+        self.resolved = False
+
+    async def on_timeout(self):
+        if self.resolved or self.message is None:
+            return
+        for child in self.children:
+            child.disabled = True
+        try:
+            await self.message.edit(
+                embed=h.warn(
+                    "Co-op report expired — partner didn't confirm in time.",
+                    "⏳ Expired",
+                ),
+                view=self,
+            )
+        except discord.HTTPException:
+            pass
+
+    @discord.ui.button(label="Confirm", style=discord.ButtonStyle.success, emoji="🤝")
+    async def confirm(
+        self, interaction: discord.Interaction, button: discord.ui.Button
+    ):
+        if interaction.user.id != self.partner_id:
+            return await interaction.response.send_message(
+                embed=h.err("Only the tagged partner can confirm this report."),
+                ephemeral=True,
+            )
+        self.resolved = True
+        guild_id = interaction.guild.id
+        cfg = await self.cog._cfg(guild_id)
+        reward = cfg["coop_reward"]
+        # Award coins + lifetime contribution to both members.
+        for uid in (self.author_id, self.partner_id):
+            await db.add_coins(guild_id, uid, reward)
+            await db.add_contribution(guild_id, uid, reward)
+        for child in self.children:
+            child.disabled = True
+        activity = f" for **{self.activity}**" if self.activity else ""
+        await interaction.response.edit_message(
+            embed=h.ok(
+                f"🤝 <@{self.author_id}> and <@{self.partner_id}> teamed up{activity}!\n"
+                f"Both earned {self.cog._money(cfg, reward)} and "
+                f"**+{reward:,}** contribution.",
+                "Co-op Confirmed",
+            ),
+            view=self,
+        )
+        self.stop()
+
+    @discord.ui.button(label="Decline", style=discord.ButtonStyle.secondary, emoji="✖️")
+    async def decline(
+        self, interaction: discord.Interaction, button: discord.ui.Button
+    ):
+        if interaction.user.id not in (self.author_id, self.partner_id):
+            return await interaction.response.send_message(
+                embed=h.err("Only the people involved can decline this report."),
+                ephemeral=True,
+            )
+        self.resolved = True
+        for child in self.children:
+            child.disabled = True
+        await interaction.response.edit_message(
+            embed=h.warn("Co-op report declined.", "✖️ Declined"), view=self
+        )
+        self.stop()
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+#  /raid  group-co-op join board
+# ══════════════════════════════════════════════════════════════════════════════
+class RaidView(discord.ui.View):
+    """Open join board for a group co-op (raid, event, big dungeon).
+
+    Anyone in the server can Join (clicking is their own confirmation) up to the
+    guild's party cap; the host or a Manage-Server mod presses Finish to pay
+    everyone who joined, or Cancel to scrap it. Short-lived and in-memory — an
+    open board simply expires on bot restart or after RAID_TIMEOUT.
+    """
+
+    def __init__(self, cog: "Economy", host_id: int, activity: str):
+        super().__init__(timeout=RAID_TIMEOUT)
+        self.cog = cog
+        self.host_id = host_id
+        self.activity = activity
+        # Host counts as the first participant; dict keeps stable join order.
+        self.participants: dict[int, None] = {host_id: None}
+        self.message: Optional[discord.Message] = None
+        self.resolved = False
+
+    def _can_manage(self, user: discord.Member) -> bool:
+        return user.id == self.host_id or user.guild_permissions.manage_guild
+
+    async def _embed(self, cfg: dict) -> discord.Embed:
+        what = f"\n**Activity:** {self.activity}" if self.activity else ""
+        names = "\n".join(f"• <@{uid}>" for uid in self.participants)
+        reward = self.cog._money(cfg, cfg["raid_reward"])
+        need = cfg["raid_min"]
+        body = (
+            f"Hosted by <@{self.host_id}>.{what}\n\n"
+            f"Press **Join** to take part — everyone who joins earns {reward} "
+            f"+ contribution when the host presses **Finish**.\n"
+            f"*Need at least {need} members · {len(self.participants)}/"
+            f"{cfg['raid_max']} joined.*\n\n"
+            f"**Party ({len(self.participants)}):**\n{names}"
+        )
+        return h.embed("⚔️ Raid Party", body, h.BLUE)
+
+    async def _refresh(self, interaction: discord.Interaction, cfg: dict):
+        await interaction.response.edit_message(embed=await self._embed(cfg), view=self)
+
+    async def on_timeout(self):
+        if self.resolved or self.message is None:
+            return
+        for child in self.children:
+            child.disabled = True
+        try:
+            await self.message.edit(
+                embed=h.warn(
+                    "Raid expired — host didn't finish it in time.", "⏳ Expired"
+                ),
+                view=self,
+            )
+        except discord.HTTPException:
+            pass
+
+    @discord.ui.button(label="Join", style=discord.ButtonStyle.primary, emoji="⚔️")
+    async def join(self, interaction: discord.Interaction, button: discord.ui.Button):
+        if interaction.user.bot:
+            return
+        cfg = await self.cog._cfg(interaction.guild.id)
+        if interaction.user.id in self.participants:
+            return await interaction.response.send_message(
+                embed=h.warn("You're already in the party."), ephemeral=True
+            )
+        if len(self.participants) >= cfg["raid_max"]:
+            return await interaction.response.send_message(
+                embed=h.err(f"Party is full ({cfg['raid_max']})."), ephemeral=True
+            )
+        self.participants[interaction.user.id] = None
+        await self._refresh(interaction, cfg)
+
+    @discord.ui.button(label="Leave", style=discord.ButtonStyle.secondary, emoji="🚪")
+    async def leave(self, interaction: discord.Interaction, button: discord.ui.Button):
+        cfg = await self.cog._cfg(interaction.guild.id)
+        if interaction.user.id == self.host_id:
+            return await interaction.response.send_message(
+                embed=h.warn("The host can't leave — use **Cancel** to scrap it."),
+                ephemeral=True,
+            )
+        if interaction.user.id not in self.participants:
+            return await interaction.response.send_message(
+                embed=h.warn("You're not in the party."), ephemeral=True
+            )
+        del self.participants[interaction.user.id]
+        await self._refresh(interaction, cfg)
+
+    @discord.ui.button(label="Finish", style=discord.ButtonStyle.success, emoji="✅")
+    async def finish(self, interaction: discord.Interaction, button: discord.ui.Button):
+        if not self._can_manage(interaction.user):
+            return await interaction.response.send_message(
+                embed=h.err("Only the host or a server manager can finish the raid."),
+                ephemeral=True,
+            )
+        cfg = await self.cog._cfg(interaction.guild.id)
+        if len(self.participants) < cfg["raid_min"]:
+            return await interaction.response.send_message(
+                embed=h.err(
+                    f"Need at least {cfg['raid_min']} members to pay out "
+                    f"(only {len(self.participants)} joined)."
+                ),
+                ephemeral=True,
+            )
+        self.resolved = True
+        reward = cfg["raid_reward"]
+        guild_id = interaction.guild.id
+        for uid in self.participants:
+            await db.add_coins(guild_id, uid, reward)
+            await db.add_contribution(guild_id, uid, reward)
+        for child in self.children:
+            child.disabled = True
+        what = f" for **{self.activity}**" if self.activity else ""
+        roster = ", ".join(f"<@{uid}>" for uid in self.participants)
+        await interaction.response.edit_message(
+            embed=h.ok(
+                f"⚔️ Raid complete{what}! **{len(self.participants)}** members "
+                f"each earned {self.cog._money(cfg, reward)} + "
+                f"**{reward:,}** contribution.\n\n{roster}",
+                "Raid Rewards Paid",
+            ),
+            view=self,
+        )
+        self.stop()
+
+    @discord.ui.button(label="Cancel", style=discord.ButtonStyle.danger, emoji="✖️")
+    async def cancel(self, interaction: discord.Interaction, button: discord.ui.Button):
+        if not self._can_manage(interaction.user):
+            return await interaction.response.send_message(
+                embed=h.err("Only the host or a server manager can cancel the raid."),
+                ephemeral=True,
+            )
+        self.resolved = True
+        for child in self.children:
+            child.disabled = True
+        await interaction.response.edit_message(
+            embed=h.warn("Raid cancelled — no coins awarded.", "✖️ Cancelled"),
+            view=self,
+        )
+        self.stop()
