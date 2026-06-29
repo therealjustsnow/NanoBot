@@ -171,6 +171,25 @@ async def _slash_error_response(
         pass
 
 
+# Shared by the two command-error handlers below. Their branches all build the
+# same title-less, "NanoBot"-footer embed (red for errors, yellow for soft
+# warnings like cooldowns/bad args) and differ only in the message text.
+_C_ERR = 0xED4245
+_C_WARN = 0xFEE75C
+
+
+def _err_embed(description: str, color: int = _C_ERR) -> discord.Embed:
+    """A title-less branded embed for the command/slash error handlers."""
+    e = discord.Embed(description=description, color=color)
+    e.set_footer(text="NanoBot")
+    return e
+
+
+def _fmt_perms(perms) -> str:
+    """Render permission node names as a human-readable, comma-joined list."""
+    return ", ".join(p.replace("_", " ").title() for p in perms)
+
+
 # ── Bot ────────────────────────────────────────────────────────────────────────
 class ObsTree(app_commands.CommandTree):
     """
@@ -803,72 +822,55 @@ class NanoBot(commands.Bot):
                 f"TransformerError in /{cmd_name}: {error} "
                 f"(value={error.value!r}, type={error.type})"
             )
-            e = discord.Embed(
-                description=f"❌ Couldn't resolve that argument: `{error.value}`{hint}",
-                color=0xED4245,
+            return await _slash_error_response(
+                interaction,
+                _err_embed(f"❌ Couldn't resolve that argument: `{error.value}`{hint}"),
             )
-            e.set_footer(text="NanoBot")
-            return await _slash_error_response(interaction, e)
 
         if isinstance(error, app_commands.MissingPermissions):
-            missing = ", ".join(
-                p.replace("_", " ").title() for p in error.missing_permissions
-            )
-            e = discord.Embed(
-                description=(
+            return await _slash_error_response(
+                interaction,
+                _err_embed(
                     f"**{interaction.user.display_name}**, you don't have the permissions "
-                    f"needed to use `{cmd_name}`.\nRequired: **{missing}**"
+                    f"needed to use `{cmd_name}`.\nRequired: **{_fmt_perms(error.missing_permissions)}**"
                 ),
-                color=0xED4245,
             )
-            e.set_footer(text="NanoBot")
-            return await _slash_error_response(interaction, e)
 
         if isinstance(error, app_commands.BotMissingPermissions):
-            missing = ", ".join(
-                p.replace("_", " ").title() for p in error.missing_permissions
-            )
-            e = discord.Embed(
-                description=(
+            return await _slash_error_response(
+                interaction,
+                _err_embed(
                     f"I'm missing permissions to run `{cmd_name}`.\n"
-                    f"Please grant me: **{missing}**"
+                    f"Please grant me: **{_fmt_perms(error.missing_permissions)}**"
                 ),
-                color=0xED4245,
             )
-            e.set_footer(text="NanoBot")
-            return await _slash_error_response(interaction, e)
 
         if isinstance(error, app_commands.CommandOnCooldown):
             secs = round(error.retry_after)
             unit = "second" if secs == 1 else "seconds"
-            e = discord.Embed(
-                description=f"⏱️ Slow down! Try again in **{secs} {unit}**.",
-                color=0xFEE75C,
+            return await _slash_error_response(
+                interaction,
+                _err_embed(f"⏱️ Slow down! Try again in **{secs} {unit}**.", _C_WARN),
             )
-            e.set_footer(text="NanoBot")
-            return await _slash_error_response(interaction, e)
 
         if isinstance(error, app_commands.CommandInvokeError):
             log.error(
                 f"Unhandled slash error in /{cmd_name}: {error.original}",
                 exc_info=error.original,
             )
-            e = discord.Embed(
-                description="Something went wrong running that command. Check `!logs` for details.",
-                color=0xED4245,
+            return await _slash_error_response(
+                interaction,
+                _err_embed(
+                    "Something went wrong running that command. Check `!logs` for details."
+                ),
             )
-            e.set_footer(text="NanoBot")
-            return await _slash_error_response(interaction, e)
 
         if isinstance(error, app_commands.CheckFailure):
             # A custom check (not the permission ones handled above) blocked
             # this slash command. Reply without logging a stack trace.
-            e = discord.Embed(
-                description="⛔ You can't use that command here.",
-                color=0xED4245,
+            return await _slash_error_response(
+                interaction, _err_embed("⛔ You can't use that command here.")
             )
-            e.set_footer(text="NanoBot")
-            return await _slash_error_response(interaction, e)
 
         # Catch-all for anything else
         log.error(f"Unhandled tree error in /{cmd_name}: {error}", exc_info=error)
@@ -897,45 +899,34 @@ class NanoBot(commands.Bot):
 
         if isinstance(error, commands.MissingPermissions):
             cmd_name = ctx.command.name if ctx.command else "that command"
-            missing = ", ".join(
-                p.replace("_", " ").title() for p in error.missing_permissions
-            )
-            e = discord.Embed(
-                description=(
+            return await ctx.reply(
+                embed=_err_embed(
                     f"**{ctx.author.display_name}**, you don't have the permissions needed "
-                    f"to use `{cmd_name}`.\nRequired: **{missing}**"
+                    f"to use `{cmd_name}`.\nRequired: **{_fmt_perms(error.missing_permissions)}**"
                 ),
-                color=0xED4245,
+                ephemeral=True,
             )
-            e.set_footer(text="NanoBot")
-            return await ctx.reply(embed=e, ephemeral=True)
 
         if isinstance(error, commands.BotMissingPermissions):
             cmd_name = ctx.command.name if ctx.command else "that"
-            missing = ", ".join(
-                p.replace("_", " ").title() for p in error.missing_permissions
-            )
-            e = discord.Embed(
-                description=(
+            return await ctx.reply(
+                embed=_err_embed(
                     f"I'm missing permissions to run `{cmd_name}`.\n"
-                    f"Please grant me: **{missing}**"
+                    f"Please grant me: **{_fmt_perms(error.missing_permissions)}**"
                 ),
-                color=0xED4245,
+                ephemeral=True,
             )
-            e.set_footer(text="NanoBot")
-            return await ctx.reply(embed=e, ephemeral=True)
 
         if isinstance(error, commands.MissingRequiredArgument):
             cmd_name = ctx.command.name if ctx.command else "this command"
-            e = discord.Embed(
-                description=(
+            return await ctx.reply(
+                embed=_err_embed(
                     f"Missing argument: `{error.param.name}`\n"
-                    f"Use `{ctx.prefix}help {cmd_name}` to see usage."
+                    f"Use `{ctx.prefix}help {cmd_name}` to see usage.",
+                    _C_WARN,
                 ),
-                color=0xFEE75C,
+                ephemeral=True,
             )
-            e.set_footer(text="NanoBot")
-            return await ctx.reply(embed=e, ephemeral=True)
 
         if isinstance(error, (commands.BadArgument, app_commands.TransformerError)):
             hint = ""
@@ -946,30 +937,28 @@ class NanoBot(commands.Bot):
                     f"TransformerError in {ctx.command}: {error} "
                     f"(value={error.value!r}, type={error.type})"
                 )
-            e = discord.Embed(
-                description=f"Invalid argument: {error}{hint}",
-                color=0xFEE75C,
+            return await ctx.reply(
+                embed=_err_embed(f"Invalid argument: {error}{hint}", _C_WARN),
+                ephemeral=True,
             )
-            e.set_footer(text="NanoBot")
-            return await ctx.reply(embed=e, ephemeral=True)
 
         if isinstance(error, commands.NotOwner):
-            e = discord.Embed(
-                description="⛔ That command is restricted to the **bot owner** only.",
-                color=0xED4245,
+            return await ctx.reply(
+                embed=_err_embed(
+                    "⛔ That command is restricted to the **bot owner** only."
+                ),
+                ephemeral=True,
             )
-            e.set_footer(text="NanoBot")
-            return await ctx.reply(embed=e, ephemeral=True)
 
         if isinstance(error, commands.CommandOnCooldown):
             secs = round(error.retry_after)
             unit = "second" if secs == 1 else "seconds"
-            e = discord.Embed(
-                description=f"⏱️ Slow down! Try again in **{secs} {unit}**.",
-                color=0xFEE75C,
+            return await ctx.reply(
+                embed=_err_embed(
+                    f"⏱️ Slow down! Try again in **{secs} {unit}**.", _C_WARN
+                ),
+                ephemeral=True,
             )
-            e.set_footer(text="NanoBot")
-            return await ctx.reply(embed=e, ephemeral=True)
 
         if isinstance(error, commands.CommandNotFound):
             return
@@ -977,12 +966,10 @@ class NanoBot(commands.Bot):
         if isinstance(error, commands.CheckFailure):
             # A custom check (not the permission/owner ones handled above)
             # blocked this. Tell the user without dumping a stack trace.
-            e = discord.Embed(
-                description="⛔ You can't use that command here.",
-                color=0xED4245,
+            return await ctx.reply(
+                embed=_err_embed("⛔ You can't use that command here."),
+                ephemeral=True,
             )
-            e.set_footer(text="NanoBot")
-            return await ctx.reply(embed=e, ephemeral=True)
 
         log.error(f"Unhandled error in {ctx.command}: {error}", exc_info=error)
 
