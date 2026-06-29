@@ -90,7 +90,7 @@ All features live in `cogs/` as discord.py cogs, hot-reloadable via `n!reload <c
 |---|---|
 | `moderation/` | Ban/kick/mute/purge/lock/slowmode, timed actions, last-sender targeting (a package — see "Moderation package layout" below) |
 | `warnings.py` | Warning tracking with configurable auto-kick/ban thresholds |
-| `automod.py` | Passive rule enforcement (spam, invites, links, caps, mentions, badwords, regex, word+attachment); actions: delete/warn/timeout/kick/softban |
+| `automod/` | Passive rule enforcement (spam, invites, links, caps, mentions, badwords, regex, word+attachment); actions: delete/warn/timeout/kick/softban (a package — see "AutoMod package layout" below) |
 | `gatekeeper.py` | New-account gate: on join, role-mutes (`Muted (NanoBot)`) accounts younger than a threshold (default 30d, auto-unmute at 35d/5w), with no avatar (Discord logo default, `member.avatar is None`), or with a pickable "stock" avatar matched by perceptual (difference) hash against a **system-wide** catalog (`assets/gatekeeper_avatars/` bundled seeds + `data/gatekeeper_avatars/` runtime adds via `/gatekeeper learnavatar`; the catalog is global, so every guild reads the same images and any guild's `learnavatar` contributes to it). How the age and avatar checks combine is per-guild via `match_mode` (`or` = mute on either signal, default; `and` = mute only when an account is both too young AND has a bad avatar). Muted members get a verification prompt (DM first, fallback to a quarantine channel) with a persistent button → math-captcha modal; correct answer unmutes. Account-age mutes auto-unmute once the account ages out (per-guild `age_unmute_enabled`, on by default; off forces verification). Unverified members are kicked after a timeout (default 7d). Auto-unmute + auto-kick persist in SQLite and restore on restart via `on_restore_schedules` (mirrors `moderation.py`). Log-channel events are emoji-tagged: 🔇 mute, ✅ verify, 🔊 auto-unmute, 🚪 kick. `/gatekeeper` group (Manage Server): `setup`/`status`/`enable`/`disable`/`role`/`channel`/`logchannel`/`minage`/`unmuteage`/`kicktimeout`/`newaccounts`/`noavatar`/`stockavatar`/`sensitivity` (per-guild dHash match distance, default 8)/`matchmode` (and/or)/`ageunmute` (toggle age auto-unmute)/`verify`/`message`/`learnavatar`/`checkavatar`. Bulk-seed the stock-avatar catalog from a Figma file with `scripts/import_figma_avatars.py` (stdlib-only, needs a Figma token). |
 | `auditlog.py` | 13 toggleable event types (12 Discord server events + AutoMod action) logged to a configurable channel |
 | `roles.py` | Persistent button-based self-assign role panels |
@@ -181,6 +181,18 @@ The static scanners `test_no_duplicate_commands.py` and `test_docs_freshness.py`
 | `helpers.py` | Pure, Discord-free helpers (`fmt_coins`, `compute_daily`, `resolve_gamble`, `_rank_title`, `_scaled_price`) — covered by `tests/test_economy_helpers.py`. |
 | `views.py` | `ReportView` (/report co-op confirm) + `RaidView` (/raid join board); they call back into the cog via a `TYPE_CHECKING` `Economy` hint. |
 | `cog.py` | The `Economy` cog: full command surface (`/balance`, `/daily`, `/pay`, `/report`, `/raid`, `/coin …`, `/shop …`). Carries the full module docstring (commands enumerated for `test_docs_freshness`). |
+
+### AutoMod package layout
+
+`cogs/automod/` was a single 1.5k-line file. Every command stays in one `AutoMod` class (no command moved); only supporting code is extracted. `load_extension("cogs.automod")` works via `setup()` in `__init__.py`. The in-memory `_spam_tracker` lives in `constants.py` and is imported by reference into both helpers and the cog so they share one tracker.
+
+| Module | Holds |
+|---|---|
+| `constants.py` | `RULE_LABELS`/`ACTION_LABELS`, `TIMEOUT_SECONDS`, the compiled `_RE_INVITE`/`_RE_URL`, the regex cache + ReDoS guards (`_REDOS_RE`, `_REGEX_TIMEOUT`, `_MAX_REGEX_INPUT`, …), and the `_spam_tracker`. `test_docs_freshness` reads this file for the `RULE_LABELS`/`ACTION_LABELS` ↔ `/help` coverage check. |
+| `helpers.py` | Pure rule-check helpers: spam tracking, content matchers (`_has_invite`/`_has_link`/`_caps_percent`/`_has_badword`/…), and the ReDoS-bounded regex matchers (`_matches_regex_safe`, `_all_matches_regex_safe`). |
+| `actions.py` | Side-effects: log-channel resolution, the action-log embed, the delete/warn/timeout/kick/softban executor (`_execute_action`), and soft-delete of notices. |
+| `autocomplete.py` | The rule/action/regex-pattern app-command autocompletes. |
+| `cog.py` | The `AutoMod` cog: the `on_message` listener, the spam-prune loop, and the `/automod` command tree. Carries the full module docstring (commands enumerated for `test_docs_freshness`). |
 
 ### Data Layer
 
