@@ -84,7 +84,7 @@ async def test_grant_credits_with_perms(bot):
 
 @pytest.mark.cogs("cogs.economy")
 async def test_gamble_win(bot, monkeypatch):
-    import cogs.economy as economy
+    from cogs.economy import cog as economy
 
     guild = config().guilds[0]
     author = config().members[0]
@@ -99,7 +99,7 @@ async def test_gamble_win(bot, monkeypatch):
 
 @pytest.mark.cogs("cogs.economy")
 async def test_gamble_loss(bot, monkeypatch):
-    import cogs.economy as economy
+    from cogs.economy import cog as economy
 
     guild = config().guilds[0]
     author = config().members[0]

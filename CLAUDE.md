@@ -53,7 +53,7 @@ Tests cover pure-Python utilities and the SQLite layer (in-memory), no live Disc
 - `tests/test_music_player.py` — voice-state recovery logic built via `__new__` (no live gateway): `GuildPlayer.skip()`'s honest bool return, `Music._clear_ghost_voice()`'s gateway-leave decision, and `Music.on_voice_state_update`'s bot-self-disconnect teardown (resets the stuck Streaming presence)
 - `tests/test_leveling_helpers.py` — pure level-math helpers from `cogs/leveling.py` (XP curve, progress bar)
 - `tests/test_leveling_db.py` — leveling accessors in `utils/db.py` against in-memory SQLite
-- `tests/test_economy_helpers.py` — pure economy helpers from `cogs/economy.py` (coin formatting, daily/streak math, `_rank_title` contribution titles)
+- `tests/test_economy_helpers.py` — pure economy helpers from `cogs/economy/` (coin formatting, daily/streak math, `_rank_title` contribution titles); imports stay on the flat `cogs.economy` API re-exported by the package `__init__`
 - `tests/test_economy_db.py` — economy accessors in `utils/db.py` against in-memory SQLite (balances, daily, config incl. the co-op/raid reward + party-size knobs, the lifetime contribution stat/leaderboard, and the shop: item CRUD + `purchase_item` enforcing funds/stock/per-user-limit/cooldown with stock refund-on-fail, plus the custom-reward pending/fulfil queue)
 - `tests/test_no_duplicate_commands.py` — static check that no two cogs register the same top-level command name or alias
 - `tests/test_obs.py` — correlation ids, the logging filter, and the JSONL event sink in `utils/obs.py`
@@ -170,6 +170,17 @@ The static scanners `test_no_duplicate_commands.py` and `test_docs_freshness.py`
 | `sources.py` | Network layer: nekos.best / Nekosia fetches, FML/WYR scrapers, the Kaggle seed, Groq WYR generation; all cached via `cache_db`. `cogs/images.py` imports `_get_nekos_image` from here. |
 | `views.py` | `WyrView` (Would-You-Rather voting) + `RpsView` (Rock-Paper-Scissors). |
 | `cog.py` | The `Fun` cog: slash `/fun` group, dynamically-registered prefix commands, daily scrape + revalidate loops. (`test_docs_freshness` exempts `fun/cog.py` since its prefix commands are generated at runtime.) |
+
+### Economy package layout
+
+`cogs/economy/` was a single 1.6k-line file. Like the moderation/admin splits, every command stays in one `Economy` class (no command moved) — only supporting code is extracted. `load_extension("cogs.economy")` works via `setup()` in `__init__.py`, which also re-exports the flat public API (`from cogs.economy import fmt_coins, compute_daily, resolve_gamble, Economy, _DEFAULT_SHOP_ITEMS, …`) so callers and tests keep importing from `cogs.economy` unchanged.
+
+| Module | Holds |
+|---|---|
+| `constants.py` | Cooldowns/windows, gamble odds, `COIN_MAX`, co-op/raid timeouts, `_DEFAULT_SHOP_ITEMS` starter catalogue, `_RANK_TITLES`. |
+| `helpers.py` | Pure, Discord-free helpers (`fmt_coins`, `compute_daily`, `resolve_gamble`, `_rank_title`, `_scaled_price`) — covered by `tests/test_economy_helpers.py`. |
+| `views.py` | `ReportView` (/report co-op confirm) + `RaidView` (/raid join board); they call back into the cog via a `TYPE_CHECKING` `Economy` hint. |
+| `cog.py` | The `Economy` cog: full command surface (`/balance`, `/daily`, `/pay`, `/report`, `/raid`, `/coin …`, `/shop …`). Carries the full module docstring (commands enumerated for `test_docs_freshness`). |
 
 ### Data Layer
 
