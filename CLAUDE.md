@@ -93,7 +93,7 @@ All features live in `cogs/` as discord.py cogs, hot-reloadable via `n!reload <c
 | `automod/` | Passive rule enforcement (spam, invites, links, caps, mentions, badwords, regex, word+attachment); actions: delete/warn/timeout/kick/softban (a package — see "AutoMod package layout" below) |
 | `gatekeeper/` | New-account gate: on join, role-mutes (`Muted (NanoBot)`) accounts younger than a threshold (default 30d, auto-unmute at 35d/5w), with no avatar (Discord logo default, `member.avatar is None`), or with a pickable "stock" avatar matched by perceptual (difference) hash against a **system-wide** catalog (`assets/gatekeeper_avatars/` bundled seeds + `data/gatekeeper_avatars/` runtime adds via `/gatekeeper learnavatar`; the catalog is global, so every guild reads the same images and any guild's `learnavatar` contributes to it). How the age and avatar checks combine is per-guild via `match_mode` (`or` = mute on either signal, default; `and` = mute only when an account is both too young AND has a bad avatar). Muted members get a verification prompt (DM first, fallback to a quarantine channel) with a persistent button → math-captcha modal; correct answer unmutes. Account-age mutes auto-unmute once the account ages out (per-guild `age_unmute_enabled`, on by default; off forces verification). Unverified members are kicked after a timeout (default 7d). Auto-unmute + auto-kick persist in SQLite and restore on restart via `on_restore_schedules` (mirrors `moderation.py`). Log-channel events are emoji-tagged: 🔇 mute, ✅ verify, 🔊 auto-unmute, 🚪 kick. `/gatekeeper` group (Manage Server): `setup`/`status`/`enable`/`disable`/`role`/`channel`/`logchannel`/`minage`/`unmuteage`/`kicktimeout`/`newaccounts`/`noavatar`/`stockavatar`/`sensitivity` (per-guild dHash match distance, default 8)/`matchmode` (and/or)/`ageunmute` (toggle age auto-unmute)/`verify`/`message`/`learnavatar`/`checkavatar`. Bulk-seed the stock-avatar catalog from a Figma file with `scripts/import_figma_avatars.py` (stdlib-only, needs a Figma token). |
 | `auditlog.py` | 13 toggleable event types (12 Discord server events + AutoMod action) logged to a configurable channel |
-| `roles.py` | Persistent button-based self-assign role panels |
+| `roles/` | Persistent button-based self-assign role panels, incl. `/roles autogen` palette generation (a package — see "Roles package layout" below) |
 | `tags.py` | Personal and global text snippets; `n!tagname` shortcut fires any tag |
 | `admin/` | Owner-only: reload cogs, restart, git pull update, full upgrade (pull+pip+restart), sync slash commands, `status` (set idle presence text / `clear` to auto-rotate) (a package — see "Admin package layout" below) |
 | `reminders.py` / `recurring.py` | One-time and repeating reminders, restart-safe via SQLite |
@@ -204,6 +204,18 @@ The static scanners `test_no_duplicate_commands.py` and `test_docs_freshness.py`
 | `helpers.py` | Pure helpers covered by `tests/test_gatekeeper.py`: the learnavatar SSRF guard (`_is_safe_public_url`) and the perceptual (difference) hash + Hamming distance (`_dhash`/`_hamming`). Owns the Pillow import / `_PILLOW_OK` (and the decompression-bomb pixel cap); `Image` is `None` when Pillow is absent. |
 | `views.py` | The verification UI — `VerifyModal` (math captcha) + the persistent-button `VerifyView`; they call back into the cog via a `TYPE_CHECKING` `Gatekeeper` hint. |
 | `cog.py` | The `Gatekeeper` cog: join-time `_evaluate`, mute/verify/unmute/kick flow, schedule restore, and the `/gatekeeper` command group. Carries the full module docstring (commands enumerated for `test_docs_freshness`). |
+
+### Roles package layout
+
+`cogs/roles/` was a single 1.2k-line file. Every command stays in one `Roles` class (no command moved); only supporting code is extracted. `load_extension("cogs.roles")` works via `setup()` in `__init__.py`.
+
+| Module | Holds |
+|---|---|
+| `constants.py` | The autogen palettes (`COLOUR_PALETTE`/`PRONOUN_PALETTE`/`AGE_PALETTE`/`REGION_PALETTE`) and `_AUTOGEN_CFG` (kind → title/desc/mode/palette). |
+| `helpers.py` | Per-guild autogen concurrency locks (`_get_autogen_lock`), the short id generator (`_new_id`), and the persistent-button custom_id encode/decode (`_encode_cid`/`_decode_cid`). |
+| `views.py` | The persistent `RoleButton` (self-assign/-remove + single-mode swap) plus the `_build_view`/`_build_embed` factories. |
+| `autogen.py` | The `_panel_autocomplete` and the shared `_run_autogen` engine behind the four `/roles autogen` commands (calls back into the cog via a `TYPE_CHECKING` `Roles` hint). |
+| `cog.py` | The `Roles` cog: the `/roles panel …`, `/roles add|remove`, and `/roles autogen …` command surface + persistent-view restore. Carries the full module docstring (commands enumerated for `test_docs_freshness`). |
 
 ### Data Layer
 
