@@ -1,5 +1,5 @@
 """
-Tests for utils/db.py — all run against an in-memory SQLite database.
+Tests for the utils/db/ package — all run against an in-memory SQLite database.
 """
 
 import time

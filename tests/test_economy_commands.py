@@ -1,5 +1,5 @@
 """
-Command-level tests for cogs/economy.py under dpytest (parse → check → DB → reply).
+Command-level tests for cogs/economy/ under dpytest (parse → check → DB → reply).
 """
 
 import pytest

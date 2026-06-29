@@ -1,5 +1,5 @@
 """
-Tests for the economy accessors in utils/db.py — in-memory SQLite.
+Tests for the economy accessors in utils/db/ — in-memory SQLite.
 """
 
 import aiosqlite

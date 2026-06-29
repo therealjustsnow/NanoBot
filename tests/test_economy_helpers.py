@@ -1,5 +1,5 @@
 """
-Tests for the pure economy helpers in cogs/economy.py (no Discord deps).
+Tests for the pure economy helpers in cogs/economy/ (no Discord deps).
 """
 
 from cogs.economy import (
