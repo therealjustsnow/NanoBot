@@ -33,14 +33,10 @@ bot can assign it — the bot cannot manage a role above its own.
 
 import asyncio
 import io
-import ipaddress
 import logging
 import os
-import random
-import socket
 import time
 from typing import Optional
-from urllib.parse import urlparse
 
 import aiohttp
 import discord
@@ -50,209 +46,22 @@ from discord.ext import commands
 from utils import db
 from utils import helpers as h
 
+from .constants import (
+    AVATAR_CATALOG_DIR,
+    BUNDLED_AVATAR_DIR,
+    DEFAULT_VERIFY_MESSAGE,
+    MUTE_ROLE_NAME,
+    _DHASH_THRESHOLD,
+    _MAX_AVATAR_BYTES,
+    _MAX_VERIFY_ATTEMPTS,
+    _VERIFY_LOCKOUT_SECONDS,
+)
+from .helpers import Image, _PILLOW_OK, _dhash, _hamming, _is_safe_public_url
+from .views import VerifyView
+
 log = logging.getLogger("NanoBot.gatekeeper")
 
-try:
-    from PIL import Image
 
-    _PILLOW_OK = True
-    # Decompression-bomb guard: a tiny crafted file can expand to a huge bitmap
-    # and exhaust memory. Avatars are small, so cap well below Pillow's ~178M
-    # default — anything bigger raises DecompressionBombError (caught at decode).
-    Image.MAX_IMAGE_PIXELS = 24_000_000
-except ImportError:  # pragma: no cover
-    _PILLOW_OK = False
-    log.warning("Pillow not installed — stock-avatar detection disabled.")
-
-# Hard cap on bytes pulled from a learnavatar URL. The SSRF filter only proves
-# the host is public, not that it won't stream gigabytes, so bound the read.
-_MAX_AVATAR_BYTES = 8 * 1024 * 1024
-
-# Reference images for stock-avatar detection. Two folders are scanned:
-#   • assets/gatekeeper_avatars/ — bundled seeds shipped with the repo (read-only)
-#   • data/gatekeeper_avatars/   — runtime additions from /gatekeeper learnavatar
-# Each file's perceptual hash is matched against joining members.
-BUNDLED_AVATAR_DIR = os.path.join("assets", "gatekeeper_avatars")
-AVATAR_CATALOG_DIR = os.path.join("data", "gatekeeper_avatars")
-
-# Perceptual (difference) hash size: 8x8 comparison grid → 64-bit hash.
-# A joining avatar within this Hamming distance of any catalog hash is a match.
-# Stock avatars are visually distinct, so a small distance avoids false hits.
-_DHASH_THRESHOLD = 8
-
-MUTE_ROLE_NAME = "Muted (NanoBot)"
-
-_VERIFY_BUTTON_CID = "gk:verify:button"
-
-# The math captcha is deliberately easy for humans, so the answer space is tiny
-# (sums of 2..9 → 4..18). Without an attempt cap a script could blind-guess past
-# it in a handful of tries, so lock a user out for a short cooldown after this
-# many wrong answers. In-memory only — a restart resets it, which is fine for a
-# speed bump.
-_MAX_VERIFY_ATTEMPTS = 5
-_VERIFY_LOCKOUT_SECONDS = 60
-
-DEFAULT_VERIFY_MESSAGE = (
-    "You've been temporarily muted in **{server}** while we check new accounts.\n\n"
-    "To get unmuted, press the **Verify** button below and solve the quick math "
-    "problem. If you don't verify in time you'll be removed from the server."
-)
-
-
-def _is_safe_public_url(url: str) -> bool:
-    """True only for an http(s) URL whose host resolves entirely to public IPs.
-
-    Blocks SSRF via /gatekeeper learnavatar: a Manage-Server user could otherwise
-    point the fetch at loopback, link-local (cloud metadata at 169.254.169.254),
-    or private-range addresses to probe the host's internal network. Every
-    resolved address must be global, so a hostname that maps to a private IP is
-    rejected too.
-    """
-    try:
-        parsed = urlparse(url)
-    except ValueError:
-        return False
-    if parsed.scheme not in ("http", "https") or not parsed.hostname:
-        return False
-    try:
-        infos = socket.getaddrinfo(parsed.hostname, parsed.port or 0)
-    except (socket.gaierror, UnicodeError, ValueError):
-        return False
-    if not infos:
-        return False
-    for info in infos:
-        addr = info[4][0]
-        try:
-            ip = ipaddress.ip_address(addr)
-        except ValueError:
-            return False
-        if not ip.is_global or ip.is_reserved:
-            return False
-    return True
-
-
-# ══════════════════════════════════════════════════════════════════════════════
-#  Perceptual hashing (pure Pillow — no extra dependency)
-# ══════════════════════════════════════════════════════════════════════════════
-
-
-def _dhash(image_bytes: bytes) -> Optional[int]:
-    """Return a 64-bit difference hash of an image, or None on failure."""
-    if not _PILLOW_OK:
-        return None
-    try:
-        im = (
-            Image.open(io.BytesIO(image_bytes))
-            .convert("L")
-            .resize((9, 8), Image.LANCZOS)
-        )
-    except Exception as exc:  # pragma: no cover - defensive
-        log.debug(f"dhash decode failed: {exc}")
-        return None
-    px = im.tobytes()  # 9 wide * 8 tall, row-major, one byte per pixel ("L")
-    bits = 0
-    for row in range(8):
-        base = row * 9
-        for col in range(8):
-            bits = (bits << 1) | (1 if px[base + col] > px[base + col + 1] else 0)
-    return bits
-
-
-def _hamming(a: int, b: int) -> int:
-    return bin(a ^ b).count("1")
-
-
-# ══════════════════════════════════════════════════════════════════════════════
-#  Verification UI (persistent button → math captcha modal)
-# ══════════════════════════════════════════════════════════════════════════════
-
-
-class VerifyModal(discord.ui.Modal):
-    """Modal that poses a random addition problem."""
-
-    def __init__(self, cog: "Gatekeeper", a: int, b: int):
-        super().__init__(title="Verify you're human")
-        self.cog = cog
-        self.answer = a + b
-        self.response = discord.ui.TextInput(
-            label=f"What is {a} + {b}?",
-            placeholder="Type the number…",
-            max_length=4,
-            required=True,
-        )
-        self.add_item(self.response)
-
-    async def on_submit(self, interaction: discord.Interaction):
-        raw = self.response.value.strip()
-        try:
-            given = int(raw)
-        except ValueError:
-            given = None
-        if given != self.answer:
-            locked_out = self.cog._register_wrong_answer(interaction.user.id)
-            if locked_out:
-                msg = (
-                    f"That's not right, and you've had too many tries. "
-                    f"Wait **{_VERIFY_LOCKOUT_SECONDS}s** before trying again."
-                )
-            else:
-                msg = "That's not the right answer. Press **Verify** to try again."
-            await interaction.response.send_message(
-                embed=h.err(msg, "❌ Incorrect"),
-                ephemeral=True,
-            )
-            return
-        await self.cog.complete_verification(interaction)
-
-
-class VerifyView(discord.ui.View):
-    """Persistent view holding the single Verify button."""
-
-    def __init__(self, cog: "Gatekeeper"):
-        super().__init__(timeout=None)
-        self.cog = cog
-
-    @discord.ui.button(
-        label="Verify",
-        style=discord.ButtonStyle.success,
-        emoji="✅",
-        custom_id=_VERIFY_BUTTON_CID,
-    )
-    async def verify(
-        self, interaction: discord.Interaction, _button: discord.ui.Button
-    ):
-        locked = self.cog._verify_lockout_remaining(interaction.user.id)
-        if locked:
-            await interaction.response.send_message(
-                embed=h.warn(
-                    f"Too many wrong answers. Try again in **{locked}s**.",
-                    "⏳ Slow Down",
-                ),
-                ephemeral=True,
-            )
-            return
-        if interaction.guild is None:
-            # Button pressed in a DM — resolve the pending guild from the DB.
-            pending = await self.cog._find_pending_for_user(interaction.user.id)
-            if pending is None:
-                await interaction.response.send_message(
-                    embed=h.info("You have nothing to verify right now.", "✅ All Set"),
-                    ephemeral=True,
-                )
-                return
-        else:
-            key = f"{interaction.guild.id}:{interaction.user.id}"
-            if await db.get_gatekeeper_pending(key) is None:
-                await interaction.response.send_message(
-                    embed=h.info("You're already verified here.", "✅ All Set"),
-                    ephemeral=True,
-                )
-                return
-        a, b = random.randint(2, 9), random.randint(2, 9)
-        await interaction.response.send_modal(VerifyModal(self.cog, a, b))
-
-
-# ══════════════════════════════════════════════════════════════════════════════
 class Gatekeeper(commands.Cog):
     """New-account muting and captcha verification."""
 
