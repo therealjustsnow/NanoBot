@@ -230,6 +230,43 @@ async def _matches_regex_safe(content: str, patterns: list[dict]) -> str | None:
         return None
 
 
+def _all_matches_regex(content: str, patterns: list[dict]) -> list[dict]:
+    """Return every stored pattern that matches content. For /automod regex test."""
+    hits = []
+    for p in patterns:
+        try:
+            compiled = _user_regex_cache.get(p["pattern"])
+            if compiled is None:
+                compiled = re.compile(p["pattern"], re.IGNORECASE)
+                if len(_user_regex_cache) >= _REGEX_CACHE_MAX:
+                    _user_regex_cache.clear()
+                _user_regex_cache[p["pattern"]] = compiled
+            if compiled.search(content):
+                hits.append(p)
+        except re.error:
+            pass
+    return hits
+
+
+async def _all_matches_regex_safe(content: str, patterns: list[dict]) -> list[dict]:
+    """Thread-bounded variant of _all_matches_regex under the ReDoS timeout."""
+    if not patterns:
+        return []
+    snippet = content[:_MAX_REGEX_INPUT]
+    loop = asyncio.get_running_loop()
+    try:
+        return await asyncio.wait_for(
+            loop.run_in_executor(None, _all_matches_regex, snippet, patterns),
+            timeout=_REGEX_TIMEOUT,
+        )
+    except asyncio.TimeoutError:
+        log.warning(
+            "automod: regex test exceeded %.1fs — aborted (possible ReDoS pattern)",
+            _REGEX_TIMEOUT,
+        )
+        return []
+
+
 # ── Log channel resolution ─────────────────────────────────────────────────────
 
 
@@ -1186,14 +1223,13 @@ class AutoMod(commands.Cog):
             )
             return
 
-        matched = []
-        for p in patterns:
-            try:
-                if re.search(p["pattern"], text, re.IGNORECASE):
-                    label_part = f" ({p['label']})" if p["label"] else ""
-                    matched.append(f"`{p['pattern']}`{label_part}")
-            except re.error:
-                pass
+        # Route through the same thread + wall-clock timeout the listener uses, so
+        # a catastrophic-backtracking pattern can't freeze the event loop here.
+        hits = await _all_matches_regex_safe(text, patterns)
+        matched = [
+            f"`{p['pattern']}`" + (f" ({p['label']})" if p["label"] else "")
+            for p in hits
+        ]
 
         preview = text[:200] + ("…" if len(text) > 200 else "")
 

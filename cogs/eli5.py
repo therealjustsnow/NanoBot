@@ -19,7 +19,7 @@ Config
 
 Rate limiting
 ──────────────────────────────────────────────────────
-  Per-user cooldown: 1 use per 15 seconds.
+  Per-user cooldown: 1 use per 30 seconds. Max 3 concurrent per guild.
 """
 
 import logging

@@ -56,9 +56,17 @@ try:
     from PIL import Image
 
     _PILLOW_OK = True
+    # Decompression-bomb guard: a tiny crafted file can expand to a huge bitmap
+    # and exhaust memory. Avatars are small, so cap well below Pillow's ~178M
+    # default — anything bigger raises DecompressionBombError (caught at decode).
+    Image.MAX_IMAGE_PIXELS = 24_000_000
 except ImportError:  # pragma: no cover
     _PILLOW_OK = False
     log.warning("Pillow not installed — stock-avatar detection disabled.")
+
+# Hard cap on bytes pulled from a learnavatar URL. The SSRF filter only proves
+# the host is public, not that it won't stream gigabytes, so bound the read.
+_MAX_AVATAR_BYTES = 8 * 1024 * 1024
 
 # Reference images for stock-avatar detection. Two folders are scanned:
 #   • assets/gatekeeper_avatars/ — bundled seeds shipped with the repo (read-only)
@@ -1115,7 +1123,18 @@ class Gatekeeper(commands.Cog):
                     url, timeout=aiohttp.ClientTimeout(10), allow_redirects=False
                 ) as r:
                     if r.status == 200:
-                        data = await r.read()
+                        # Bounded read so a public host can't stream an unbounded
+                        # body and exhaust memory (the SSRF check only vets the IP).
+                        data = await r.content.read(_MAX_AVATAR_BYTES + 1)
+                        if len(data) > _MAX_AVATAR_BYTES:
+                            await interaction.followup.send(
+                                embed=h.err(
+                                    "That image is too large (max "
+                                    f"{_MAX_AVATAR_BYTES // (1024 * 1024)} MB)."
+                                ),
+                                ephemeral=True,
+                            )
+                            return
             except (aiohttp.ClientError, asyncio.TimeoutError):
                 data = None
             label = "url"
