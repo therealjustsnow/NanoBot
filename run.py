@@ -104,7 +104,7 @@ def check_file_structure():
         "cogs/utility/cog.py",
         "cogs/admin/cog.py",
         "utils/__init__.py",
-        "utils/db.py",
+        "utils/db/__init__.py",
         "utils/helpers.py",
         "utils/checks.py",
         "utils/config.py",
