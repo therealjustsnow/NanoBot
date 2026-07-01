@@ -1,4 +1,4 @@
-"""discord.ui views for the economy cog: /report co-op confirm + /raid join board."""
+"""discord.ui views for the economy cog: /squad assembly + confirm + /raid join board."""
 
 from __future__ import annotations
 
@@ -15,22 +15,60 @@ if TYPE_CHECKING:
     from .cog import Economy
 
 
-class ReportView(discord.ui.View):
-    """Partner-confirm gate for a co-op activity reward.
+class SquadView(discord.ui.View):
+    """Squad-confirm gate for a co-op activity reward.
 
-    Only the named partner can confirm; either party can decline. Coins +
-    contribution are awarded to both members on confirm. Short-lived (no
-    persistence) — a pending report simply expires on bot restart.
+    The author tags one or more teammates; every tagged teammate presses
+    Confirm (clicking is their own confirmation). Coins + contribution are
+    awarded to the whole party — author included — only once *everyone* has
+    confirmed. Any involved member can Decline to scrap it. Short-lived (no
+    persistence) — a pending squad simply expires on bot restart.
     """
 
-    def __init__(self, cog: "Economy", author_id: int, partner_id: int, activity: str):
+    def __init__(
+        self,
+        cog: "Economy",
+        author_id: int,
+        partner_ids: list[int],
+        activity: str,
+    ):
         super().__init__(timeout=COOP_CONFIRM_TIMEOUT)
         self.cog = cog
         self.author_id = author_id
-        self.partner_id = partner_id
+        self.partner_ids = partner_ids
         self.activity = activity
+        # Teammates who've pressed Confirm; payout fires when this covers all.
+        self.confirmed: set[int] = set()
         self.message: Optional[discord.Message] = None
         self.resolved = False
+
+    def _party_size(self) -> int:
+        return 1 + len(self.partner_ids)  # author + teammates
+
+    def _roster_lines(self) -> str:
+        lines = []
+        for uid in self.partner_ids:
+            mark = "✅" if uid in self.confirmed else "⏳"
+            lines.append(f"{mark} <@{uid}>")
+        return "\n".join(lines)
+
+    async def _embed(self, cfg: dict) -> discord.Embed:
+        what = f"\n**Activity:** {self.activity}" if self.activity else ""
+        reward = self.cog._money(cfg, cfg["coop_reward"])
+        pending = len(self.partner_ids) - len(self.confirmed)
+        note = (
+            f"Waiting on **{pending}** more to confirm…"
+            if pending
+            else "Everyone's confirmed!"
+        )
+        body = (
+            f"<@{self.author_id}> squadded up with the crew below!{what}\n\n"
+            f"Each teammate presses **Confirm**. Once everyone's in, all "
+            f"**{self._party_size()}** earn {reward} + contribution points.\n"
+            f"*{note}*\n\n"
+            f"**Squad:**\n{self._roster_lines()}"
+        )
+        return h.embed("🤝 Co-op Squad", body, h.BLUE)
 
     async def on_timeout(self):
         if self.resolved or self.message is None:
@@ -40,7 +78,7 @@ class ReportView(discord.ui.View):
         try:
             await self.message.edit(
                 embed=h.warn(
-                    "Co-op report expired — partner didn't confirm in time.",
+                    "Squad expired — not everyone confirmed in time.",
                     "⏳ Expired",
                 ),
                 view=self,
@@ -52,28 +90,43 @@ class ReportView(discord.ui.View):
     async def confirm(
         self, interaction: discord.Interaction, button: discord.ui.Button
     ):
-        if interaction.user.id != self.partner_id:
+        if interaction.user.id not in self.partner_ids:
             return await interaction.response.send_message(
-                embed=h.err("Only the tagged partner can confirm this report."),
+                embed=h.err("Only a tagged teammate can confirm this squad."),
                 ephemeral=True,
             )
+        if interaction.user.id in self.confirmed:
+            return await interaction.response.send_message(
+                embed=h.warn("You've already confirmed — waiting on the others."),
+                ephemeral=True,
+            )
+        self.confirmed.add(interaction.user.id)
+        cfg = await self.cog._cfg(interaction.guild.id)
+
+        # Still waiting on someone — update the progress board and bail.
+        if len(self.confirmed) < len(self.partner_ids):
+            return await interaction.response.edit_message(
+                embed=await self._embed(cfg), view=self
+            )
+
+        # Everyone's in — pay the whole party.
         self.resolved = True
         guild_id = interaction.guild.id
-        cfg = await self.cog._cfg(guild_id)
         reward = cfg["coop_reward"]
-        # Award coins + lifetime contribution to both members.
-        for uid in (self.author_id, self.partner_id):
+        party = [self.author_id, *self.partner_ids]
+        for uid in party:
             await db.add_coins(guild_id, uid, reward)
             await db.add_contribution(guild_id, uid, reward)
         for child in self.children:
             child.disabled = True
         activity = f" for **{self.activity}**" if self.activity else ""
+        roster = ", ".join(f"<@{uid}>" for uid in party)
         await interaction.response.edit_message(
             embed=h.ok(
-                f"🤝 <@{self.author_id}> and <@{self.partner_id}> teamed up{activity}!\n"
-                f"Both earned {self.cog._money(cfg, reward)} and "
-                f"**+{reward:,}** contribution.",
-                "Co-op Confirmed",
+                f"🤝 The squad teamed up{activity}! All **{len(party)}** earned "
+                f"{self.cog._money(cfg, reward)} and **+{reward:,}** "
+                f"contribution.\n\n{roster}",
+                "Squad Confirmed",
             ),
             view=self,
         )
@@ -83,18 +136,118 @@ class ReportView(discord.ui.View):
     async def decline(
         self, interaction: discord.Interaction, button: discord.ui.Button
     ):
-        if interaction.user.id not in (self.author_id, self.partner_id):
+        if interaction.user.id not in (self.author_id, *self.partner_ids):
             return await interaction.response.send_message(
-                embed=h.err("Only the people involved can decline this report."),
+                embed=h.err("Only the people involved can decline this squad."),
                 ephemeral=True,
             )
         self.resolved = True
         for child in self.children:
             child.disabled = True
         await interaction.response.edit_message(
-            embed=h.warn("Co-op report declined.", "✖️ Declined"), view=self
+            embed=h.warn(f"Squad declined by <@{interaction.user.id}>.", "✖️ Declined"),
+            view=self,
         )
         self.stop()
+
+
+class SquadBuilderView(discord.ui.View):
+    """Host-only assembly menu for /squad when no teammates are tagged.
+
+    A UserSelect lets the host pick up to 25 teammates (Discord's per-select
+    cap — far past a raid party), then **Start** converts the message into a
+    SquadView confirmation board. Only the host can drive it. Short-lived and
+    in-memory — it simply expires on timeout or bot restart.
+    """
+
+    def __init__(self, cog: "Economy", host_id: int, activity: str):
+        super().__init__(timeout=COOP_CONFIRM_TIMEOUT)
+        self.cog = cog
+        self.host_id = host_id
+        self.activity = activity
+        self.selected: list[int] = []
+        self.message: Optional[discord.Message] = None
+        self.resolved = False
+
+    async def interaction_check(self, interaction: discord.Interaction) -> bool:
+        if interaction.user.id != self.host_id:
+            await interaction.response.send_message(
+                embed=h.err("Only the host can build this squad."), ephemeral=True
+            )
+            return False
+        return True
+
+    def _embed(self) -> discord.Embed:
+        what = f"\n**Activity:** {self.activity}" if self.activity else ""
+        if self.selected:
+            roster = "\n".join(f"• <@{uid}>" for uid in self.selected)
+            picks = f"**Squad ({len(self.selected)}):**\n{roster}"
+        else:
+            picks = "*No teammates picked yet.*"
+        body = (
+            f"<@{self.host_id}>, pick everyone who was in on it.{what}\n\n"
+            f"Use the menu to add teammates (up to 25), then press **Start** to "
+            f"send it for confirmation.\n\n{picks}"
+        )
+        return h.embed("🤝 Assemble Your Squad", body, h.BLUE)
+
+    @discord.ui.select(
+        cls=discord.ui.UserSelect,
+        placeholder="Pick your teammates…",
+        min_values=1,
+        max_values=25,
+    )
+    async def pick(
+        self, interaction: discord.Interaction, select: discord.ui.UserSelect
+    ):
+        chosen: list[int] = []
+        for user in select.values:
+            # Drop bots and the host; a squad is other people who joined in.
+            if user.bot or user.id == self.host_id:
+                continue
+            if user.id not in chosen:
+                chosen.append(user.id)
+        self.selected = chosen
+        await interaction.response.edit_message(embed=self._embed(), view=self)
+
+    @discord.ui.button(label="Start", style=discord.ButtonStyle.success, emoji="🚀")
+    async def start(self, interaction: discord.Interaction, button: discord.ui.Button):
+        if not self.selected:
+            return await interaction.response.send_message(
+                embed=h.err("Pick at least one teammate first."), ephemeral=True
+            )
+        self.resolved = True
+        cfg = await self.cog._cfg(interaction.guild.id)
+        view = SquadView(self.cog, self.host_id, self.selected, self.activity)
+        pings = " ".join(f"<@{uid}>" for uid in self.selected)
+        await interaction.response.edit_message(
+            content=pings, embed=await view._embed(cfg), view=view
+        )
+        # The confirmation board lives on the same message we've been editing.
+        view.message = self.message
+        self.stop()
+
+    @discord.ui.button(label="Cancel", style=discord.ButtonStyle.danger, emoji="✖️")
+    async def cancel(self, interaction: discord.Interaction, button: discord.ui.Button):
+        self.resolved = True
+        for child in self.children:
+            child.disabled = True
+        await interaction.response.edit_message(
+            embed=h.warn("Squad assembly cancelled.", "✖️ Cancelled"), view=self
+        )
+        self.stop()
+
+    async def on_timeout(self):
+        if self.resolved or self.message is None:
+            return
+        for child in self.children:
+            child.disabled = True
+        try:
+            await self.message.edit(
+                embed=h.warn("Squad assembly expired.", "⏳ Expired"), view=self
+            )
+        except discord.HTTPException:
+            pass
 
 
 # ══════════════════════════════════════════════════════════════════════════════
