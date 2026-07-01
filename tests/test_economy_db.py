@@ -324,3 +324,78 @@ async def test_role_purchase_not_in_pending_queue():
     await db.purchase_item(G, iid, A)
     # Role rewards are auto-fulfilled, so they never enter the mod queue.
     assert await db.count_pending_purchases(G) == 0
+
+
+# ── Raids (persisted /raid boards) ──────────────────────────────────────────────
+async def test_create_and_get_raid_roundtrip():
+    rid = await db.create_raid(G, 111, A, "dungeon", [A], created_at=1000.0)
+    assert isinstance(rid, int)
+    await db.set_raid_message(rid, 222)
+    raids = await db.get_open_raids()
+    assert len(raids) == 1
+    r = raids[0]
+    assert r["raid_id"] == rid
+    assert r["guild_id"] == G
+    assert r["channel_id"] == 111
+    assert r["message_id"] == 222
+    assert r["host_id"] == A
+    assert r["activity"] == "dungeon"
+    assert r["participants"] == [A]
+    assert r["created_at"] == 1000.0
+
+
+async def test_raid_participants_update():
+    rid = await db.create_raid(G, 111, A, "", [A], created_at=1.0)
+    await db.set_raid_participants(rid, [A, B, C])
+    r = (await db.get_open_raids())[0]
+    assert r["participants"] == [A, B, C]
+
+
+async def test_delete_raid():
+    rid = await db.create_raid(G, 111, A, "", [A], created_at=1.0)
+    await db.delete_raid(rid)
+    assert await db.get_open_raids() == []
+
+
+async def test_raid_message_id_null_before_set():
+    await db.create_raid(G, 111, A, "", [A], created_at=1.0)
+    r = (await db.get_open_raids())[0]
+    assert r["message_id"] is None
+
+
+# ── Squads (persisted /squad co-op confirms) ────────────────────────────────────
+async def test_create_and_get_squad_roundtrip():
+    sid = await db.create_squad(G, 111, A, [B, C], "dungeon", created_at=1000.0)
+    assert isinstance(sid, int)
+    await db.set_squad_message(sid, 222)
+    squads = await db.get_open_squads()
+    assert len(squads) == 1
+    s = squads[0]
+    assert s["squad_id"] == sid
+    assert s["guild_id"] == G
+    assert s["channel_id"] == 111
+    assert s["message_id"] == 222
+    assert s["author_id"] == A
+    assert s["partner_ids"] == [B, C]
+    assert s["confirmed"] == []
+    assert s["activity"] == "dungeon"
+    assert s["created_at"] == 1000.0
+
+
+async def test_squad_confirmed_update():
+    sid = await db.create_squad(G, 111, A, [B, C], "", created_at=1.0)
+    await db.set_squad_confirmed(sid, [B])
+    s = (await db.get_open_squads())[0]
+    assert s["confirmed"] == [B]
+
+
+async def test_delete_squad():
+    sid = await db.create_squad(G, 111, A, [B], "", created_at=1.0)
+    await db.delete_squad(sid)
+    assert await db.get_open_squads() == []
+
+
+async def test_squad_message_id_null_before_set():
+    await db.create_squad(G, 111, A, [B], "", created_at=1.0)
+    s = (await db.get_open_squads())[0]
+    assert s["message_id"] is None

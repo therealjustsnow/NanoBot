@@ -6,6 +6,7 @@ module holds the economy + shop accessors and registers its table setup with _co
 db.init() creates them in the right order.
 """
 
+import json
 import time
 
 
@@ -105,6 +106,39 @@ async def _ensure_economy_tables():
         "CREATE INDEX IF NOT EXISTS shop_purchases_pending "
         "ON shop_purchases (guild_id, kind, fulfilled)"
     )
+    # Open /raid join boards — persisted so a restart doesn't orphan the buttons
+    # (clicking an orphaned in-memory view shows Discord's "This interaction
+    # failed"). Rows are restored on startup and dropped on finish/cancel/expire.
+    await _conn().execute("""
+        CREATE TABLE IF NOT EXISTS economy_raids (
+            raid_id      INTEGER PRIMARY KEY AUTOINCREMENT,
+            guild_id     TEXT NOT NULL,
+            channel_id   TEXT NOT NULL,
+            message_id   TEXT,
+            host_id      TEXT NOT NULL,
+            activity     TEXT NOT NULL DEFAULT '',
+            participants TEXT NOT NULL DEFAULT '[]',
+            created_at   REAL NOT NULL DEFAULT 0
+        )
+    """)
+    # Pending /squad co-op confirms — same restart-orphan problem as raids: if a
+    # restart lands while teammates are still confirming, the button is dead and
+    # the payout is lost. Persisted + restored on startup, dropped on confirm/
+    # decline/expire. `confirmed` tracks who's pressed Confirm so restart resumes
+    # mid-progress.
+    await _conn().execute("""
+        CREATE TABLE IF NOT EXISTS economy_squads (
+            squad_id     INTEGER PRIMARY KEY AUTOINCREMENT,
+            guild_id     TEXT NOT NULL,
+            channel_id   TEXT NOT NULL,
+            message_id   TEXT,
+            author_id    TEXT NOT NULL,
+            partner_ids  TEXT NOT NULL DEFAULT '[]',
+            confirmed    TEXT NOT NULL DEFAULT '[]',
+            activity     TEXT NOT NULL DEFAULT '',
+            created_at   REAL NOT NULL DEFAULT 0
+        )
+    """)
     await _conn().commit()
 
 
@@ -664,6 +698,173 @@ async def fulfill_purchase(guild_id: int, purchase_id: int, mod_id: int) -> dict
         "user_id": int(row["user_id"]),
         "item_name": row["item_name"],
     }
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+#  Raids (open /raid join boards — persisted for restart-safe buttons)
+# ══════════════════════════════════════════════════════════════════════════════
+
+
+async def create_raid(
+    guild_id: int,
+    channel_id: int,
+    host_id: int,
+    activity: str,
+    participants: list[int],
+    created_at: float,
+) -> int:
+    """Insert an open raid and return its new id (used in the button custom_ids)."""
+    cur = await _conn().execute(
+        "INSERT INTO economy_raids "
+        "(guild_id, channel_id, host_id, activity, participants, created_at) "
+        "VALUES (?,?,?,?,?,?)",
+        (
+            str(guild_id),
+            str(channel_id),
+            str(host_id),
+            activity,
+            json.dumps([int(u) for u in participants]),
+            float(created_at),
+        ),
+    )
+    await _conn().commit()
+    return cur.lastrowid
+
+
+async def set_raid_message(raid_id: int, message_id: int) -> None:
+    await _conn().execute(
+        "UPDATE economy_raids SET message_id=? WHERE raid_id=?",
+        (str(message_id), int(raid_id)),
+    )
+    await _conn().commit()
+
+
+async def set_raid_participants(raid_id: int, participants: list[int]) -> None:
+    await _conn().execute(
+        "UPDATE economy_raids SET participants=? WHERE raid_id=?",
+        (json.dumps([int(u) for u in participants]), int(raid_id)),
+    )
+    await _conn().commit()
+
+
+async def delete_raid(raid_id: int) -> None:
+    await _conn().execute("DELETE FROM economy_raids WHERE raid_id=?", (int(raid_id),))
+    await _conn().commit()
+
+
+async def get_open_raids() -> list[dict]:
+    """All persisted raids (message_id may be NULL if a crash beat the update)."""
+    async with _conn().execute(
+        "SELECT raid_id, guild_id, channel_id, message_id, host_id, activity, "
+        "participants, created_at FROM economy_raids"
+    ) as cur:
+        rows = await cur.fetchall()
+    out = []
+    for r in rows:
+        try:
+            participants = [int(u) for u in json.loads(r["participants"] or "[]")]
+        except (ValueError, TypeError):
+            participants = []
+        out.append(
+            {
+                "raid_id": r["raid_id"],
+                "guild_id": int(r["guild_id"]),
+                "channel_id": int(r["channel_id"]),
+                "message_id": int(r["message_id"]) if r["message_id"] else None,
+                "host_id": int(r["host_id"]),
+                "activity": r["activity"] or "",
+                "participants": participants,
+                "created_at": r["created_at"],
+            }
+        )
+    return out
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+#  Squads (pending /squad co-op confirms — persisted for restart-safe payout)
+# ══════════════════════════════════════════════════════════════════════════════
+
+
+async def create_squad(
+    guild_id: int,
+    channel_id: int,
+    author_id: int,
+    partner_ids: list[int],
+    activity: str,
+    created_at: float,
+) -> int:
+    """Insert a pending squad confirm and return its new id (used in custom_ids)."""
+    cur = await _conn().execute(
+        "INSERT INTO economy_squads "
+        "(guild_id, channel_id, author_id, partner_ids, activity, created_at) "
+        "VALUES (?,?,?,?,?,?)",
+        (
+            str(guild_id),
+            str(channel_id),
+            str(author_id),
+            json.dumps([int(u) for u in partner_ids]),
+            activity,
+            float(created_at),
+        ),
+    )
+    await _conn().commit()
+    return cur.lastrowid
+
+
+async def set_squad_message(squad_id: int, message_id: int) -> None:
+    await _conn().execute(
+        "UPDATE economy_squads SET message_id=? WHERE squad_id=?",
+        (str(message_id), int(squad_id)),
+    )
+    await _conn().commit()
+
+
+async def set_squad_confirmed(squad_id: int, confirmed: list[int]) -> None:
+    await _conn().execute(
+        "UPDATE economy_squads SET confirmed=? WHERE squad_id=?",
+        (json.dumps([int(u) for u in confirmed]), int(squad_id)),
+    )
+    await _conn().commit()
+
+
+async def delete_squad(squad_id: int) -> None:
+    await _conn().execute(
+        "DELETE FROM economy_squads WHERE squad_id=?", (int(squad_id),)
+    )
+    await _conn().commit()
+
+
+async def get_open_squads() -> list[dict]:
+    """All persisted pending squad confirms (message_id may be NULL after a crash)."""
+    async with _conn().execute(
+        "SELECT squad_id, guild_id, channel_id, message_id, author_id, partner_ids, "
+        "confirmed, activity, created_at FROM economy_squads"
+    ) as cur:
+        rows = await cur.fetchall()
+    out = []
+    for r in rows:
+        try:
+            partner_ids = [int(u) for u in json.loads(r["partner_ids"] or "[]")]
+        except (ValueError, TypeError):
+            partner_ids = []
+        try:
+            confirmed = [int(u) for u in json.loads(r["confirmed"] or "[]")]
+        except (ValueError, TypeError):
+            confirmed = []
+        out.append(
+            {
+                "squad_id": r["squad_id"],
+                "guild_id": int(r["guild_id"]),
+                "channel_id": int(r["channel_id"]),
+                "message_id": int(r["message_id"]) if r["message_id"] else None,
+                "author_id": int(r["author_id"]),
+                "partner_ids": partner_ids,
+                "confirmed": confirmed,
+                "activity": r["activity"] or "",
+                "created_at": r["created_at"],
+            }
+        )
+    return out
 
 
 register_init(_ensure_economy_tables)
