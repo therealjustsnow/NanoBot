@@ -3,18 +3,19 @@ cogs/economy.py
 Per-guild NanoCoin economy.
 
 Members hold a coin balance, claim a daily reward (with a consecutive-day
-streak bonus), and pay each other. They also reward co-op activity: /teamup
-tags up to five teammates who each confirm with a button, and /raid opens a
-join board for a whole group (the host or a mod presses Finish to pay the
-party) — both grant spendable coins and a lifetime contribution stat that
-drives a separate contributor leaderboard and rank titles. Coins are spent in a
+streak bonus), and pay each other. They also reward co-op activity: /squad
+tags teammates who each confirm with a button (tag up to five directly, or tag
+no one to open a picker menu for a squad of up to 25), and /raid opens a join
+board for a whole group (the host or a mod presses Finish to pay the party) —
+both grant spendable coins and a lifetime contribution stat that drives a
+separate contributor leaderboard and rank titles. Coins are spent in a
 per-guild shop on Discord roles (granted instantly) or custom rewards (queued
 for a mod to fulfil), with optional stock counts, per-user limits, and
 cooldowns. Admins grant/take coins, view a rich list, and customise the
 currency name, emoji, daily amount, streak bonus, co-op reward, and raid
 reward/party size.
 
-Slash command budget: five flat commands (/balance, /daily, /pay, /teamup,
+Slash command budget: five flat commands (/balance, /daily, /pay, /squad,
 /raid) plus two groups (/coin …, /shop …) whose subcommands cost no extra
 top-level slots.
 
@@ -24,7 +25,7 @@ Commands
   /balance [member]              → check a balance (+ contribution rank)
   /daily                         → claim the daily reward
   /pay <member> <amount>         → send coins to someone
-  /teamup <member…> [activity]   → co-op reward, teammates confirm (alias: coop)
+  /squad [member…] [activity]    → co-op reward, teammates confirm (alias: coop)
   /raid [activity]               → group co-op join board (alias: event)
   /coin top [page]               → richest members
   /coin contrib [page]           → top contributors (alias: contributions)
@@ -71,7 +72,7 @@ from .helpers import (
     _rank_title,
     _scaled_price,
 )
-from .views import RaidView, TeamupView
+from .views import RaidView, SquadBuilderView, SquadView
 
 log = logging.getLogger("NanoBot.economy")
 
@@ -541,7 +542,7 @@ class Economy(commands.Cog):
         if total == 0:
             return await ctx.reply(
                 embed=h.info(
-                    "No co-op contributions yet. Team up and use `/teamup`!",
+                    "No co-op contributions yet. Team up and use `/squad`!",
                     "🤝 Top Contributors",
                 )
             )
@@ -569,7 +570,7 @@ class Economy(commands.Cog):
     # ── /coin coop (set co-op reward) ─────────────────────────────────────────────
     @coin.command(
         name="coop",
-        description="Set the coins each member earns per confirmed /teamup.",
+        description="Set the coins each member earns per confirmed /squad.",
     )
     @app_commands.describe(amount="Coins awarded to EACH partner per confirmed co-op")
     @commands.has_permissions(manage_guild=True)
@@ -587,7 +588,7 @@ class Economy(commands.Cog):
         await ctx.reply(
             embed=h.ok(
                 f"Co-op reward set to {self._money(cfg, amount)} per person.\n"
-                f"Set to **0** to disable `/teamup`."
+                f"Set to **0** to disable `/squad`."
             )
         )
 
@@ -645,30 +646,31 @@ class Economy(commands.Cog):
         )
 
     # ══════════════════════════════════════════════════════════════════════════
-    #  /teamup  — flat, co-op activity reward (1–5 teammates)
+    #  /squad  — flat, co-op activity reward (tag up to 5, or menu-pick up to 25)
     # ══════════════════════════════════════════════════════════════════════════
     @commands.hybrid_command(
-        name="teamup",
+        name="squad",
         aliases=["coop"],
-        description="Team up on a guild activity — everyone tagged earns coins!",
+        description="Squad up on a guild activity — everyone in the squad earns coins!",
         extras={
             "category": "🪙 Economy",
             "short": "Reward a co-op activity",
-            "usage": "teamup <member> [member2] [member3] [member4] [member5] [activity]",
-            "desc": "Tag the teammates you did something with (a dungeon, a raid, an "
-            "event). Each one confirms with a button, then the whole party earns "
-            "coins and contribution points. Tag up to 5 teammates.",
+            "usage": "squad [member] [member2] [member3] [member4] [member5] [activity]",
+            "desc": "Reward a group activity (a dungeon, a raid, an event). Tag up to 5 "
+            "teammates directly, or tag no one to open a picker menu and build a "
+            "squad of up to 25. Each teammate confirms with a button, then the "
+            "whole squad earns coins and contribution points.",
             "args": [
-                "member — a teammate (tag up to 5 across member…member5)",
+                "member — a teammate (tag up to 5, or omit all to open the picker)",
                 "activity — what you did together (optional)",
             ],
             "perms": "None",
-            "example": "{prefix}teamup @Ann @Bo @Cy cleared a dungeon",
+            "example": "{prefix}squad @Ann @Bo @Cy cleared a dungeon\n{prefix}squad",
         },
     )
     @commands.guild_only()
     @app_commands.describe(
-        member="A teammate you played with",
+        member="A teammate (leave everyone blank to open the squad picker)",
         member2="Another teammate (optional)",
         member3="Another teammate (optional)",
         member4="Another teammate (optional)",
@@ -676,10 +678,10 @@ class Economy(commands.Cog):
         activity="What you did together (optional)",
     )
     @commands.cooldown(1, 10, commands.BucketType.user)
-    async def teamup(
+    async def squad(
         self,
         ctx: commands.Context,
-        member: discord.Member,
+        member: Optional[discord.Member] = None,
         member2: Optional[discord.Member] = None,
         member3: Optional[discord.Member] = None,
         member4: Optional[discord.Member] = None,
@@ -697,14 +699,14 @@ class Economy(commands.Cog):
                 ),
                 ephemeral=True,
             )
-        # Collect the tagged teammates, dropping bots/self/duplicates.
+        # Collect any directly-tagged teammates, dropping bots/self/duplicates.
         partner_ids: list[int] = []
         for m in (member, member2, member3, member4, member5):
             if m is None:
                 continue
             if m.bot:
                 return await ctx.reply(
-                    embed=h.err("You can't team up with a bot."), ephemeral=True
+                    embed=h.err("You can't squad up with a bot."), ephemeral=True
                 )
             if m.id == ctx.author.id:
                 return await ctx.reply(
@@ -713,13 +715,17 @@ class Economy(commands.Cog):
                 )
             if m.id not in partner_ids:
                 partner_ids.append(m.id)
-        if not partner_ids:
-            return await ctx.reply(
-                embed=h.err("Tag at least one teammate."), ephemeral=True
-            )
 
         activity = (activity or "").strip()[:200]
-        view = TeamupView(self, ctx.author.id, partner_ids, activity)
+
+        # No one tagged → open the host-only picker menu (up to 25 teammates).
+        if not partner_ids:
+            builder = SquadBuilderView(self, ctx.author.id, activity)
+            msg = await ctx.reply(embed=builder._embed(), view=builder)
+            builder.message = msg
+            return
+
+        view = SquadView(self, ctx.author.id, partner_ids, activity)
         pings = " ".join(f"<@{uid}>" for uid in partner_ids)
         msg = await ctx.reply(content=pings, embed=await view._embed(cfg), view=view)
         view.message = msg

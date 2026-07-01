@@ -20,7 +20,7 @@ GAMBLE_MULTIPLIER = 2.0
 # values toward integer limits. A billion is far above any real use.
 COIN_MAX = 1_000_000_000
 
-# How long a /teamup co-op reward waits for every teammate to confirm.
+# How long a /squad co-op reward (and its picker menu) waits before expiring.
 COOP_CONFIRM_TIMEOUT = 120
 
 # How long an open /raid board stays joinable before it auto-expires unpaid.
