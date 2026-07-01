@@ -8,7 +8,7 @@ dpytest>=0.7.0
 
 # Exercises the encrypted-DB path in tests/test_db_crypto.py (optional at
 # runtime — see the commented line in requirements.txt)
-sqlcipher3>=0.6.0
+sqlcipher3>=0.6.2
 
 # Linting / formatting (also wired into .pre-commit-config.yaml)
 black>=26.5.1
