@@ -64,7 +64,7 @@ from discord.ext import commands
 from utils import db
 from utils import helpers as h
 
-from .constants import COIN_MAX, _DEFAULT_SHOP_ITEMS
+from .constants import COIN_MAX, COOP_CONFIRM_TIMEOUT, RAID_TIMEOUT, _DEFAULT_SHOP_ITEMS
 from .helpers import (
     compute_daily,
     fmt_coins,
@@ -87,6 +87,20 @@ class Economy(commands.Cog):
         # double-claim. Created lazily; entries are tiny and bounded by the
         # active user set.
         self._daily_locks: dict[tuple[int, int], asyncio.Lock] = {}
+        # Open /raid boards + pending /squad confirms, keyed by id: the live view
+        # + its expiry timer. Persisted in SQLite (economy_raids/economy_squads)
+        # and restored on startup so a restart doesn't orphan the buttons ("This
+        # interaction failed") or drop a payout mid-confirm.
+        self._raids: dict[int, RaidView] = {}
+        self._raid_tasks: dict[int, asyncio.Task] = {}
+        self._squads: dict[int, SquadView] = {}
+        self._squad_tasks: dict[int, asyncio.Task] = {}
+
+    def cog_unload(self):
+        for task in (*self._raid_tasks.values(), *self._squad_tasks.values()):
+            task.cancel()
+        self._raid_tasks.clear()
+        self._squad_tasks.clear()
 
     def _daily_lock(self, guild_id: int, user_id: int) -> asyncio.Lock:
         key = (guild_id, user_id)
@@ -725,10 +739,55 @@ class Economy(commands.Cog):
             builder.message = msg
             return
 
-        view = SquadView(self, ctx.author.id, partner_ids, activity)
+        view = await self._make_squad(
+            ctx.guild.id, ctx.channel.id, ctx.author.id, partner_ids, activity
+        )
         pings = " ".join(f"<@{uid}>" for uid in partner_ids)
         msg = await ctx.reply(content=pings, embed=await view._embed(cfg), view=view)
         view.message = msg
+        await db.set_squad_message(view.squad_id, msg.id)
+        self._arm_squad(view)
+
+    # ── Squad persistence / lifecycle ────────────────────────────────────────────
+    async def _make_squad(
+        self,
+        guild_id: int,
+        channel_id: int,
+        author_id: int,
+        partner_ids: list[int],
+        activity: str,
+    ) -> SquadView:
+        """Persist a new pending squad confirm and build its (unsent) view."""
+        created_at = time.time()
+        squad_id = await db.create_squad(
+            guild_id, channel_id, author_id, partner_ids, activity, created_at
+        )
+        return SquadView(
+            self, squad_id, author_id, partner_ids, activity, created_at=created_at
+        )
+
+    def _arm_squad(self, view: SquadView) -> None:
+        """Track a pending squad confirm and schedule its auto-expire."""
+        self._squads[view.squad_id] = view
+        delay = max(0.0, view.created_at + COOP_CONFIRM_TIMEOUT - time.time())
+        self._squad_tasks[view.squad_id] = asyncio.create_task(
+            self._squad_expiry(view, delay)
+        )
+
+    async def _squad_expiry(self, view: SquadView, delay: float) -> None:
+        try:
+            await asyncio.sleep(delay)
+        except asyncio.CancelledError:
+            return
+        await view.expire()
+
+    async def _end_squad(self, squad_id: int) -> None:
+        """Drop a confirmed/declined/expired squad: cancel timer + delete the row."""
+        task = self._squad_tasks.pop(squad_id, None)
+        if task is not None and task is not asyncio.current_task():
+            task.cancel()
+        self._squads.pop(squad_id, None)
+        await db.delete_squad(squad_id)
 
     # ══════════════════════════════════════════════════════════════════════════
     #  /raid  — flat, group-co-op join board
@@ -764,9 +823,89 @@ class Economy(commands.Cog):
                 ephemeral=True,
             )
         activity = (activity or "").strip()[:200]
-        view = RaidView(self, ctx.author.id, activity)
+        created_at = time.time()
+        raid_id = await db.create_raid(
+            ctx.guild.id,
+            ctx.channel.id,
+            ctx.author.id,
+            activity,
+            [ctx.author.id],
+            created_at,
+        )
+        view = RaidView(self, raid_id, ctx.author.id, activity, created_at=created_at)
         msg = await ctx.reply(embed=await view._embed(cfg), view=view)
         view.message = msg
+        await db.set_raid_message(raid_id, msg.id)
+        self._arm_raid(view)
+
+    # ── Raid persistence / lifecycle ─────────────────────────────────────────────
+    def _arm_raid(self, view: RaidView) -> None:
+        """Track a live raid and schedule its RAID_TIMEOUT auto-expire."""
+        self._raids[view.raid_id] = view
+        delay = max(0.0, view.created_at + RAID_TIMEOUT - time.time())
+        self._raid_tasks[view.raid_id] = asyncio.create_task(
+            self._raid_expiry(view, delay)
+        )
+
+    async def _raid_expiry(self, view: RaidView, delay: float) -> None:
+        try:
+            await asyncio.sleep(delay)
+        except asyncio.CancelledError:
+            return
+        await view.expire()
+
+    async def _end_raid(self, raid_id: int) -> None:
+        """Drop a finished/cancelled/expired raid: cancel its timer + delete the row."""
+        task = self._raid_tasks.pop(raid_id, None)
+        if task is not None and task is not asyncio.current_task():
+            task.cancel()
+        self._raids.pop(raid_id, None)
+        await db.delete_raid(raid_id)
+
+    @commands.Cog.listener()
+    async def on_restore_schedules(self):
+        """Rebuild open raid boards + pending squad confirms after a restart."""
+        for row in await db.get_open_raids():
+            raid_id = row["raid_id"]
+            if row["message_id"] is None:
+                # Crash beat the message-id write — nothing to bind buttons to.
+                await db.delete_raid(raid_id)
+                continue
+            participants = {uid: None for uid in row["participants"]}
+            participants.setdefault(row["host_id"], None)
+            view = RaidView(
+                self,
+                raid_id,
+                row["host_id"],
+                row["activity"],
+                participants=participants,
+                created_at=row["created_at"],
+            )
+            self.bot.add_view(view, message_id=row["message_id"])
+            channel = self.bot.get_channel(row["channel_id"])
+            if channel is not None:
+                view.message = channel.get_partial_message(row["message_id"])
+            self._arm_raid(view)
+
+        for row in await db.get_open_squads():
+            squad_id = row["squad_id"]
+            if row["message_id"] is None:
+                await db.delete_squad(squad_id)
+                continue
+            view = SquadView(
+                self,
+                squad_id,
+                row["author_id"],
+                row["partner_ids"],
+                row["activity"],
+                confirmed=set(row["confirmed"]),
+                created_at=row["created_at"],
+            )
+            self.bot.add_view(view, message_id=row["message_id"])
+            channel = self.bot.get_channel(row["channel_id"])
+            if channel is not None:
+                view.message = channel.get_partial_message(row["message_id"])
+            self._arm_squad(view)
 
     # ══════════════════════════════════════════════════════════════════════════
     #  /shop  group

@@ -2,7 +2,8 @@
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING, Optional
+import time
+from typing import TYPE_CHECKING, Callable, Optional
 
 import discord
 
@@ -15,32 +16,89 @@ if TYPE_CHECKING:
     from .cog import Economy
 
 
+# Squad-confirm button custom_ids encode the squad id so a persistent
+# (timeout=None) view can be rebuilt after a restart and route clicks correctly:
+#   "squad:{squad_id}:{action}"  — action ∈ {confirm, decline}
+_SQUAD_ACTIONS = ("confirm", "decline")
+
+
+def _squad_cid(squad_id: int, action: str) -> str:
+    return f"squad:{squad_id}:{action}"
+
+
+def _decode_squad_cid(custom_id: str) -> tuple[int, str] | None:
+    parts = custom_id.split(":")
+    if len(parts) != 3 or parts[0] != "squad" or parts[2] not in _SQUAD_ACTIONS:
+        return None
+    try:
+        return int(parts[1]), parts[2]
+    except ValueError:
+        return None
+
+
+class SquadButton(discord.ui.Button):
+    """A squad-confirm button carrying a per-squad custom_id (survives restarts)."""
+
+    def __init__(
+        self,
+        squad_id: int,
+        action: str,
+        label: str,
+        style: discord.ButtonStyle,
+        emoji: str,
+        handler: Callable,
+    ):
+        super().__init__(
+            label=label,
+            style=style,
+            emoji=emoji,
+            custom_id=_squad_cid(squad_id, action),
+        )
+        self._handler = handler
+
+    async def callback(self, interaction: discord.Interaction):
+        await self._handler(interaction)
+
+
 class SquadView(discord.ui.View):
     """Squad-confirm gate for a co-op activity reward.
 
     The author tags one or more teammates; every tagged teammate presses
     Confirm (clicking is their own confirmation). Coins + contribution are
     awarded to the whole party — author included — only once *everyone* has
-    confirmed. Any involved member can Decline to scrap it. Short-lived (no
-    persistence) — a pending squad simply expires on bot restart.
+    confirmed. Any involved member can Decline to scrap it. Persisted in SQLite
+    (see utils/db economy_squads) and restored on startup, so a restart while a
+    confirm is pending doesn't orphan the button or drop the payout. Auto-expires
+    COOP_CONFIRM_TIMEOUT after creation via a cog-owned timer (the view itself is
+    persistent/timeout=None so it can be re-registered after a restart).
     """
 
     def __init__(
         self,
         cog: "Economy",
+        squad_id: int,
         author_id: int,
         partner_ids: list[int],
         activity: str,
+        confirmed: Optional[set[int]] = None,
+        created_at: Optional[float] = None,
     ):
-        super().__init__(timeout=COOP_CONFIRM_TIMEOUT)
+        super().__init__(timeout=None)
         self.cog = cog
+        self.squad_id = squad_id
         self.author_id = author_id
         self.partner_ids = partner_ids
         self.activity = activity
         # Teammates who've pressed Confirm; payout fires when this covers all.
-        self.confirmed: set[int] = set()
-        self.message: Optional[discord.Message] = None
+        self.confirmed: set[int] = confirmed if confirmed is not None else set()
+        self.created_at = created_at if created_at is not None else time.time()
+        self.message: Optional[discord.abc.Message] = None
         self.resolved = False
+        for action, label, style, emoji, handler in (
+            ("confirm", "Confirm", discord.ButtonStyle.success, "🤝", self._confirm),
+            ("decline", "Decline", discord.ButtonStyle.secondary, "✖️", self._decline),
+        ):
+            self.add_item(SquadButton(squad_id, action, label, style, emoji, handler))
 
     def _party_size(self) -> int:
         return 1 + len(self.partner_ids)  # author + teammates
@@ -51,6 +109,9 @@ class SquadView(discord.ui.View):
             mark = "✅" if uid in self.confirmed else "⏳"
             lines.append(f"{mark} <@{uid}>")
         return "\n".join(lines)
+
+    def _expired(self) -> bool:
+        return time.time() - self.created_at >= COOP_CONFIRM_TIMEOUT
 
     async def _embed(self, cfg: dict) -> discord.Embed:
         what = f"\n**Activity:** {self.activity}" if self.activity else ""
@@ -70,26 +131,45 @@ class SquadView(discord.ui.View):
         )
         return h.embed("🤝 Co-op Squad", body, h.BLUE)
 
-    async def on_timeout(self):
-        if self.resolved or self.message is None:
+    async def _reject_stale(self, interaction: discord.Interaction) -> bool:
+        """If the squad already resolved/expired, ack the click + tidy up."""
+        if self.resolved:
+            await interaction.response.send_message(
+                embed=h.warn("This squad has already ended."), ephemeral=True
+            )
+            return True
+        if self._expired():
+            await interaction.response.send_message(
+                embed=h.warn("This squad has expired."), ephemeral=True
+            )
+            await self.expire()
+            return True
+        return False
+
+    async def expire(self):
+        """Disable the confirm and drop it from persistence (called by the timer)."""
+        if self.resolved:
             return
+        self.resolved = True
         for child in self.children:
             child.disabled = True
-        try:
-            await self.message.edit(
-                embed=h.warn(
-                    "Squad expired — not everyone confirmed in time.",
-                    "⏳ Expired",
-                ),
-                view=self,
-            )
-        except discord.HTTPException:
-            pass
+        if self.message is not None:
+            try:
+                await self.message.edit(
+                    embed=h.warn(
+                        "Squad expired — not everyone confirmed in time.",
+                        "⏳ Expired",
+                    ),
+                    view=self,
+                )
+            except discord.HTTPException:
+                pass
+        await self.cog._end_squad(self.squad_id)
+        self.stop()
 
-    @discord.ui.button(label="Confirm", style=discord.ButtonStyle.success, emoji="🤝")
-    async def confirm(
-        self, interaction: discord.Interaction, button: discord.ui.Button
-    ):
+    async def _confirm(self, interaction: discord.Interaction):
+        if await self._reject_stale(interaction):
+            return
         if interaction.user.id not in self.partner_ids:
             return await interaction.response.send_message(
                 embed=h.err("Only a tagged teammate can confirm this squad."),
@@ -103,8 +183,9 @@ class SquadView(discord.ui.View):
         self.confirmed.add(interaction.user.id)
         cfg = await self.cog._cfg(interaction.guild.id)
 
-        # Still waiting on someone — update the progress board and bail.
+        # Still waiting on someone — persist progress, update the board, bail.
         if len(self.confirmed) < len(self.partner_ids):
+            await db.set_squad_confirmed(self.squad_id, list(self.confirmed))
             return await interaction.response.edit_message(
                 embed=await self._embed(cfg), view=self
             )
@@ -130,12 +211,12 @@ class SquadView(discord.ui.View):
             ),
             view=self,
         )
+        await self.cog._end_squad(self.squad_id)
         self.stop()
 
-    @discord.ui.button(label="Decline", style=discord.ButtonStyle.secondary, emoji="✖️")
-    async def decline(
-        self, interaction: discord.Interaction, button: discord.ui.Button
-    ):
+    async def _decline(self, interaction: discord.Interaction):
+        if await self._reject_stale(interaction):
+            return
         if interaction.user.id not in (self.author_id, *self.partner_ids):
             return await interaction.response.send_message(
                 embed=h.err("Only the people involved can decline this squad."),
@@ -148,6 +229,7 @@ class SquadView(discord.ui.View):
             embed=h.warn(f"Squad declined by <@{interaction.user.id}>.", "✖️ Declined"),
             view=self,
         )
+        await self.cog._end_squad(self.squad_id)
         self.stop()
 
 
@@ -157,7 +239,8 @@ class SquadBuilderView(discord.ui.View):
     A UserSelect lets the host pick up to 25 teammates (Discord's per-select
     cap — far past a raid party), then **Start** converts the message into a
     SquadView confirmation board. Only the host can drive it. Short-lived and
-    in-memory — it simply expires on timeout or bot restart.
+    in-memory — the assembly step carries no payout, so it simply expires on
+    timeout or bot restart (the SquadView it launches *is* persisted).
     """
 
     def __init__(self, cog: "Economy", host_id: int, activity: str):
@@ -218,13 +301,23 @@ class SquadBuilderView(discord.ui.View):
             )
         self.resolved = True
         cfg = await self.cog._cfg(interaction.guild.id)
-        view = SquadView(self.cog, self.host_id, self.selected, self.activity)
+        # Persist the confirmation board so a restart mid-confirm keeps working.
+        view = await self.cog._make_squad(
+            interaction.guild.id,
+            interaction.channel_id,
+            self.host_id,
+            self.selected,
+            self.activity,
+        )
         pings = " ".join(f"<@{uid}>" for uid in self.selected)
         await interaction.response.edit_message(
             content=pings, embed=await view._embed(cfg), view=view
         )
         # The confirmation board lives on the same message we've been editing.
         view.message = self.message
+        if self.message is not None:
+            await db.set_squad_message(view.squad_id, self.message.id)
+        self.cog._arm_squad(view)
         self.stop()
 
     @discord.ui.button(label="Cancel", style=discord.ButtonStyle.danger, emoji="✖️")
@@ -253,27 +346,93 @@ class SquadBuilderView(discord.ui.View):
 # ══════════════════════════════════════════════════════════════════════════════
 #  /raid  group-co-op join board
 # ══════════════════════════════════════════════════════════════════════════════
+# Button custom_ids encode the raid id so a persistent (timeout=None) view can be
+# rebuilt after a restart and route clicks to the right raid:
+#   "raid:{raid_id}:{action}"  — action ∈ {join, leave, finish, cancel}
+_RAID_ACTIONS = ("join", "leave", "finish", "cancel")
+
+
+def _raid_cid(raid_id: int, action: str) -> str:
+    return f"raid:{raid_id}:{action}"
+
+
+def _decode_raid_cid(custom_id: str) -> tuple[int, str] | None:
+    parts = custom_id.split(":")
+    if len(parts) != 3 or parts[0] != "raid" or parts[2] not in _RAID_ACTIONS:
+        return None
+    try:
+        return int(parts[1]), parts[2]
+    except ValueError:
+        return None
+
+
+class RaidButton(discord.ui.Button):
+    """A raid-board button carrying a per-raid custom_id so it survives restarts."""
+
+    def __init__(
+        self,
+        raid_id: int,
+        action: str,
+        label: str,
+        style: discord.ButtonStyle,
+        emoji: str,
+        handler: Callable,
+    ):
+        super().__init__(
+            label=label, style=style, emoji=emoji, custom_id=_raid_cid(raid_id, action)
+        )
+        self._handler = handler
+
+    async def callback(self, interaction: discord.Interaction):
+        await self._handler(interaction)
+
+
 class RaidView(discord.ui.View):
     """Open join board for a group co-op (raid, event, big dungeon).
 
     Anyone in the server can Join (clicking is their own confirmation) up to the
     guild's party cap; the host or a Manage-Server mod presses Finish to pay
-    everyone who joined, or Cancel to scrap it. Short-lived and in-memory — an
-    open board simply expires on bot restart or after RAID_TIMEOUT.
+    everyone who joined, or Cancel to scrap it. Persisted in SQLite (see
+    utils/db economy_raids) and restored on startup, so a restart doesn't orphan
+    the buttons. Auto-expires RAID_TIMEOUT after creation via a cog-owned timer
+    (the view itself is persistent/timeout=None, so it can be re-registered after
+    a restart).
     """
 
-    def __init__(self, cog: "Economy", host_id: int, activity: str):
-        super().__init__(timeout=RAID_TIMEOUT)
+    def __init__(
+        self,
+        cog: "Economy",
+        raid_id: int,
+        host_id: int,
+        activity: str,
+        participants: Optional[dict[int, None]] = None,
+        created_at: Optional[float] = None,
+    ):
+        super().__init__(timeout=None)
         self.cog = cog
+        self.raid_id = raid_id
         self.host_id = host_id
         self.activity = activity
         # Host counts as the first participant; dict keeps stable join order.
-        self.participants: dict[int, None] = {host_id: None}
-        self.message: Optional[discord.Message] = None
+        self.participants: dict[int, None] = (
+            participants if participants is not None else {host_id: None}
+        )
+        self.created_at = created_at if created_at is not None else time.time()
+        self.message: Optional[discord.abc.Message] = None
         self.resolved = False
+        for action, label, style, emoji, handler in (
+            ("join", "Join", discord.ButtonStyle.primary, "⚔️", self._join),
+            ("leave", "Leave", discord.ButtonStyle.secondary, "🚪", self._leave),
+            ("finish", "Finish", discord.ButtonStyle.success, "✅", self._finish),
+            ("cancel", "Cancel", discord.ButtonStyle.danger, "✖️", self._cancel),
+        ):
+            self.add_item(RaidButton(raid_id, action, label, style, emoji, handler))
 
     def _can_manage(self, user: discord.Member) -> bool:
         return user.id == self.host_id or user.guild_permissions.manage_guild
+
+    def _expired(self) -> bool:
+        return time.time() - self.created_at >= RAID_TIMEOUT
 
     async def _embed(self, cfg: dict) -> discord.Embed:
         what = f"\n**Activity:** {self.activity}" if self.activity else ""
@@ -293,24 +452,45 @@ class RaidView(discord.ui.View):
     async def _refresh(self, interaction: discord.Interaction, cfg: dict):
         await interaction.response.edit_message(embed=await self._embed(cfg), view=self)
 
-    async def on_timeout(self):
-        if self.resolved or self.message is None:
+    async def _reject_stale(self, interaction: discord.Interaction) -> bool:
+        """If the raid already ended/expired, ack the click and tidy up. True if so."""
+        if self.resolved:
+            await interaction.response.send_message(
+                embed=h.warn("This raid has already ended."), ephemeral=True
+            )
+            return True
+        if self._expired():
+            await interaction.response.send_message(
+                embed=h.warn("This raid has expired."), ephemeral=True
+            )
+            await self.expire()
+            return True
+        return False
+
+    async def expire(self):
+        """Disable the board and drop it from persistence (called by the cog timer)."""
+        if self.resolved:
             return
+        self.resolved = True
         for child in self.children:
             child.disabled = True
-        try:
-            await self.message.edit(
-                embed=h.warn(
-                    "Raid expired — host didn't finish it in time.", "⏳ Expired"
-                ),
-                view=self,
-            )
-        except discord.HTTPException:
-            pass
+        if self.message is not None:
+            try:
+                await self.message.edit(
+                    embed=h.warn(
+                        "Raid expired — host didn't finish it in time.", "⏳ Expired"
+                    ),
+                    view=self,
+                )
+            except discord.HTTPException:
+                pass
+        await self.cog._end_raid(self.raid_id)
+        self.stop()
 
-    @discord.ui.button(label="Join", style=discord.ButtonStyle.primary, emoji="⚔️")
-    async def join(self, interaction: discord.Interaction, button: discord.ui.Button):
+    async def _join(self, interaction: discord.Interaction):
         if interaction.user.bot:
+            return
+        if await self._reject_stale(interaction):
             return
         cfg = await self.cog._cfg(interaction.guild.id)
         if interaction.user.id in self.participants:
@@ -322,10 +502,12 @@ class RaidView(discord.ui.View):
                 embed=h.err(f"Party is full ({cfg['raid_max']})."), ephemeral=True
             )
         self.participants[interaction.user.id] = None
+        await db.set_raid_participants(self.raid_id, list(self.participants))
         await self._refresh(interaction, cfg)
 
-    @discord.ui.button(label="Leave", style=discord.ButtonStyle.secondary, emoji="🚪")
-    async def leave(self, interaction: discord.Interaction, button: discord.ui.Button):
+    async def _leave(self, interaction: discord.Interaction):
+        if await self._reject_stale(interaction):
+            return
         cfg = await self.cog._cfg(interaction.guild.id)
         if interaction.user.id == self.host_id:
             return await interaction.response.send_message(
@@ -337,10 +519,12 @@ class RaidView(discord.ui.View):
                 embed=h.warn("You're not in the party."), ephemeral=True
             )
         del self.participants[interaction.user.id]
+        await db.set_raid_participants(self.raid_id, list(self.participants))
         await self._refresh(interaction, cfg)
 
-    @discord.ui.button(label="Finish", style=discord.ButtonStyle.success, emoji="✅")
-    async def finish(self, interaction: discord.Interaction, button: discord.ui.Button):
+    async def _finish(self, interaction: discord.Interaction):
+        if await self._reject_stale(interaction):
+            return
         if not self._can_manage(interaction.user):
             return await interaction.response.send_message(
                 embed=h.err("Only the host or a server manager can finish the raid."),
@@ -374,10 +558,12 @@ class RaidView(discord.ui.View):
             ),
             view=self,
         )
+        await self.cog._end_raid(self.raid_id)
         self.stop()
 
-    @discord.ui.button(label="Cancel", style=discord.ButtonStyle.danger, emoji="✖️")
-    async def cancel(self, interaction: discord.Interaction, button: discord.ui.Button):
+    async def _cancel(self, interaction: discord.Interaction):
+        if await self._reject_stale(interaction):
+            return
         if not self._can_manage(interaction.user):
             return await interaction.response.send_message(
                 embed=h.err("Only the host or a server manager can cancel the raid."),
@@ -390,4 +576,5 @@ class RaidView(discord.ui.View):
             embed=h.warn("Raid cancelled — no coins awarded.", "✖️ Cancelled"),
             view=self,
         )
+        await self.cog._end_raid(self.raid_id)
         self.stop()
