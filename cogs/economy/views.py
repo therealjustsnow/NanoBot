@@ -1,4 +1,4 @@
-"""discord.ui views for the economy cog: /report co-op confirm + /raid join board."""
+"""discord.ui views for the economy cog: /teamup co-op confirm + /raid join board."""
 
 from __future__ import annotations
 
@@ -15,22 +15,60 @@ if TYPE_CHECKING:
     from .cog import Economy
 
 
-class ReportView(discord.ui.View):
-    """Partner-confirm gate for a co-op activity reward.
+class TeamupView(discord.ui.View):
+    """Team-confirm gate for a co-op activity reward.
 
-    Only the named partner can confirm; either party can decline. Coins +
-    contribution are awarded to both members on confirm. Short-lived (no
-    persistence) — a pending report simply expires on bot restart.
+    The author tags one or more teammates; every tagged teammate presses
+    Confirm (clicking is their own confirmation). Coins + contribution are
+    awarded to the whole party — author included — only once *everyone* has
+    confirmed. Any involved member can Decline to scrap it. Short-lived (no
+    persistence) — a pending team-up simply expires on bot restart.
     """
 
-    def __init__(self, cog: "Economy", author_id: int, partner_id: int, activity: str):
+    def __init__(
+        self,
+        cog: "Economy",
+        author_id: int,
+        partner_ids: list[int],
+        activity: str,
+    ):
         super().__init__(timeout=COOP_CONFIRM_TIMEOUT)
         self.cog = cog
         self.author_id = author_id
-        self.partner_id = partner_id
+        self.partner_ids = partner_ids
         self.activity = activity
+        # Teammates who've pressed Confirm; payout fires when this covers all.
+        self.confirmed: set[int] = set()
         self.message: Optional[discord.Message] = None
         self.resolved = False
+
+    def _party_size(self) -> int:
+        return 1 + len(self.partner_ids)  # author + teammates
+
+    def _roster_lines(self) -> str:
+        lines = []
+        for uid in self.partner_ids:
+            mark = "✅" if uid in self.confirmed else "⏳"
+            lines.append(f"{mark} <@{uid}>")
+        return "\n".join(lines)
+
+    async def _embed(self, cfg: dict) -> discord.Embed:
+        what = f"\n**Activity:** {self.activity}" if self.activity else ""
+        reward = self.cog._money(cfg, cfg["coop_reward"])
+        pending = len(self.partner_ids) - len(self.confirmed)
+        note = (
+            f"Waiting on **{pending}** more to confirm…"
+            if pending
+            else "Everyone's confirmed!"
+        )
+        body = (
+            f"<@{self.author_id}> teamed up with the crew below!{what}\n\n"
+            f"Each teammate presses **Confirm**. Once everyone's in, all "
+            f"**{self._party_size()}** earn {reward} + contribution points.\n"
+            f"*{note}*\n\n"
+            f"**Teammates:**\n{self._roster_lines()}"
+        )
+        return h.embed("🤝 Co-op Team-up", body, h.BLUE)
 
     async def on_timeout(self):
         if self.resolved or self.message is None:
@@ -40,7 +78,7 @@ class ReportView(discord.ui.View):
         try:
             await self.message.edit(
                 embed=h.warn(
-                    "Co-op report expired — partner didn't confirm in time.",
+                    "Team-up expired — not everyone confirmed in time.",
                     "⏳ Expired",
                 ),
                 view=self,
@@ -52,27 +90,42 @@ class ReportView(discord.ui.View):
     async def confirm(
         self, interaction: discord.Interaction, button: discord.ui.Button
     ):
-        if interaction.user.id != self.partner_id:
+        if interaction.user.id not in self.partner_ids:
             return await interaction.response.send_message(
-                embed=h.err("Only the tagged partner can confirm this report."),
+                embed=h.err("Only a tagged teammate can confirm this team-up."),
                 ephemeral=True,
             )
+        if interaction.user.id in self.confirmed:
+            return await interaction.response.send_message(
+                embed=h.warn("You've already confirmed — waiting on the others."),
+                ephemeral=True,
+            )
+        self.confirmed.add(interaction.user.id)
+        cfg = await self.cog._cfg(interaction.guild.id)
+
+        # Still waiting on someone — update the progress board and bail.
+        if len(self.confirmed) < len(self.partner_ids):
+            return await interaction.response.edit_message(
+                embed=await self._embed(cfg), view=self
+            )
+
+        # Everyone's in — pay the whole party.
         self.resolved = True
         guild_id = interaction.guild.id
-        cfg = await self.cog._cfg(guild_id)
         reward = cfg["coop_reward"]
-        # Award coins + lifetime contribution to both members.
-        for uid in (self.author_id, self.partner_id):
+        party = [self.author_id, *self.partner_ids]
+        for uid in party:
             await db.add_coins(guild_id, uid, reward)
             await db.add_contribution(guild_id, uid, reward)
         for child in self.children:
             child.disabled = True
         activity = f" for **{self.activity}**" if self.activity else ""
+        roster = ", ".join(f"<@{uid}>" for uid in party)
         await interaction.response.edit_message(
             embed=h.ok(
-                f"🤝 <@{self.author_id}> and <@{self.partner_id}> teamed up{activity}!\n"
-                f"Both earned {self.cog._money(cfg, reward)} and "
-                f"**+{reward:,}** contribution.",
+                f"🤝 The crew teamed up{activity}! All **{len(party)}** earned "
+                f"{self.cog._money(cfg, reward)} and **+{reward:,}** "
+                f"contribution.\n\n{roster}",
                 "Co-op Confirmed",
             ),
             view=self,
@@ -83,16 +136,19 @@ class ReportView(discord.ui.View):
     async def decline(
         self, interaction: discord.Interaction, button: discord.ui.Button
     ):
-        if interaction.user.id not in (self.author_id, self.partner_id):
+        if interaction.user.id not in (self.author_id, *self.partner_ids):
             return await interaction.response.send_message(
-                embed=h.err("Only the people involved can decline this report."),
+                embed=h.err("Only the people involved can decline this team-up."),
                 ephemeral=True,
             )
         self.resolved = True
         for child in self.children:
             child.disabled = True
         await interaction.response.edit_message(
-            embed=h.warn("Co-op report declined.", "✖️ Declined"), view=self
+            embed=h.warn(
+                f"Team-up declined by <@{interaction.user.id}>.", "✖️ Declined"
+            ),
+            view=self,
         )
         self.stop()
 
