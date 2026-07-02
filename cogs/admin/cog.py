@@ -660,7 +660,7 @@ class Admin(ConfigMixin, commands.Cog):
             embed=h.ok(
                 f"Synced **{len(synced)}** slash command(s) globally.\n"
                 "⏱️ Global changes can take **up to 1 hour** to propagate.\n"
-                "_Tip: use `!sync <guild_id>` for instant updates while developing._",
+                "*Tip: use `!sync <guild_id>` for instant updates while developing.*",
                 "🌐 Global Sync Complete",
             )
         )
