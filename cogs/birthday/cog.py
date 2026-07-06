@@ -8,8 +8,10 @@ channel on the day (always with a festive, reachability-checked GIF), and plays
 join a voice channel on their birthday (via on_voice_state_update), not only at
 announcement time — but at most once per person per local day: an in-memory
 "sung today" set (recorded only on a successful play) plus a per-guild "singing"
-guard stop it from looping or re-joining. The bot never hijacks an existing
-voice client, so it won't fight the music cog.
+guard stop it from looping or re-joining. If the bot is already connected in
+the guild, it reuses that connection when it's idle and already in the
+birthday person's channel; otherwise (busy elsewhere, e.g. the music cog, or
+connected to a different channel) it skips singing rather than hijacking it.
 
 The announcement is driven by a 15-minute background check (not a live event),
 so it survives restarts. Each birthday fires once per year: the row's
@@ -216,7 +218,7 @@ class Birthday(commands.Cog):
         today = datetime.now(self._tz(cfg["timezone"])).date()
         if not is_birthday_today(bd["month"], bd["day"], today):
             return
-        await self._sing_for(member, cfg, today)
+        self._spawn_sing(member, cfg, today)
 
     async def _check_guild(self, guild: discord.Guild, cfg: dict) -> None:
         now = datetime.now(self._tz(cfg["timezone"]))
@@ -304,7 +306,12 @@ class Birthday(commands.Cog):
         log.info("Birthday announced for %s in %s", h.user_log(member), member.guild.id)
 
         if cfg["vc_enabled"]:
-            await self._sing_for(member, cfg, today)
+            self._spawn_sing(member, cfg, today)
+
+    def _spawn_sing(self, member: discord.Member, cfg: dict, today: date) -> None:
+        """Fire-and-forget _sing_for so a busy voice client we're waiting on
+        can't stall the 15-minute check loop or the voice-state listener."""
+        self.bot.loop.create_task(self._sing_for(member, cfg, today))
 
     # ── Voice-channel song (plays once, then leaves) ───────────────────────────
 
@@ -346,29 +353,97 @@ class Birthday(commands.Cog):
         if await self._maybe_sing(member, cfg):
             self._vc_sung.add(key)
 
+    # How long to wait for a busy same-channel voice client to free up before
+    # giving up on the song entirely, and how often to check.
+    _QUEUE_WAIT_TIMEOUT = 180
+    _QUEUE_POLL_INTERVAL = 3
+
+    async def _wait_for_idle(self, vc: discord.VoiceClient) -> bool:
+        """Poll a voice client until it's idle, disconnects, or we time out.
+        Returns True if it's idle and still connected, False otherwise."""
+        elapsed = 0.0
+        while elapsed < self._QUEUE_WAIT_TIMEOUT:
+            if not vc.is_connected():
+                return False
+            if not (vc.is_playing() or vc.is_paused()):
+                return True
+            await asyncio.sleep(self._QUEUE_POLL_INTERVAL)
+            elapsed += self._QUEUE_POLL_INTERVAL
+        return False
+
     async def _maybe_sing(self, member: discord.Member, cfg: dict) -> bool:
-        """Join the member's voice channel, play the song once, leave. Returns
-        True only if the song actually started playing."""
+        """Join the member's voice channel (or reuse an existing connection
+        already in that channel, queuing behind whatever it's playing), play
+        the song once, then leave if we were the one who joined. Returns True
+        only if the song actually started playing."""
         voice = member.voice
         if voice is None or voice.channel is None:
             return False  # not in a voice channel — nothing to do
         guild = member.guild
-        # Don't hijack an existing connection (music cog, or a sing already going).
-        if guild.voice_client is not None or guild.id in self._singing:
-            return False
+        if guild.id in self._singing:
+            return False  # a sing is already in flight for this guild
         channel = voice.channel
-        perms = channel.permissions_for(guild.me)
-        if not (perms.connect and perms.speak):
-            return False
+
+        existing = guild.voice_client
+        joined_here = existing is None
+        if existing is not None:
+            if existing.channel is None or existing.channel.id != channel.id:
+                log.info(
+                    "Birthday song skipped in %s: bot connected to a different "
+                    "channel than %s",
+                    guild.id,
+                    member.display_name,
+                )
+                return False
+            if existing.is_playing() or existing.is_paused():
+                log.info(
+                    "Birthday song queued in %s: voice client busy, waiting up "
+                    "to %ss for it to free up",
+                    guild.id,
+                    self._QUEUE_WAIT_TIMEOUT,
+                )
+                if not await self._wait_for_idle(existing):
+                    log.info(
+                        "Birthday song skipped in %s: voice client still busy "
+                        "(or disconnected) after waiting",
+                        guild.id,
+                    )
+                    return False
+                # Re-check the member is still there and it's still their day —
+                # we may have waited up to _QUEUE_WAIT_TIMEOUT seconds.
+                voice = member.voice
+                if (
+                    voice is None
+                    or voice.channel is None
+                    or voice.channel.id != channel.id
+                ):
+                    log.info(
+                        "Birthday song skipped in %s: %s left the channel while queued",
+                        guild.id,
+                        member.display_name,
+                    )
+                    return False
+            # Existing connection is idle and already in the right channel — reuse it.
+        else:
+            perms = channel.permissions_for(guild.me)
+            if not (perms.connect and perms.speak):
+                log.info(
+                    "Birthday song skipped in %s: missing connect/speak perms in %s",
+                    guild.id,
+                    channel.id,
+                )
+                return False
 
         self._singing.add(guild.id)
-        vc: discord.VoiceClient | None = None
+        vc: discord.VoiceClient | None = existing
         played = False
         try:
             path = await self._ensure_song(cfg)
             if not path:
+                log.warning("Birthday song skipped in %s: song file unavailable", guild.id)
                 return False
-            vc = await channel.connect(self_deaf=True, timeout=20)
+            if vc is None:
+                vc = await channel.connect(self_deaf=True, timeout=20)
             done = asyncio.Event()
 
             def _after(error: Exception | None) -> None:
@@ -386,7 +461,9 @@ class Birthday(commands.Cog):
         except Exception as exc:
             log.warning("Birthday song failed in %s: %s", guild.id, exc)
         finally:
-            if vc is not None:
+            # Only disconnect if we're the ones who joined — leave a
+            # pre-existing (reused) connection exactly as we found it.
+            if joined_here and vc is not None:
                 try:
                     await vc.disconnect(force=True)
                 except Exception:
