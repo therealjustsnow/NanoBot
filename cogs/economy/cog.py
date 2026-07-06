@@ -30,8 +30,10 @@ Commands
   /coin top [page]               → richest members
   /coin contrib [page]           → top contributors (alias: contributions)
   /coin gamble <amount>          → bet coins to double them (alias: bet)
-  /coin grant <member> <amount>  → add coins        (Manage Server)
-  /coin take <member> <amount>   → remove coins     (Manage Server)
+  /coin grant <amount> [member…] → add coins        (tag up to 5, or blank for
+                                                       a 25-member picker) (Manage Server)
+  /coin take <amount> [member…]  → remove coins     (tag up to 5, or blank for
+                                                       a 25-member picker) (Manage Server)
   /coin reset [member]           → wipe balances    (Manage Server)
   /coin daily <amount>           → set daily reward (Manage Server)
   /coin streakbonus <amount>     → per-day bonus    (Manage Server)
@@ -72,7 +74,7 @@ from .helpers import (
     _rank_title,
     _scaled_price,
 )
-from .views import RaidView, SquadBuilderView, SquadView
+from .views import MassCoinPickerView, RaidView, SquadBuilderView, SquadView
 
 log = logging.getLogger("NanoBot.economy")
 
@@ -282,7 +284,7 @@ class Economy(commands.Cog):
             "and customise the daily reward, streak bonus, currency name, and emoji.",
             "args": [],
             "perms": "Admin subcommands require Manage Server",
-            "example": "{prefix}coin top\n{prefix}coin grant @User 500",
+            "example": "{prefix}coin top\n{prefix}coin grant 500 @User",
         },
     )
     @commands.guild_only()
@@ -370,17 +372,75 @@ class Economy(commands.Cog):
         await ctx.reply(embed=embed)
 
     # ── /coin grant ─────────────────────────────────────────────────────────────
-    @coin.command(name="grant", description="Add coins to a member's balance.")
-    @app_commands.describe(member="Member to credit", amount="Coins to add")
+    @coin.command(
+        name="grant", description="Add coins to one or more members' balances."
+    )
+    @app_commands.describe(
+        amount="Coins to add per member",
+        member="Member to credit (leave every member blank to open a 25-member picker)",
+        member2="Another member (optional)",
+        member3="Another member (optional)",
+        member4="Another member (optional)",
+        member5="Another member (optional)",
+    )
     @commands.has_permissions(manage_guild=True)
     async def coin_grant(
-        self, ctx: commands.Context, member: discord.Member, amount: int
+        self,
+        ctx: commands.Context,
+        amount: int,
+        member: Optional[discord.Member] = None,
+        member2: Optional[discord.Member] = None,
+        member3: Optional[discord.Member] = None,
+        member4: Optional[discord.Member] = None,
+        member5: Optional[discord.Member] = None,
     ):
+        await self._mass_coin(
+            ctx, "grant", amount, (member, member2, member3, member4, member5)
+        )
+
+    # ── /coin take ─────────────────────────────────────────────────────────────
+    @coin.command(
+        name="take", description="Remove coins from one or more members' balances."
+    )
+    @app_commands.describe(
+        amount="Coins to remove per member",
+        member="Member to debit (leave every member blank to open a 25-member picker)",
+        member2="Another member (optional)",
+        member3="Another member (optional)",
+        member4="Another member (optional)",
+        member5="Another member (optional)",
+    )
+    @commands.has_permissions(manage_guild=True)
+    async def coin_take(
+        self,
+        ctx: commands.Context,
+        amount: int,
+        member: Optional[discord.Member] = None,
+        member2: Optional[discord.Member] = None,
+        member3: Optional[discord.Member] = None,
+        member4: Optional[discord.Member] = None,
+        member5: Optional[discord.Member] = None,
+    ):
+        await self._mass_coin(
+            ctx, "take", amount, (member, member2, member3, member4, member5)
+        )
+
+    async def _mass_coin(
+        self,
+        ctx: commands.Context,
+        action: str,
+        amount: int,
+        tagged: tuple[Optional[discord.Member], ...],
+    ) -> None:
+        """Shared body for /coin grant and /coin take.
+
+        Directly-tagged members (up to 5) are applied immediately, matching
+        /squad's "tag up to 5" shortcut. If none are tagged, opens a
+        MassCoinPickerView so the mod can pick up to 25 members via a menu
+        instead — Discord has no way to accept an arbitrary-length member list
+        as slash command arguments, so the picker is the only path past 5.
+        """
         cfg = await self._cfg(ctx.guild.id)
-        if member.bot:
-            return await ctx.reply(
-                embed=h.err("Bots don't hold coins."), ephemeral=True
-            )
         if amount <= 0:
             return await ctx.reply(
                 embed=h.err("Amount must be positive."), ephemeral=True
@@ -389,31 +449,36 @@ class Economy(commands.Cog):
             return await ctx.reply(
                 embed=h.err(f"Amount can't exceed {COIN_MAX:,}."), ephemeral=True
             )
-        new_bal = await db.add_coins(ctx.guild.id, member.id, amount)
-        await ctx.reply(
-            embed=h.ok(
-                f"Granted {self._money(cfg, amount)} to {member.mention}.\n"
-                f"New balance: {self._money(cfg, new_bal)}"
-            )
-        )
 
-    # ── /coin take ─────────────────────────────────────────────────────────────
-    @coin.command(name="take", description="Remove coins from a member's balance.")
-    @app_commands.describe(member="Member to debit", amount="Coins to remove")
-    @commands.has_permissions(manage_guild=True)
-    async def coin_take(
-        self, ctx: commands.Context, member: discord.Member, amount: int
-    ):
-        cfg = await self._cfg(ctx.guild.id)
-        if amount <= 0:
-            return await ctx.reply(
-                embed=h.err("Amount must be positive."), ephemeral=True
-            )
-        new_bal = await db.add_coins(ctx.guild.id, member.id, -amount)
+        members: list[discord.Member] = []
+        for m in tagged:
+            if m is None:
+                continue
+            if m.bot:
+                return await ctx.reply(
+                    embed=h.err("Bots don't hold coins."), ephemeral=True
+                )
+            if m.id not in {x.id for x in members}:
+                members.append(m)
+
+        if not members:
+            builder = MassCoinPickerView(self, ctx.author.id, action, amount)
+            msg = await ctx.reply(embed=builder._embed(cfg), view=builder)
+            builder.message = msg
+            return
+
+        delta = amount if action == "grant" else -amount
+        lines = []
+        for m in members:
+            new_bal = await db.add_coins(ctx.guild.id, m.id, delta)
+            lines.append(f"{m.mention} → {self._money(cfg, new_bal)}")
+
+        verb = "Granted" if action == "grant" else "Took"
+        prep = "to" if action == "grant" else "from"
         await ctx.reply(
             embed=h.ok(
-                f"Took {self._money(cfg, amount)} from {member.mention}.\n"
-                f"New balance: {self._money(cfg, new_bal)}"
+                f"{verb} {self._money(cfg, amount)} {prep} "
+                f"**{len(members)}** member(s).\n\n" + "\n".join(lines)
             )
         )
 

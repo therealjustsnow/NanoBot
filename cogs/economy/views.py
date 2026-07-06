@@ -1,4 +1,5 @@
-"""discord.ui views for the economy cog: /squad assembly + confirm + /raid join board."""
+"""discord.ui views for the economy cog: /squad assembly + confirm, /raid join
+board, and the /coin grant|take mass-member picker."""
 
 from __future__ import annotations
 
@@ -578,3 +579,131 @@ class RaidView(discord.ui.View):
         )
         await self.cog._end_raid(self.raid_id)
         self.stop()
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+#  /coin grant | /coin take  mass-member picker
+# ══════════════════════════════════════════════════════════════════════════════
+
+
+class MassCoinPickerView(discord.ui.View):
+    """Manage-Server-only picker for /coin grant or /coin take with no members tagged.
+
+    Mirrors the /squad assembly menu: a UserSelect lets the admin pick up to 25
+    members (Discord's per-select cap), then **Confirm** applies the coin
+    change to everyone picked at once. Unlike a squad, there's no confirmation
+    step for the targets — a mod granting/taking coins doesn't need the
+    recipients to opt in — so this simply applies immediately and edits the
+    message with a receipt. Short-lived and in-memory; it just expires on
+    timeout since there's no payout state to persist across a restart.
+    """
+
+    def __init__(self, cog: "Economy", host_id: int, action: str, amount: int):
+        super().__init__(timeout=COOP_CONFIRM_TIMEOUT)
+        self.cog = cog
+        self.host_id = host_id
+        self.action = action  # "grant" or "take"
+        self.amount = amount
+        self.selected: list[int] = []
+        self.message: Optional[discord.Message] = None
+        self.resolved = False
+
+    async def interaction_check(self, interaction: discord.Interaction) -> bool:
+        if interaction.user.id != self.host_id:
+            await interaction.response.send_message(
+                embed=h.err("Only the mod who ran this command can use it."),
+                ephemeral=True,
+            )
+            return False
+        if not interaction.user.guild_permissions.manage_guild:
+            await interaction.response.send_message(
+                embed=h.err("You need Manage Server to do this."), ephemeral=True
+            )
+            return False
+        return True
+
+    def _embed(self, cfg: dict) -> discord.Embed:
+        verb = "grant" if self.action == "grant" else "take"
+        prep = "to" if self.action == "grant" else "from"
+        money = self.cog._money(cfg, self.amount)
+        if self.selected:
+            roster = "\n".join(f"• <@{uid}>" for uid in self.selected)
+            picks = f"**Picked ({len(self.selected)}):**\n{roster}"
+        else:
+            picks = "*No members picked yet.*"
+        body = (
+            f"Pick up to 25 members to {verb} {money} {prep} each.\n\n"
+            f"Use the menu below, then press **Confirm** to apply.\n\n{picks}"
+        )
+        title = "🪙 Mass Grant" if self.action == "grant" else "🪙 Mass Take"
+        return h.embed(title, body, h.BLUE)
+
+    @discord.ui.select(
+        cls=discord.ui.UserSelect,
+        placeholder="Pick members…",
+        min_values=1,
+        max_values=25,
+    )
+    async def pick(
+        self, interaction: discord.Interaction, select: discord.ui.UserSelect
+    ):
+        chosen: list[int] = []
+        for user in select.values:
+            if user.bot:
+                continue
+            if user.id not in chosen:
+                chosen.append(user.id)
+        self.selected = chosen
+        cfg = await self.cog._cfg(interaction.guild.id)
+        await interaction.response.edit_message(embed=self._embed(cfg), view=self)
+
+    @discord.ui.button(label="Confirm", style=discord.ButtonStyle.success, emoji="✅")
+    async def confirm(
+        self, interaction: discord.Interaction, button: discord.ui.Button
+    ):
+        if not self.selected:
+            return await interaction.response.send_message(
+                embed=h.err("Pick at least one member first."), ephemeral=True
+            )
+        self.resolved = True
+        cfg = await self.cog._cfg(interaction.guild.id)
+        delta = self.amount if self.action == "grant" else -self.amount
+        lines = []
+        for uid in self.selected:
+            new_bal = await db.add_coins(interaction.guild.id, uid, delta)
+            lines.append(f"<@{uid}> → {self.cog._money(cfg, new_bal)}")
+        for child in self.children:
+            child.disabled = True
+        verb = "Granted" if self.action == "grant" else "Took"
+        prep = "to" if self.action == "grant" else "from"
+        await interaction.response.edit_message(
+            embed=h.ok(
+                f"{verb} {self.cog._money(cfg, self.amount)} {prep} "
+                f"**{len(self.selected)}** member(s).\n\n" + "\n".join(lines),
+                "🪙 Mass Coin Update",
+            ),
+            view=self,
+        )
+        self.stop()
+
+    @discord.ui.button(label="Cancel", style=discord.ButtonStyle.danger, emoji="✖️")
+    async def cancel(self, interaction: discord.Interaction, button: discord.ui.Button):
+        self.resolved = True
+        for child in self.children:
+            child.disabled = True
+        await interaction.response.edit_message(
+            embed=h.warn("Mass coin update cancelled.", "✖️ Cancelled"), view=self
+        )
+        self.stop()
+
+    async def on_timeout(self):
+        if self.resolved or self.message is None:
+            return
+        for child in self.children:
+            child.disabled = True
+        try:
+            await self.message.edit(
+                embed=h.warn("Mass coin update expired.", "⏳ Expired"), view=self
+            )
+        except discord.HTTPException:
+            pass
