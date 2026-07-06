@@ -38,7 +38,7 @@ async def bot(tmp_path, monkeypatch, request):
     for ext in marker.args if marker else ():
         await bot.load_extension(ext)
 
-    dpytest.configure(bot, members=2)
+    dpytest.configure(bot, members=3)
     try:
         yield bot
     finally:

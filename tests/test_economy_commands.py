@@ -67,7 +67,7 @@ async def test_pay_insufficient_funds(bot):
 async def test_grant_denied_without_manage_guild(bot):
     author, target = config().members[0], config().members[1]
     with pytest.raises(commands.MissingPermissions):
-        await dpytest.message(f"!coin grant {target.mention} 500", member=author)
+        await dpytest.message(f"!coin grant 500 {target.mention}", member=author)
 
 
 @pytest.mark.cogs("cogs.economy")
@@ -76,10 +76,40 @@ async def test_grant_credits_with_perms(bot):
     author, target = config().members[0], config().members[1]
     await grant_perms(author, manage_guild=True)
 
-    await dpytest.message(f"!coin grant {target.mention} 500", member=author)
+    await dpytest.message(f"!coin grant 500 {target.mention}", member=author)
     sent = dpytest.get_message()
     assert sent.embeds
     assert await db.get_balance(guild.id, target.id) == 500
+
+
+@pytest.mark.cogs("cogs.economy")
+async def test_grant_credits_multiple_tagged_members(bot):
+    guild = config().guilds[0]
+    author = config().members[0]
+    t1, t2 = config().members[1], config().members[2]
+    await grant_perms(author, manage_guild=True)
+
+    await dpytest.message(f"!coin grant 500 {t1.mention} {t2.mention}", member=author)
+    sent = dpytest.get_message()
+    assert sent.embeds
+    assert await db.get_balance(guild.id, t1.id) == 500
+    assert await db.get_balance(guild.id, t2.id) == 500
+
+
+@pytest.mark.cogs("cogs.economy")
+async def test_take_debits_multiple_tagged_members(bot):
+    guild = config().guilds[0]
+    author = config().members[0]
+    t1, t2 = config().members[1], config().members[2]
+    await grant_perms(author, manage_guild=True)
+    await db.add_coins(guild.id, t1.id, 500)
+    await db.add_coins(guild.id, t2.id, 500)
+
+    await dpytest.message(f"!coin take 200 {t1.mention} {t2.mention}", member=author)
+    sent = dpytest.get_message()
+    assert sent.embeds
+    assert await db.get_balance(guild.id, t1.id) == 300
+    assert await db.get_balance(guild.id, t2.id) == 300
 
 
 @pytest.mark.cogs("cogs.economy")
