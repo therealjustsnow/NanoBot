@@ -440,7 +440,9 @@ class Birthday(commands.Cog):
         try:
             path = await self._ensure_song(cfg)
             if not path:
-                log.warning("Birthday song skipped in %s: song file unavailable", guild.id)
+                log.warning(
+                    "Birthday song skipped in %s: song file unavailable", guild.id
+                )
                 return False
             if vc is None:
                 vc = await channel.connect(self_deaf=True, timeout=20)
