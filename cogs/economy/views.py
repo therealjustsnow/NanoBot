@@ -182,20 +182,34 @@ class SquadView(discord.ui.View):
                 ephemeral=True,
             )
         self.confirmed.add(interaction.user.id)
-        cfg = await self.cog._cfg(interaction.guild.id)
 
         # Still waiting on someone — persist progress, update the board, bail.
         if len(self.confirmed) < len(self.partner_ids):
+            cfg = await self.cog._cfg(interaction.guild.id)
             await db.set_squad_confirmed(self.squad_id, list(self.confirmed))
+            if self.resolved:
+                # A concurrent final confirm resolved the squad while we were
+                # persisting — don't repaint the payout board with a waiting one.
+                return await interaction.response.defer()
             return await interaction.response.edit_message(
                 embed=await self._embed(cfg), view=self
             )
 
-        # Everyone's in — pay the whole party.
+        # Everyone's in — claim the payout before the first await so a second
+        # near-simultaneous final confirm can't pay the party twice.
+        if self.resolved:
+            return await interaction.response.send_message(
+                embed=h.warn("This squad has already ended."), ephemeral=True
+            )
         self.resolved = True
+        cfg = await self.cog._cfg(interaction.guild.id)
         guild_id = interaction.guild.id
         reward = cfg["coop_reward"]
         party = [self.author_id, *self.partner_ids]
+        # Drop the persisted row BEFORE paying: a crash mid-payout then
+        # under-pays (a support ping) instead of leaving a restorable squad
+        # whose re-confirm would pay the whole party a second time.
+        await self.cog._end_squad(self.squad_id)
         for uid in party:
             await db.add_coins(guild_id, uid, reward)
             await db.add_contribution(guild_id, uid, reward)
@@ -212,7 +226,6 @@ class SquadView(discord.ui.View):
             ),
             view=self,
         )
-        await self.cog._end_squad(self.squad_id)
         self.stop()
 
     async def _decline(self, interaction: discord.Interaction):
@@ -296,6 +309,9 @@ class SquadBuilderView(discord.ui.View):
 
     @discord.ui.button(label="Start", style=discord.ButtonStyle.success, emoji="🚀")
     async def start(self, interaction: discord.Interaction, button: discord.ui.Button):
+        if self.resolved:
+            # A double-click raced the first Start — one squad is enough.
+            return await interaction.response.defer()
         if not self.selected:
             return await interaction.response.send_message(
                 embed=h.err("Pick at least one teammate first."), ephemeral=True
@@ -532,6 +548,12 @@ class RaidView(discord.ui.View):
                 ephemeral=True,
             )
         cfg = await self.cog._cfg(interaction.guild.id)
+        # Re-check after the await: a second near-simultaneous Finish (host and
+        # a mod clicking together) could have already paid the party.
+        if self.resolved:
+            return await interaction.response.send_message(
+                embed=h.warn("This raid has already ended."), ephemeral=True
+            )
         if len(self.participants) < cfg["raid_min"]:
             return await interaction.response.send_message(
                 embed=h.err(
@@ -543,6 +565,9 @@ class RaidView(discord.ui.View):
         self.resolved = True
         reward = cfg["raid_reward"]
         guild_id = interaction.guild.id
+        # Drop the persisted row BEFORE paying (same crash-safety trade as
+        # SquadView: under-pay beats a restorable board that double-pays).
+        await self.cog._end_raid(self.raid_id)
         for uid in self.participants:
             await db.add_coins(guild_id, uid, reward)
             await db.add_contribution(guild_id, uid, reward)
@@ -559,7 +584,6 @@ class RaidView(discord.ui.View):
             ),
             view=self,
         )
-        await self.cog._end_raid(self.raid_id)
         self.stop()
 
     async def _cancel(self, interaction: discord.Interaction):
@@ -661,6 +685,9 @@ class MassCoinPickerView(discord.ui.View):
     async def confirm(
         self, interaction: discord.Interaction, button: discord.ui.Button
     ):
+        if self.resolved:
+            # A double-click raced the first Confirm — don't apply twice.
+            return await interaction.response.defer()
         if not self.selected:
             return await interaction.response.send_message(
                 embed=h.err("Pick at least one member first."), ephemeral=True

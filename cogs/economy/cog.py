@@ -98,6 +98,15 @@ class Economy(commands.Cog):
         self._squads: dict[int, SquadView] = {}
         self._squad_tasks: dict[int, asyncio.Task] = {}
 
+    async def cog_load(self):
+        # restore_schedules only fires from on_ready, so a hot-reload after the
+        # bot is up would bring the persisted boards back with no expiry timers.
+        # Re-run the restore here when the gateway is already ready (initial
+        # startup still waits for the on_ready dispatch — the guild/channel
+        # cache isn't populated this early).
+        if self.bot.is_ready():
+            self.bot.loop.create_task(self.on_restore_schedules())
+
     def cog_unload(self):
         for task in (*self._raid_tasks.values(), *self._squad_tasks.values()):
             task.cancel()
@@ -932,6 +941,10 @@ class Economy(commands.Cog):
         """Rebuild open raid boards + pending squad confirms after a restart."""
         for row in await db.get_open_raids():
             raid_id = row["raid_id"]
+            if raid_id in self._raids:
+                # on_ready re-fired (gateway re-identify) — this raid is already
+                # live; rebuilding it would leak the old expiry timer.
+                continue
             if row["message_id"] is None:
                 # Crash beat the message-id write — nothing to bind buttons to.
                 await db.delete_raid(raid_id)
@@ -954,6 +967,8 @@ class Economy(commands.Cog):
 
         for row in await db.get_open_squads():
             squad_id = row["squad_id"]
+            if squad_id in self._squads:
+                continue  # already live — same re-identify guard as raids
             if row["message_id"] is None:
                 await db.delete_squad(squad_id)
                 continue

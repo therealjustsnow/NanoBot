@@ -116,9 +116,16 @@ def is_birthday_today(month: int, day: int, today: date) -> bool:
 
 
 def age_on(month: int, day: int, year: int | None, on_date: date) -> int | None:
-    """Age the person reaches on/by ``on_date`` (None when birth year unknown)."""
+    """Age the person reaches on/by ``on_date`` (None when birth year unknown).
+
+    A Feb 29 birthday counts as reached on Feb 28 in non-leap years, matching
+    when it's celebrated (next_birthday_date/is_birthday_today) — otherwise the
+    announcement would report the age one year low.
+    """
     if year is None:
         return None
+    if (month, day) == (2, 29) and not _is_leap(on_date.year):
+        day = 28
     age = on_date.year - year
     if (on_date.month, on_date.day) < (month, day):
         age -= 1
