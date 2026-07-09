@@ -4,14 +4,18 @@ Per-server birthday tracker.
 
 Members register their birthday once; NanoBot announces it in a configured
 channel on the day (always with a festive, reachability-checked GIF), and plays
-"Happy Birthday" in voice for the birthday person. The song fires whenever they
-join a voice channel on their birthday (via on_voice_state_update), not only at
-announcement time — but at most once per person per local day: an in-memory
-"sung today" set (recorded only on a successful play) plus a per-guild "singing"
-guard stop it from looping or re-joining. If the bot is already connected in
-the guild, it reuses that connection when it's idle and already in the
-birthday person's channel; otherwise (busy elsewhere, e.g. the music cog, or
-connected to a different channel) it skips singing rather than hijacking it.
+"Happy Birthday" in voice for the birthday person. Members sharing a birthday
+are celebrated in ONE combined post (joined mentions, a Turns field each)
+rather than back-to-back posts. The song fires any time the birthday person is
+in a voice channel that local day: on joining (via on_voice_state_update) AND
+via a 15-minute sweep that catches people already sitting in voice before the
+bot started or before the announce hour — but at most once per person per
+local day: an in-memory "sung today" set (recorded only on a successful play)
+plus a per-guild "singing" guard stop it from looping or re-joining. If the
+bot is already connected in the guild, it reuses that connection when it's
+idle and already in the birthday person's channel; otherwise (busy elsewhere,
+e.g. the music cog, or connected to a different channel) it skips singing
+rather than hijacking it.
 
 The announcement is driven by a 15-minute background check (not a live event),
 so it survives restarts. Each birthday fires once per year: the row's
@@ -222,79 +226,154 @@ class Birthday(commands.Cog):
 
     async def _check_guild(self, guild: discord.Guild, cfg: dict) -> None:
         now = datetime.now(self._tz(cfg["timezone"]))
+        today = now.date()
+        today_str = today.isoformat()
+
+        celebrants: list[tuple[discord.Member, dict]] = []
+        for bd in await db.get_guild_birthdays(guild.id):
+            if not is_birthday_today(bd["month"], bd["day"], today):
+                continue
+            member = guild.get_member(int(bd["user_id"]))
+            if member is None:
+                continue  # left the server — don't announce, don't stamp
+            celebrants.append((member, bd))
+        if not celebrants:
+            return
+
+        # Voice-song sweep, any hour of the local day: catches birthday folks
+        # who were already sitting in voice before the bot started (no join
+        # event to react to) or before the announce hour. _sing_for's
+        # once-per-day guard keeps this 15-minute tick from re-singing.
+        if cfg["vc_enabled"]:
+            for member, _bd in celebrants:
+                if member.voice is not None and member.voice.channel is not None:
+                    self._spawn_sing(member, cfg, today)
+
         if now.hour < int(cfg["hour"]):
             return  # before the configured local hour — wait for a later tick
         channel = guild.get_channel(int(cfg["channel_id"]))
         if not isinstance(channel, discord.abc.Messageable):
             return
 
-        today = now.date()
-        today_str = today.isoformat()
-        for bd in await db.get_guild_birthdays(guild.id):
-            if bd["last_announced"] == today_str:
-                continue
-            if not is_birthday_today(bd["month"], bd["day"], today):
-                continue
-            member = guild.get_member(int(bd["user_id"]))
-            if member is None:
-                continue  # left the server — don't announce, don't stamp
-            # Stamp BEFORE announcing so a failure can't double-fire next tick.
+        pending = [(m, bd) for m, bd in celebrants if bd["last_announced"] != today_str]
+        if not pending:
+            return
+        # Stamp BEFORE announcing so a failure can't double-fire next tick.
+        for member, _bd in pending:
             await db.set_birthday_announced(guild.id, member.id, today_str)
-            await self._announce(member, bd, cfg, channel, today)
+        # One combined post covers everyone sharing the day.
+        await self._announce(pending, cfg, channel, today)
 
     # ── Announcement ────────────────────────────────────────────────────────────
 
-    def _fill(self, template: str, member: discord.Member, age: int | None) -> str:
+    @staticmethod
+    def _join_names(names: list[str]) -> str:
+        """'a' · 'a and b' · 'a, b and c'."""
+        if len(names) <= 1:
+            return names[0] if names else ""
+        return ", ".join(names[:-1]) + f" and {names[-1]}"
+
+    def _fill(
+        self,
+        template: str,
+        *,
+        mention: str,
+        user: str,
+        username: str,
+        server: str,
+        age: int | None,
+    ) -> str:
         age_str = str(age) if age is not None else "another year older"
         return (
-            template.replace("{mention}", member.mention)
-            .replace("{user}", member.display_name)
-            .replace("{username}", str(member))
-            .replace("{server}", member.guild.name)
+            template.replace("{mention}", mention)
+            .replace("{user}", user)
+            .replace("{username}", username)
+            .replace("{server}", server)
             .replace("{age}", age_str)
         )
 
-    def _build_embed(
-        self,
-        member: discord.Member,
-        bd: dict,
-        cfg: dict,
-        today: date,
-        gif_url: str | None = None,
-    ) -> discord.Embed:
+    def _turning_age(self, bd: dict, today: date) -> int | None:
         # The announcement celebrates the birthday itself, so report the age the
         # member turns on that day — not their age as of `today`. On the real
         # announce `today` is the birthday (next occurrence == today); for a
         # `/birthday test` preview before the day this still shows the upcoming age.
         bday = next_birthday_date(bd["month"], bd["day"], today)
-        age = age_on(bd["month"], bd["day"], bd.get("year"), bday)
+        return age_on(bd["month"], bd["day"], bd.get("year"), bday)
+
+    def _build_embed(
+        self,
+        celebrants: list[tuple[discord.Member, dict]],
+        cfg: dict,
+        today: date,
+        gif_url: str | None = None,
+    ) -> discord.Embed:
+        """One embed for everyone sharing the day — a single celebrant keeps the
+        classic card; multiple get joined mentions plus a Turns field each."""
         template = cfg["message"] or _DEFAULT_MESSAGE
-        e = h.embed(
-            "🎂 Happy Birthday!",
-            self._fill(template, member, age),
-            color=BIRTHDAY_COLOR,
-        )
-        if age is not None:
-            e.add_field(name="Turns", value=f"**{age}** 🎈", inline=True)
-        try:
-            e.set_thumbnail(url=member.display_avatar.url)
-        except Exception:
-            pass
+        guild = celebrants[0][0].guild
+
+        if len(celebrants) == 1:
+            member, bd = celebrants[0]
+            age = self._turning_age(bd, today)
+            e = h.embed(
+                "🎂 Happy Birthday!",
+                self._fill(
+                    template,
+                    mention=member.mention,
+                    user=member.display_name,
+                    username=str(member),
+                    server=guild.name,
+                    age=age,
+                ),
+                color=BIRTHDAY_COLOR,
+            )
+            if age is not None:
+                e.add_field(name="Turns", value=f"**{age}** 🎈", inline=True)
+            try:
+                e.set_thumbnail(url=member.display_avatar.url)
+            except Exception:
+                pass
+        else:
+            e = h.embed(
+                "🎂 Happy Birthdays!",
+                self._fill(
+                    template,
+                    mention=self._join_names([m.mention for m, _ in celebrants]),
+                    user=self._join_names([m.display_name for m, _ in celebrants]),
+                    username=self._join_names([str(m) for m, _ in celebrants]),
+                    server=guild.name,
+                    # A shared age would be wrong for a shared day — the
+                    # per-member Turns fields below carry the numbers.
+                    age=None,
+                ),
+                color=BIRTHDAY_COLOR,
+            )
+            for member, bd in celebrants[:25]:  # Discord's embed-field cap
+                age = self._turning_age(bd, today)
+                if age is not None:
+                    e.add_field(
+                        name=member.display_name,
+                        value=f"turns **{age}** 🎈",
+                        inline=True,
+                    )
+
         if cfg["gif_enabled"] and gif_url:
             e.set_image(url=gif_url)
         return e
 
     async def _announce(
         self,
-        member: discord.Member,
-        bd: dict,
+        celebrants: list[tuple[discord.Member, dict]],
         cfg: dict,
         channel: discord.abc.Messageable,
         today: date,
     ) -> None:
+        guild_id = celebrants[0][0].guild.id
         gif_url = await self._pick_gif() if cfg["gif_enabled"] else None
-        embed = self._build_embed(member, bd, cfg, today, gif_url)
-        content = member.mention if cfg["ping_enabled"] else None
+        embed = self._build_embed(celebrants, cfg, today, gif_url)
+        content = (
+            " ".join(m.mention for m, _ in celebrants) if cfg["ping_enabled"] else None
+        )
         try:
             await channel.send(
                 content=content,
@@ -302,11 +381,14 @@ class Birthday(commands.Cog):
                 allowed_mentions=discord.AllowedMentions(users=True),
             )
         except discord.HTTPException as exc:
-            log.warning("Birthday announce send failed in %s: %s", member.guild.id, exc)
-        log.info("Birthday announced for %s in %s", h.user_log(member), member.guild.id)
-
-        if cfg["vc_enabled"]:
-            self._spawn_sing(member, cfg, today)
+            log.warning("Birthday announce send failed in %s: %s", guild_id, exc)
+        log.info(
+            "Birthday announced for %s in %s",
+            ", ".join(h.user_log(m) for m, _ in celebrants),
+            guild_id,
+        )
+        # No song spawn here — _check_guild's voice sweep already covered
+        # everyone in voice this same tick.
 
     def _spawn_sing(self, member: discord.Member, cfg: dict, today: date) -> None:
         """Fire-and-forget _sing_for so a busy voice client we're waiting on
@@ -380,64 +462,71 @@ class Birthday(commands.Cog):
         if voice is None or voice.channel is None:
             return False  # not in a voice channel — nothing to do
         guild = member.guild
+        # Claim the per-guild singing slot BEFORE any await: the busy-wait
+        # below yields for up to _QUEUE_WAIT_TIMEOUT seconds, and two members
+        # sharing a birthday in the same VC could otherwise both slip past
+        # this check and race vc.play(). The loser just retries on the next
+        # 15-minute sweep (it never got marked sung).
         if guild.id in self._singing:
             return False  # a sing is already in flight for this guild
+        self._singing.add(guild.id)
         channel = voice.channel
 
         existing = guild.voice_client
         joined_here = existing is None
-        if existing is not None:
-            if existing.channel is None or existing.channel.id != channel.id:
-                log.info(
-                    "Birthday song skipped in %s: bot connected to a different "
-                    "channel than %s",
-                    guild.id,
-                    member.display_name,
-                )
-                return False
-            if existing.is_playing() or existing.is_paused():
-                log.info(
-                    "Birthday song queued in %s: voice client busy, waiting up "
-                    "to %ss for it to free up",
-                    guild.id,
-                    self._QUEUE_WAIT_TIMEOUT,
-                )
-                if not await self._wait_for_idle(existing):
+        vc: discord.VoiceClient | None = existing
+        played = False
+        try:
+            if existing is not None:
+                if existing.channel is None or existing.channel.id != channel.id:
                     log.info(
-                        "Birthday song skipped in %s: voice client still busy "
-                        "(or disconnected) after waiting",
-                        guild.id,
-                    )
-                    return False
-                # Re-check the member is still there and it's still their day —
-                # we may have waited up to _QUEUE_WAIT_TIMEOUT seconds.
-                voice = member.voice
-                if (
-                    voice is None
-                    or voice.channel is None
-                    or voice.channel.id != channel.id
-                ):
-                    log.info(
-                        "Birthday song skipped in %s: %s left the channel while queued",
+                        "Birthday song skipped in %s: bot connected to a different "
+                        "channel than %s",
                         guild.id,
                         member.display_name,
                     )
                     return False
-            # Existing connection is idle and already in the right channel — reuse it.
-        else:
-            perms = channel.permissions_for(guild.me)
-            if not (perms.connect and perms.speak):
-                log.info(
-                    "Birthday song skipped in %s: missing connect/speak perms in %s",
-                    guild.id,
-                    channel.id,
-                )
-                return False
+                if existing.is_playing() or existing.is_paused():
+                    log.info(
+                        "Birthday song queued in %s: voice client busy, waiting up "
+                        "to %ss for it to free up",
+                        guild.id,
+                        self._QUEUE_WAIT_TIMEOUT,
+                    )
+                    if not await self._wait_for_idle(existing):
+                        log.info(
+                            "Birthday song skipped in %s: voice client still busy "
+                            "(or disconnected) after waiting",
+                            guild.id,
+                        )
+                        return False
+                    # Re-check the member is still there and it's still their day —
+                    # we may have waited up to _QUEUE_WAIT_TIMEOUT seconds.
+                    voice = member.voice
+                    if (
+                        voice is None
+                        or voice.channel is None
+                        or voice.channel.id != channel.id
+                    ):
+                        log.info(
+                            "Birthday song skipped in %s: %s left the channel "
+                            "while queued",
+                            guild.id,
+                            member.display_name,
+                        )
+                        return False
+                # Existing connection is idle and in the right channel — reuse it.
+            else:
+                perms = channel.permissions_for(guild.me)
+                if not (perms.connect and perms.speak):
+                    log.info(
+                        "Birthday song skipped in %s: missing connect/speak perms "
+                        "in %s",
+                        guild.id,
+                        channel.id,
+                    )
+                    return False
 
-        self._singing.add(guild.id)
-        vc: discord.VoiceClient | None = existing
-        played = False
-        try:
             path = await self._ensure_song(cfg)
             if not path:
                 log.warning(
@@ -951,7 +1040,7 @@ class Birthday(commands.Cog):
             bd = {"month": today.month, "day": today.day, "year": None}
         today = datetime.now(self._tz(cfg["timezone"])).date()
         gif_url = await self._pick_gif() if cfg["gif_enabled"] else None
-        embed = self._build_embed(member, bd, cfg, today, gif_url)
+        embed = self._build_embed([(member, bd)], cfg, today, gif_url)
         await ctx.reply(
             content="**Preview** (this is what the announcement looks like):",
             embed=embed,

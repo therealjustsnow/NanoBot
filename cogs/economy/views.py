@@ -206,6 +206,10 @@ class SquadView(discord.ui.View):
         guild_id = interaction.guild.id
         reward = cfg["coop_reward"]
         party = [self.author_id, *self.partner_ids]
+        # Drop the persisted row BEFORE paying: a crash mid-payout then
+        # under-pays (a support ping) instead of leaving a restorable squad
+        # whose re-confirm would pay the whole party a second time.
+        await self.cog._end_squad(self.squad_id)
         for uid in party:
             await db.add_coins(guild_id, uid, reward)
             await db.add_contribution(guild_id, uid, reward)
@@ -222,7 +226,6 @@ class SquadView(discord.ui.View):
             ),
             view=self,
         )
-        await self.cog._end_squad(self.squad_id)
         self.stop()
 
     async def _decline(self, interaction: discord.Interaction):
@@ -562,6 +565,9 @@ class RaidView(discord.ui.View):
         self.resolved = True
         reward = cfg["raid_reward"]
         guild_id = interaction.guild.id
+        # Drop the persisted row BEFORE paying (same crash-safety trade as
+        # SquadView: under-pay beats a restorable board that double-pays).
+        await self.cog._end_raid(self.raid_id)
         for uid in self.participants:
             await db.add_coins(guild_id, uid, reward)
             await db.add_contribution(guild_id, uid, reward)
@@ -578,7 +584,6 @@ class RaidView(discord.ui.View):
             ),
             view=self,
         )
-        await self.cog._end_raid(self.raid_id)
         self.stop()
 
     async def _cancel(self, interaction: discord.Interaction):

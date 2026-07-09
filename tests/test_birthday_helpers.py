@@ -102,6 +102,20 @@ def test_age_unknown_when_no_year():
     assert age_on(3, 5, None, date(2026, 3, 5)) is None
 
 
+def test_age_leap_day_counts_on_feb_28_in_non_leap_years():
+    # Born 2000-02-29. 2026 isn't a leap year, so the birthday is celebrated on
+    # Feb 28 — the age must tick over that day, not read one year low.
+    assert age_on(2, 29, 2000, date(2026, 2, 28)) == 26
+    # But not a day early: Feb 27 is still the old age.
+    assert age_on(2, 29, 2000, date(2026, 2, 27)) == 25
+
+
+def test_age_leap_day_still_waits_for_feb_29_in_leap_years():
+    # 2028 is a leap year: Feb 28 hasn't reached the real birthday yet.
+    assert age_on(2, 29, 2000, date(2028, 2, 28)) == 27
+    assert age_on(2, 29, 2000, date(2028, 2, 29)) == 28
+
+
 # ── song command builder ───────────────────────────────────────────────────────
 
 

@@ -20,8 +20,11 @@ GAMBLE_MULTIPLIER = 2.0
 # values toward integer limits. A billion is far above any real use.
 COIN_MAX = 1_000_000_000
 
-# How long a /squad co-op reward (and its picker menu) waits before expiring.
-COOP_CONFIRM_TIMEOUT = 120
+# How long a /squad co-op reward (and its picker menu, and the /coin grant|take
+# mass picker) waits before expiring. Generous — a big squad can be 25 people
+# who all have to press Confirm — but not unlimited, so an abandoned board
+# doesn't stay clickable (and its persisted row doesn't linger) forever.
+COOP_CONFIRM_TIMEOUT = 1800  # 30 min, matches RAID_TIMEOUT
 
 # How long an open /raid board stays joinable before it auto-expires unpaid.
 RAID_TIMEOUT = 1800  # 30 min

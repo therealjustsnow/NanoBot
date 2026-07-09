@@ -98,6 +98,15 @@ class Economy(commands.Cog):
         self._squads: dict[int, SquadView] = {}
         self._squad_tasks: dict[int, asyncio.Task] = {}
 
+    async def cog_load(self):
+        # restore_schedules only fires from on_ready, so a hot-reload after the
+        # bot is up would bring the persisted boards back with no expiry timers.
+        # Re-run the restore here when the gateway is already ready (initial
+        # startup still waits for the on_ready dispatch — the guild/channel
+        # cache isn't populated this early).
+        if self.bot.is_ready():
+            self.bot.loop.create_task(self.on_restore_schedules())
+
     def cog_unload(self):
         for task in (*self._raid_tasks.values(), *self._squad_tasks.values()):
             task.cancel()
