@@ -932,6 +932,10 @@ class Economy(commands.Cog):
         """Rebuild open raid boards + pending squad confirms after a restart."""
         for row in await db.get_open_raids():
             raid_id = row["raid_id"]
+            if raid_id in self._raids:
+                # on_ready re-fired (gateway re-identify) — this raid is already
+                # live; rebuilding it would leak the old expiry timer.
+                continue
             if row["message_id"] is None:
                 # Crash beat the message-id write — nothing to bind buttons to.
                 await db.delete_raid(raid_id)
@@ -954,6 +958,8 @@ class Economy(commands.Cog):
 
         for row in await db.get_open_squads():
             squad_id = row["squad_id"]
+            if squad_id in self._squads:
+                continue  # already live — same re-identify guard as raids
             if row["message_id"] is None:
                 await db.delete_squad(squad_id)
                 continue
