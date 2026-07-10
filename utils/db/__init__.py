@@ -40,6 +40,7 @@ _DOMAIN_ORDER = (
     "gatekeeper",
     "birthday",
     "liverole",
+    "tickets",
 )
 
 # _core first so its connection/schema names (init, close, _conn, migration, …)
