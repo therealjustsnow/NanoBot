@@ -162,6 +162,34 @@ _SLASH_GROUPS: list[dict] = [
         "perms": "Manage Roles",
         "example": "/liverole setup @Live #go-live\n/liverole enable\n/liverole message {mention} is now live: {title} {url}",
     },
+    {
+        "name": "ticket",
+        "aliases": ["tickets"],
+        "category": "🎫 Tickets",
+        "short": "Private support tickets between members and staff",
+        "usage": "/ticket <open|close|claim|add|remove|setup|panel|limit|config|enable|disable>",
+        "desc": (
+            "Members press an Open Ticket button (or run /ticket open) and get a "
+            "private thread only they and the staff can see — no channel clutter, "
+            "no permission juggling, great on mobile.\n\n"
+            "Staff claim, work, and close tickets right in the thread; closing "
+            "locks the thread and drops a full text transcript in the log channel.\n\n"
+            "**Setup:** /ticket setup @Staff #ticket-log → /ticket panel"
+        ),
+        "args": [
+            ("open [subject]", "Open a ticket (no subject → a pop-up form asks)"),
+            ("close [reason]", "Close the ticket you're in (opener or staff)"),
+            ("claim", "Mark yourself as the staff member handling this ticket"),
+            ("add / remove <member>", "Add or remove a member from the ticket"),
+            ("setup <role> [log] [limit]", "Set the staff role, log channel, and cap"),
+            ("panel [channel] [title] [message]", "Post the Open Ticket button panel"),
+            ("limit <n>", "Max open tickets per member (1-10)"),
+            ("config", "Show current ticket settings"),
+            ("enable / disable", "Master on/off switch (open tickets stay usable)"),
+        ],
+        "perms": "Manage Server (setup) · everyone (open)",
+        "example": "/ticket setup @Staff #ticket-log\n/ticket panel #support\n/ticket close All sorted!",
+    },
 ]
 
 # Build a flat name→entry lookup for slash groups (used by !help <cmd>)

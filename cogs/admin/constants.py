@@ -33,6 +33,7 @@ _ALL_COGS = (
     "cogs.gatekeeper",
     "cogs.liverole",
     "cogs.birthday",
+    "cogs.tickets",
     "cogs.debug",
 )
 
