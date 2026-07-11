@@ -9,15 +9,17 @@ Features:
   - Extra reminder slots for voters (50 vs 25)
   - /vote command — links, status, and streak
 
+discord.bots.gg is stats-only — it has no voting or vote-webhook API, so only
+its server-count posting is wired up (no vote link, cooldown, or webhook).
+
 Config keys (config.ini → [votes]):
   topgg_v1_token       — top.gg v1 API token (Bearer, from Integrations & API settings)
   dbl_token            — discordbotlist.com bot token
-  discordbotsgg_token  — discord.bots.gg bot token
+  discordbotsgg_token  — discord.bots.gg bot token (server-count posting only)
   vote_webhook_port    — port to listen on (default 5000)
   vote_webhook_secret  — shared secret for webhook verification
                          top.gg:             HMAC-SHA256 (x-topgg-signature header)
                          DBL:                plain Authorization header match
-                         discord.bots.gg:    plain Authorization header match
   webhook_allowed_ips  — comma-separated IPs or CIDR ranges allowed to POST webhooks
                          e.g. 167.114.156.0/24,192.168.1.1
                          If unset, all IPs are accepted (existing behaviour).
@@ -25,7 +27,6 @@ Config keys (config.ini → [votes]):
 Webhook URLs to register on each site:
   top.gg:             http://YOUR_IP:PORT/webhook/topgg
   discordbotlist.com: http://YOUR_IP:PORT/webhook/dbl
-  discord.bots.gg:    http://YOUR_IP:PORT/webhook/botsgg
 """
 
 import asyncio
@@ -55,13 +56,11 @@ _BOTSGG_API = "https://discord.bots.gg/api/v1"
 
 _TOPGG_VOTE = "https://top.gg/bot/{bot_id}/vote"
 _DBL_VOTE = "https://discordbotlist.com/bots/{bot_id}/upvote"
-_BOTSGG_VOTE = "https://discord.bots.gg/bots/{bot_id}/vote"
 
-# Cooldowns in seconds
+# Cooldowns in seconds. discord.bots.gg has no voting, so it isn't listed here.
 _COOLDOWNS = {
     "topgg": 12 * 3600,  # 12 hours
     "dbl": 12 * 3600,  # 12 hours
-    "botsgg": 12 * 3600,  # 12 hours
 }
 
 # Extra reminders granted to voters
@@ -71,7 +70,6 @@ DEFAULT_REMINDER_MAX = 25
 _SITE_NAMES = {
     "topgg": "top.gg",
     "dbl": "discordbotlist.com",
-    "botsgg": "discord.bots.gg",
 }
 
 
@@ -299,7 +297,6 @@ class Votes(commands.Cog):
         routes = [
             aiohttp.web.post("/webhook/topgg", self._handle_topgg),
             aiohttp.web.post("/webhook/dbl", self._handle_dbl),
-            aiohttp.web.post("/webhook/botsgg", self._handle_botsgg),
         ]
         self.bot.web.register(
             WEBHOOK_OWNER,
@@ -320,7 +317,7 @@ class Votes(commands.Cog):
             await self.bot.web.restart()
 
     def _check_auth(self, request: aiohttp.web.Request) -> bool:
-        """Validate the Authorization header against the configured secret (DBL / discord.bots.gg)."""
+        """Validate the Authorization header against the configured secret (DBL)."""
         if not self.webhook_secret:
             return True
         auth = request.headers.get("Authorization", "")
@@ -407,30 +404,6 @@ class Votes(commands.Cog):
         if user_id:
             log.info(f"DBL vote received: user={user_id}")
             await self._process_vote(user_id, "dbl")
-
-        return aiohttp.web.Response(status=200)
-
-    async def _handle_botsgg(
-        self, request: aiohttp.web.Request
-    ) -> aiohttp.web.Response:
-        if not self._check_auth(request):
-            log.warning("discord.bots.gg webhook: rejected — bad Authorization header")
-            return aiohttp.web.Response(status=401)
-
-        try:
-            data = await request.json()
-        except Exception:
-            return aiohttp.web.Response(status=400)
-
-        # discord.bots.gg payload: {"userId": "...", "botId": "...", "type": "vote"}
-        try:
-            user_id = int(data.get("userId", 0))
-        except (ValueError, TypeError):
-            return aiohttp.web.Response(status=400)
-
-        if user_id:
-            log.info(f"discord.bots.gg vote received: user={user_id}")
-            await self._process_vote(user_id, "botsgg")
 
         return aiohttp.web.Response(status=200)
 
@@ -555,10 +528,8 @@ class Votes(commands.Cog):
                 site_name = _SITE_NAMES[site]
                 if site == "topgg":
                     vote_url = _TOPGG_VOTE.format(bot_id=self.bot.user.id)
-                elif site == "dbl":
-                    vote_url = _DBL_VOTE.format(bot_id=self.bot.user.id)
                 else:
-                    vote_url = _BOTSGG_VOTE.format(bot_id=self.bot.user.id)
+                    vote_url = _DBL_VOTE.format(bot_id=self.bot.user.id)
 
                 try:
                     e = h.embed(
@@ -621,15 +592,12 @@ class Votes(commands.Cog):
             if len(parts) == 1:
                 topgg_row = await db.get_vote(user.id, "topgg")
                 dbl_row = await db.get_vote(user.id, "dbl")
-                botsgg_row = await db.get_vote(user.id, "botsgg")
                 topgg_on = topgg_row["notify"] if topgg_row else True
                 dbl_on = dbl_row["notify"] if dbl_row else True
-                botsgg_on = botsgg_row["notify"] if botsgg_row else True
                 await ctx.reply(
                     embed=h.info(
                         f"**top.gg cooldown pings:** {'on ✅' if topgg_on else 'off ❌'}\n"
-                        f"**DBL cooldown pings:** {'on ✅' if dbl_on else 'off ❌'}\n"
-                        f"**discord.bots.gg cooldown pings:** {'on ✅' if botsgg_on else 'off ❌'}\n\n"
+                        f"**DBL cooldown pings:** {'on ✅' if dbl_on else 'off ❌'}\n\n"
                         f"Use `/vote notify on` or `/vote notify off` to change.",
                         "🔔 Vote Notifications",
                     ),
@@ -648,7 +616,6 @@ class Votes(commands.Cog):
             enabled = setting_str == "on"
             await db.set_vote_notify(user.id, "topgg", enabled)
             await db.set_vote_notify(user.id, "dbl", enabled)
-            await db.set_vote_notify(user.id, "botsgg", enabled)
             status = "on ✅" if enabled else "off ❌"
             await ctx.reply(
                 embed=h.ok(
@@ -671,11 +638,9 @@ class Votes(commands.Cog):
         # ── main /vote embed ───────────────────────────────────────────────────
         topgg_url = _TOPGG_VOTE.format(bot_id=bot_id)
         dbl_url = _DBL_VOTE.format(bot_id=bot_id)
-        botsgg_url = _BOTSGG_VOTE.format(bot_id=bot_id)
 
         topgg_row = await db.get_vote(user.id, "topgg")
         dbl_row = await db.get_vote(user.id, "dbl")
-        botsgg_row = await db.get_vote(user.id, "botsgg")
 
         def _status_line(row: dict | None, site: str) -> str:
             if not row or row["voted_at"] == 0:
@@ -687,20 +652,14 @@ class Votes(commands.Cog):
 
         topgg_status = _status_line(topgg_row, "topgg")
         dbl_status = _status_line(dbl_row, "dbl")
-        botsgg_status = _status_line(botsgg_row, "botsgg")
 
         topgg_streak = topgg_row["streak"] if topgg_row and topgg_row["voted_at"] else 0
         dbl_streak = dbl_row["streak"] if dbl_row and dbl_row["voted_at"] else 0
-        botsgg_streak = (
-            botsgg_row["streak"] if botsgg_row and botsgg_row["voted_at"] else 0
-        )
 
         # Voter status — active on any site
-        is_voter = (
-            await db.has_voted_recently(user.id, "topgg")
-            or await db.has_voted_recently(user.id, "dbl")
-            or await db.has_voted_recently(user.id, "botsgg")
-        )
+        is_voter = await db.has_voted_recently(
+            user.id, "topgg"
+        ) or await db.has_voted_recently(user.id, "dbl")
 
         e = h.embed(title="🗳️ Vote for NanoBot", color=h.BLUE)
         e.description = (
@@ -727,15 +686,6 @@ class Votes(commands.Cog):
             inline=True,
         )
         e.add_field(
-            name="🏆 discord.bots.gg",
-            value=(
-                f"[**Vote →**]({botsgg_url})\n"
-                f"{botsgg_status}\n"
-                f"Streak: **{botsgg_streak}** vote(s)  ·  Resets every 12h"
-            ),
-            inline=True,
-        )
-        e.add_field(
             name="\u200b",
             value=(
                 f"**Your status:** {'🟢 Active voter — 50 reminder slots!' if is_voter else '⚪ Not an active voter — 25 reminder slots'}\n"
@@ -755,12 +705,7 @@ async def get_reminder_limit(user_id: int) -> int:
     """
     topgg_active = await db.has_voted_recently(user_id, "topgg")
     dbl_active = await db.has_voted_recently(user_id, "dbl")
-    botsgg_active = await db.has_voted_recently(user_id, "botsgg")
-    return (
-        VOTER_REMINDER_MAX
-        if (topgg_active or dbl_active or botsgg_active)
-        else DEFAULT_REMINDER_MAX
-    )
+    return VOTER_REMINDER_MAX if (topgg_active or dbl_active) else DEFAULT_REMINDER_MAX
 
 
 # ── Registration ───────────────────────────────────────────────────────────────

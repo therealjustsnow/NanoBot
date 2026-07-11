@@ -93,7 +93,7 @@ Some features call external APIs. Here is exactly what leaves the bot:
 | Groq (AI) | Only when you use `/eli5`: the question text you typed is sent to Groq's API to generate an explanation. Subject to [Groq's privacy policy](https://groq.com/privacy-policy/). |
 | nekos.best / Nekosia | Nothing about you — the bot fetches image URLs for image/GIF commands. |
 | YouTube / yt-dlp, Spotify (page metadata), iTunes Search, SponsorBlock | Song titles/URLs requested in music commands. No Discord user data is sent. |
-| Bot lists (top.gg, Discord Bot List, discord.bots.gg) | The bot's server count. When you vote on those sites, they send us your user ID (see Votes above). |
+| Bot lists (top.gg, Discord Bot List, discord.bots.gg) | The bot's server count. When you vote on top.gg or Discord Bot List, they send us your user ID (see Votes above). discord.bots.gg has no voting — only the server count is shared with it. |
 
 NanoBot never sends your messages, member lists, or presence data to any
 third party.
