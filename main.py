@@ -191,6 +191,18 @@ def _fmt_perms(perms) -> str:
     return ", ".join(p.replace("_", " ").title() for p in perms)
 
 
+# What kind of slash option failed to resolve, for TransformerError messages.
+# Without this the error can't say WHICH option broke, and users blame the
+# wrong one (e.g. a log-channel cache miss read as an invalid staff role).
+_OPTION_KIND = {
+    discord.AppCommandOptionType.channel: "channel",
+    discord.AppCommandOptionType.role: "role",
+    discord.AppCommandOptionType.user: "member",
+    discord.AppCommandOptionType.mentionable: "member or role",
+    discord.AppCommandOptionType.attachment: "attachment",
+}
+
+
 # ── Bot ────────────────────────────────────────────────────────────────────────
 class ObsTree(app_commands.CommandTree):
     """
@@ -816,16 +828,23 @@ class NanoBot(commands.Bot):
         )
 
         if isinstance(error, app_commands.TransformerError):
+            kind = _OPTION_KIND.get(error.type, "argument")
             hint = ""
             if error.type == discord.AppCommandOptionType.channel:
                 hint = "\nMake sure to select the channel from the picker rather than typing the name."
-            log.debug(
+            # WARNING, not DEBUG: an option that Discord sent but the bot
+            # couldn't resolve is worth a log line at the default level —
+            # otherwise these failures are invisible in `!logs`.
+            log.warning(
                 f"TransformerError in /{cmd_name}: {error} "
                 f"(value={error.value!r}, type={error.type})"
             )
+            shown = getattr(error.value, "id", error.value)
             return await _slash_error_response(
                 interaction,
-                _err_embed(f"❌ Couldn't resolve that argument: `{error.value}`{hint}"),
+                _err_embed(
+                    f"❌ Couldn't resolve the {kind} you selected: `{shown}`{hint}"
+                ),
             )
 
         if isinstance(error, app_commands.MissingPermissions):
@@ -934,7 +953,7 @@ class NanoBot(commands.Bot):
             if isinstance(error, app_commands.TransformerError):
                 if error.type == discord.AppCommandOptionType.channel:
                     hint = "\nMake sure to select the channel from the picker rather than typing the name."
-                log.debug(
+                log.warning(
                     f"TransformerError in {ctx.command}: {error} "
                     f"(value={error.value!r}, type={error.type})"
                 )
