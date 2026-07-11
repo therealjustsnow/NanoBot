@@ -206,7 +206,7 @@ groq_wyr_system = You generate Would You Rather questions for a Discord bot. ...
 | `votes` | `topgg_token` | No | top.gg API token -- enables stat posting and vote webhooks |
 | `votes` | `topgg_v1_token` | No | top.gg v1 API token -- enables command sync to top.gg |
 | `votes` | `dbl_token` | No | discordbotlist.com bot token -- enables stat posting, command sync, and vote webhooks |
-| `votes` | `discordbotsgg_token` | No | discord.bots.gg bot token -- enables stat posting and vote webhooks |
+| `votes` | `discordbotsgg_token` | No | discord.bots.gg bot token -- enables stat posting (the site has no voting or vote-webhook API) |
 | `votes` | `vote_webhook_port` | No | Port for the vote webhook HTTP server. Default `5000` |
 | `votes` | `vote_webhook_secret` | No | Shared secret for webhook verification |
 | `votes` | `webhook_allowed_ips` | No | Comma-separated IPs or CIDR ranges allowed to POST to the webhook server (e.g. `167.114.156.0/24,192.168.1.1`). Blank = allow all |

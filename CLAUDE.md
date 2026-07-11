@@ -102,7 +102,7 @@ All features live in `cogs/` as discord.py cogs, hot-reloadable via `n!reload <c
 | `welcome.py` | Per-guild join/leave messages with template variables |
 | `utility/` | Info commands (`/server`, `/user`, `/help`; `serverinfo`/`userinfo` aliases) (a package — see "Utility package layout" below) |
 | `fun/` | 26 social + 33 reaction GIF commands via nekos.best (a package — see "Fun package layout" below) |
-| `votes.py` | top.gg / DBL / discord.bots.gg stat posting and vote webhooks |
+| `votes.py` | top.gg / DBL stat posting + vote webhooks; discord.bots.gg stat posting only (site has no voting/vote-webhook API) |
 | `eli5.py` | Plain-English AI explanations via Groq (GPT-OSS 20B) |
 | `images.py` | Anime image commands (husbando, kitsune, neko, waifu) via nekos.best |
 | `debug.py` | Owner-only debug REPL / shell evaluation |

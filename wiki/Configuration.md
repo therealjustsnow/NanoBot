@@ -39,7 +39,7 @@ An old `config.json` is auto-migrated to `config.ini` on first start (the legacy
 | `topgg_token` | *(blank)* | top.gg AUTH token. |
 | `topgg_v1_token` | *(blank)* | top.gg v1 API token used for commands sync. |
 | `dbl_token` | *(blank)* | discordbotlist.com bot token. |
-| `discordbotsgg_token` | *(blank)* | discord.bots.gg bot token. |
+| `discordbotsgg_token` | *(blank)* | discord.bots.gg bot token. Server-count posting only — the site has no voting or vote-webhook API. |
 | `vote_webhook_port` | `5000` | Local port the vote webhook listens on. |
 | `vote_webhook_host` | `0.0.0.0` | Bind address for the vote webhook. 0.0.0.0 = all interfaces; 127.0.0.1 = host-local (e.g. behind a reverse proxy). |
 | `vote_webhook_secret` | *(blank)* | Shared secret used by bot lists to authenticate webhooks. |
