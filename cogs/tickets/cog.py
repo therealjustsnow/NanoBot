@@ -50,6 +50,38 @@ from .views import TicketModal, TicketPanelView, TicketThreadView
 log = logging.getLogger("NanoBot.tickets")
 
 
+class LogChannelTransformer(app_commands.Transformer):
+    """Text-channel option that survives a guild-cache miss.
+
+    The built-in `discord.TextChannel` transform resolves the picked channel
+    through the guild cache and raises TransformerError when it isn't there,
+    which aborts `/ticket setup` with an unresolved-argument error even though
+    the staff role was fine. Setup only needs the channel's id and mention,
+    and both exist on the raw AppCommandChannel payload — so fall back to it
+    instead of failing.
+    """
+
+    @property
+    def type(self) -> discord.AppCommandOptionType:
+        return discord.AppCommandOptionType.channel
+
+    @property
+    def channel_types(self) -> list[discord.ChannelType]:
+        return [discord.ChannelType.text, discord.ChannelType.news]
+
+    async def transform(
+        self, interaction: discord.Interaction, value: app_commands.AppCommandChannel
+    ):
+        return value.resolve() or value
+
+
+# Accepts what the picker sends even when the cache lookup misses; the command
+# body only touches .id and .mention, which both variants carry.
+LogChannelOption = app_commands.Transform[
+    "discord.TextChannel | app_commands.AppCommandChannel", LogChannelTransformer
+]
+
+
 class Tickets(commands.Cog):
     """Private-thread support tickets with a button panel."""
 
@@ -606,12 +638,30 @@ class Tickets(commands.Cog):
         self,
         interaction: discord.Interaction,
         staff_role: discord.Role,
-        log_channel: Optional[discord.TextChannel] = None,
+        log_channel: Optional[LogChannelOption] = None,
         max_open: Optional[app_commands.Range[int, 1, 10]] = None,
     ):
         if not interaction.user.guild_permissions.manage_guild:
             await interaction.response.send_message(
                 embed=h.err("You need **Manage Server** to set up tickets."),
+                ephemeral=True,
+            )
+            return
+        if staff_role.is_default():
+            await interaction.response.send_message(
+                embed=h.err(
+                    "@everyone can't be the staff role — that would make every "
+                    "member staff. Pick the role your support team holds."
+                ),
+                ephemeral=True,
+            )
+            return
+        if staff_role.managed:
+            await interaction.response.send_message(
+                embed=h.err(
+                    f"{staff_role.mention} is managed by an integration, so members "
+                    "can't hold it. Pick the role your support team holds."
+                ),
                 ephemeral=True,
             )
             return
