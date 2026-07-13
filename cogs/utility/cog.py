@@ -483,6 +483,8 @@ class Utility(commands.Cog):
             manage_messages=True,  # Purge, snailpurge, clean
             manage_roles=True,  # addrole / removerole
             view_audit_log=True,  # Audit log cog
+            create_private_threads=True,  # Ticket system
+            manage_threads=True,  # Lock closed tickets (else falls back to archive-only)
             # Communication
             send_messages=True,
             send_messages_in_threads=True,
@@ -494,6 +496,7 @@ class Utility(commands.Cog):
             # Voice
             move_members=True,  # moveall command
             connect=True,  # Required alongside move_members
+            speak=True,  # Music playback + birthday song
         )
 
         url = discord.utils.oauth_url(
@@ -511,21 +514,12 @@ class Utility(commands.Cog):
         perms_list = (
             "Ban Members · Kick Members · Timeout Members\n"
             "Manage Channels · Manage Messages · Manage Roles\n"
-            "View Audit Log · Move Members · Connect\n"
+            "Manage Threads · Create Private Threads\n"
+            "View Audit Log · Move Members · Connect · Speak\n"
             "Send Messages · Send Messages in Threads\n"
             "Embed Links · Read History · Attach Files · Add Reactions"
         )
         e.add_field(name="🔐 Requested Permissions", value=perms_list, inline=False)
-        e.add_field(
-            name="⚠️ Required Intents",
-            value=(
-                "After inviting, go to the **Discord Developer Portal** → Your App → Bot "
-                "and enable:\n"
-                "✅ **Server Members Intent**\n"
-                "✅ **Message Content Intent**"
-            ),
-            inline=False,
-        )
         e.set_footer(text="NanoBot — Small. Fast. Built for Mobile Mods.")
         await ctx.reply(embed=e, ephemeral=True)
 
