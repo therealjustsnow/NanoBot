@@ -37,6 +37,7 @@ from discord.ext import commands
 
 from utils import db
 from utils import helpers as h
+from utils.converters import SafeTextChannel
 
 log = logging.getLogger("NanoBot.leveling")
 
@@ -455,7 +456,7 @@ class Leveling(commands.Cog):
     async def level_announce(
         self,
         ctx: commands.Context,
-        channel: Optional[discord.TextChannel] = None,
+        channel: Optional[SafeTextChannel] = None,
     ):
         if channel:
             await db.set_level_config(
@@ -552,7 +553,7 @@ class Leveling(commands.Cog):
         self,
         ctx: commands.Context,
         action: str,
-        channel: Optional[discord.TextChannel] = None,
+        channel: Optional[SafeTextChannel] = None,
     ):
         act = action.strip().lower()
         if act == "list":

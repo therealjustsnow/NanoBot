@@ -40,6 +40,7 @@ from discord.ext import commands
 
 from utils import db
 from utils import helpers as h
+from utils.converters import SafeTextChannel
 
 from .help_engine import (
     _OWNER_CATEGORIES,
@@ -1423,7 +1424,7 @@ class Utility(commands.Cog):
     async def firstmsg(
         self,
         ctx: commands.Context,
-        channel: Optional[discord.TextChannel] = None,
+        channel: Optional[SafeTextChannel] = None,
     ):
         ch = channel or ctx.channel
         async for msg in ch.history(limit=1, oldest_first=True):

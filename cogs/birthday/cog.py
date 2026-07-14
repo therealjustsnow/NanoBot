@@ -69,6 +69,7 @@ from discord.ext import commands, tasks
 
 from utils import db
 from utils import helpers as h
+from utils.converters import SafeTextChannel
 
 from .constants import (
     BIRTHDAY_COLOR,
@@ -793,9 +794,7 @@ class Birthday(commands.Cog):
     )
     @commands.has_permissions(manage_guild=True)
     @app_commands.describe(channel="Channel where birthday announcements are posted")
-    async def birthday_channel(
-        self, ctx: commands.Context, channel: discord.TextChannel
-    ):
+    async def birthday_channel(self, ctx: commands.Context, channel: SafeTextChannel):
         cfg = await db.get_birthday_config(ctx.guild.id)
         updates = {"enabled": True, "channel_id": str(channel.id)}
 

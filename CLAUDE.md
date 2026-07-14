@@ -61,6 +61,7 @@ Tests cover pure-Python utilities and the SQLite layer (in-memory), no live Disc
 - `tests/test_birthday_helpers.py` — pure date helpers from `cogs/birthday/` (`parse_birthday`, `next_birthday_date`, `days_until_birthday`, `is_birthday_today` incl. leap-day, `age_on`, `fmt_birthday`), the voice-region→timezone guesser + `_TZ_CHOICES` IANA validity, and the FFmpeg song-command builder
 - `tests/test_birthday_db.py` — birthday accessors in `utils/db/` against in-memory SQLite (config defaults/roundtrip, the enabled-config filter, the `last_announced` once-a-year stamp)
 - `tests/test_tickets_helpers.py` — pure helpers from `cogs/tickets/` (`thread_name` sanitise/truncate, `transcript_line` formatting)
+- `tests/test_converters.py` — `SafeTextChannel` in `utils/converters.py`: cache-hit/fetch-fallback/fetch-fail transform paths + the hybrid-command slash-option/prefix-converter regression shape of the `/level announce` cache-miss bug
 - `tests/test_tickets_db.py` — ticket accessors in `utils/db/` against in-memory SQLite (config roundtrip, per-guild sequential numbering, thread attach/lookup, the reserve-rollback `delete_ticket`, per-user open counts, the close/claim conditional-UPDATE race guards, the startup `close_stale_tickets` sweep)
 
 Command-level tests (parse → permission check → DB → reply) run under **dpytest**, which fakes a guild/members/message dispatch so cog wiring executes without a live gateway:
@@ -259,6 +260,7 @@ Both use WAL mode (`PRAGMA journal_mode=WAL`) for concurrent read/write. All que
 ### Utilities (`utils/`)
 
 - **`helpers.py`** — Embed factory (`ok()`, `err()`, `warn()`, `info()` with consistent brand colors), duration parsing (`parse_duration`, `parse_duration_from_end`, `parse_interval`), and `user_display()` for consistent user references.
+- **`converters.py`** — Shared command-argument converters. `SafeTextChannel`: drop-in replacement for a `discord.TextChannel` parameter annotation (slash/hybrid/prefix) that survives a guild-cache miss — the built-in transform raises `TransformerError` when the picked channel isn't cached (e.g. created while the gateway was down), aborting the command; this one falls back to an HTTP fetch and always hands the command a real `discord.TextChannel`. Every command-facing text-channel parameter across the cogs uses it; use it for new ones too.
 - **`checks.py`** — Combined user+bot permission decorators (`has_ban_perms()`, `has_mod_perms()`, etc.). Always use these instead of bare `commands.has_permissions` so both the user and bot permissions are checked together.
 - **`config.py`** — Config validation with detailed error reporting. Called by `run.py`.
 - **`storage.py`** — Legacy JSON helpers kept for backward compatibility. New code should use `db.py`.

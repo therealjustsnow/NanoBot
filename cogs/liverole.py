@@ -27,6 +27,7 @@ from discord.ext import commands
 from utils import db
 from utils import helpers as h
 from utils.checks import has_role_perms
+from utils.converters import SafeTextChannel
 
 log = logging.getLogger("NanoBot.liverole")
 
@@ -208,7 +209,7 @@ class LiveRole(commands.Cog):
         self,
         interaction: discord.Interaction,
         role: discord.Role = None,
-        channel: discord.TextChannel = None,
+        channel: SafeTextChannel = None,
     ) -> None:
         if role is None and channel is None:
             return await interaction.response.send_message(
@@ -283,7 +284,7 @@ class LiveRole(commands.Cog):
     @app_commands.describe(channel="Channel that receives go-live announcements")
     @has_role_perms()
     async def lr_channel(
-        self, interaction: discord.Interaction, channel: discord.TextChannel
+        self, interaction: discord.Interaction, channel: SafeTextChannel
     ) -> None:
         await db.set_liverole_channel(interaction.guild.id, channel.id)
         await interaction.response.send_message(

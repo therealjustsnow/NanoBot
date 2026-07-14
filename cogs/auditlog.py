@@ -34,6 +34,7 @@ from discord.ext import commands
 from utils import db
 from utils import helpers as h
 from utils.checks import has_admin_perms
+from utils.converters import SafeTextChannel
 
 log = logging.getLogger("NanoBot.auditlog")
 
@@ -197,7 +198,7 @@ class AuditLog(commands.Cog):
     async def al_channel(
         self,
         interaction: discord.Interaction,
-        channel: discord.TextChannel,
+        channel: SafeTextChannel,
     ):
         await db.set_auditlog_channel(interaction.guild_id, channel.id)
         _invalidate_auditlog_cache(interaction.guild_id)
