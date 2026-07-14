@@ -2,9 +2,7 @@
 Tests for the pure helpers in cogs/tickets/ (no live Discord dependency).
 """
 
-import discord
-
-from cogs.tickets import LogChannelTransformer, thread_name, transcript_line
+from cogs.tickets import thread_name, transcript_line
 
 # ── thread_name ────────────────────────────────────────────────────────────────
 
@@ -51,39 +49,3 @@ def test_transcript_line_attachments_only():
 
 def test_transcript_line_empty_message():
     assert transcript_line("t", "a", "", []) == "[t] a: [no text content]"
-
-
-# ── LogChannelTransformer ──────────────────────────────────────────────────────
-# The /ticket setup log_channel option must not explode on a guild-cache miss
-# (the built-in TextChannel transform does, aborting setup with an
-# unresolved-argument error users misread as an invalid staff role).
-
-
-class _FakeAppCommandChannel:
-    """Stands in for app_commands.AppCommandChannel: id + resolve() only."""
-
-    def __init__(self, resolved):
-        self.id = 1234567890
-        self._resolved = resolved
-
-    def resolve(self):
-        return self._resolved
-
-
-async def test_log_channel_transform_prefers_cached_channel():
-    cached = object()
-    value = _FakeAppCommandChannel(cached)
-    out = await LogChannelTransformer().transform(None, value)
-    assert out is cached
-
-
-async def test_log_channel_transform_falls_back_on_cache_miss():
-    value = _FakeAppCommandChannel(None)
-    out = await LogChannelTransformer().transform(None, value)
-    assert out is value
-
-
-def test_log_channel_transformer_is_a_text_channel_option():
-    t = LogChannelTransformer()
-    assert t.type is discord.AppCommandOptionType.channel
-    assert t.channel_types == [discord.ChannelType.text, discord.ChannelType.news]

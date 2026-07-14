@@ -39,6 +39,7 @@ from discord.ext import commands
 from utils import db
 from utils import helpers as h
 from utils.checks import has_admin_perms, has_role_perms
+from utils.converters import SafeTextChannel
 
 from .constants import _AUTOGEN_CFG
 from .helpers import _new_id
@@ -143,7 +144,7 @@ class Roles(commands.Cog):
         self,
         interaction: discord.Interaction,
         panel_id: str,
-        channel: Optional[discord.TextChannel] = None,
+        channel: Optional[SafeTextChannel] = None,
     ):
         panel = await db.get_role_panel(panel_id)
         if not panel or panel["guild_id"] != str(interaction.guild_id):
@@ -527,7 +528,7 @@ class Roles(commands.Cog):
     async def autogen_colors(
         self,
         interaction: discord.Interaction,
-        channel: discord.TextChannel,
+        channel: SafeTextChannel,
         prefix: Optional[str] = None,
         extra_role_1: Optional[discord.Role] = None,
         extra_role_2: Optional[discord.Role] = None,
@@ -577,7 +578,7 @@ class Roles(commands.Cog):
     async def autogen_pronouns(
         self,
         interaction: discord.Interaction,
-        channel: discord.TextChannel,
+        channel: SafeTextChannel,
         extra_role_1: Optional[discord.Role] = None,
         extra_role_2: Optional[discord.Role] = None,
         extra_role_3: Optional[discord.Role] = None,
@@ -626,7 +627,7 @@ class Roles(commands.Cog):
     async def autogen_age(
         self,
         interaction: discord.Interaction,
-        channel: discord.TextChannel,
+        channel: SafeTextChannel,
         extra_role_1: Optional[discord.Role] = None,
         extra_role_2: Optional[discord.Role] = None,
         extra_role_3: Optional[discord.Role] = None,
@@ -666,7 +667,7 @@ class Roles(commands.Cog):
     async def autogen_region(
         self,
         interaction: discord.Interaction,
-        channel: discord.TextChannel,
+        channel: SafeTextChannel,
         extra_role_1: Optional[discord.Role] = None,
         extra_role_2: Optional[discord.Role] = None,
         extra_role_3: Optional[discord.Role] = None,

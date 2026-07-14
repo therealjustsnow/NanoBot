@@ -54,6 +54,7 @@ from utils.checks import (
     has_move_perms,
     has_admin_perms,
 )
+from utils.converters import SafeTextChannel
 
 from .helpers import (
     resolve_target,
@@ -633,7 +634,7 @@ class Moderation(TimedActionsMixin, commands.Cog):
     async def lock(
         self,
         ctx,
-        channel: Optional[discord.TextChannel] = None,
+        channel: Optional[SafeTextChannel] = None,
         *,
         reason: Optional[str] = None,
     ):
@@ -1193,7 +1194,7 @@ class Moderation(TimedActionsMixin, commands.Cog):
     )
     @app_commands.describe(channel="Channel to inspect (default: current channel)")
     @commands.cooldown(1, 5, commands.BucketType.user)
-    async def channelinfo(self, ctx, channel: Optional[discord.TextChannel] = None):
+    async def channelinfo(self, ctx, channel: Optional[SafeTextChannel] = None):
         ch = channel or ctx.channel
         type_icons = {
             discord.ChannelType.text: "📝",
@@ -1620,7 +1621,7 @@ class Moderation(TimedActionsMixin, commands.Cog):
     )
     @app_commands.describe(channel="Channel to hide (default: current)")
     @has_channel_perms()
-    async def hide(self, ctx, channel: Optional[discord.TextChannel] = None):
+    async def hide(self, ctx, channel: Optional[SafeTextChannel] = None):
         target = channel or ctx.channel
         everyone = ctx.guild.default_role
         ow = target.overwrites_for(everyone)
@@ -1664,7 +1665,7 @@ class Moderation(TimedActionsMixin, commands.Cog):
     )
     @app_commands.describe(channel="Channel to unhide (default: current)")
     @has_channel_perms()
-    async def unhide(self, ctx, channel: Optional[discord.TextChannel] = None):
+    async def unhide(self, ctx, channel: Optional[SafeTextChannel] = None):
         target = channel or ctx.channel
         everyone = ctx.guild.default_role
         ow = target.overwrites_for(everyone)
@@ -1715,7 +1716,7 @@ class Moderation(TimedActionsMixin, commands.Cog):
     )
     @has_mod_perms()
     async def echo(
-        self, ctx, channel: Optional[discord.TextChannel] = None, *, message: str
+        self, ctx, channel: Optional[SafeTextChannel] = None, *, message: str
     ):
         target = channel or ctx.channel
         try:

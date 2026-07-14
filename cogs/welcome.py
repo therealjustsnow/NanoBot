@@ -33,6 +33,7 @@ from discord.ext import commands
 from utils import db
 from utils import helpers as h
 from utils.checks import has_admin_perms
+from utils.converters import SafeTextChannel
 
 log = logging.getLogger("NanoBot.welcome")
 
@@ -383,7 +384,7 @@ class Welcome(commands.Cog):
         self,
         ctx: commands.Context,
         enabled: Optional[bool] = None,
-        channel: Optional[discord.TextChannel] = None,
+        channel: Optional[SafeTextChannel] = None,
         title: Optional[str] = None,
         content: Optional[str] = None,
         image_url: Optional[str] = None,
@@ -472,7 +473,7 @@ class Welcome(commands.Cog):
         self,
         ctx: commands.Context,
         enabled: Optional[bool] = None,
-        channel: Optional[discord.TextChannel] = None,
+        channel: Optional[SafeTextChannel] = None,
         title: Optional[str] = None,
         content: Optional[str] = None,
         image_url: Optional[str] = None,

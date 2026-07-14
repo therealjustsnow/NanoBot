@@ -45,6 +45,7 @@ from discord.ext import commands
 
 from utils import db
 from utils import helpers as h
+from utils.converters import SafeTextChannel
 
 from .constants import (
     AVATAR_CATALOG_DIR,
@@ -711,7 +712,7 @@ class Gatekeeper(commands.Cog):
     @app_commands.describe(channel="Channel for verification when DMs are closed")
     @app_commands.checks.has_permissions(manage_guild=True)
     async def gk_channel(
-        self, interaction: discord.Interaction, channel: discord.TextChannel
+        self, interaction: discord.Interaction, channel: SafeTextChannel
     ):
         await db.set_gatekeeper_config(
             interaction.guild_id, quarantine_channel_id=str(channel.id)
@@ -725,7 +726,7 @@ class Gatekeeper(commands.Cog):
     @app_commands.describe(channel="Channel for mute/verify/kick logs")
     @app_commands.checks.has_permissions(manage_guild=True)
     async def gk_logchannel(
-        self, interaction: discord.Interaction, channel: discord.TextChannel
+        self, interaction: discord.Interaction, channel: SafeTextChannel
     ):
         await db.set_gatekeeper_config(
             interaction.guild_id, log_channel_id=str(channel.id)

@@ -62,6 +62,7 @@ from discord.ext import commands, tasks
 from utils import db
 from utils import helpers as h
 from utils.checks import has_admin_perms
+from utils.converters import SafeTextChannel
 
 from .constants import ACTION_LABELS, RULE_LABELS, TIMEOUT_SECONDS, _spam_tracker
 from .helpers import (
@@ -272,7 +273,7 @@ class AutoMod(commands.Cog):
     async def am_logchannel(
         self,
         interaction: discord.Interaction,
-        channel: Optional[discord.TextChannel] = None,
+        channel: Optional[SafeTextChannel] = None,
     ):
         await db.set_automod_log_channel(
             interaction.guild_id, channel.id if channel else None
@@ -819,7 +820,7 @@ class AutoMod(commands.Cog):
     async def ig_channel(
         self,
         interaction: discord.Interaction,
-        channel: discord.TextChannel,
+        channel: SafeTextChannel,
     ):
         toggled = await db.toggle_automod_ignore(
             interaction.guild_id, "channel", channel.id
