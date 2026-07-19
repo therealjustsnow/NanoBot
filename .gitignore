@@ -26,3 +26,6 @@ Thumbs.db
 .vscode/
 .idea/
 *.swp
+
+# Local plugin marketplace clone (claude plugin setup)
+i-have-adhd/
