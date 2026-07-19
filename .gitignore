@@ -29,3 +29,5 @@ Thumbs.db
 
 # Local plugin marketplace clone (claude plugin setup)
 i-have-adhd/
+# Local caveman plugin (claude plugin setup)
+.claude/plugins/caveman/
