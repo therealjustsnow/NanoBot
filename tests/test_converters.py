@@ -66,8 +66,21 @@ async def test_transform_raises_transformer_error_when_fetch_fails():
         SimpleNamespace(status=404, reason="Not Found"), "Unknown Channel"
     )
     value = _FakeAppCommandChannel(resolved=None, fetch_exc=exc)
-    with pytest.raises(app_commands.TransformerError):
+    with pytest.raises(app_commands.TransformerError) as caught:
         await SafeTextChannel().transform(None, value)
+    # The fetch failure rides along as the cause so the command error handler
+    # can tailor its user-facing message (no access vs. deleted vs. generic).
+    assert caught.value.__cause__ is exc
+
+
+async def test_transform_wraps_non_http_fetch_failure():
+    # InvalidData (and other DiscordExceptions) aren't HTTPExceptions but still
+    # must route through the clean TransformerError path, not escape raw.
+    exc = discord.InvalidData("Unknown channel type")
+    value = _FakeAppCommandChannel(resolved=None, fetch_exc=exc)
+    with pytest.raises(app_commands.TransformerError) as caught:
+        await SafeTextChannel().transform(None, value)
+    assert caught.value.__cause__ is exc
 
 
 async def test_transform_rejects_non_text_channel():

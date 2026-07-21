@@ -60,7 +60,17 @@ class SafeTextChannel(commands.Converter, app_commands.Transformer):
             )
             try:
                 channel = await value.fetch()
-            except discord.HTTPException as exc:
+            except discord.DiscordException as exc:
+                # The fetch is the whole point of this converter, so when it
+                # fails, say WHY at WARNING level — otherwise the operator only
+                # sees the downstream TransformerError and the real cause
+                # (403 no-access, 404 deleted, a rate-limit, …) is invisible in
+                # `!logs`. The cause rides along on the raised error too, so the
+                # command error handler can tailor its user-facing message.
+                log.warning(
+                    f"HTTP fetch of channel {value.id} (guild {value.guild_id}) "
+                    f"failed: {exc.__class__.__name__}: {exc}"
+                )
                 raise app_commands.TransformerError(value, self.type, self) from exc
         if not isinstance(channel, discord.TextChannel):
             raise app_commands.TransformerError(value, self.type, self)

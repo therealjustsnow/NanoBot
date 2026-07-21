@@ -203,6 +203,30 @@ _OPTION_KIND = {
 }
 
 
+def _transformer_error_text(error: app_commands.TransformerError) -> str:
+    """User-facing message for a slash option the bot couldn't resolve.
+
+    A channel option that misses the guild cache falls back to an HTTP fetch
+    (see utils.converters.SafeTextChannel). When that fetch fails, the cause
+    rides along on ``error.__cause__`` — use it to say what actually went
+    wrong instead of the generic "pick it from the picker" hint, which is
+    misleading when the real problem is access or a deleted channel.
+    """
+    kind = _OPTION_KIND.get(error.type, "argument")
+    shown = getattr(error.value, "id", error.value)
+    cause = error.__cause__
+    if error.type == discord.AppCommandOptionType.channel:
+        if isinstance(cause, discord.Forbidden):
+            return f"❌ I don't have access to that channel (`{shown}`), so I can't use it here."
+        if isinstance(cause, discord.NotFound):
+            return f"❌ That channel (`{shown}`) no longer exists."
+        return (
+            f"❌ Couldn't resolve the channel you selected: `{shown}`\n"
+            "Make sure to select the channel from the picker rather than typing the name."
+        )
+    return f"❌ Couldn't resolve the {kind} you selected: `{shown}`"
+
+
 # ── Bot ────────────────────────────────────────────────────────────────────────
 class ObsTree(app_commands.CommandTree):
     """
@@ -828,23 +852,16 @@ class NanoBot(commands.Bot):
         )
 
         if isinstance(error, app_commands.TransformerError):
-            kind = _OPTION_KIND.get(error.type, "argument")
-            hint = ""
-            if error.type == discord.AppCommandOptionType.channel:
-                hint = "\nMake sure to select the channel from the picker rather than typing the name."
             # WARNING, not DEBUG: an option that Discord sent but the bot
             # couldn't resolve is worth a log line at the default level —
             # otherwise these failures are invisible in `!logs`.
             log.warning(
                 f"TransformerError in /{cmd_name}: {error} "
-                f"(value={error.value!r}, type={error.type})"
+                f"(value={error.value!r}, type={error.type}, cause={error.__cause__!r})"
             )
-            shown = getattr(error.value, "id", error.value)
             return await _slash_error_response(
                 interaction,
-                _err_embed(
-                    f"❌ Couldn't resolve the {kind} you selected: `{shown}`{hint}"
-                ),
+                _err_embed(_transformer_error_text(error)),
             )
 
         if isinstance(error, app_commands.MissingPermissions):
@@ -949,16 +966,17 @@ class NanoBot(commands.Bot):
             )
 
         if isinstance(error, (commands.BadArgument, app_commands.TransformerError)):
-            hint = ""
             if isinstance(error, app_commands.TransformerError):
-                if error.type == discord.AppCommandOptionType.channel:
-                    hint = "\nMake sure to select the channel from the picker rather than typing the name."
                 log.warning(
                     f"TransformerError in {ctx.command}: {error} "
-                    f"(value={error.value!r}, type={error.type})"
+                    f"(value={error.value!r}, type={error.type}, cause={error.__cause__!r})"
+                )
+                return await ctx.reply(
+                    embed=_err_embed(_transformer_error_text(error), _C_WARN),
+                    ephemeral=True,
                 )
             return await ctx.reply(
-                embed=_err_embed(f"Invalid argument: {error}{hint}", _C_WARN),
+                embed=_err_embed(f"Invalid argument: {error}", _C_WARN),
                 ephemeral=True,
             )
 
