@@ -25,7 +25,6 @@ Commands
   /craft info <recipe>        → a recipe's inputs, output, and what it does
 """
 
-import asyncio
 import logging
 from typing import Optional
 
@@ -53,15 +52,14 @@ class Crafting(commands.Cog):
         # Per-(guild, user) locks serialize multi-step craft flows (the
         # economy /daily pattern) so a double-send can't double-consume or
         # race the refund-on-failure path.
-        self._locks: dict[tuple[int, int], asyncio.Lock] = {}
+        self._locks = h.KeyedLocks()
 
-    def _lock(self, guild_id: int, user_id: int) -> asyncio.Lock:
-        key = (guild_id, user_id)
-        lock = self._locks.get(key)
-        if lock is None:
-            lock = asyncio.Lock()
-            self._locks[key] = lock
-        return lock
+    def _lock(self, guild_id: int, user_id: int):
+        # Returns an async context manager; existing `async with self._lock(...)`
+        # call sites are unchanged. KeyedLocks refcounts holder + waiters and
+        # drops an entry when the last interested task releases, so the map no
+        # longer grows for the lifetime of the process.
+        return self._locks.hold((guild_id, user_id))
 
     def _fmt_inputs(self, recipe: RecipeDef, qty: int = 1) -> str:
         parts = [

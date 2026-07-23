@@ -8,6 +8,8 @@ deterministic under test — the same resolve_gamble pattern fishing uses.
 import random
 from collections import Counter
 
+from utils.helpers import weighted_pick
+
 from .constants import (
     BLACKJACK_NATURAL_PAYOUT,
     BLACKJACK_PAYOUT,
@@ -97,12 +99,7 @@ def resolve_dice(
 # ── /casino slots ────────────────────────────────────────────────────────────────
 def pick_symbol(roll: float) -> str:
     """Map a roll in [0, 1) onto a reel symbol via the weighted table."""
-    acc = 0.0
-    for symbol, weight in SLOT_SYMBOLS:
-        acc += weight
-        if roll < acc:
-            return symbol
-    return SLOT_SYMBOLS[-1][0]
+    return weighted_pick(SLOT_SYMBOLS, roll)
 
 
 def resolve_slots(bet: int, rolls: tuple[float, float, float]) -> dict:

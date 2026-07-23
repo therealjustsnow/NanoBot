@@ -6,6 +6,8 @@ randomness and tests stay deterministic (the resolve_gamble pattern used
 throughout the economy/fishing cogs).
 """
 
+from utils.helpers import weighted_pick
+
 from .constants import (
     CAREER_LADDER,
     EXPLORE_OUTCOMES,
@@ -109,13 +111,7 @@ def roll_cave_in(roll: float, chance: float = MINE_CAVE_IN_CHANCE) -> bool:
 
 def pick_ore(rarity_roll: float, luck: float = 0.0) -> str:
     """Map a roll in [0, 1) onto the luck-adjusted ore table."""
-    acc = 0.0
-    odds = mine_odds(luck)
-    for key, p in odds:
-        acc += p
-        if rarity_roll < acc:
-            return key
-    return odds[-1][0]
+    return weighted_pick(mine_odds(luck), rarity_roll)
 
 
 def roll_mine_treasure_key(
@@ -142,12 +138,7 @@ def next_pickaxe(level: int) -> dict | None:
 # ══════════════════════════════════════════════════════════════════════════════
 def pick_hunt_catch(roll: float) -> str:
     """Map a roll in [0, 1) onto HUNT_ODDS."""
-    acc = 0.0
-    for key, p in HUNT_ODDS:
-        acc += p
-        if roll < acc:
-            return key
-    return HUNT_ODDS[-1][0]
+    return weighted_pick(HUNT_ODDS, roll)
 
 
 def roll_hunt_injury(roll: float, chance: float = HUNT_INJURY_CHANCE) -> bool:
@@ -168,12 +159,7 @@ def roll_hunt_padlock(roll: float, chance: float = HUNT_PADLOCK_CHANCE) -> bool:
 # ══════════════════════════════════════════════════════════════════════════════
 def pick_explore_outcome(roll: float) -> str:
     """Map a roll in [0, 1) onto EXPLORE_OUTCOMES."""
-    acc = 0.0
-    for key, p in EXPLORE_OUTCOMES:
-        acc += p
-        if roll < acc:
-            return key
-    return EXPLORE_OUTCOMES[-1][0]
+    return weighted_pick(EXPLORE_OUTCOMES, roll)
 
 
 def roll_coin_amount(roll: float, lo: int, hi: int) -> int:

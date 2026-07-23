@@ -86,9 +86,8 @@ class Economy(commands.Cog):
         self.bot = bot
         # Per-(guild, user) locks serialize the read-check-write in /daily so two
         # concurrent invocations can't both pass the cooldown check and
-        # double-claim. Created lazily; entries are tiny and bounded by the
-        # active user set.
-        self._daily_locks: dict[tuple[int, int], asyncio.Lock] = {}
+        # double-claim. Entries free themselves once idle (KeyedLocks).
+        self._daily_locks = h.KeyedLocks()
         # Open /raid boards + pending /squad confirms, keyed by id: the live view
         # + its expiry timer. Persisted in SQLite (economy_raids/economy_squads)
         # and restored on startup so a restart doesn't orphan the buttons ("This
@@ -113,13 +112,11 @@ class Economy(commands.Cog):
         self._raid_tasks.clear()
         self._squad_tasks.clear()
 
-    def _daily_lock(self, guild_id: int, user_id: int) -> asyncio.Lock:
-        key = (guild_id, user_id)
-        lock = self._daily_locks.get(key)
-        if lock is None:
-            lock = asyncio.Lock()
-            self._daily_locks[key] = lock
-        return lock
+    def _daily_lock(self, guild_id: int, user_id: int):
+        # Returns an async context manager; existing `async with` call sites
+        # are unchanged. KeyedLocks refcounts holder + waiters and drops an
+        # entry when the last interested task releases.
+        return self._daily_locks.hold((guild_id, user_id))
 
     async def _cfg(self, guild_id: int) -> dict:
         return await db.get_econ_config(guild_id)

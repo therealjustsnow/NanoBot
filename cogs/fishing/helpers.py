@@ -6,6 +6,8 @@ randomness and tests stay deterministic (the resolve_gamble pattern).
 
 import random
 
+from utils.helpers import weighted_pick
+
 from .constants import (
     EVENT_POOL,
     FISH,
@@ -60,13 +62,7 @@ def rarity_odds(luck: float = 0.0) -> list[tuple[str, float]]:
 
 def pick_rarity(roll: float, luck: float = 0.0) -> str:
     """Map a roll in [0, 1) onto the effective rarity table."""
-    acc = 0.0
-    odds = rarity_odds(luck)
-    for rarity, p in odds:
-        acc += p
-        if roll < acc:
-            return rarity
-    return odds[-1][0]
+    return weighted_pick(rarity_odds(luck), roll)
 
 
 def pick_fish(rarity: str, roll: float) -> str:

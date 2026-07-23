@@ -42,7 +42,6 @@ Commands
   /fish config                → show settings              (Manage Server)
 """
 
-import asyncio
 import logging
 import random
 import time
@@ -105,20 +104,17 @@ class Fishing(commands.Cog):
         # economy /daily pattern) so a double-send can't sell the same fish
         # twice or buy the same rod twice. Cast needs no lock — its cooldown
         # claim is a single atomic upsert in the DB layer.
-        self._locks: dict[tuple[int, int], asyncio.Lock] = {}
+        self._locks = h.KeyedLocks()
 
-    def _lock(self, guild_id: int, user_id: int) -> asyncio.Lock:
-        key = (guild_id, user_id)
-        lock = self._locks.get(key)
-        if lock is None:
-            lock = asyncio.Lock()
-            self._locks[key] = lock
-        return lock
+    def _lock(self, guild_id: int, user_id: int):
+        # Returns an async context manager; existing `async with self._lock(...)`
+        # call sites are unchanged. KeyedLocks refcounts holder + waiters and
+        # drops an entry when the last interested task releases, so the map no
+        # longer grows for the lifetime of the process.
+        return self._locks.hold((guild_id, user_id))
 
     def _money(self, econ: dict, amount: int) -> str:
-        name = econ["currency_name"]
-        label = name if abs(amount) == 1 else f"{name}s"
-        return f"{econ['currency_emoji']} **{amount:,}** {label}"
+        return h.fmt_coins(amount, econ["currency_name"], econ["currency_emoji"])
 
     # ══════════════════════════════════════════════════════════════════════════
     #  /fish  group
