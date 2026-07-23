@@ -413,9 +413,7 @@ class Admin(ConfigMixin, commands.Cog):
         dev = "--dev" in flags.split()
         req_file = "requirements.dev.txt" if dev else "requirements.txt"
 
-        log.warning(
-            f"Upgrade initiated by {h.user_log(ctx.author)} (deps: {req_file})"
-        )
+        log.warning(f"Upgrade initiated by {h.user_log(ctx.author)} (deps: {req_file})")
 
         # ── Step 1: git pull ───────────────────────────────────────────────────
         try:
