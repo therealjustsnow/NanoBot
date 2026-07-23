@@ -38,6 +38,8 @@ _DOMAIN_ORDER = (
     "leveling",
     "economy",
     "items",
+    "casino",
+    "activities",
     "fishing",
     "gatekeeper",
     "birthday",
