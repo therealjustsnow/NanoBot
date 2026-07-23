@@ -7,6 +7,11 @@ import math
 import pytest
 
 from cogs.casino import (
+    CHALLENGE_COUNT,
+    CHALLENGE_POOL,
+    CHALLENGE_REWARD_MAX,
+    CHALLENGE_REWARD_MIN,
+    CHALLENGE_TARGET_RANGE,
     PAIR_PAYOUTS,
     SLOT_SYMBOLS,
     STREAK_BONUS_CAP,
@@ -14,7 +19,11 @@ from cogs.casino import (
     TRIPLE_PAYOUTS,
     apply_streak_bonus,
     card_label,
+    challenge_label,
+    challenge_reward,
+    challenge_short_label,
     dealer_should_hit,
+    generate_challenges,
     hand_value,
     is_blackjack,
     new_shoe,
@@ -291,3 +300,50 @@ def test_settle_blackjack_lower_total_loses():
 def test_settle_blackjack_equal_totals_push():
     result = settle_blackjack(100, [("10", "♠"), ("8", "♥")], [("10", "♣"), ("8", "♠")])
     assert result == {"outcome": "push", "payout": 100}
+
+
+# ── Daily challenges ─────────────────────────────────────────────────────────────
+def test_challenge_reward_flat_kinds_within_band():
+    for key in ("win_games", "play_games", "big_payout"):
+        lo, hi = CHALLENGE_TARGET_RANGE[key]
+        for target in (lo, (lo + hi) // 2, hi):
+            reward = challenge_reward(key, target)
+            assert CHALLENGE_REWARD_MIN <= reward <= CHALLENGE_REWARD_MAX
+
+
+def test_challenge_reward_wager_scales_with_target_and_is_clamped():
+    lo, hi = CHALLENGE_TARGET_RANGE["wager_coins"]
+    low_reward = challenge_reward("wager_coins", lo)
+    high_reward = challenge_reward("wager_coins", hi)
+    assert CHALLENGE_REWARD_MIN <= low_reward <= high_reward <= CHALLENGE_REWARD_MAX
+
+
+def test_challenge_label_and_short_label_cover_every_pool_key():
+    for key in CHALLENGE_POOL:
+        assert challenge_label(key, 5) != "Unknown challenge"
+        assert challenge_short_label(key) != "progress"
+
+
+def test_generate_challenges_picks_distinct_keys_within_range():
+    challenges = generate_challenges(1, 2, 100)
+    assert len(challenges) == CHALLENGE_COUNT
+    keys = [c["chal_key"] for c in challenges]
+    assert len(set(keys)) == len(keys)  # no duplicate challenge kind in one day
+    for chal in challenges:
+        lo, hi = CHALLENGE_TARGET_RANGE[chal["chal_key"]]
+        assert lo <= chal["target"] <= hi
+        assert CHALLENGE_REWARD_MIN <= chal["reward"] <= CHALLENGE_REWARD_MAX
+        assert chal["label"]
+
+
+def test_generate_challenges_is_deterministic_per_seed():
+    a = generate_challenges(111, 222, 42)
+    b = generate_challenges(111, 222, 42)
+    assert a == b
+
+
+def test_generate_challenges_varies_by_day_or_user():
+    a = generate_challenges(111, 222, 42)
+    b = generate_challenges(111, 222, 43)
+    c = generate_challenges(111, 333, 42)
+    assert a != b or a != c

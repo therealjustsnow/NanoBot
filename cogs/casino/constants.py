@@ -77,9 +77,15 @@ JACKPOT_FEED_RATE = 0.20
 
 # ── /casino blackjack ────────────────────────────────────────────────────────────
 BLACKJACK_DECKS = 4
-BLACKJACK_TIMEOUT = 90  # seconds a Hit/Stand view waits before auto-standing
 BLACKJACK_PAYOUT = 2.0  # regular win: total return
 BLACKJACK_NATURAL_PAYOUT = 2.5  # blackjack (3:2): total return
+
+# An open hand (bet already debited) is persisted in casino_blackjack so a
+# restart can resume or auto-settle it instead of orphaning the bet. BJ_TIMEOUT
+# is how long a hand can sit with no Hit/Stand before a cog-owned timer auto-
+# stands it (dealer plays out, payout settles, message updated if reachable) —
+# the same "persist + cog-owned expiry timer" pattern as economy's /raid.
+BJ_TIMEOUT = 600  # 10 minutes
 
 RANKS: tuple[str, ...] = (
     "2",
@@ -97,3 +103,51 @@ RANKS: tuple[str, ...] = (
     "A",
 )
 SUITS: tuple[str, ...] = ("♠", "♥", "♦", "♣")
+
+# ── Daily casino challenges ───────────────────────────────────────────────────────
+# Two challenges/day per member (deterministic per (guild, user, UTC day) — see
+# helpers.generate_challenges, same seeded-Random pattern as fishing's daily
+# quest), auto-claimed the instant progress reaches target.
+#
+# Reward-sizing goal: a completed challenge shouldn't, on average, hand back
+# more coins than the house already expects to keep from the wagering the
+# challenge required — the reward rides on top of house-edge revenue instead
+# of minting new coins. The per-game edges documented above run ~2.7%-8%;
+# CHALLENGE_EDGE_ASSUMPTION deliberately uses a low-end figure so the derived
+# reward undercounts (never overstates) the real expected house take.
+CHALLENGE_EDGE_ASSUMPTION = 0.05
+CHALLENGE_COUNT = 2  # challenges generated/shown per member per day
+CHALLENGE_REWARD_MIN = 150
+CHALLENGE_REWARD_MAX = 300
+
+CHALLENGE_POOL = ("win_games", "play_games", "wager_coins", "big_payout")
+
+# (low, high) inclusive target range per challenge kind.
+CHALLENGE_TARGET_RANGE = {
+    "win_games": (3, 6),  # win this many games today (any game)
+    "play_games": (8, 14),  # play this many games today (any outcome)
+    "wager_coins": (3000, 6000),  # wager this many coins total today
+    "big_payout": (500, 1200),  # land one payout this big in a single game
+}
+
+# Flat reward for challenge kinds whose target isn't itself a coin amount, so
+# there's nothing sensible to scale the reward against — kept modest and
+# within the CHALLENGE_REWARD_MIN/MAX band. `wager_coins` instead computes
+# reward = target * CHALLENGE_EDGE_ASSUMPTION (clamped to the same band) —
+# see helpers.challenge_reward — tying it directly to (and below) the house's
+# expected take on the wagering that challenge demanded.
+CHALLENGE_FLAT_REWARD = {
+    "win_games": 150,
+    "play_games": 150,
+    "big_payout": 250,
+}
+
+# Compact noun used in the one-line game-result footer hint, e.g.
+# "Challenge: 2/3 wins". The full sentence (used by /casino challenge) comes
+# from helpers.challenge_label instead.
+CHALLENGE_SHORT_LABEL = {
+    "win_games": "wins",
+    "play_games": "games",
+    "wager_coins": "coins wagered",
+    "big_payout": "big payout",
+}

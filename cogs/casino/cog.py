@@ -1,7 +1,7 @@
 """
 cogs/casino/cog.py
 Casino minigames — a NanoCoin economy sink/faucet with a shared progressive
-jackpot.
+jackpot and a pair of daily challenges.
 
 Five bet-and-resolve games (flip, dice, slots, roulette, blackjack) all debit
 the bet up front via the atomic economy API, resolve the outcome from an
@@ -10,6 +10,18 @@ pure helpers in helpers.py, then credit any payout. A 3+ consecutive win
 streak adds a small payout bonus (capped at +25%); losing resets it. 20% of
 every net loss a player takes feeds a per-guild progressive jackpot, which a
 triple-7️⃣ slots spin claims outright.
+
+/casino blackjack persists its open hand (bet already debited) in SQLite the
+moment it's dealt, updates it on every Hit, and deletes it the instant it's
+settled — so a restart mid-hand resumes exactly where it left off (or, if the
+message is gone, a cog-owned timer auto-stands it) instead of silently losing
+the bet. The Hit/Stand view is persistent with stable per-hand custom_ids;
+settlement claims the row atomically first so a button press racing the
+expiry timer (or a restart-restored expiry) can never pay out twice.
+
+Two deterministic daily challenges per member (win/play N games, wager N
+coins, or land a big payout) auto-claim a modest coin reward the moment
+they're completed — see constants.py for the reward-vs-house-edge sizing.
 
 Slash command budget: one group (/casino …) — subcommands cost no extra
 top-level slots.
@@ -22,9 +34,10 @@ Commands
   /casino dice <bet>               → 2d6 vs the dealer, higher wins, pays 2.1x
   /casino slots <bet>              → 3-reel slots, triple 7️⃣ also wins the jackpot
   /casino roulette <bet> <space>   → European wheel: color/parity/range or a number
-  /casino blackjack <bet>          → interactive Hit/Stand vs the dealer
+  /casino blackjack <bet>          → interactive Hit/Stand vs the dealer, restart-safe
   /casino jackpot                  → see the progressive jackpot pool
-  /casino stats [member]           → games, wagered, won, net, biggest win, streak
+  /casino challenge                → today's 2 daily challenges + your progress
+  /casino stats [member]           → games, wins, wagered, net, biggest win, streak
   /casino top [page]               → leaderboard by net winnings
   /casino limit <min> <max>        → set bet bounds              (Manage Server)
   /casino toggle                   → enable/disable casino games (Manage Server)
@@ -34,6 +47,7 @@ Commands
 import asyncio
 import logging
 import random
+import time
 from typing import Optional
 
 import discord
@@ -43,9 +57,17 @@ from discord.ext import commands
 from utils import db
 from utils import helpers as h
 
-from .constants import BLACKJACK_DECKS, JACKPOT_FEED_RATE, SLOT_JACKPOT_SYMBOL
+from .constants import (
+    BJ_TIMEOUT,
+    BLACKJACK_DECKS,
+    JACKPOT_FEED_RATE,
+    SLOT_JACKPOT_SYMBOL,
+)
 from .helpers import (
     apply_streak_bonus,
+    challenge_short_label,
+    dealer_should_hit,
+    generate_challenges,
     is_blackjack,
     new_shoe,
     parse_roulette_space,
@@ -70,6 +92,26 @@ class Casino(commands.Cog):
         # a double-send can't be charged twice or corrupt the win-streak read
         # (the /daily / fishing pattern).
         self._locks: dict[tuple[int, int], asyncio.Lock] = {}
+        # Open /casino blackjack hands, keyed by hand_id: the live view + its
+        # BJ_TIMEOUT expiry timer. Persisted in SQLite (casino_blackjack) and
+        # restored on startup (on_restore_schedules) so a restart never
+        # orphans the buttons or loses the already-debited bet — the same
+        # persisted-view + cog-owned-timer pattern as economy's /raid.
+        self._bj_hands: dict[int, BlackjackView] = {}
+        self._bj_tasks: dict[int, asyncio.Task] = {}
+
+    async def cog_load(self):
+        # restore_schedules only fires from on_ready, so a hot-reload after
+        # the bot is already up would leave any persisted hand un-rearmed.
+        # Re-run the restore here when the gateway is already ready (initial
+        # startup still waits for the on_ready dispatch).
+        if self.bot.is_ready():
+            self.bot.loop.create_task(self.on_restore_schedules())
+
+    def cog_unload(self):
+        for task in self._bj_tasks.values():
+            task.cancel()
+        self._bj_tasks.clear()
 
     def _lock(self, guild_id: int, user_id: int) -> asyncio.Lock:
         key = (guild_id, user_id)
@@ -93,9 +135,10 @@ class Casino(commands.Cog):
 
     async def _settle_common(
         self, guild_id: int, user_id: int, bet: int, streak: int, raw_payout: int
-    ) -> tuple[int, dict]:
+    ) -> tuple[int, dict, Optional[str]]:
         """Apply the streak bonus (on a true win), feed the jackpot on a net
-        loss, record the game, and return (final_payout, updated_stats).
+        loss, record the game, bump today's challenges, and return
+        (final_payout, updated_stats, challenge_footer_hint).
 
         Caller must already hold `self._lock(guild_id, user_id)` and must have
         already debited `bet`.
@@ -110,7 +153,158 @@ class Casino(commands.Cog):
         if net < 0:
             await db.add_to_jackpot(guild_id, round(-net * JACKPOT_FEED_RATE))
         stats = await db.record_casino_game(guild_id, user_id, bet, final_payout)
-        return final_payout, stats
+        hint = await self._bump_challenges(guild_id, user_id, bet, final_payout)
+        return final_payout, stats, hint
+
+    def _set_result_footer(
+        self, embed: discord.Embed, stats: dict, hint: Optional[str]
+    ) -> None:
+        """Append the win-streak line and/or a challenge hint to a result embed."""
+        parts = []
+        if stats["streak"] >= 3:
+            parts.append(f"🔥 {stats['streak']}-win streak!")
+        if hint:
+            parts.append(hint)
+        if parts:
+            embed.set_footer(text=" · ".join(parts))
+
+    # ── Daily challenges ─────────────────────────────────────────────────────
+    async def _bump_challenges(
+        self, guild_id: int, user_id: int, bet: int, payout: int
+    ) -> Optional[str]:
+        """Advance today's 2 daily challenges for one settled game and
+        auto-claim any that just completed.
+
+        Returns a short footer hint — a completion announcement takes
+        priority, else the first still-open challenge's progress — or None if
+        neither challenge is relevant to mention right now.
+        """
+        won = payout > bet
+        today = int(time.time() // 86400)
+        challenges = generate_challenges(guild_id, user_id, today)
+        completed_notes: list[str] = []
+        progress_notes: list[str] = []
+        for chal in challenges:
+            key, target, reward, label = (
+                chal["chal_key"],
+                chal["target"],
+                chal["reward"],
+                chal["label"],
+            )
+            current = await db.get_challenge_progress(guild_id, user_id, today, key)
+            if current["claimed"]:
+                continue
+            amount, mode = 0, "add"
+            if key == "win_games":
+                amount = 1 if won else 0
+            elif key == "play_games":
+                amount = 1
+            elif key == "wager_coins":
+                amount = bet
+            elif key == "big_payout":
+                amount, mode = payout, "max"
+            if mode == "add" and amount <= 0:
+                continue
+            row = await db.bump_challenge_progress(
+                guild_id, user_id, today, key, target, amount, mode=mode
+            )
+            if row["progress"] >= target and not row["claimed"]:
+                if await db.try_claim_challenge(guild_id, user_id, today, key):
+                    await db.add_coins(guild_id, user_id, reward)
+                    econ = await db.get_econ_config(guild_id)
+                    completed_notes.append(
+                        f"🏆 Challenge done — {label}! +{self._money(econ, reward)}"
+                    )
+                    continue
+            progress_notes.append(
+                f"Challenge: {min(row['progress'], target)}/{target} "
+                f"{challenge_short_label(key)}"
+            )
+        if completed_notes:
+            return " ".join(completed_notes)
+        return progress_notes[0] if progress_notes else None
+
+    # ── Blackjack hand persistence / lifecycle ──────────────────────────────
+    def _arm_blackjack(self, view: BlackjackView) -> None:
+        """Track a live blackjack hand and schedule its BJ_TIMEOUT auto-stand."""
+        self._bj_hands[view.hand_id] = view
+        delay = max(0.0, view.created_at + BJ_TIMEOUT - time.time())
+        self._bj_tasks[view.hand_id] = asyncio.create_task(self._bj_expiry(view, delay))
+
+    async def _bj_expiry(self, view: BlackjackView, delay: float) -> None:
+        try:
+            await asyncio.sleep(delay)
+        except asyncio.CancelledError:
+            return
+        await view.expire()
+
+    async def _end_blackjack(self, hand_id: int) -> None:
+        """Drop a settled hand: cancel its timer and stop tracking it.
+
+        The persisted row itself is removed by db.claim_blackjack_hand at
+        settle time — this only tidies up in-memory bookkeeping.
+        """
+        task = self._bj_tasks.pop(hand_id, None)
+        if task is not None and task is not asyncio.current_task():
+            task.cancel()
+        self._bj_hands.pop(hand_id, None)
+
+    @commands.Cog.listener()
+    async def on_restore_schedules(self):
+        """Rebuild open blackjack hands after a restart."""
+        for row in await db.get_open_blackjack_hands():
+            hand_id = row["hand_id"]
+            if hand_id in self._bj_hands:
+                # on_ready re-fired (gateway re-identify) — this hand is
+                # already live; rebuilding it would leak the old timer.
+                continue
+            if row["message_id"] is None:
+                # Crash beat the message-id write — nothing to bind buttons
+                # to. Settle it anyway so the debited bet isn't lost forever.
+                await self._settle_orphaned_hand(row)
+                continue
+            econ = await db.get_econ_config(row["guild_id"])
+            view = BlackjackView(
+                self,
+                hand_id=hand_id,
+                guild_id=row["guild_id"],
+                user_id=row["user_id"],
+                bet=row["bet"],
+                shoe=row["shoe"],
+                player_cards=row["player"],
+                dealer_cards=row["dealer"],
+                econ=econ,
+                streak=row["streak"],
+                created_at=row["created_at"],
+            )
+            self.bot.add_view(view, message_id=row["message_id"])
+            channel = self.bot.get_channel(row["channel_id"])
+            if channel is not None:
+                view.message = channel.get_partial_message(row["message_id"])
+            self._arm_blackjack(view)
+
+    async def _settle_orphaned_hand(self, row: dict) -> None:
+        """Settle a persisted hand that never got a message_id (crash between
+        the row insert and the reply being sent) — there's nothing to edit,
+        but the bet must still be resolved rather than left debited forever."""
+        claimed = await db.claim_blackjack_hand(row["hand_id"])
+        if claimed is None:
+            return
+        shoe, player_cards, dealer_cards = (
+            claimed["shoe"],
+            claimed["player"],
+            claimed["dealer"],
+        )
+        while dealer_should_hit(dealer_cards):
+            dealer_cards.append(shoe.pop())
+        await self.settle_blackjack_hand(
+            claimed["guild_id"],
+            claimed["user_id"],
+            claimed["bet"],
+            claimed["streak"],
+            player_cards,
+            dealer_cards,
+        )
 
     # ══════════════════════════════════════════════════════════════════════════
     #  /casino  group
@@ -125,9 +319,10 @@ class Casino(commands.Cog):
             "short": "Bet coins on flip, dice, slots, roulette, and blackjack",
             "usage": "casino [subcommand]",
             "desc": "Bet NanoCoins across five games, chase a shared progressive "
-            "jackpot (triple 7️⃣ on /casino slots claims it), and build a "
-            "win streak for a payout bonus. Admins can toggle the casino "
-            "and set bet limits.",
+            "jackpot (triple 7️⃣ on /casino slots claims it), build a win "
+            "streak for a payout bonus, and complete 2 daily challenges "
+            "(/casino challenge) for a coin reward. Admins can toggle the "
+            "casino and set bet limits.",
             "args": [],
             "perms": "Admin subcommands require Manage Server",
             "example": "{prefix}casino\n{prefix}casino flip 50 heads\n"
@@ -148,7 +343,8 @@ class Casino(commands.Cog):
             "🎲 **dice** <bet> — 2d6 vs the dealer, pays 2.1x\n"
             "🎰 **slots** <bet> — 3 reels, triple 7️⃣ wins the jackpot\n"
             "🎡 **roulette** <bet> <space> — color/parity/range 2x, number 35x\n"
-            "🃏 **blackjack** <bet> — Hit/Stand vs the dealer, blackjack pays 3:2"
+            "🃏 **blackjack** <bet> — Hit/Stand vs the dealer, blackjack pays 3:2\n"
+            "🎯 **challenge** — today's 2 daily challenges + your progress"
         )
         embed = h.embed("🎰 Casino", desc, h.BLUE)
         embed.add_field(
@@ -206,7 +402,7 @@ class Casino(commands.Cog):
                 )
             stats = await db.get_casino_stats(ctx.guild.id, ctx.author.id)
             outcome = resolve_flip(bet, choice, random.random())
-            final_payout, new_stats = await self._settle_common(
+            final_payout, new_stats, chal_hint = await self._settle_common(
                 ctx.guild.id, ctx.author.id, bet, stats["streak"], outcome["payout"]
             )
 
@@ -220,8 +416,7 @@ class Casino(commands.Cog):
             desc = f"The coin landed on **{outcome['result']}**. You lost {self._money(econ, bet)}."
             title, color = "🪙 You Lost", h.RED
         embed = h.embed(title, desc, color)
-        if new_stats["streak"] >= 3:
-            embed.set_footer(text=f"🔥 {new_stats['streak']}-win streak!")
+        self._set_result_footer(embed, new_stats, chal_hint)
         await ctx.reply(embed=embed)
 
     # ── /casino dice ─────────────────────────────────────────────────────────
@@ -254,7 +449,7 @@ class Casino(commands.Cog):
                 (random.random(), random.random()),
                 (random.random(), random.random()),
             )
-            final_payout, new_stats = await self._settle_common(
+            final_payout, new_stats, chal_hint = await self._settle_common(
                 ctx.guild.id, ctx.author.id, bet, stats["streak"], outcome["payout"]
             )
 
@@ -274,8 +469,7 @@ class Casino(commands.Cog):
             desc = f"{rolls_desc}\n\nYou lost {self._money(econ, bet)}."
             title, color = "🎲 You Lost", h.RED
         embed = h.embed(title, desc, color)
-        if new_stats["streak"] >= 3:
-            embed.set_footer(text=f"🔥 {new_stats['streak']}-win streak!")
+        self._set_result_footer(embed, new_stats, chal_hint)
         await ctx.reply(embed=embed)
 
     # ── /casino slots ────────────────────────────────────────────────────────
@@ -307,7 +501,7 @@ class Casino(commands.Cog):
             outcome = resolve_slots(
                 bet, (random.random(), random.random(), random.random())
             )
-            final_payout, new_stats = await self._settle_common(
+            final_payout, new_stats, chal_hint = await self._settle_common(
                 ctx.guild.id, ctx.author.id, bet, stats["streak"], outcome["payout"]
             )
             if outcome["jackpot_win"]:
@@ -335,8 +529,7 @@ class Casino(commands.Cog):
                 f"{self._money(econ, jackpot_award)}!",
                 inline=False,
             )
-        if new_stats["streak"] >= 3:
-            embed.set_footer(text=f"🔥 {new_stats['streak']}-win streak!")
+        self._set_result_footer(embed, new_stats, chal_hint)
         await ctx.reply(embed=embed)
 
     # ── /casino roulette ─────────────────────────────────────────────────────
@@ -378,7 +571,7 @@ class Casino(commands.Cog):
             stats = await db.get_casino_stats(ctx.guild.id, ctx.author.id)
             number = spin_number(random.random())
             outcome = resolve_roulette(bet, parsed_space, number)
-            final_payout, new_stats = await self._settle_common(
+            final_payout, new_stats, chal_hint = await self._settle_common(
                 ctx.guild.id, ctx.author.id, bet, stats["streak"], outcome["payout"]
             )
 
@@ -391,8 +584,7 @@ class Casino(commands.Cog):
             desc += f"You lost {self._money(econ, bet)}."
             title, color = "🎡 You Lost", h.RED
         embed = h.embed(title, desc, color)
-        if new_stats["streak"] >= 3:
-            embed.set_footer(text=f"🔥 {new_stats['streak']}-win streak!")
+        self._set_result_footer(embed, new_stats, chal_hint)
         await ctx.reply(embed=embed)
 
     # ── /casino blackjack ────────────────────────────────────────────────────
@@ -429,7 +621,8 @@ class Casino(commands.Cog):
             if is_blackjack(player_cards) or is_blackjack(dealer_cards):
                 # Already holding the lock from the debit above — settle
                 # in-place rather than recursing into settle_blackjack_hand
-                # (which acquires the same non-reentrant lock).
+                # (which acquires the same non-reentrant lock). Resolves in
+                # one round trip, so there's no open hand to persist.
                 result = await self._settle_blackjack_locked(
                     ctx.guild.id, ctx.author.id, bet, streak, player_cards, dealer_cards
                 )
@@ -443,8 +636,25 @@ class Casino(commands.Cog):
                 )
                 return await ctx.reply(embed=embed)
 
+            # Persist the open hand now — bet already debited — before ever
+            # showing the buttons, so a restart mid-hand can resume or
+            # auto-settle it instead of orphaning the bet.
+            created_at = time.time()
+            hand_id = await db.create_blackjack_hand(
+                ctx.guild.id,
+                ctx.channel.id,
+                ctx.author.id,
+                bet,
+                streak,
+                shoe,
+                player_cards,
+                dealer_cards,
+                created_at,
+            )
+
         view = BlackjackView(
             self,
+            hand_id=hand_id,
             guild_id=ctx.guild.id,
             user_id=ctx.author.id,
             bet=bet,
@@ -453,9 +663,12 @@ class Casino(commands.Cog):
             dealer_cards=dealer_cards,
             econ=econ,
             streak=streak,
+            created_at=created_at,
         )
         msg = await ctx.reply(embed=view.render(), view=view)
         view.message = msg
+        await db.set_blackjack_message(hand_id, msg.id)
+        self._arm_blackjack(view)
 
     async def settle_blackjack_hand(
         self,
@@ -492,7 +705,7 @@ class Casino(commands.Cog):
         self._lock(guild_id, user_id)."""
         outcome = settle_blackjack(bet, player_cards, dealer_cards)
         econ = await db.get_econ_config(guild_id)
-        final_payout, new_stats = await self._settle_common(
+        final_payout, new_stats, chal_hint = await self._settle_common(
             guild_id, user_id, bet, streak, outcome["payout"]
         )
 
@@ -522,6 +735,8 @@ class Casino(commands.Cog):
         title, color, footer = labels[outcome["outcome"]]
         if new_stats["streak"] >= 3:
             footer += f" 🔥 {new_stats['streak']}-win streak!"
+        if chal_hint:
+            footer += f" · {chal_hint}"
         return {
             "outcome": outcome["outcome"],
             "payout": final_payout,
@@ -544,6 +759,40 @@ class Casino(commands.Cog):
         )
         await ctx.reply(embed=embed)
 
+    # ── /casino challenge ────────────────────────────────────────────────────
+    @casino.command(
+        name="challenge", description="See today's daily challenges and your progress."
+    )
+    @commands.cooldown(1, 5, commands.BucketType.user)
+    async def casino_challenge(self, ctx: commands.Context):
+        econ = await db.get_econ_config(ctx.guild.id)
+        today = int(time.time() // 86400)
+        challenges = generate_challenges(ctx.guild.id, ctx.author.id, today)
+        embed = h.embed(
+            "🎯 Daily Casino Challenges",
+            "Play flip, dice, slots, roulette, or blackjack to make progress. "
+            "Rewards pay out automatically the moment you complete one.",
+            h.BLUE,
+        )
+        for chal in challenges:
+            row = await db.get_challenge_progress(
+                ctx.guild.id, ctx.author.id, today, chal["chal_key"]
+            )
+            progress = min(row["progress"], chal["target"])
+            if row["claimed"]:
+                status = "✅ Claimed"
+            elif progress >= chal["target"]:
+                status = "🎉 Complete!"
+            else:
+                status = f"{progress:,}/{chal['target']:,}"
+            embed.add_field(
+                name=chal["label"],
+                value=f"{status} · reward {self._money(econ, chal['reward'])}",
+                inline=False,
+            )
+        embed.set_footer(text="Resets daily at 00:00 UTC")
+        await ctx.reply(embed=embed)
+
     # ── /casino stats ────────────────────────────────────────────────────────
     @casino.command(name="stats", description="Casino stats for you or another member.")
     @app_commands.describe(member="Whose stats to show (defaults to you)")
@@ -564,6 +813,7 @@ class Casino(commands.Cog):
         embed.add_field(
             name="Games played", value=f"**{stats['games']:,}**", inline=True
         )
+        embed.add_field(name="Wins", value=f"**{stats['wins']:,}**", inline=True)
         embed.add_field(
             name="Wagered", value=self._money(econ, stats["wagered"]), inline=True
         )

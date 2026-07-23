@@ -5,11 +5,20 @@ pre-dealt card list) so the cog owns all randomness and these stay
 deterministic under test — the same resolve_gamble pattern fishing uses.
 """
 
+import random
 from collections import Counter
 
 from .constants import (
     BLACKJACK_NATURAL_PAYOUT,
     BLACKJACK_PAYOUT,
+    CHALLENGE_COUNT,
+    CHALLENGE_EDGE_ASSUMPTION,
+    CHALLENGE_FLAT_REWARD,
+    CHALLENGE_POOL,
+    CHALLENGE_REWARD_MAX,
+    CHALLENGE_REWARD_MIN,
+    CHALLENGE_SHORT_LABEL,
+    CHALLENGE_TARGET_RANGE,
     DICE_PAYOUT,
     FLIP_PAYOUT,
     PAIR_PAYOUTS,
@@ -257,3 +266,57 @@ def settle_blackjack(
     if player_total < dealer_total:
         return {"outcome": "lose", "payout": 0}
     return {"outcome": "push", "payout": bet}
+
+
+# ── Daily challenges ─────────────────────────────────────────────────────────────
+def challenge_reward(chal_key: str, target: int) -> int:
+    """Coin reward for completing one challenge (see constants.py for the
+    reward-vs-house-edge reasoning). `wager_coins` scales with its target;
+    every other kind pays a flat, modest amount."""
+    if chal_key == "wager_coins":
+        raw = round(target * CHALLENGE_EDGE_ASSUMPTION)
+        return max(CHALLENGE_REWARD_MIN, min(CHALLENGE_REWARD_MAX, raw))
+    return CHALLENGE_FLAT_REWARD.get(chal_key, CHALLENGE_REWARD_MIN)
+
+
+def challenge_label(chal_key: str, target: int) -> str:
+    """Full human-readable description of a challenge, for /casino challenge."""
+    if chal_key == "win_games":
+        return f"Win {target} games (any casino game)"
+    if chal_key == "play_games":
+        return f"Play {target} games"
+    if chal_key == "wager_coins":
+        return f"Wager {target:,} coins total"
+    if chal_key == "big_payout":
+        return f"Land a single payout of {target:,}+ coins"
+    return "Unknown challenge"
+
+
+def challenge_short_label(chal_key: str) -> str:
+    """Compact noun for the one-line footer hint, e.g. 'Challenge: 2/3 wins'."""
+    return CHALLENGE_SHORT_LABEL.get(chal_key, "progress")
+
+
+def generate_challenges(guild_id: int, user_id: int, day: int) -> list[dict]:
+    """Deterministically pick CHALLENGE_COUNT distinct daily challenges.
+
+    Seeded on (guild_id, user_id, day) — the same trio always yields the same
+    pool, so callers regenerate it on demand (the fishing generate_quest
+    pattern) instead of persisting the pick; only progress/claimed state is
+    persisted (see utils/db casino_challenges).
+    """
+    rng = random.Random(f"{int(guild_id)}:{int(user_id)}:{int(day)}:challenges")
+    keys = rng.sample(CHALLENGE_POOL, CHALLENGE_COUNT)
+    out = []
+    for key in keys:
+        lo, hi = CHALLENGE_TARGET_RANGE[key]
+        target = rng.randint(lo, hi)
+        out.append(
+            {
+                "chal_key": key,
+                "target": target,
+                "reward": challenge_reward(key, target),
+                "label": challenge_label(key, target),
+            }
+        )
+    return out
