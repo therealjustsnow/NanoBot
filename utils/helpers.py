@@ -8,6 +8,7 @@ Shared utilities:
   - user_display() for consistent user references
 """
 
+import asyncio
 import re
 from datetime import datetime, timezone
 
@@ -336,3 +337,93 @@ def user_log(user) -> str:
     @username and ID, since str(user) alone yields only the unreadable username.
     """
     return f"{user.display_name} (@{user.name}, {user.id})"
+
+
+# ── Shared economy utilities ───────────────────────────────────────────────────
+def fmt_coins(amount: int, name: str, emoji: str) -> str:
+    """Render a coin amount, e.g. '🪙 1,234 NanoCoins'.
+
+    The single source for currency formatting — cogs' _money helpers delegate
+    here (cogs/economy/helpers.py re-exports it for back-compat).
+    """
+    label = name if abs(amount) == 1 else f"{name}s"
+    return f"{emoji} **{amount:,}** {label}"
+
+
+def weighted_pick(table, roll: float):
+    """Map a roll in [0, 1) onto a cumulative-weight table [(key, weight), …].
+
+    The one implementation of the walk every drop table uses (fish rarity,
+    ore, hunt/explore outcomes, slot symbols). Weights are expected to sum to
+    ~1.0; the last key soaks up float round-off (a roll past the accumulated
+    total). Identical to the per-cog loops it replaced: strict `roll < acc`,
+    so a boundary roll falls into the *next* bucket.
+    """
+    acc = 0.0
+    for key, weight in table:
+        acc += weight
+        if roll < acc:
+            return key
+    return table[-1][0]
+
+
+class KeyedLocks:
+    """Per-key asyncio locks that free themselves when idle.
+
+    Replaces the per-cog `self._locks: dict[(guild, user), asyncio.Lock]`
+    pattern, which held every lock ever created for the process lifetime.
+    Entries are refcounted: the count covers the holder *and* every waiter, so
+    an entry is deleted only when the last interested task releases — a lock
+    can never be dropped while locked or awaited, and two tasks can never
+    hold different lock objects for the same key. Single-event-loop bot, so
+    the count mutations (between awaits) need no extra synchronization.
+
+    Usage (an async context manager, so existing `async with self._lock(g, u):`
+    call sites work unchanged when `_lock` returns `self._locks.hold((g, u))`):
+
+        async with locks.hold(key):
+            ...
+    """
+
+    def __init__(self):
+        self._entries: dict = {}  # key -> [asyncio.Lock, refcount]
+
+    def hold(self, key):
+        return _KeyedLockHold(self, key)
+
+    def __len__(self):
+        return len(self._entries)
+
+
+class _KeyedLockHold:
+    __slots__ = ("_locks", "_key", "_entry")
+
+    def __init__(self, locks: KeyedLocks, key):
+        self._locks = locks
+        self._key = key
+        self._entry = None
+
+    async def __aenter__(self):
+        entry = self._locks._entries.get(self._key)
+        if entry is None:
+            entry = self._locks._entries[self._key] = [asyncio.Lock(), 0]
+        entry[1] += 1
+        self._entry = entry
+        try:
+            await entry[0].acquire()
+        except BaseException:
+            # A cancelled acquire (asyncio.wait_for timeout, task cancellation
+            # on unload) never reaches __aexit__ — release the refcount here
+            # or the entry would be pinned forever.
+            entry[1] -= 1
+            if entry[1] == 0 and self._locks._entries.get(self._key) is entry:
+                del self._locks._entries[self._key]
+            raise
+
+    async def __aexit__(self, exc_type, exc, tb):
+        entry = self._entry
+        entry[0].release()
+        entry[1] -= 1
+        if entry[1] == 0 and self._locks._entries.get(self._key) is entry:
+            del self._locks._entries[self._key]
+        return False

@@ -26,10 +26,16 @@ def _scaled_price(base: int, daily_amount: int) -> int:
     return max(10, min(COIN_MAX, scaled))
 
 
+from utils import helpers as _h
+
+
 def fmt_coins(amount: int, name: str, emoji: str) -> str:
-    """Render a coin amount, e.g. '🪙 1,234 NanoCoins'."""
-    label = name if abs(amount) == 1 else f"{name}s"
-    return f"{emoji} **{amount:,}** {label}"
+    """Render a coin amount, e.g. '🪙 1,234 NanoCoins'.
+
+    Thin re-export kept for back-compat (tests and cog.py import it from
+    here); the single real implementation lives in utils.helpers.
+    """
+    return _h.fmt_coins(amount, name, emoji)
 
 
 def compute_daily(

@@ -645,6 +645,20 @@ async def purchase_item(guild_id: int, item_id: int, user_id: int) -> dict:
     return {"ok": True, "item": item, "new_balance": new_balance}
 
 
+async def restock_shop_item(guild_id: int, item_id: int, delta: int = 1) -> None:
+    """Atomically put reserved stock back (refund path after a failed grant).
+
+    A relative increment, never an absolute SET — a stale pre-purchase stock
+    snapshot written back absolutely would silently erase a concurrent buyer's
+    decrement and oversell a limited item.
+    """
+    await _conn().execute(
+        "UPDATE shop_items SET stock=stock+? WHERE guild_id=? AND id=? AND stock>=0",
+        (int(delta), str(guild_id), int(item_id)),
+    )
+    await _conn().commit()
+
+
 async def list_pending_purchases(
     guild_id: int, limit: int = 25, offset: int = 0
 ) -> list[dict]:
