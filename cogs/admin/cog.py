@@ -385,7 +385,7 @@ class Admin(ConfigMixin, commands.Cog):
         name="upgrade",
         aliases=["deploy", "ud"],
         help=(
-            "Full upgrade: git pull → pip install -r requirements.txt → restart.\n\n"
+            "Full upgrade: git pull → pip install -r requirements-dev.txt → restart.\n\n"
             "Use this to deploy new code and dependency changes from mobile.\n"
             "Stops at git pull failure — won't install or restart if pull fails.\n"
             "If pip fails, reports the error but restarts anyway (existing code still works).\n\n"
@@ -398,7 +398,7 @@ class Admin(ConfigMixin, commands.Cog):
 
         1. Runs `git pull` and reports the output.
         2. If pull fails, stops — no install, no restart.
-        3. Runs `pip install -r requirements.txt --quiet` in a background thread
+        3. Runs `pip install -r requirements-dev.txt --quiet` in a background thread
            (can be slow; uses asyncio.to_thread to avoid blocking the event loop).
         4. Sends a result embed showing both steps, then spawns a new process
            and closes this one — identical to !restart.
@@ -456,7 +456,7 @@ class Admin(ConfigMixin, commands.Cog):
                         "pip",
                         "install",
                         "-r",
-                        "requirements.txt",
+                        "requirements-dev.txt",
                         "--quiet",
                     ],
                     capture_output=True,
