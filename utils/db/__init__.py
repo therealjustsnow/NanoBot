@@ -40,6 +40,7 @@ _DOMAIN_ORDER = (
     "items",
     "casino",
     "activities",
+    "progression",
     "fishing",
     "gatekeeper",
     "birthday",
@@ -58,23 +59,27 @@ for _mod in _modules:
         if not _attr.startswith("__"):
             globals().setdefault(_attr, getattr(_mod, _attr))
 
-# The connection lives in a single place — _core._db. Pre-split, callers and
-# tests treated ``db._db`` as that slot (e.g. monkeypatch.setattr(db, "_db",
-# conn) to inject an in-memory DB). Route the package's ``_db`` attribute to
-# _core so that contract still holds: reads and writes both hit _core._db, which
-# is what _conn() consults. Drop the stale copy the loop above made first.
-globals().pop("_db", None)
+# Connection state lives in a single place — _core. Pre-split, callers and
+# tests treated ``db._db`` (the connection slot) and ``db._DB_PATH`` (the file
+# path init() opens) as that state (e.g. monkeypatch.setattr(db, "_db", conn)
+# to inject an in-memory DB, or monkeypatch.setattr(db, "_DB_PATH", tmp) to
+# isolate an on-disk one). Route both package attributes to _core so that
+# contract still holds: reads and writes hit _core's module globals, which are
+# what _conn()/init() consult. Drop the stale copies the loop above made first.
+_CORE_ROUTED = ("_db", "_DB_PATH")
+for _name in _CORE_ROUTED:
+    globals().pop(_name, None)
 
 
 class _DbPackage(_types.ModuleType):
     def __getattr__(self, name):
-        if name == "_db":
-            return _core._db
+        if name in _CORE_ROUTED:
+            return getattr(_core, name)
         raise AttributeError(f"module {self.__name__!r} has no attribute {name!r}")
 
     def __setattr__(self, name, value):
-        if name == "_db":
-            _core._db = value
+        if name in _CORE_ROUTED:
+            setattr(_core, name, value)
         else:
             super().__setattr__(name, value)
 

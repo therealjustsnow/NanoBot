@@ -6,14 +6,20 @@ Images sourced from nekos.best (no API key required).
 URLs cached in cache_db; scraping handled by the Fun cog's daily loop.
 Falls back to live API if cache is empty for an endpoint.
 
-Slash:  /husbando, /kitsune, /neko, /waifu  (4 top-level slots)
-Prefix: !husbando, !kitsune, !neko, !waifu
+Slash:  /anime <type>  (one top-level slot — type picks husbando/kitsune/neko/waifu)
+Prefix: !husbando, !kitsune, !neko, !waifu  (unchanged back-compat)
+
+The four image commands used to be four hybrid commands (4 top-level slash
+slots); Discord caps the bot at 100 top-level slash commands, so the slash
+side is consolidated into the single /anime command while the prefix commands
+stay flat.
 """
 
 import logging
 
 import aiohttp
 import discord
+from discord import app_commands
 from discord.ext import commands
 
 from utils import helpers as h
@@ -107,16 +113,30 @@ class Images(commands.Cog):
         else:
             await ctx_or_i.reply(embed=e)
 
-    # ── commands ──────────────────────────────────────────────────────────────
+    # ── slash: one /anime command (one top-level slot) ────────────────────────
 
-    @commands.hybrid_command(
+    @app_commands.command(
+        name="anime",
+        description="Get a random anime image (husbando/kitsune/neko/waifu).",
+    )
+    @app_commands.describe(type="Which kind of image to fetch")
+    @app_commands.choices(
+        type=[app_commands.Choice(name=k, value=k) for k in _ENDPOINTS]
+    )
+    @app_commands.checks.cooldown(1, 3)
+    async def anime(self, interaction: discord.Interaction, type: str):
+        await self._image_cmd(interaction, type)
+
+    # ── prefix commands (unchanged back-compat) ───────────────────────────────
+
+    @commands.command(
         name="husbando",
-        description="Get a random husbando image.",
         extras={
             "category": "\U0001f5bc\ufe0f Images",
             "short": "Random husbando image",
             "usage": "husbando",
-            "desc": "Fetches a random anime husbando image from nekos.best.",
+            "desc": "Fetches a random anime husbando image from nekos.best. "
+            "Slash users: /anime type:husbando.",
             "args": [],
             "perms": "None",
             "example": "{prefix}husbando",
@@ -126,14 +146,14 @@ class Images(commands.Cog):
     async def husbando(self, ctx: commands.Context):
         await self._image_cmd(ctx, "husbando")
 
-    @commands.hybrid_command(
+    @commands.command(
         name="kitsune",
-        description="Get a random kitsune image.",
         extras={
             "category": "\U0001f5bc\ufe0f Images",
             "short": "Random kitsune image",
             "usage": "kitsune",
-            "desc": "Fetches a random anime kitsune image from nekos.best.",
+            "desc": "Fetches a random anime kitsune image from nekos.best. "
+            "Slash users: /anime type:kitsune.",
             "args": [],
             "perms": "None",
             "example": "{prefix}kitsune",
@@ -143,14 +163,14 @@ class Images(commands.Cog):
     async def kitsune(self, ctx: commands.Context):
         await self._image_cmd(ctx, "kitsune")
 
-    @commands.hybrid_command(
+    @commands.command(
         name="neko",
-        description="Get a random neko image.",
         extras={
             "category": "\U0001f5bc\ufe0f Images",
             "short": "Random neko image",
             "usage": "neko",
-            "desc": "Fetches a random anime neko image from nekos.best.",
+            "desc": "Fetches a random anime neko image from nekos.best. "
+            "Slash users: /anime type:neko.",
             "args": [],
             "perms": "None",
             "example": "{prefix}neko",
@@ -160,14 +180,14 @@ class Images(commands.Cog):
     async def neko(self, ctx: commands.Context):
         await self._image_cmd(ctx, "neko")
 
-    @commands.hybrid_command(
+    @commands.command(
         name="waifu",
-        description="Get a random waifu image.",
         extras={
             "category": "\U0001f5bc\ufe0f Images",
             "short": "Random waifu image",
             "usage": "waifu",
-            "desc": "Fetches a random anime waifu image from nekos.best.",
+            "desc": "Fetches a random anime waifu image from nekos.best. "
+            "Slash users: /anime type:waifu.",
             "args": [],
             "perms": "None",
             "example": "{prefix}waifu",
