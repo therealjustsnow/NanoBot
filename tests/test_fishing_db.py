@@ -30,7 +30,7 @@ A, B = 1, 2
 # ── Config ─────────────────────────────────────────────────────────────────────
 async def test_config_defaults():
     cfg = await db.get_fishing_config(G)
-    assert cfg == {"enabled": True, "cooldown": 60}
+    assert cfg == {"enabled": True, "cooldown": 240}
 
 
 async def test_config_roundtrip_partial_update():

@@ -6,3 +6,11 @@ CHEST_COINS_MAX = 750
 
 # Cap on how many of one item can be used/sold in a single command call.
 MAX_BULK = 1000
+
+# Bulk-using effect items multiplies the granted duration/charges by qty, so
+# without a separate ceiling one command could bank a near-permanent buff
+# (e.g. 1000 lucky charms = 500 hours of luck, or a years-long rob shield).
+# A single use of an item whose base duration/uses already exceeds the cap
+# still works — the cap only limits *stacking*.
+EFFECT_MAX_DURATION = 86400  # granted seconds per use command (24h)
+EFFECT_MAX_USES = 50  # granted charges per use command

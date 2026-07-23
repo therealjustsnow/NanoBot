@@ -151,16 +151,26 @@ async def try_claim_jackpot(guild_id: int) -> int:
     A read-then-conditional-UPDATE compare-and-swap (mirrors set_rod_level):
     two simultaneous triple-7 hits can't both drain the same pot — the loser's
     UPDATE matches zero rows because the winner already changed the value.
+
+    The CAS also loses when a concurrent add_to_jackpot (any other player's
+    losing bet — no cooldown gates those) lands between the read and the
+    UPDATE, which would silently rob a legitimate winner. That's a live-lock,
+    not a correctness conflict, so retry the read-CAS a few times; each retry
+    re-reads the (grown) pot, so the winner claims the fed-up value.
     """
-    pot = (await get_casino_config(guild_id))["jackpot_pool"]
-    if pot <= 0:
-        return 0
-    cur = await _conn().execute(
-        "UPDATE casino_config SET jackpot_pool=0 WHERE guild_id=? AND jackpot_pool=?",
-        (str(guild_id), pot),
-    )
-    await _conn().commit()
-    return pot if cur.rowcount > 0 else 0
+    for _ in range(5):
+        pot = (await get_casino_config(guild_id))["jackpot_pool"]
+        if pot <= 0:
+            return 0
+        cur = await _conn().execute(
+            "UPDATE casino_config SET jackpot_pool=0 "
+            "WHERE guild_id=? AND jackpot_pool=?",
+            (str(guild_id), pot),
+        )
+        await _conn().commit()
+        if cur.rowcount > 0:
+            return pot
+    return 0
 
 
 # ── Player stats ───────────────────────────────────────────────────────────────

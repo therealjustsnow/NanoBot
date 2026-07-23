@@ -178,3 +178,18 @@ async def test_gamble_insufficient_funds(bot):
     sent = dpytest.get_message()
     assert "Error" in sent.embeds[0].title
     assert await db.get_balance(guild.id, author.id) == 10
+
+
+@pytest.mark.cogs("cogs.economy")
+async def test_pay_rejects_negative_amount(bot):
+    """Audit regression: a negative /pay must not become a reverse-transfer."""
+    guild = config().guilds[0]
+    author, other = config().members[0], config().members[1]
+    await db.set_coins(guild.id, author.id, 100)
+    await db.set_coins(guild.id, other.id, 100)
+
+    await dpytest.message(f"!pay {other.mention} -50", member=author)
+    sent = dpytest.get_message()
+    assert "Error" in sent.embeds[0].title
+    assert await db.get_balance(guild.id, author.id) == 100
+    assert await db.get_balance(guild.id, other.id) == 100

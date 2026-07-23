@@ -20,7 +20,7 @@ async def _ensure_fishing_tables():
         CREATE TABLE IF NOT EXISTS fishing_config (
             guild_id  TEXT PRIMARY KEY,
             enabled   INTEGER NOT NULL DEFAULT 1,
-            cooldown  INTEGER NOT NULL DEFAULT 60
+            cooldown  INTEGER NOT NULL DEFAULT 240
         )
     """)
     # Per-fisher aggregates. `earned` is lifetime coins from fishing (sales +
@@ -110,7 +110,7 @@ async def get_fishing_config(guild_id: int) -> dict:
         row = await cur.fetchone()
     if row:
         return {"enabled": bool(row["enabled"]), "cooldown": row["cooldown"]}
-    return {"enabled": True, "cooldown": 60}
+    return {"enabled": True, "cooldown": 240}
 
 
 async def set_fishing_config(guild_id: int, **kwargs) -> None:

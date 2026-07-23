@@ -696,7 +696,7 @@ class Fishing(commands.Cog):
                 ),
                 ephemeral=True,
             )
-        qty = max(1, qty)
+        qty = max(1, min(qty, 100))
         total = d.price * qty
         econ = await db.get_econ_config(ctx.guild.id)
         async with self._lock(ctx.guild.id, ctx.author.id):

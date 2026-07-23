@@ -1092,12 +1092,12 @@ class Economy(commands.Cog):
                     role, reason=f"Shop purchase: {item_row['name']}"
                 )
             except discord.HTTPException:
-                # Grant failed after charge — refund coins and restore stock.
+                # Grant failed after charge — refund coins and restore stock
+                # (relative increment: writing back the stale pre-purchase
+                # snapshot would clobber a concurrent buyer's decrement).
                 await db.add_coins(ctx.guild.id, ctx.author.id, item_row["price"])
                 if item_row["stock"] != -1:
-                    await db.edit_shop_item(
-                        ctx.guild.id, item_row["id"], stock=item_row["stock"]
-                    )
+                    await db.restock_shop_item(ctx.guild.id, item_row["id"])
                 return await ctx.reply(
                     embed=h.err("Couldn't grant the role — refunded. Tell an admin."),
                     ephemeral=True,

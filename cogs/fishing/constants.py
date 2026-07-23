@@ -31,8 +31,15 @@ RARITIES: dict[str, tuple[str, int]] = {
 # The catalogue. `weight` is the (min, max) kg roll; `value` is the base coin
 # worth — junk sells for exactly `value`, fish scale 0.6x–1.4x by weight (see
 # helpers.catch_value), treasure pays 0.5x–1.5x in coins immediately and never
-# enters the bag. Prices are tuned to the default 100-coin /daily: an average
-# cast is worth ~25–30 coins on the default 60s cooldown.
+# enters the bag.
+#
+# Balance guardrail (mirrors cogs/activities/constants.py): EV per cast is
+# ~28 coins at luck 0 and ~62 coins at the luck cap of 1.0 (Golden Rod +
+# level cap + Glowgrub bait reaches it). On the default 240s cooldown that's
+# ~420–930 coins/hour of *active, per-command* play — deliberately the top
+# faucet, but within an order of magnitude of /work (~100–145/h). Guilds that
+# lower the cooldown toward COOLDOWN_MIN are opting into faster inflation;
+# a 60s cooldown multiplies those rates by 4.
 FISH: dict[str, dict] = {
     # ── junk ──
     "boot": {

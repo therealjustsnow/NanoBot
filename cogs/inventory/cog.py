@@ -35,7 +35,7 @@ from utils import db
 from utils import helpers as h
 from utils import items as item_catalog
 
-from .constants import MAX_BULK
+from .constants import EFFECT_MAX_DURATION, EFFECT_MAX_USES, MAX_BULK
 from .helpers import chest_payout
 
 log = logging.getLogger("NanoBot.inventory")
@@ -142,8 +142,13 @@ class Inventory(commands.Cog):
     @discord.app_commands.describe(
         item="The item to use", qty="How many to use at once (default 1)"
     )
+    # NOTE: `item`/`qty` are plain positional params, not `*, item, qty` —
+    # discord.py's prefix parser only transforms the first keyword-only
+    # parameter, which silently pins qty at its default under prefix
+    # invocation. Multi-word names need quotes in prefix form ("lucky charm"),
+    # or use the underscore key (lucky_charm); slash options are unaffected.
     async def inventory_use(
-        self, ctx: commands.Context, *, item: str, qty: Optional[int] = 1
+        self, ctx: commands.Context, item: str, qty: Optional[int] = 1
     ):
         d = item_catalog.find(item)
         if d is None:
@@ -160,8 +165,18 @@ class Inventory(commands.Cog):
                     embed=h.warn(f"{item_catalog.display(d.key)} can't be used."),
                     ephemeral=True,
                 )
-            uses = int(d.effect.get("uses", 0)) * qty
-            duration = float(d.effect.get("duration", 0)) * qty
+            # Stacking cap: qty multiplies the granted duration/charges, so
+            # clamp qty to whatever fits under the per-command effect ceiling
+            # (never below 1 — a single big item is always usable). Only the
+            # clamped qty is consumed, so no items are eaten without effect.
+            per_uses = int(d.effect.get("uses", 0))
+            per_duration = float(d.effect.get("duration", 0))
+            if per_duration > 0:
+                qty = min(qty, max(1, int(EFFECT_MAX_DURATION // per_duration)))
+            elif per_uses > 0:
+                qty = min(qty, max(1, EFFECT_MAX_USES // per_uses))
+            uses = per_uses * qty
+            duration = per_duration * qty
             if not await db.try_consume_item(ctx.guild.id, ctx.author.id, d.key, qty):
                 have = await db.get_item_qty(ctx.guild.id, ctx.author.id, d.key)
                 return await ctx.reply(
@@ -231,7 +246,7 @@ class Inventory(commands.Cog):
         item="The item to sell", qty="How many to sell (default: all of them)"
     )
     async def inventory_sell(
-        self, ctx: commands.Context, *, item: str, qty: Optional[int] = None
+        self, ctx: commands.Context, item: str, qty: Optional[int] = None
     ):
         d = item_catalog.find(item)
         if d is None:
@@ -278,7 +293,6 @@ class Inventory(commands.Cog):
         self,
         ctx: commands.Context,
         member: discord.Member,
-        *,
         item: str,
         qty: Optional[int] = 1,
     ):

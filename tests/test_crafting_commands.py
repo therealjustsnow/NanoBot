@@ -110,3 +110,19 @@ async def test_craft_output_can_be_used_via_inventory(bot):
     await dpytest.message("!craft make campfire_feast", member=author)
     dpytest.get_message()
     assert await db.get_item_qty(guild.id, author.id, "craft_campfire_feast") == 1
+
+
+@pytest.mark.cogs("cogs.crafting")
+async def test_multi_input_shortfall_refunds_earlier_inputs(bot):
+    """Audit regression: gem_ring consumes gold_ore then diamond; when the
+    LAST input is short, the already-consumed gold_ore must come back."""
+    guild = config().guilds[0]
+    author = config().members[0]
+    await db.add_item(guild.id, author.id, "gold_ore", 2)
+    # No diamond at all.
+
+    await dpytest.message("!craft make gem_ring", member=author)
+    sent = dpytest.get_message()
+    assert "diamond" in str(sent.embeds[0].to_dict()).lower()
+    assert await db.get_item_qty(guild.id, author.id, "gold_ore") == 2
+    assert await db.get_item_qty(guild.id, author.id, "craft_gem_ring") == 0
