@@ -1,5 +1,5 @@
 # NanoBot dev/test dependencies
-# Install with: pip install -r requirements-dev.txt
+# Install with: pip install -r requirements.dev.txt
 # This is a superset of requirements.txt — it pulls in all runtime deps plus the
 # dev/test extras below, so a single install gets you a runnable + testable env.
 

@@ -36,8 +36,7 @@ black .
 
 **Test (pytest):**
 ```bash
-pip install -r requirements.txt      # discord.py is required by utils/helpers.py
-pip install -r requirements-dev.txt
+pip install -r requirements.dev.txt  # superset: runtime deps (requirements.txt) + dev/test extras
 pytest tests/ -v
 ```
 
@@ -46,7 +45,7 @@ Tests cover pure-Python utilities and the SQLite layer (in-memory), no live Disc
 - `tests/test_config.py` — `validate()` from `utils/config.py`
 - `tests/test_config_io.py` — load, save, migrate, `set_value`, `_coerce`, `_format`, `assert_no_fatal`, `example_ini` from `utils/config.py`
 - `tests/test_db.py` — the `utils/db/` package against an in-memory SQLite database
-- `tests/test_db_crypto.py` — `utils/db_crypto.py` key resolution + header sniffing; the encrypted round-trip/migration tests need `sqlcipher3-binary` (in requirements-dev.txt) and self-skip without it
+- `tests/test_db_crypto.py` — `utils/db_crypto.py` key resolution + header sniffing; the encrypted round-trip/migration tests need `sqlcipher3-binary` (in requirements.dev.txt) and self-skip without it
 - `tests/test_cache_db.py` — `utils/cache_db.py` against an in-memory SQLite database
 - `tests/test_storage.py` — sync and async JSON helpers in `utils/storage.py`
 - `tests/test_music_helpers.py` — pure helper functions imported directly from `cogs/music/helpers.py` (Discord/yt-dlp-free module); includes `_extract_ytid`
@@ -304,6 +303,6 @@ Logs rotate at 50 KB, 5 backups, written to `logs/nanobot.log`. Each line carrie
 
 GitHub Actions runs two workflows on every push:
 - **`black.yml`** — Auto-formats code with Black. If formatting is needed, it auto-commits with `[skip ci]`. Run `black .` locally before pushing to avoid the auto-commit noise.
-- **`tests.yml`** — Runs the pytest suite (`pytest tests/ -v`). Installs `requirements.txt` then `requirements-dev.txt` before running.
+- **`tests.yml`** — Runs the pytest suite (`pytest tests/ -v`). Installs `requirements.dev.txt` (a superset of `requirements.txt`) before running.
 
 A third workflow, **`branch-protection.yml`**, is not part of the per-push CI: it runs only via `workflow_dispatch` or when pushed to `main` touching that file, applying `main` branch protection (required `test` + `black` checks, 1 review, no force-push) via the GitHub API.
