@@ -7,7 +7,6 @@ import pytest
 from discord.ext import test as dpytest
 
 import utils.db as db
-from cogs.progression import cog as progression_cog
 from cogs.progression.definitions import WeeklyObjectiveDef
 from tests.conftest import config
 
@@ -27,6 +26,12 @@ _FAKE_OBJ = WeeklyObjectiveDef(
 
 
 def _force_single_weekly_pick(monkeypatch):
+    # Resolve the cog module at call time, not import time: unload_extension
+    # (run by e.g. test_command_limits' all-cogs fixture) purges the package
+    # from sys.modules, so a collection-time module reference goes stale and a
+    # monkeypatch against it would silently patch a dead module.
+    from cogs.progression import cog as progression_cog
+
     monkeypatch.setattr(
         progression_cog,
         "pick_weekly_objectives",

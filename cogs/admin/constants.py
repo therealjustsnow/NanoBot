@@ -33,6 +33,8 @@ _ALL_COGS = (
     "cogs.inventory",
     "cogs.casino",
     "cogs.activities",
+    "cogs.crafting",
+    "cogs.progression",
     "cogs.fishing",
     "cogs.gatekeeper",
     "cogs.liverole",
