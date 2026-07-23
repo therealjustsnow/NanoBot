@@ -17,6 +17,8 @@ async def database(monkeypatch):
     await db._ensure_fishing_tables()
     # sell/upgrade credit coins through the economy tables.
     await db._ensure_economy_tables()
+    # bait charge consumption exercises the shared items/effects tables.
+    await db._ensure_items_tables()
     yield conn
     await conn.close()
 
@@ -159,3 +161,173 @@ async def test_rod_upgrade_race_second_buyer_loses():
     assert await db.set_rod_level(G, A, 1, expected=0) is False
     assert (await db.get_fisher(G, A))["rod_level"] == 1
     assert await db.set_rod_level(G, A, 2, expected=1) is True
+
+
+# ── XP ─────────────────────────────────────────────────────────────────────────
+async def test_add_fishing_xp_accumulates():
+    assert await db.add_fishing_xp(G, A, 10) == 10
+    assert await db.add_fishing_xp(G, A, 15) == 25
+    assert (await db.get_fisher(G, A))["xp"] == 25
+
+
+async def test_add_fishing_xp_clamps_at_zero():
+    await db.add_fishing_xp(G, A, 10)
+    assert await db.add_fishing_xp(G, A, -100) == 0
+
+
+async def test_fresh_fisher_has_zero_xp_and_streak_columns():
+    fisher = await db.get_fisher(G, B)
+    assert fisher["xp"] == 0
+    assert fisher["streak_days"] == 0
+    assert fisher["last_day"] == 0
+
+
+# ── Daily streak stamp ─────────────────────────────────────────────────────────
+async def test_try_claim_daily_streak_first_time():
+    await db.try_claim_cast(G, A, 1000.0, 60)  # creates the fishing_stats row
+    assert await db.try_claim_daily_streak(G, A, 100, 1) is True
+    fisher = await db.get_fisher(G, A)
+    assert fisher["last_day"] == 100
+    assert fisher["streak_days"] == 1
+
+
+async def test_try_claim_daily_streak_same_day_is_a_noop():
+    await db.try_claim_cast(G, A, 1000.0, 60)
+    assert await db.try_claim_daily_streak(G, A, 100, 1) is True
+    # A second claim attempt for the same day must not re-advance.
+    assert await db.try_claim_daily_streak(G, A, 100, 2) is False
+    assert (await db.get_fisher(G, A))["streak_days"] == 1
+
+
+async def test_try_claim_daily_streak_advances_next_day():
+    await db.try_claim_cast(G, A, 1000.0, 60)
+    await db.try_claim_daily_streak(G, A, 100, 1)
+    assert await db.try_claim_daily_streak(G, A, 101, 2) is True
+    assert (await db.get_fisher(G, A))["streak_days"] == 2
+
+
+# ── Daily quest ──────────────────────────────────────────────────────────────────
+async def test_get_or_create_quest_is_idempotent():
+    quest = await db.get_or_create_quest(G, A, 100, "catch_any", 10)
+    assert quest == {
+        "quest_key": "catch_any",
+        "target": 10,
+        "progress": 0,
+        "claimed": False,
+    }
+    # Re-reading the same day with different generated params doesn't overwrite.
+    again = await db.get_or_create_quest(G, A, 100, "earn_coins", 999)
+    assert again == quest
+
+
+async def test_bump_quest_progress_clamps_at_target():
+    await db.get_or_create_quest(G, A, 100, "catch_any", 5)
+    assert await db.bump_quest_progress(G, A, 100, 3) == 3
+    assert await db.bump_quest_progress(G, A, 100, 10) == 5  # clamped
+
+
+async def test_bump_quest_progress_zero_or_negative_is_a_noop():
+    await db.get_or_create_quest(G, A, 100, "catch_any", 5)
+    assert await db.bump_quest_progress(G, A, 100, 0) == 0
+    assert await db.bump_quest_progress(G, A, 100, -3) == 0
+
+
+async def test_try_claim_quest_reward_requires_target_and_guards_double_claim():
+    await db.get_or_create_quest(G, A, 100, "catch_any", 5)
+    # Not at target yet.
+    assert await db.try_claim_quest_reward(G, A, 100) is False
+    await db.bump_quest_progress(G, A, 100, 5)
+    assert await db.try_claim_quest_reward(G, A, 100) is True
+    # A second claim on the same completed quest must fail.
+    assert await db.try_claim_quest_reward(G, A, 100) is False
+
+
+async def test_quests_are_isolated_per_day_and_user():
+    await db.get_or_create_quest(G, A, 100, "catch_any", 5)
+    await db.bump_quest_progress(G, A, 100, 5)
+    await db.try_claim_quest_reward(G, A, 100)
+    # A new day for the same user is a fresh, unclaimed quest.
+    fresh = await db.get_or_create_quest(G, A, 101, "catch_any", 5)
+    assert fresh["progress"] == 0
+    assert fresh["claimed"] is False
+    # A different user on the same day is independent too.
+    other = await db.get_or_create_quest(G, B, 100, "catch_any", 5)
+    assert other["progress"] == 0
+    assert other["claimed"] is False
+
+
+# ── Bait charge consumption (shared items/effects layer) ─────────────────────────
+async def test_fish_bait_effect_charges_deplete_on_consume():
+    await db.grant_effect(G, A, "fish_bait", 0.12, uses=2)
+    effects = await db.get_active_effects(G, A)
+    assert effects["fish_bait"]["magnitude"] == 0.12
+    assert effects["fish_bait"]["uses_left"] == 2
+
+    assert await db.consume_effect_use(G, A, "fish_bait") is True
+    assert (await db.get_active_effects(G, A))["fish_bait"]["uses_left"] == 1
+    assert await db.consume_effect_use(G, A, "fish_bait") is True
+    # Charges exhausted: the effect row is gone, and a further consume fails.
+    assert "fish_bait" not in await db.get_active_effects(G, A)
+    assert await db.consume_effect_use(G, A, "fish_bait") is False
+
+
+async def test_consume_effect_use_missing_effect_fails():
+    assert await db.consume_effect_use(G, A, "fish_bait") is False
+
+
+# ── Global (cross-guild) leaderboard ───────────────────────────────────────────
+G2 = 888  # a second guild, to prove global stats span every guild
+
+
+async def test_global_stats_registry_has_expected_keys():
+    assert set(db.GLOBAL_STATS) == {
+        "earned",
+        "caught",
+        "casts",
+        "best_weight",
+        "xp",
+        "streak",
+    }
+
+
+async def test_global_leaderboard_aggregates_across_guilds():
+    await db.add_fishing_earned(G, A, 100)
+    await db.add_fishing_earned(G2, A, 50)  # same user, different guild
+    await db.add_fishing_earned(G, B, 80)
+
+    board = await db.get_global_leaderboard("earned")
+    values = {row["user_id"]: row["value"] for row in board}
+    assert values[A] == 150  # 100 + 50 summed across both guilds
+    assert values[B] == 80
+    assert board[0]["user_id"] == A  # highest first
+
+
+async def test_global_leaderboard_caught_and_best_weight():
+    await db.record_catch(G, A, "salmon", 5.0, 40)
+    await db.record_catch(G2, A, "tuna", 20.0, 70)
+    board = await db.get_global_leaderboard("caught")
+    assert {row["user_id"]: row["value"] for row in board}[A] == 2
+
+    board = await db.get_global_leaderboard("best_weight")
+    assert {row["user_id"]: row["value"] for row in board}[A] == 20.0
+
+
+async def test_global_rank_and_count():
+    await db.add_fishing_earned(G, A, 200)
+    await db.add_fishing_earned(G2, B, 500)
+    assert await db.get_global_rank("earned", B) == (1, 500)
+    assert await db.get_global_rank("earned", A) == (2, 200)
+    assert await db.count_global_leaderboard("earned") == 2
+
+
+async def test_global_rank_none_without_stat():
+    assert await db.get_global_rank("earned", A) is None
+
+
+async def test_global_stat_key_is_whitelisted():
+    with pytest.raises(ValueError):
+        await db.get_global_leaderboard("coins; DROP TABLE fishing_stats;--")
+    with pytest.raises(ValueError):
+        await db.get_global_rank("nonsense", A)
+    with pytest.raises(ValueError):
+        await db.count_global_leaderboard("nonsense")

@@ -3,43 +3,48 @@ cogs/activities.py
 Economy activities — five distinct risk/reward profiles that pay out NanoCoins
 (or ore/loot items members can sell) beyond /daily and fishing.
 
-  /work    — SAFE. Steady, low-risk pay with a 10-step career ladder: the more
-             shifts you rack up, the higher your title climbs, and each
-             promotion adds a small pay bonus. No downside.
-  /mine    — a dig every cooldown window. Yields ore items (stone → coal →
-             iron → gold → diamond) by rarity roll into your inventory, with
-             an occasional cave-in (no yield) and a rare bonus treasure key.
-             A coin-priced pickaxe ladder shifts the odds toward rarer ore.
-  /hunt    — MEDIUM risk. Pelts and meat with a rare golden antler trophy, but
-             a chance of getting injured (a small coin fine) — and a small
-             chance of finding a padlock that blocks /rob for a day.
-  /explore — LONG SHOT. High-variance outcomes from nothing at all to a big
-             coin find, plus treasure keys/chests and lucky charms.
-  /rob     — PVP RISK. Try to steal a cut of another member's coins. Guarded
-             by minimum balances and a rob-shield item; failure costs a fine.
+  /work              — SAFE. Steady, low-risk pay with a 10-step career ladder:
+                       the more shifts you rack up, the higher your title
+                       climbs, and each promotion adds a small pay bonus.
+  /mine              — a dig every cooldown window. Yields ore items (stone →
+                       coal → iron → gold → diamond) by rarity roll into your
+                       inventory, with an occasional cave-in (no yield) and a
+                       rare bonus treasure key. A coin-priced pickaxe ladder
+                       shifts the odds toward rarer ore.
+  /adventure hunt    — MEDIUM risk. Pelts and meat with a rare golden antler
+                       trophy, but a chance of getting injured (a small coin
+                       fine) — and a small chance of finding a padlock that
+                       blocks /rob for a day.
+  /adventure explore — LONG SHOT. High-variance outcomes from nothing at all
+                       to a big coin find, plus treasure keys/chests and
+                       lucky charms.
+  /rob               — PVP RISK. Try to steal a cut of another member's coins.
+                       Guarded by minimum balances and a rob-shield item;
+                       failure costs a fine.
 
 Coins ride the existing economy tables (db.add_coins et al.), and loot rides
 the shared inventory (utils/db/items.py), so earnings from any activity spend
 anywhere coins/items do (/shop, /pay, /coin gamble, /inventory sell).
 
-Slash command budget: five flat commands (/work, /hunt, /explore, /rob) plus
-one group (/mine …) and an admin group (/activities …) whose subcommands cost
-no extra top-level slots.
+Slash command budget: two flat commands (/work, /rob) plus two groups
+(/mine …, /adventure …) whose subcommands cost no extra top-level slots —
+hunt, explore, and the Manage-Server settings all live under /adventure.
 
 ──────────────────────────────────────────────────────
 Commands
 ──────────────────────────────────────────────────────
-  /work                          → work a shift for coins (safe)
-  /mine                          → dig for ore                (same as /mine dig)
-  /mine dig                      → dig for ore
-  /mine upgrade                  → buy the next pickaxe tier with coins
-  /mine stats                    → your pickaxe + dig stats
-  /hunt                          → hunt for pelts/meat/trophies (medium risk)
-  /explore                       → explore for a long-shot reward
-  /rob <member>                  → try to steal a cut of a member's coins
-  /activities toggle <activity>  → enable/disable an activity   (Manage Server)
-  /activities cooldown <a> <s>   → set an activity's cooldown    (Manage Server)
-  /activities config             → show settings                (Manage Server)
+  /work                         → work a shift for coins (safe)
+  /mine                         → dig for ore                (same as /mine dig)
+  /mine dig                     → dig for ore
+  /mine upgrade                 → buy the next pickaxe tier with coins
+  /mine stats                   → your pickaxe + dig stats
+  /adventure                    → show the activities settings overview
+  /adventure hunt               → hunt for pelts/meat/trophies (medium risk)
+  /adventure explore            → explore for a long-shot reward
+  /rob <member>                 → try to steal a cut of a member's coins
+  /adventure toggle <activity>  → enable/disable an activity   (Manage Server)
+  /adventure cooldown <a> <s>   → set an activity's cooldown    (Manage Server)
+  /adventure config             → show settings                (Manage Server)
 """
 
 import asyncio
@@ -302,24 +307,33 @@ class Activities(commands.Cog):
         await ctx.reply(embed=h.embed("⛏️ Your Pickaxe", desc, h.BLUE))
 
     # ══════════════════════════════════════════════════════════════════════════
-    #  /hunt — flat, medium risk
+    #  /adventure — hunt + explore + activity settings (one top-level slot)
     # ══════════════════════════════════════════════════════════════════════════
-    @commands.hybrid_command(
-        name="hunt",
-        description="Hunt for pelts, meat, and rare trophies — a bit riskier.",
+    @commands.hybrid_group(
+        name="adventure",
+        description="Hunt and explore for loot, and configure economy activities.",
+        invoke_without_command=True,
         extras={
             "category": "🪙 Economy",
-            "short": "Hunt for loot (medium risk)",
-            "usage": "hunt",
-            "desc": "Track down pelts, meat, and — rarely — a golden antler trophy. "
-            "There's a chance you get injured and pay a small coin fine, and a "
-            "small chance of finding a padlock that blocks /rob for a day.",
+            "short": "Hunt, explore, and tune activities",
+            "usage": "adventure [subcommand]",
+            "desc": "Hunt for pelts, meat, and rare trophies (medium risk) or "
+            "explore for a long-shot reward. Admins can enable/disable and tune "
+            "the cooldown for every activity: work, mine, hunt, explore, rob.",
             "args": [],
-            "perms": "None",
-            "example": "{prefix}hunt",
+            "perms": "Admin subcommands require Manage Server",
+            "example": "{prefix}adventure hunt\n{prefix}adventure explore",
         },
     )
     @commands.guild_only()
+    async def adventure(self, ctx: commands.Context):
+        await self._show_activities_config(ctx)
+
+    # ── /adventure hunt — medium risk ────────────────────────────────────────
+    @adventure.command(
+        name="hunt",
+        description="Hunt for pelts, meat, and rare trophies — a bit riskier.",
+    )
     async def hunt(self, ctx: commands.Context):
         cfg = await db.get_activities_config(ctx.guild.id)
         if not cfg["hunt_enabled"]:
@@ -360,25 +374,11 @@ class Activities(commands.Cog):
         desc += "\n\nSell loot with `/inventory sell`."
         await ctx.reply(embed=h.embed("🏹 Hunt", desc, h.BLUE))
 
-    # ══════════════════════════════════════════════════════════════════════════
-    #  /explore — flat, long shot
-    # ══════════════════════════════════════════════════════════════════════════
-    @commands.hybrid_command(
+    # ── /adventure explore — long shot ───────────────────────────────────────
+    @adventure.command(
         name="explore",
         description="Explore for a long-shot reward — mostly nothing, occasionally huge.",
-        extras={
-            "category": "🪙 Economy",
-            "short": "Explore for a long-shot reward",
-            "usage": "explore",
-            "desc": "High variance: usually nothing or a modest coin find, but "
-            "sometimes a treasure key, a treasure chest, a lucky charm, or a "
-            "rare big coin payout.",
-            "args": [],
-            "perms": "None",
-            "example": "{prefix}explore",
-        },
     )
-    @commands.guild_only()
     async def explore(self, ctx: commands.Context):
         cfg = await db.get_activities_config(ctx.guild.id)
         if not cfg["explore_enabled"]:
@@ -544,30 +544,8 @@ class Activities(commands.Cog):
             )
         )
 
-    # ══════════════════════════════════════════════════════════════════════════
-    #  /activities  — admin group (Manage Server)
-    # ══════════════════════════════════════════════════════════════════════════
-    @commands.hybrid_group(
-        name="activities",
-        description="Configure /work, /mine, /hunt, /explore, and /rob (Manage Server).",
-        invoke_without_command=True,
-        extras={
-            "category": "🪙 Economy",
-            "short": "Configure economy activities",
-            "usage": "activities [subcommand]",
-            "desc": "Enable/disable and tune the cooldown for each activity: work, "
-            "mine, hunt, explore, rob.",
-            "args": [],
-            "perms": "Manage Server",
-            "example": "{prefix}activities toggle rob\n{prefix}activities cooldown mine 900",
-        },
-    )
-    @commands.guild_only()
-    @commands.has_permissions(manage_guild=True)
-    async def activities(self, ctx: commands.Context):
-        await self._show_activities_config(ctx)
-
-    @activities.command(
+    # ── /adventure admin subcommands (Manage Server) ─────────────────────────
+    @adventure.command(
         name="toggle", description="Enable or disable an activity (Manage Server)."
     )
     @app_commands.describe(activity="Which activity to toggle")
@@ -588,7 +566,7 @@ class Activities(commands.Cog):
         state = "enabled" if enabled else "disabled"
         await ctx.reply(embed=h.ok(f"`/{activity}` is now **{state}**."))
 
-    @activities.command(
+    @adventure.command(
         name="cooldown",
         description="Set an activity's cooldown, in seconds (Manage Server).",
     )
@@ -622,7 +600,7 @@ class Activities(commands.Cog):
             embed=h.ok(f"`/{activity}` cooldown set to **{h.fmt_duration(seconds)}**.")
         )
 
-    @activities.command(
+    @adventure.command(
         name="config", description="Show the activities settings (Manage Server)."
     )
     @commands.has_permissions(manage_guild=True)

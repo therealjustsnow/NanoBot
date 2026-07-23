@@ -149,7 +149,7 @@ async def test_hunt_catch_only(bot, monkeypatch):
     # 0.5 for every roll: pelt (< .57 cumulative), no injury (>= .12), no padlock (>= .06).
     monkeypatch.setattr(activities.random, "random", lambda: 0.5)
 
-    await dpytest.message("!hunt", member=author)
+    await dpytest.message("!adventure hunt", member=author)
     sent = dpytest.get_message()
     assert sent.embeds
     assert await db.get_item_qty(guild.id, author.id, "pelt") == 1
@@ -167,7 +167,7 @@ async def test_hunt_injury_deducts_fine(bot, monkeypatch):
     rolls = iter([0.5, 0.05, 0.4, 0.9])  # catch, injury(<.12), fine roll, no padlock
     monkeypatch.setattr(activities.random, "random", lambda: next(rolls))
 
-    await dpytest.message("!hunt", member=author)
+    await dpytest.message("!adventure hunt", member=author)
     sent = dpytest.get_message()
     assert "tumble" in sent.embeds[0].description
     assert await db.get_balance(guild.id, author.id) == 100 - round(0.4 * 50)
@@ -182,7 +182,7 @@ async def test_hunt_padlock_found(bot, monkeypatch):
     rolls = iter([0.5, 0.9, 0.02])  # catch, no injury (>=.12), padlock (<.06)
     monkeypatch.setattr(activities.random, "random", lambda: next(rolls))
 
-    await dpytest.message("!hunt", member=author)
+    await dpytest.message("!adventure hunt", member=author)
     assert await db.get_item_qty(guild.id, author.id, "padlock") == 1
 
 
@@ -192,7 +192,7 @@ async def test_hunt_disabled(bot):
     author = config().members[0]
     await db.set_activities_config(guild.id, hunt_enabled=False)
 
-    await dpytest.message("!hunt", member=author)
+    await dpytest.message("!adventure hunt", member=author)
     sent = dpytest.get_message()
     assert "disabled" in sent.embeds[0].description
 
@@ -210,7 +210,7 @@ async def test_explore_nothing(bot, monkeypatch):
         activities.random, "random", lambda: _roll_for_outcome("nothing")
     )
 
-    await dpytest.message("!explore", member=author)
+    await dpytest.message("!adventure explore", member=author)
     sent = dpytest.get_message()
     assert "Explore" in sent.embeds[0].title
     assert await db.get_balance(guild.id, author.id) == 0
@@ -226,7 +226,7 @@ async def test_explore_coins_small(bot, monkeypatch):
     rolls = iter([outcome_roll, 0.5])
     monkeypatch.setattr(activities.random, "random", lambda: next(rolls))
 
-    await dpytest.message("!explore", member=author)
+    await dpytest.message("!adventure explore", member=author)
     expected = round(
         EXPLORE_COINS_SMALL[0] + 0.5 * (EXPLORE_COINS_SMALL[1] - EXPLORE_COINS_SMALL[0])
     )
@@ -243,7 +243,7 @@ async def test_explore_item_reward(bot, monkeypatch):
         activities.random, "random", lambda: _roll_for_outcome("treasure_key")
     )
 
-    await dpytest.message("!explore", member=author)
+    await dpytest.message("!adventure explore", member=author)
     assert await db.get_item_qty(guild.id, author.id, "treasure_key") == 1
 
 
@@ -253,7 +253,7 @@ async def test_explore_disabled(bot):
     author = config().members[0]
     await db.set_activities_config(guild.id, explore_enabled=False)
 
-    await dpytest.message("!explore", member=author)
+    await dpytest.message("!adventure explore", member=author)
     sent = dpytest.get_message()
     assert "disabled" in sent.embeds[0].description
 
@@ -381,20 +381,21 @@ async def test_rob_cooldown_consumed_after_attempt(bot, monkeypatch):
 
 
 # ══════════════════════════════════════════════════════════════════════════════
-#  /activities admin group
+#  /adventure group (hunt/explore + admin settings)
 # ══════════════════════════════════════════════════════════════════════════════
 @pytest.mark.cogs("cogs.activities")
-async def test_activities_bare_denied_without_manage_guild(bot):
+async def test_adventure_bare_shows_settings_overview(bot):
     author = config().members[0]
-    with pytest.raises(commands.MissingPermissions):
-        await dpytest.message("!activities", member=author)
+    await dpytest.message("!adventure", member=author)
+    sent = dpytest.get_message()
+    assert "Activities Settings" in sent.embeds[0].title
 
 
 @pytest.mark.cogs("cogs.activities")
 async def test_activities_toggle_denied_without_manage_guild(bot):
     author = config().members[0]
     with pytest.raises(commands.MissingPermissions):
-        await dpytest.message("!activities toggle rob", member=author)
+        await dpytest.message("!adventure toggle rob", member=author)
 
 
 @pytest.mark.cogs("cogs.activities")
@@ -403,12 +404,12 @@ async def test_activities_toggle_flips_with_perms(bot):
     author = config().members[0]
     await grant_perms(author, manage_guild=True)
 
-    await dpytest.message("!activities toggle rob", member=author)
+    await dpytest.message("!adventure toggle rob", member=author)
     sent = dpytest.get_message()
     assert "disabled" in sent.embeds[0].description
     assert (await db.get_activities_config(guild.id))["rob_enabled"] is False
 
-    await dpytest.message("!activities toggle rob", member=author)
+    await dpytest.message("!adventure toggle rob", member=author)
     sent = dpytest.get_message()
     assert "enabled" in sent.embeds[0].description
     assert (await db.get_activities_config(guild.id))["rob_enabled"] is True
@@ -420,7 +421,7 @@ async def test_activities_cooldown_out_of_bounds(bot):
     author = config().members[0]
     await grant_perms(author, manage_guild=True)
 
-    await dpytest.message("!activities cooldown work 1", member=author)
+    await dpytest.message("!adventure cooldown work 1", member=author)
     sent = dpytest.get_message()
     assert "Error" in sent.embeds[0].title
     assert (await db.get_activities_config(guild.id))["work_cooldown"] == 3600
@@ -432,7 +433,7 @@ async def test_activities_cooldown_sets_value(bot):
     author = config().members[0]
     await grant_perms(author, manage_guild=True)
 
-    await dpytest.message("!activities cooldown work 120", member=author)
+    await dpytest.message("!adventure cooldown work 120", member=author)
     sent = dpytest.get_message()
     assert "Done" in sent.embeds[0].title or "set" in sent.embeds[0].description
     assert (await db.get_activities_config(guild.id))["work_cooldown"] == 120
@@ -443,7 +444,7 @@ async def test_activities_config_shows_settings(bot):
     author = config().members[0]
     await grant_perms(author, manage_guild=True)
 
-    await dpytest.message("!activities config", member=author)
+    await dpytest.message("!adventure config", member=author)
     sent = dpytest.get_message()
     field_names = {f.name for f in sent.embeds[0].fields}
     assert field_names == {"/work", "/mine", "/hunt", "/explore", "/rob"}

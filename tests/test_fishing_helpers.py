@@ -7,20 +7,33 @@ import math
 import pytest
 
 from cogs.fishing import (
+    EVENT_POOL,
     FISH,
     FISH_BY_RARITY,
+    LEVEL_LUCK_CAP,
     RARITIES,
     RARITY_ODDS,
     RODS,
     catch_value,
+    cum_xp_for_level,
     find_fish,
+    fish_level,
     fmt_weight,
+    generate_quest,
+    level_luck_bonus,
+    level_progress,
     next_rod,
+    next_streak,
+    pick_event,
     pick_fish,
     pick_rarity,
+    quest_label,
+    quest_reward,
     rarity_odds,
     rod_info,
+    roll_event_duration,
     roll_weight,
+    streak_bonus_coins,
     treasure_coins,
 )
 
@@ -162,3 +175,122 @@ def test_find_fish_by_key_and_name():
     assert find_fish("Bluefin Tuna") == "tuna"
     assert find_fish("  old boot ") == "boot"
     assert find_fish("kraken") is None
+
+
+# ── Levels & XP ──────────────────────────────────────────────────────────────────
+def test_cum_xp_for_level_matches_25n_squared():
+    assert cum_xp_for_level(0) == 0
+    assert cum_xp_for_level(1) == 25
+    assert cum_xp_for_level(10) == 2500
+    assert cum_xp_for_level(-5) == 0  # clamped
+
+
+def test_fish_level_boundaries():
+    assert fish_level(0) == 0
+    assert fish_level(24) == 0
+    assert fish_level(25) == 1
+    assert fish_level(99) == 1
+    assert fish_level(100) == 2
+    assert fish_level(-10) == 0  # negative xp floors to level 0
+
+
+def test_fish_level_is_monotonic():
+    prev = fish_level(0)
+    for xp in range(0, 5000, 17):
+        lvl = fish_level(xp)
+        assert lvl >= prev
+        prev = lvl
+
+
+def test_level_progress_reports_into_and_needed():
+    level, into, needed = level_progress(30)
+    assert level == 1
+    assert into == 30 - cum_xp_for_level(1)
+    assert needed == cum_xp_for_level(2) - cum_xp_for_level(1)
+    # Exactly on a level boundary: 0 xp into the level.
+    level, into, _needed = level_progress(cum_xp_for_level(3))
+    assert level == 3
+    assert into == 0
+
+
+def test_level_luck_bonus_caps():
+    assert level_luck_bonus(0) == 0.0
+    assert level_luck_bonus(10) == pytest.approx(0.05)
+    assert level_luck_bonus(1000) == LEVEL_LUCK_CAP
+    assert level_luck_bonus(-5) == 0.0
+
+
+# ── Daily streak ─────────────────────────────────────────────────────────────────
+def test_next_streak_continues_on_consecutive_day():
+    assert next_streak(last_day=10, today=11, streak=3) == 4
+
+
+def test_next_streak_resets_on_gap_or_fresh_start():
+    assert next_streak(last_day=5, today=11, streak=8) == 1
+    assert next_streak(last_day=0, today=0, streak=0) == 1
+
+
+def test_streak_bonus_coins_scales_and_caps():
+    assert streak_bonus_coins(1) == 10
+    assert streak_bonus_coins(5) == 50
+    assert streak_bonus_coins(50) == 100  # capped
+    assert streak_bonus_coins(0) == 0
+
+
+# ── Daily quest generation ─────────────────────────────────────────────────────────
+def test_generate_quest_is_deterministic_for_same_inputs():
+    a = generate_quest(1, 2, 100)
+    b = generate_quest(1, 2, 100)
+    assert a == b
+
+
+def test_generate_quest_varies_by_day_or_user():
+    a = generate_quest(1, 2, 100)
+    b = generate_quest(1, 2, 101)
+    c = generate_quest(1, 3, 100)
+    # Not asserting inequality of every field (a coincidence is possible), just
+    # that varying an input can change the outcome across a decent sample.
+    variants = {
+        generate_quest(1, 2, day)["quest_key"]
+        + str(generate_quest(1, 2, day)["target"])
+        for day in range(50)
+    }
+    assert len(variants) > 1
+    assert a is not b and a is not c  # sanity: independent dict objects
+
+
+def test_generate_quest_shape_and_reward_consistency():
+    for day in range(30):
+        q = generate_quest(42, 7, day)
+        assert q["quest_key"] in ("catch_any", "earn_coins") or q[
+            "quest_key"
+        ].startswith("catch_rarity:")
+        assert q["target"] > 0
+        assert q["label"] == quest_label(q["quest_key"], q["target"])
+        assert (q["reward_coins"], q["reward_xp"]) == quest_reward(
+            q["quest_key"], q["target"]
+        )
+
+
+def test_quest_label_and_reward_for_each_shape():
+    assert quest_label("catch_any", 10) == "Catch 10 fish"
+    assert quest_label("catch_rarity:epic", 2) == "Catch 2 epic fish"
+    assert quest_label("earn_coins", 100) == "Earn 100 coins fishing"
+    assert quest_label("bogus", 1) == "Unknown quest"
+
+    assert quest_reward("catch_any", 10) == (80, 40)
+    assert quest_reward("catch_rarity:epic", 2) == (240, 120)
+    assert quest_reward("earn_coins", 100) == (50, 30)
+    assert quest_reward("bogus", 1) == (0, 0)
+
+
+# ── Guild fishing events ─────────────────────────────────────────────────────────
+def test_pick_event_walks_the_weighted_table():
+    assert pick_event(0.0) == EVENT_POOL[0]
+    assert pick_event(0.999999) == EVENT_POOL[-1]
+
+
+def test_roll_event_duration_bounds():
+    assert roll_event_duration(0.0, (600, 1200)) == 600
+    assert roll_event_duration(1.0, (600, 1200)) == 1200
+    assert 600 <= roll_event_duration(0.5, (600, 1200)) <= 1200

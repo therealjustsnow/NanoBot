@@ -147,6 +147,8 @@ _ALL_COGS = (
     "cogs.leveling",
     "cogs.economy",
     "cogs.inventory",
+    "cogs.casino",
+    "cogs.activities",
     "cogs.fishing",
     "cogs.gatekeeper",
     "cogs.liverole",

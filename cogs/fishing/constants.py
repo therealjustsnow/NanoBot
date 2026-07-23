@@ -269,3 +269,65 @@ RODS: list[dict] = [
     {"name": "Golden Rod", "emoji": "✨", "price": 25_000, "luck": 0.60},
     {"name": "Mythic Trident", "emoji": "🔱", "price": 75_000, "luck": 0.75},
 ]
+
+# ── Fishing XP & levels ────────────────────────────────────────────────────────
+# XP awarded per catch, by rarity — multiplied by any active fish_xp / double_xp
+# effects/events at cast time (see helpers.fish_level / cog._do_cast).
+XP_PER_RARITY: dict[str, int] = {
+    "junk": 1,
+    "common": 3,
+    "uncommon": 6,
+    "rare": 12,
+    "epic": 25,
+    "legendary": 60,
+    "treasure": 40,
+}
+
+# Level n needs LEVEL_XP_BASE * n^2 cumulative XP (level 1 = 25 XP, level 10 =
+# 2,500 XP, …) — see helpers.fish_level/cum_xp_for_level.
+LEVEL_XP_BASE = 25
+
+# Luck bonus per fishing level, capped — a level 30+ angler tops out at +15%.
+LEVEL_LUCK_PER_LEVEL = 0.005
+LEVEL_LUCK_CAP = 0.15
+
+# Hard ceiling on combined luck (rod + level + bait + events) fed into
+# helpers.rarity_odds, which independently clamps to the same range.
+MAX_LUCK = 1.0
+
+# ── Daily streak ─────────────────────────────────────────────────────────────
+STREAK_COIN_PER_DAY = 10
+STREAK_COIN_CAP = 100
+
+# ── Daily quest pool ─────────────────────────────────────────────────────────
+# Three quest shapes, picked + sized deterministically by helpers.generate_quest.
+QUEST_CATCH_ANY_TARGET = (5, 15)
+QUEST_CATCH_RARITY_POOL = ("uncommon", "rare", "epic")
+QUEST_CATCH_RARITY_TARGET: dict[str, tuple[int, int]] = {
+    "uncommon": (2, 5),
+    "rare": (1, 3),
+    "epic": (1, 2),
+}
+QUEST_EARN_COINS_TARGET = (50, 200)
+QUEST_CATCH_RARITY_COIN_MULT: dict[str, int] = {"uncommon": 30, "rare": 60, "epic": 120}
+QUEST_CATCH_RARITY_XP_MULT: dict[str, int] = {"uncommon": 15, "rare": 30, "epic": 60}
+QUEST_CATCH_ANY_COIN_MULT = 8
+QUEST_CATCH_ANY_XP_MULT = 4
+QUEST_EARN_COINS_COIN_FRACTION = 0.5
+QUEST_EARN_COINS_XP_FRACTION = 0.3
+
+# ── Guild fishing events ─────────────────────────────────────────────────────
+EVENT_CHANCE = 0.004  # ~0.4% chance per cast to start an event, if none active
+EVENT_DURATION_RANGE = (600, 1200)  # 10-20 minutes
+
+EVENT_POOL: list[dict] = [
+    {"key": "frenzy", "weight": 0.4, "magnitude": 2.0},
+    {"key": "double_xp", "weight": 0.35, "magnitude": 2.0},
+    {"key": "lucky_waters", "weight": 0.25, "magnitude": 0.15},
+]
+
+EVENT_LABELS: dict[str, str] = {
+    "frenzy": "🐟 Feeding Frenzy (catch values x2)",
+    "double_xp": "⭐ Double XP",
+    "lucky_waters": "🍀 Lucky Waters (+15% luck)",
+}
