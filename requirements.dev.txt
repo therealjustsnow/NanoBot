@@ -1,6 +1,9 @@
 # NanoBot dev/test dependencies
-# Install with: pip install -r requirements-dev.txt
-# Requires requirements.txt to already be installed (discord.py is needed by utils/helpers.py)
+# Install with: pip install -r requirements.dev.txt
+# This is a superset of requirements.txt — it pulls in all runtime deps plus the
+# dev/test extras below, so a single install gets you a runnable + testable env.
+
+-r requirements.txt
 
 pytest>=9.1.1
 pytest-asyncio>=1.4.0

@@ -385,27 +385,35 @@ class Admin(ConfigMixin, commands.Cog):
         name="upgrade",
         aliases=["deploy", "ud"],
         help=(
-            "Full upgrade: git pull → pip install -r requirements.txt → restart.\n\n"
+            "Full upgrade: git pull → pip install → restart.\n\n"
+            "Installs `requirements.txt` (runtime deps only) by default.\n"
+            "Pass `--dev` to install `requirements.dev.txt` instead (runtime deps "
+            "plus the dev/test tooling).\n\n"
             "Use this to deploy new code and dependency changes from mobile.\n"
             "Stops at git pull failure — won't install or restart if pull fails.\n"
             "If pip fails, reports the error but restarts anyway (existing code still works).\n\n"
             "See also: !update (pull + reload cogs, no restart), !restart (restart only)."
         ),
     )
-    async def upgrade(self, ctx: commands.Context):
+    async def upgrade(self, ctx: commands.Context, *, flags: str = ""):
         """
-        !upgrade  /  !deploy
+        !upgrade [--dev]  /  !deploy
 
         1. Runs `git pull` and reports the output.
         2. If pull fails, stops — no install, no restart.
-        3. Runs `pip install -r requirements.txt --quiet` in a background thread
+        3. Runs `pip install -r <requirements> --quiet` in a background thread
            (can be slow; uses asyncio.to_thread to avoid blocking the event loop).
+           `<requirements>` is `requirements.txt` normally, or `requirements.dev.txt`
+           when `--dev` is passed.
         4. Sends a result embed showing both steps, then spawns a new process
            and closes this one — identical to !restart.
         """
         await ctx.defer()
 
-        log.warning(f"Upgrade initiated by {h.user_log(ctx.author)}")
+        dev = "--dev" in flags.split()
+        req_file = "requirements.dev.txt" if dev else "requirements.txt"
+
+        log.warning(f"Upgrade initiated by {h.user_log(ctx.author)} (deps: {req_file})")
 
         # ── Step 1: git pull ───────────────────────────────────────────────────
         try:
@@ -456,7 +464,7 @@ class Admin(ConfigMixin, commands.Cog):
                         "pip",
                         "install",
                         "-r",
-                        "requirements.txt",
+                        req_file,
                         "--quiet",
                     ],
                     capture_output=True,
@@ -489,7 +497,9 @@ class Admin(ConfigMixin, commands.Cog):
         e.add_field(name="📥 Git Pull", value=f"```\n{git_output}\n```", inline=False)
         pip_display = pip_output or "_(nothing to install / all up to date)_"
         e.add_field(
-            name="📦 Pip Install", value=f"```\n{pip_display}\n```", inline=False
+            name=f"📦 Pip Install (`{req_file}`)",
+            value=f"```\n{pip_display}\n```",
+            inline=False,
         )
 
         if pip_ok:

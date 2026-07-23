@@ -1,7 +1,7 @@
 """Tests for utils/db_crypto.py — key resolution, plaintext detection, and the
 encrypted-connection / plaintext-migration round-trip.
 
-The round-trip tests need the sqlcipher3 driver (requirements-dev.txt installs
+The round-trip tests need the sqlcipher3 driver (requirements.dev.txt installs
 it); they are skipped when it is missing so the rest of the suite still runs.
 """
 
