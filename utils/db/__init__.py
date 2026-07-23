@@ -37,6 +37,7 @@ _DOMAIN_ORDER = (
     "music",
     "leveling",
     "economy",
+    "items",
     "fishing",
     "gatekeeper",
     "birthday",

@@ -30,6 +30,7 @@ _ALL_COGS = (
     "cogs.music",
     "cogs.leveling",
     "cogs.economy",
+    "cogs.inventory",
     "cogs.fishing",
     "cogs.gatekeeper",
     "cogs.liverole",
