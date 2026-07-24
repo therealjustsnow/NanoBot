@@ -153,40 +153,40 @@ async def _craft(guild_id: int, user_id: int, recipe, qty: int = 1):
     consumed: list[tuple[str, int]] = []
     for item_key, need in recipe.inputs.items():
         total = need * qty
-        if await db.try_consume_item(guild_id, user_id, item_key, total):
+        if await db.try_consume_item(user_id, item_key, total):
             consumed.append((item_key, total))
         else:
             for k, amount in consumed:
-                await db.add_item(guild_id, user_id, k, amount)
+                await db.add_item(user_id, k, amount)
             return False
-    await db.add_item(guild_id, user_id, recipe.output_item, recipe.output_qty * qty)
+    await db.add_item(user_id, recipe.output_item, recipe.output_qty * qty)
     return True
 
 
 async def test_successful_craft_consumes_all_inputs_and_grants_output():
     recipe = RECIPES["fur_coat"]  # pelt x5
-    await db.add_item(G, U, "pelt", 5)
+    await db.add_item(U, "pelt", 5)
     assert await _craft(G, U, recipe) is True
-    assert await db.get_item_qty(G, U, "pelt") == 0
-    assert await db.get_item_qty(G, U, "craft_fur_coat") == 1
+    assert await db.get_item_qty(U, "pelt") == 0
+    assert await db.get_item_qty(U, "craft_fur_coat") == 1
 
 
 async def test_partial_failure_refunds_already_consumed_inputs():
     recipe = RECIPES["campfire_feast"]  # meat x3, coal x2
-    await db.add_item(G, U, "meat", 3)
+    await db.add_item(U, "meat", 3)
     # No coal at all — the second consume must fail and the meat must come back.
     assert await _craft(G, U, recipe) is False
-    assert await db.get_item_qty(G, U, "meat") == 3
-    assert await db.get_item_qty(G, U, "coal") == 0
-    assert await db.get_item_qty(G, U, "craft_campfire_feast") == 0
+    assert await db.get_item_qty(U, "meat") == 3
+    assert await db.get_item_qty(U, "coal") == 0
+    assert await db.get_item_qty(U, "craft_campfire_feast") == 0
 
 
 async def test_partial_failure_refunds_multiple_already_consumed_inputs():
     recipe = RECIPES["trophy_mount"]  # golden_antler x1, iron_ore x2
-    await db.add_item(G, U, "golden_antler", 1)
-    await db.add_item(G, U, "iron_ore", 1)  # one short of the required 2
+    await db.add_item(U, "golden_antler", 1)
+    await db.add_item(U, "iron_ore", 1)  # one short of the required 2
     assert await _craft(G, U, recipe) is False
     # The golden_antler consumed before the iron_ore shortfall was hit is refunded.
-    assert await db.get_item_qty(G, U, "golden_antler") == 1
-    assert await db.get_item_qty(G, U, "iron_ore") == 1
-    assert await db.get_item_qty(G, U, "craft_trophy_mount") == 0
+    assert await db.get_item_qty(U, "golden_antler") == 1
+    assert await db.get_item_qty(U, "iron_ore") == 1
+    assert await db.get_item_qty(U, "craft_trophy_mount") == 0

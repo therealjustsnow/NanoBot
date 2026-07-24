@@ -12,27 +12,30 @@ import time
 
 from utils import db_crypto
 
-from ._core import _conn, _ensure_columns, register_init
+from ._core import _conn, _ensure_columns, register_init, rows_for_users
 
 # ══════════════════════════════════════════════════════════════════════════════
-#  Economy (per-guild coin balances + daily claim)
+#  Economy (GLOBAL per-user coin balances + daily claim)
+#
+#  The wallet belongs to the *user*, not to a guild: coins earned in one server
+#  spend in every other one. Only guild-owned settings (economy_config), the
+#  guild's own shop, and its live co-op boards keep a guild_id — see
+#  docs/global-economy.md for the full scope audit. Existing per-guild rows are
+#  merged into one wallet per user by migration 1 (utils/db/globalize.py).
 # ══════════════════════════════════════════════════════════════════════════════
 
 
 async def _ensure_economy_tables():
     await _conn().execute("""
         CREATE TABLE IF NOT EXISTS economy (
-            guild_id    TEXT NOT NULL,
-            user_id     TEXT NOT NULL,
+            user_id     TEXT PRIMARY KEY,
             coins       INTEGER NOT NULL DEFAULT 0,
             last_daily  REAL NOT NULL DEFAULT 0,
-            streak      INTEGER NOT NULL DEFAULT 0,
-            PRIMARY KEY (guild_id, user_id)
+            streak      INTEGER NOT NULL DEFAULT 0
         )
     """)
     await _conn().execute(
-        "CREATE INDEX IF NOT EXISTS economy_guild_coins "
-        "ON economy (guild_id, coins DESC)"
+        "CREATE INDEX IF NOT EXISTS economy_coins ON economy (coins DESC)"
     )
     await _conn().execute("""
         CREATE TABLE IF NOT EXISTS economy_config (
@@ -58,8 +61,7 @@ async def _ensure_economy_tables():
         },
     )
     await _conn().execute(
-        "CREATE INDEX IF NOT EXISTS economy_guild_contrib "
-        "ON economy (guild_id, contribution DESC)"
+        "CREATE INDEX IF NOT EXISTS economy_contrib ON economy (contribution DESC)"
     )
     # Shop: redeemable rewards mods configure, and a purchase ledger that backs
     # per-user limits, cooldowns, stock counts, and custom-reward fulfilment.
@@ -142,26 +144,25 @@ async def _ensure_economy_tables():
     await _conn().commit()
 
 
-# ── Balances ───────────────────────────────────────────────────────────────────
-async def get_balance(guild_id: int, user_id: int) -> int:
+# ── Balances (global — one wallet per user) ────────────────────────────────────
+async def get_balance(user_id: int) -> int:
     async with _conn().execute(
-        "SELECT coins FROM economy WHERE guild_id=? AND user_id=?",
-        (str(guild_id), str(user_id)),
+        "SELECT coins FROM economy WHERE user_id=?", (str(user_id),)
     ) as cur:
         row = await cur.fetchone()
     return row["coins"] if row else 0
 
 
-async def set_coins(guild_id: int, user_id: int, amount: int) -> None:
+async def set_coins(user_id: int, amount: int) -> None:
     await _conn().execute(
-        "INSERT INTO economy (guild_id, user_id, coins) VALUES (?,?,?) "
-        "ON CONFLICT(guild_id, user_id) DO UPDATE SET coins=excluded.coins",
-        (str(guild_id), str(user_id), max(0, int(amount))),
+        "INSERT INTO economy (user_id, coins) VALUES (?,?) "
+        "ON CONFLICT(user_id) DO UPDATE SET coins=excluded.coins",
+        (str(user_id), max(0, int(amount))),
     )
     await _conn().commit()
 
 
-async def add_coins(guild_id: int, user_id: int, amount: int) -> int:
+async def add_coins(user_id: int, amount: int) -> int:
     """Add (or subtract) coins atomically. Clamps at 0. Returns the new balance.
 
     The mutation is a single SQL statement so concurrent callers can't lose an
@@ -170,102 +171,109 @@ async def add_coins(guild_id: int, user_id: int, amount: int) -> int:
     """
     amount = int(amount)
     await _conn().execute(
-        "INSERT INTO economy (guild_id, user_id, coins) VALUES (?,?,MAX(0,?)) "
-        "ON CONFLICT(guild_id, user_id) DO UPDATE SET coins=MAX(0, coins + ?)",
-        (str(guild_id), str(user_id), amount, amount),
+        "INSERT INTO economy (user_id, coins) VALUES (?,MAX(0,?)) "
+        "ON CONFLICT(user_id) DO UPDATE SET coins=MAX(0, coins + ?)",
+        (str(user_id), amount, amount),
     )
     await _conn().commit()
-    return await get_balance(guild_id, user_id)
+    return await get_balance(user_id)
 
 
-async def try_debit_coins(guild_id: int, user_id: int, amount: int) -> bool:
+async def try_debit_coins(user_id: int, amount: int) -> bool:
     """Atomically subtract `amount` only if the balance covers it.
 
     Returns True on success, False if amount <= 0 or funds are insufficient. The
     conditional UPDATE makes the check-and-debit a single atomic step, so two
-    concurrent debits (e.g. rapid /gamble) can't both spend the same coins.
+    concurrent debits (e.g. rapid /gamble in two different servers) can't both
+    spend the same coins.
     """
     if amount <= 0:
         return False
     cur = await _conn().execute(
-        "UPDATE economy SET coins = coins - ? "
-        "WHERE guild_id=? AND user_id=? AND coins >= ?",
-        (int(amount), str(guild_id), str(user_id), int(amount)),
+        "UPDATE economy SET coins = coins - ? WHERE user_id=? AND coins >= ?",
+        (int(amount), str(user_id), int(amount)),
     )
     await _conn().commit()
     return cur.rowcount > 0
 
 
-async def transfer_coins(guild_id: int, from_id: int, to_id: int, amount: int) -> bool:
-    """Move coins between two members. Returns False if amount <= 0 or low funds.
+async def transfer_coins(from_id: int, to_id: int, amount: int) -> bool:
+    """Move coins between two users. Returns False if amount <= 0 or low funds.
 
     The debit is an atomic conditional UPDATE, so concurrent transfers can't
     overdraw the sender.
     """
-    if not await try_debit_coins(guild_id, from_id, amount):
+    if not await try_debit_coins(from_id, amount):
         return False
-    await add_coins(guild_id, to_id, amount)
+    await add_coins(to_id, amount)
     return True
 
 
-async def get_econ_rank(guild_id: int, user_id: int) -> tuple[int, int] | None:
-    """Return (rank, coins) for a member; None if they have no account row."""
+async def get_econ_rank(user_id: int) -> tuple[int, int] | None:
+    """Return (global rank, coins) for a user; None if they have no wallet row."""
     async with _conn().execute(
-        "SELECT coins FROM economy WHERE guild_id=? AND user_id=?",
-        (str(guild_id), str(user_id)),
+        "SELECT coins FROM economy WHERE user_id=?", (str(user_id),)
     ) as cur:
         row = await cur.fetchone()
     if row is None:
         return None
     coins = row["coins"]
     async with _conn().execute(
-        "SELECT COUNT(*) FROM economy WHERE guild_id=? AND coins > ?",
-        (str(guild_id), coins),
+        "SELECT COUNT(*) FROM economy WHERE coins > ?", (coins,)
     ) as cur:
         ahead = (await cur.fetchone())[0]
     return ahead + 1, coins
 
 
-async def get_econ_leaderboard(
-    guild_id: int, limit: int = 10, offset: int = 0
-) -> list[dict]:
+async def get_econ_leaderboard(limit: int = 10, offset: int = 0) -> list[dict]:
+    """Richest users across every server."""
     async with _conn().execute(
-        "SELECT user_id, coins FROM economy WHERE guild_id=? AND coins > 0 "
+        "SELECT user_id, coins FROM economy WHERE coins > 0 "
         "ORDER BY coins DESC, user_id ASC LIMIT ? OFFSET ?",
-        (str(guild_id), int(limit), int(offset)),
+        (int(limit), int(offset)),
     ) as cur:
         rows = await cur.fetchall()
     return [{"user_id": int(r["user_id"]), "coins": r["coins"]} for r in rows]
 
 
-async def count_econ(guild_id: int) -> int:
-    async with _conn().execute(
-        "SELECT COUNT(*) FROM economy WHERE guild_id=? AND coins > 0",
-        (str(guild_id),),
-    ) as cur:
+async def count_econ() -> int:
+    async with _conn().execute("SELECT COUNT(*) FROM economy WHERE coins > 0") as cur:
         return (await cur.fetchone())[0]
 
 
-async def reset_economy(guild_id: int, user_id: int | None = None) -> int:
+async def get_econ_leaderboard_for(user_ids) -> list[dict]:
+    """The same global wallets, filtered to a set of users (a server's members).
+
+    Sorting/paging happens in the caller: the row count is bounded by the
+    guild's member list, and chunking keeps the IN clause inside SQLite's
+    bound-parameter limit.
+    """
+    rows = await rows_for_users(
+        "SELECT user_id, coins FROM economy", user_ids, positive_col="coins"
+    )
+    return [{"user_id": int(r["user_id"]), "coins": r["coins"]} for r in rows]
+
+
+async def reset_economy(user_id: int | None = None) -> int:
+    """Wipe one user's wallet, or (user_id None) every wallet everywhere.
+
+    Global data: a full reset is bot-owner-only at the command layer.
+    """
     if user_id is None:
-        cur = await _conn().execute(
-            "DELETE FROM economy WHERE guild_id=?", (str(guild_id),)
-        )
+        cur = await _conn().execute("DELETE FROM economy")
     else:
         cur = await _conn().execute(
-            "DELETE FROM economy WHERE guild_id=? AND user_id=?",
-            (str(guild_id), str(user_id)),
+            "DELETE FROM economy WHERE user_id=?", (str(user_id),)
         )
     await _conn().commit()
     return cur.rowcount
 
 
-# ── Daily claim state ──────────────────────────────────────────────────────────
-async def get_daily_state(guild_id: int, user_id: int) -> tuple[float, int]:
-    """Return (last_daily_epoch, streak) for a member."""
+# ── Daily claim state (global cooldown + streak) ───────────────────────────────
+async def get_daily_state(user_id: int) -> tuple[float, int]:
+    """Return (last_daily_epoch, streak) for a user."""
     async with _conn().execute(
-        "SELECT last_daily, streak FROM economy WHERE guild_id=? AND user_id=?",
-        (str(guild_id), str(user_id)),
+        "SELECT last_daily, streak FROM economy WHERE user_id=?", (str(user_id),)
     ) as cur:
         row = await cur.fetchone()
     if row:
@@ -273,14 +281,12 @@ async def get_daily_state(guild_id: int, user_id: int) -> tuple[float, int]:
     return 0.0, 0
 
 
-async def set_daily_state(
-    guild_id: int, user_id: int, last_daily: float, streak: int
-) -> None:
+async def set_daily_state(user_id: int, last_daily: float, streak: int) -> None:
     await _conn().execute(
-        "INSERT INTO economy (guild_id, user_id, last_daily, streak) VALUES (?,?,?,?) "
-        "ON CONFLICT(guild_id, user_id) DO UPDATE SET "
+        "INSERT INTO economy (user_id, last_daily, streak) VALUES (?,?,?) "
+        "ON CONFLICT(user_id) DO UPDATE SET "
         "last_daily=excluded.last_daily, streak=excluded.streak",
-        (str(guild_id), str(user_id), float(last_daily), int(streak)),
+        (str(user_id), float(last_daily), int(streak)),
     )
     await _conn().commit()
 
@@ -345,54 +351,48 @@ async def set_econ_config(guild_id: int, **kwargs) -> None:
     await _conn().commit()
 
 
-# ── Contribution (lifetime co-op stat) ───────────────────────────────────────────
-async def add_contribution(guild_id: int, user_id: int, amount: int) -> int:
-    """Add to a member's lifetime contribution total. Returns the new total.
+# ── Contribution (lifetime co-op stat, global) ─────────────────────────────────
+async def add_contribution(user_id: int, amount: int) -> int:
+    """Add to a user's lifetime contribution total. Returns the new total.
 
     Single atomic statement (mirrors add_coins) so concurrent co-op confirms
     can't lose an update. Contribution never decreases on spend.
     """
     amount = int(amount)
     await _conn().execute(
-        "INSERT INTO economy (guild_id, user_id, contribution) VALUES (?,?,MAX(0,?)) "
-        "ON CONFLICT(guild_id, user_id) DO UPDATE SET "
-        "contribution=MAX(0, contribution + ?)",
-        (str(guild_id), str(user_id), amount, amount),
+        "INSERT INTO economy (user_id, contribution) VALUES (?,MAX(0,?)) "
+        "ON CONFLICT(user_id) DO UPDATE SET contribution=MAX(0, contribution + ?)",
+        (str(user_id), amount, amount),
     )
     await _conn().commit()
-    return await get_contribution(guild_id, user_id)
+    return await get_contribution(user_id)
 
 
-async def get_contribution(guild_id: int, user_id: int) -> int:
+async def get_contribution(user_id: int) -> int:
     async with _conn().execute(
-        "SELECT contribution FROM economy WHERE guild_id=? AND user_id=?",
-        (str(guild_id), str(user_id)),
+        "SELECT contribution FROM economy WHERE user_id=?", (str(user_id),)
     ) as cur:
         row = await cur.fetchone()
     return row["contribution"] if row else 0
 
 
-async def get_contrib_rank(guild_id: int, user_id: int) -> tuple[int, int] | None:
-    """Return (rank, contribution) for a member; None if they have no points."""
-    points = await get_contribution(guild_id, user_id)
+async def get_contrib_rank(user_id: int) -> tuple[int, int] | None:
+    """Return (global rank, contribution); None if they have no points."""
+    points = await get_contribution(user_id)
     if points <= 0:
         return None
     async with _conn().execute(
-        "SELECT COUNT(*) FROM economy WHERE guild_id=? AND contribution > ?",
-        (str(guild_id), points),
+        "SELECT COUNT(*) FROM economy WHERE contribution > ?", (points,)
     ) as cur:
         ahead = (await cur.fetchone())[0]
     return ahead + 1, points
 
 
-async def get_contrib_leaderboard(
-    guild_id: int, limit: int = 10, offset: int = 0
-) -> list[dict]:
+async def get_contrib_leaderboard(limit: int = 10, offset: int = 0) -> list[dict]:
     async with _conn().execute(
-        "SELECT user_id, contribution FROM economy "
-        "WHERE guild_id=? AND contribution > 0 "
+        "SELECT user_id, contribution FROM economy WHERE contribution > 0 "
         "ORDER BY contribution DESC, user_id ASC LIMIT ? OFFSET ?",
-        (str(guild_id), int(limit), int(offset)),
+        (int(limit), int(offset)),
     ) as cur:
         rows = await cur.fetchall()
     return [
@@ -400,12 +400,23 @@ async def get_contrib_leaderboard(
     ]
 
 
-async def count_contrib(guild_id: int) -> int:
+async def count_contrib() -> int:
     async with _conn().execute(
-        "SELECT COUNT(*) FROM economy WHERE guild_id=? AND contribution > 0",
-        (str(guild_id),),
+        "SELECT COUNT(*) FROM economy WHERE contribution > 0"
     ) as cur:
         return (await cur.fetchone())[0]
+
+
+async def get_contrib_leaderboard_for(user_ids) -> list[dict]:
+    """Contribution rows for a set of users (the server-scoped view)."""
+    rows = await rows_for_users(
+        "SELECT user_id, contribution FROM economy",
+        user_ids,
+        positive_col="contribution",
+    )
+    return [
+        {"user_id": int(r["user_id"]), "contribution": r["contribution"]} for r in rows
+    ]
 
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -616,7 +627,7 @@ async def purchase_item(guild_id: int, item_id: int, user_id: int) -> dict:
             return {"ok": False, "reason": "out_of_stock", "item": item}
 
     # Charge the buyer; refund the reserved stock if they can't afford it.
-    if not await try_debit_coins(guild_id, user_id, item["price"]):
+    if not await try_debit_coins(user_id, item["price"]):
         if item["stock"] != -1:
             await _conn().execute(
                 "UPDATE shop_items SET stock=stock+1 WHERE guild_id=? AND id=?",
@@ -641,7 +652,7 @@ async def purchase_item(guild_id: int, item_id: int, user_id: int) -> dict:
         ),
     )
     await _conn().commit()
-    new_balance = await get_balance(guild_id, user_id)
+    new_balance = await get_balance(user_id)
     return {"ok": True, "item": item, "new_balance": new_balance}
 
 

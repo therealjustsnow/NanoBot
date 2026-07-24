@@ -46,6 +46,9 @@ _DOMAIN_ORDER = (
     "birthday",
     "liverole",
     "tickets",
+    # No tables of its own — registers migration 1 (per-guild economy → global),
+    # so it must be imported after every domain whose tables it rebuilds.
+    "globalize",
 )
 
 # _core first so its connection/schema names (init, close, _conn, migration, …)

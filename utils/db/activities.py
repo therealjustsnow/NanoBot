@@ -3,9 +3,14 @@
 
 Part of the utils/db package. Coins/items themselves live in the economy and
 items tables (utils/db/economy.py, utils/db/items.py) — this module only
-tracks per-guild config (enable flags + cooldown overrides) and per-member
-cooldown/lifetime stats (last-run timestamps, per-activity counts, the /work
-career shift tally, and the /mine pickaxe tier).
+tracks per-guild config (enable flags + cooldown overrides) and GLOBAL
+per-user cooldown/lifetime stats (last-run timestamps, per-activity counts, the
+/work career shift tally, and the /mine pickaxe tier).
+
+The stats row is keyed by user_id alone: a pickaxe bought in one server digs in
+every server, and a cooldown claimed anywhere applies everywhere (which is also
+what stops the same member farming /work once per server). How long that
+cooldown lasts, and whether an activity runs at all, stay per-guild settings.
 """
 
 from ._core import _conn, register_init
@@ -39,14 +44,13 @@ async def _ensure_activities_tables():
             rob_cooldown      INTEGER NOT NULL DEFAULT 14400
         )
     """)
-    # Per-member cooldown claims + lifetime stats. `work_shifts` doubles as the
+    # Per-user cooldown claims + lifetime stats. `work_shifts` doubles as the
     # /work career-ladder tally (see cogs.activities.helpers.career_info);
     # `pickaxe_level` is /mine-specific, the rest are generic per-activity
     # last-run/count pairs (see _ACTIVITY_COLUMNS).
     await _conn().execute("""
         CREATE TABLE IF NOT EXISTS activities_stats (
-            guild_id        TEXT NOT NULL,
-            user_id         TEXT NOT NULL,
+            user_id         TEXT PRIMARY KEY,
             last_work       REAL NOT NULL DEFAULT 0,
             work_shifts     INTEGER NOT NULL DEFAULT 0,
             last_mine       REAL NOT NULL DEFAULT 0,
@@ -57,8 +61,7 @@ async def _ensure_activities_tables():
             last_explore    REAL NOT NULL DEFAULT 0,
             explore_count   INTEGER NOT NULL DEFAULT 0,
             last_rob        REAL NOT NULL DEFAULT 0,
-            rob_count       INTEGER NOT NULL DEFAULT 0,
-            PRIMARY KEY (guild_id, user_id)
+            rob_count       INTEGER NOT NULL DEFAULT 0
         )
     """)
     await _conn().commit()
@@ -167,12 +170,12 @@ _STATS_DEFAULTS = {
 }
 
 
-async def get_activity_stats(guild_id: int, user_id: int) -> dict:
+async def get_activity_stats(user_id: int) -> dict:
     async with _conn().execute(
         "SELECT last_work, work_shifts, last_mine, mine_count, pickaxe_level, "
         "last_hunt, hunt_count, last_explore, explore_count, last_rob, rob_count "
-        "FROM activities_stats WHERE guild_id=? AND user_id=?",
-        (str(guild_id), str(user_id)),
+        "FROM activities_stats WHERE user_id=?",
+        (str(user_id),),
     ) as cur:
         row = await cur.fetchone()
     if row:
@@ -181,7 +184,7 @@ async def get_activity_stats(guild_id: int, user_id: int) -> dict:
 
 
 async def try_claim_activity(
-    guild_id: int, user_id: int, activity: str, now: float, cooldown: int
+    user_id: int, activity: str, now: float, cooldown: int
 ) -> int:
     """Atomically claim a cooldown slot for one activity. Returns 0 on
     success, else seconds left.
@@ -194,30 +197,28 @@ async def try_claim_activity(
     if activity not in _ACTIVITY_COLUMNS:
         raise ValueError(f"unknown activity {activity!r}")
     last_col, count_col = _ACTIVITY_COLUMNS[activity]
-    # The row is shared across all five activities (one per guild/user), so a
+    # The row is shared across all five activities (one per user), so a
     # fresh claim for THIS activity can hit the UPDATE branch even though its
     # own last_col is still the untouched 0 default (some other activity
     # created the row first) — guard that case explicitly, or a 0 baseline
     # would wrongly be treated as a real recent timestamp.
     cur = await _conn().execute(
-        f"INSERT INTO activities_stats (guild_id, user_id, {last_col}, {count_col}) "
-        f"VALUES (?,?,?,1) "
-        f"ON CONFLICT(guild_id, user_id) DO UPDATE SET "
+        f"INSERT INTO activities_stats (user_id, {last_col}, {count_col}) "
+        f"VALUES (?,?,1) "
+        f"ON CONFLICT(user_id) DO UPDATE SET "
         f"{last_col}=excluded.{last_col}, {count_col}={count_col}+1 "
         f"WHERE activities_stats.{last_col} = 0 "
         f"OR excluded.{last_col} - activities_stats.{last_col} >= ?",
-        (str(guild_id), str(user_id), float(now), int(cooldown)),
+        (str(user_id), float(now), int(cooldown)),
     )
     await _conn().commit()
     if cur.rowcount > 0:
         return 0
-    stats = await get_activity_stats(guild_id, user_id)
+    stats = await get_activity_stats(user_id)
     return max(1, int(cooldown - (now - stats[last_col])))
 
 
-async def set_pickaxe_level(
-    guild_id: int, user_id: int, new_level: int, *, expected: int
-) -> bool:
+async def set_pickaxe_level(user_id: int, new_level: int, *, expected: int) -> bool:
     """Conditionally advance the pickaxe tier (first upgrader wins a race).
 
     Returns False when the stored level no longer matches `expected` — the
@@ -227,13 +228,13 @@ async def set_pickaxe_level(
     if expected == 0:
         # A miner with no stats row yet is implicitly at level 0.
         await _conn().execute(
-            "INSERT OR IGNORE INTO activities_stats (guild_id, user_id) VALUES (?,?)",
-            (str(guild_id), str(user_id)),
+            "INSERT OR IGNORE INTO activities_stats (user_id) VALUES (?)",
+            (str(user_id),),
         )
     cur = await _conn().execute(
         "UPDATE activities_stats SET pickaxe_level=? "
-        "WHERE guild_id=? AND user_id=? AND pickaxe_level=?",
-        (int(new_level), str(guild_id), str(user_id), int(expected)),
+        "WHERE user_id=? AND pickaxe_level=?",
+        (int(new_level), str(user_id), int(expected)),
     )
     await _conn().commit()
     return cur.rowcount > 0

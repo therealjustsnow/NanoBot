@@ -7,7 +7,8 @@ everyone else — no other cog is modified, no listener spies on `/fish`,
 lazily, entirely from whatever these providers report right now.
 
 `STAT_PROVIDERS` is the documented per-key contract: one async
-``fn(guild_id, user_id) -> int | float`` per stat key. Evaluating ~30
+``fn(user_id) -> int | float`` per stat key — user-scoped, because every
+economy stat it reads is now global (one account per user, any server). Evaluating ~30
 achievements one provider call at a time would mean ~30 DB round-trips even
 though most of them read the same handful of source rows (e.g. five fishing
 achievements all come from one `fishing_stats` row) — so the actual bulk
@@ -21,7 +22,7 @@ from utils import db
 
 # Each source is awaited at most once per compute_stats() call, no matter how
 # many stat keys it feeds. Keep this in sync with _EXTRACTORS below.
-_SOURCES: dict[str, Callable[[int, int], Awaitable]] = {
+_SOURCES: dict[str, Callable[[int], Awaitable]] = {
     "fisher": db.get_fisher,  # dict: caught/earned/best_weight/streak_days/xp/…
     "dex": db.get_species_counts,  # dict: fish_key -> lifetime caught count
     "casino": db.get_casino_stats,  # dict: games/wagered/won/biggest_win/streak/best_streak
@@ -62,14 +63,14 @@ _EXTRACTORS: dict[str, tuple[str, Callable]] = {
 
 
 async def compute_stats(
-    guild_id: int, user_id: int, keys: "list[str] | None" = None
+    user_id: int, keys: "list[str] | None" = None
 ) -> dict[str, float]:
     """Batch-read every requested stat key (default: every registered key),
     fetching each underlying source exactly once regardless of how many keys
     ride on it."""
     wanted = list(_EXTRACTORS) if keys is None else list(dict.fromkeys(keys))
     needed_sources = {_EXTRACTORS[k][0] for k in wanted if k in _EXTRACTORS}
-    raw = {name: await _SOURCES[name](guild_id, user_id) for name in needed_sources}
+    raw = {name: await _SOURCES[name](user_id) for name in needed_sources}
     out: dict[str, float] = {}
     for key in wanted:
         entry = _EXTRACTORS.get(key)
@@ -80,9 +81,9 @@ async def compute_stats(
     return out
 
 
-def _make_provider(key: str) -> Callable[[int, int], Awaitable]:
-    async def _provider(guild_id: int, user_id: int):
-        stats = await compute_stats(guild_id, user_id, [key])
+def _make_provider(key: str) -> Callable[[int], Awaitable]:
+    async def _provider(user_id: int):
+        stats = await compute_stats(user_id, [key])
         return stats.get(key, 0)
 
     return _provider

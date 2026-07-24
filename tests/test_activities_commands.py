@@ -48,7 +48,7 @@ async def test_work_pays_and_blocks_second_shift(bot, monkeypatch):
     sent = dpytest.get_message()
     assert sent.embeds
     expected_pay = roll_work_pay(0.5, 0)
-    assert await db.get_balance(guild.id, author.id) == expected_pay
+    assert await db.get_balance(author.id) == expected_pay
 
     await dpytest.message("!work", member=author)
     sent = dpytest.get_message()
@@ -82,12 +82,12 @@ async def test_mine_dig_adds_ore_and_blocks_second_dig(bot, monkeypatch):
     await dpytest.message("!mine", member=author)
     sent = dpytest.get_message()
     assert "Dig" in sent.embeds[0].title
-    assert await db.get_item_qty(guild.id, author.id, expected_key) == 1
+    assert await db.get_item_qty(author.id, expected_key) == 1
 
     await dpytest.message("!mine dig", member=author)
     sent = dpytest.get_message()
     assert "Not Yet" in sent.embeds[0].title
-    assert await db.get_item_qty(guild.id, author.id, expected_key) == 1
+    assert await db.get_item_qty(author.id, expected_key) == 1
 
 
 @pytest.mark.cogs("cogs.activities")
@@ -101,7 +101,7 @@ async def test_mine_cave_in_yields_nothing(bot, monkeypatch):
     await dpytest.message("!mine", member=author)
     sent = dpytest.get_message()
     assert "Cave-In" in sent.embeds[0].title
-    assert await db.get_inventory(guild.id, author.id) == []
+    assert await db.get_inventory(author.id) == []
 
 
 @pytest.mark.cogs("cogs.activities")
@@ -119,26 +119,26 @@ async def test_mine_disabled(bot):
 async def test_mine_upgrade_charges_and_advances(bot):
     guild = config().guilds[0]
     author = config().members[0]
-    await db.add_coins(guild.id, author.id, 600)
+    await db.add_coins(author.id, 600)
 
     await dpytest.message("!mine upgrade", member=author)
     sent = dpytest.get_message()
     assert "Upgraded" in sent.embeds[0].title
-    assert (await db.get_activity_stats(guild.id, author.id))["pickaxe_level"] == 1
-    assert await db.get_balance(guild.id, author.id) == 600 - PICKAXES[1]["price"]
+    assert (await db.get_activity_stats(author.id))["pickaxe_level"] == 1
+    assert await db.get_balance(author.id) == 600 - PICKAXES[1]["price"]
 
 
 @pytest.mark.cogs("cogs.activities")
 async def test_mine_upgrade_insufficient_funds(bot):
     guild = config().guilds[0]
     author = config().members[0]
-    await db.add_coins(guild.id, author.id, 10)
+    await db.add_coins(author.id, 10)
 
     await dpytest.message("!mine upgrade", member=author)
     sent = dpytest.get_message()
     assert "Error" in sent.embeds[0].title
-    assert (await db.get_activity_stats(guild.id, author.id))["pickaxe_level"] == 0
-    assert await db.get_balance(guild.id, author.id) == 10
+    assert (await db.get_activity_stats(author.id))["pickaxe_level"] == 0
+    assert await db.get_balance(author.id) == 10
 
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -156,9 +156,9 @@ async def test_hunt_catch_only(bot, monkeypatch):
     await dpytest.message("!adventure hunt", member=author)
     sent = dpytest.get_message()
     assert sent.embeds
-    assert await db.get_item_qty(guild.id, author.id, "pelt") == 1
-    assert await db.get_item_qty(guild.id, author.id, "padlock") == 0
-    assert await db.get_balance(guild.id, author.id) == 0
+    assert await db.get_item_qty(author.id, "pelt") == 1
+    assert await db.get_item_qty(author.id, "padlock") == 0
+    assert await db.get_balance(author.id) == 0
 
 
 @pytest.mark.cogs("cogs.activities")
@@ -167,14 +167,14 @@ async def test_hunt_injury_deducts_fine(bot, monkeypatch):
 
     guild = config().guilds[0]
     author = config().members[0]
-    await db.add_coins(guild.id, author.id, 100)
+    await db.add_coins(author.id, 100)
     rolls = iter([0.5, 0.05, 0.4, 0.9])  # catch, injury(<.12), fine roll, no padlock
     monkeypatch.setattr(activities.random, "random", lambda: next(rolls))
 
     await dpytest.message("!adventure hunt", member=author)
     sent = dpytest.get_message()
     assert "tumble" in sent.embeds[0].description
-    assert await db.get_balance(guild.id, author.id) == 100 - round(0.4 * 50)
+    assert await db.get_balance(author.id) == 100 - round(0.4 * 50)
 
 
 @pytest.mark.cogs("cogs.activities")
@@ -187,7 +187,7 @@ async def test_hunt_padlock_found(bot, monkeypatch):
     monkeypatch.setattr(activities.random, "random", lambda: next(rolls))
 
     await dpytest.message("!adventure hunt", member=author)
-    assert await db.get_item_qty(guild.id, author.id, "padlock") == 1
+    assert await db.get_item_qty(author.id, "padlock") == 1
 
 
 @pytest.mark.cogs("cogs.activities")
@@ -217,7 +217,7 @@ async def test_explore_nothing(bot, monkeypatch):
     await dpytest.message("!adventure explore", member=author)
     sent = dpytest.get_message()
     assert "Explore" in sent.embeds[0].title
-    assert await db.get_balance(guild.id, author.id) == 0
+    assert await db.get_balance(author.id) == 0
 
 
 @pytest.mark.cogs("cogs.activities")
@@ -234,7 +234,7 @@ async def test_explore_coins_small(bot, monkeypatch):
     expected = round(
         EXPLORE_COINS_SMALL[0] + 0.5 * (EXPLORE_COINS_SMALL[1] - EXPLORE_COINS_SMALL[0])
     )
-    assert await db.get_balance(guild.id, author.id) == expected
+    assert await db.get_balance(author.id) == expected
 
 
 @pytest.mark.cogs("cogs.activities")
@@ -248,7 +248,7 @@ async def test_explore_item_reward(bot, monkeypatch):
     )
 
     await dpytest.message("!adventure explore", member=author)
-    assert await db.get_item_qty(guild.id, author.id, "treasure_key") == 1
+    assert await db.get_item_qty(author.id, "treasure_key") == 1
 
 
 @pytest.mark.cogs("cogs.activities")
@@ -270,8 +270,8 @@ async def test_rob_disabled(bot):
     guild = config().guilds[0]
     author, target = config().members[0], config().members[1]
     await db.set_activities_config(guild.id, rob_enabled=False)
-    await db.add_coins(guild.id, author.id, 500)
-    await db.add_coins(guild.id, target.id, 1000)
+    await db.add_coins(author.id, 500)
+    await db.add_coins(target.id, 1000)
 
     await dpytest.message(f"!rob {target.mention}", member=author)
     sent = dpytest.get_message()
@@ -281,7 +281,7 @@ async def test_rob_disabled(bot):
 @pytest.mark.cogs("cogs.activities")
 async def test_rob_self_rejected(bot):
     author = config().members[0]
-    await db.add_coins(config().guilds[0].id, author.id, 500)
+    await db.add_coins(author.id, 500)
 
     await dpytest.message(f"!rob {author.mention}", member=author)
     sent = dpytest.get_message()
@@ -292,9 +292,9 @@ async def test_rob_self_rejected(bot):
 async def test_rob_target_shielded(bot):
     guild = config().guilds[0]
     author, target = config().members[0], config().members[1]
-    await db.add_coins(guild.id, author.id, 500)
-    await db.add_coins(guild.id, target.id, 1000)
-    await db.grant_effect(guild.id, target.id, "rob_shield", 1, duration=3600)
+    await db.add_coins(author.id, 500)
+    await db.add_coins(target.id, 1000)
+    await db.grant_effect(target.id, "rob_shield", 1, duration=3600)
 
     await dpytest.message(f"!rob {target.mention}", member=author)
     sent = dpytest.get_message()
@@ -310,7 +310,7 @@ async def test_rob_target_shielded(bot):
 async def test_rob_robber_balance_too_low(bot):
     guild = config().guilds[0]
     author, target = config().members[0], config().members[1]
-    await db.add_coins(guild.id, target.id, 1000)
+    await db.add_coins(target.id, 1000)
 
     await dpytest.message(f"!rob {target.mention}", member=author)
     sent = dpytest.get_message()
@@ -322,8 +322,8 @@ async def test_rob_robber_balance_too_low(bot):
 async def test_rob_target_balance_too_low(bot):
     guild = config().guilds[0]
     author, target = config().members[0], config().members[1]
-    await db.add_coins(guild.id, author.id, 500)
-    await db.add_coins(guild.id, target.id, 10)
+    await db.add_coins(author.id, 500)
+    await db.add_coins(target.id, 10)
 
     await dpytest.message(f"!rob {target.mention}", member=author)
     sent = dpytest.get_message()
@@ -337,8 +337,8 @@ async def test_rob_success_steals_coins(bot, monkeypatch):
 
     guild = config().guilds[0]
     author, target = config().members[0], config().members[1]
-    await db.add_coins(guild.id, author.id, 500)
-    await db.add_coins(guild.id, target.id, 2000)
+    await db.add_coins(author.id, 500)
+    await db.add_coins(target.id, 2000)
     rolls = iter([0.1, 0.5])  # success roll (<.35), steal-amount roll
     monkeypatch.setattr(activities.random, "random", lambda: next(rolls))
 
@@ -346,8 +346,8 @@ async def test_rob_success_steals_coins(bot, monkeypatch):
     sent = dpytest.get_message()
     assert "Heist" in sent.embeds[0].title
     stolen = rob_steal_amount(0.5, 2000)
-    assert await db.get_balance(guild.id, author.id) == 500 + stolen
-    assert await db.get_balance(guild.id, target.id) == 2000 - stolen
+    assert await db.get_balance(author.id) == 500 + stolen
+    assert await db.get_balance(target.id) == 2000 - stolen
 
 
 @pytest.mark.cogs("cogs.activities")
@@ -356,15 +356,15 @@ async def test_rob_failure_pays_fine(bot, monkeypatch):
 
     guild = config().guilds[0]
     author, target = config().members[0], config().members[1]
-    await db.add_coins(guild.id, author.id, 500)
-    await db.add_coins(guild.id, target.id, 2000)
+    await db.add_coins(author.id, 500)
+    await db.add_coins(target.id, 2000)
     monkeypatch.setattr(activities.random, "random", lambda: 0.9)  # fail (>=.35)
 
     await dpytest.message(f"!rob {target.mention}", member=author)
     sent = dpytest.get_message()
     assert "Caught" in sent.embeds[0].title
-    assert await db.get_balance(guild.id, author.id) == 500 - ROB_FINE
-    assert await db.get_balance(guild.id, target.id) == 2000
+    assert await db.get_balance(author.id) == 500 - ROB_FINE
+    assert await db.get_balance(target.id) == 2000
 
 
 @pytest.mark.cogs("cogs.activities")
@@ -373,8 +373,8 @@ async def test_rob_cooldown_consumed_after_attempt(bot, monkeypatch):
 
     guild = config().guilds[0]
     author, target = config().members[0], config().members[1]
-    await db.add_coins(guild.id, author.id, 500)
-    await db.add_coins(guild.id, target.id, 2000)
+    await db.add_coins(author.id, 500)
+    await db.add_coins(target.id, 2000)
     monkeypatch.setattr(activities.random, "random", lambda: 0.9)  # fail
 
     await dpytest.message(f"!rob {target.mention}", member=author)
@@ -407,7 +407,7 @@ async def test_adventure_bare_shows_member_overview(bot):
     assert all("Ready now" in f.value for f in embed.fields)
 
     # A used activity reports its remaining cooldown; a disabled one says so.
-    await db.try_claim_activity(guild.id, author.id, "work", time.time(), 3600)
+    await db.try_claim_activity(author.id, "work", time.time(), 3600)
     await db.set_activities_config(guild.id, rob_enabled=False)
     await dpytest.message("!adventure", member=author)
     fields = {f.name: f.value for f in dpytest.get_message().embeds[0].fields}
@@ -478,7 +478,7 @@ async def test_mine_stats_shows_next_pickaxe_price(bot):
     # A second member with the coins in hand sees the affordable marker
     # (separate member because /mine stats carries a 5s per-user cooldown).
     rich = config().members[1]
-    await db.add_coins(guild.id, rich.id, PICKAXES[1]["price"])
+    await db.add_coins(rich.id, PICKAXES[1]["price"])
     await dpytest.message("!mine stats", member=rich)
     assert "✅ you can afford it" in dpytest.get_message().embeds[0].description
 

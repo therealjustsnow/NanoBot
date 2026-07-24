@@ -96,7 +96,7 @@ async def test_craft_recipe_autocomplete_marks_craftable_first(bot):
 
     key = sorted(RECIPES)[0]
     for item_key, need in RECIPES[key].inputs.items():
-        await db.add_item(guild.id, user.id, item_key, need)
+        await db.add_item(user.id, item_key, need)
     choices = await cog._craft_make_ac(interaction, "")
     assert choices[0].value == key
     assert choices[0].name.startswith("✅")
@@ -124,8 +124,8 @@ async def test_fish_sell_autocomplete_lists_your_bag(bot):
 
     assert await cog._fish_sell_ac(interaction, "") == []
 
-    await db.record_catch(guild.id, user.id, "mackerel", 1.5, 11)
-    await db.record_catch(guild.id, user.id, "mackerel", 1.2, 9)
+    await db.record_catch(user.id, "mackerel", 1.5, 11)
+    await db.record_catch(user.id, "mackerel", 1.2, 9)
     choices = await cog._fish_sell_ac(interaction, "")
     assert choices[0].value == "all"  # sell-everything option comes first
     assert [c.value for c in choices[1:]] == ["mackerel"]
@@ -144,7 +144,7 @@ async def test_fish_buy_autocomplete_marks_affordability(bot):
     assert all(c.name.startswith("🔒") for c in choices)  # broke: everything locked
     cheapest = item_catalog.get(choices[0].value)
 
-    await db.add_coins(guild.id, user.id, cheapest.price)
+    await db.add_coins(user.id, cheapest.price)
     choices = await cog._fish_buy_ac(interaction, "")
     assert choices[0].name.startswith("✅")
 
@@ -156,14 +156,14 @@ async def test_fish_sell_accepts_the_everything_choice(bot):
 
     guild = dpytest.get_config().guilds[0]
     author = dpytest.get_config().members[0]
-    await db.record_catch(guild.id, author.id, "mackerel", 1.5, 11)
-    await db.record_catch(guild.id, author.id, "cod", 2.0, 20)
+    await db.record_catch(author.id, "mackerel", 1.5, 11)
+    await db.record_catch(author.id, "cod", 2.0, 20)
 
     await dpytest.message("!fish sell all", member=author)
     sent = dpytest.get_message()
     assert "Sold" in sent.embeds[0].title
-    assert await db.get_bag(guild.id, author.id) == []
-    assert await db.get_balance(guild.id, author.id) == 31
+    assert await db.get_bag(author.id) == []
+    assert await db.get_balance(author.id) == 31
 
 
 # ── /inventory ────────────────────────────────────────────────────────────────
@@ -174,8 +174,8 @@ async def test_inventory_autocompletes_scope_to_what_you_own(bot):
     cog = bot.get_cog("Inventory")
     interaction = _stub_interaction(guild, user)
 
-    await db.add_item(guild.id, user.id, "iron_ore", 4)  # sellable, not usable
-    await db.add_item(guild.id, user.id, "lucky_charm", 1)  # usable, not sellable
+    await db.add_item(user.id, "iron_ore", 4)  # sellable, not usable
+    await db.add_item(user.id, "lucky_charm", 1)  # usable, not sellable
 
     usable = {c.value for c in await cog._use_ac(interaction, "")}
     sellable = {c.value for c in await cog._sell_ac(interaction, "")}
@@ -205,7 +205,7 @@ async def test_shop_autocomplete_shows_price_and_affordability(bot):
     assert [c.value for c in buyable] == [str(item_id)]  # hidden item not offered
     assert buyable[0].name.startswith("🔒")  # can't afford it yet
 
-    await db.add_coins(guild.id, user.id, 500)
+    await db.add_coins(user.id, 500)
     buyable = await cog._shop_buy_ac(interaction, "")
     assert buyable[0].name.startswith("✅")
 
@@ -224,7 +224,7 @@ async def test_shop_fulfill_autocomplete_lists_the_pending_queue(bot):
     assert await cog._shop_fulfill_ac(interaction, "") == []
 
     item_id = await db.add_shop_item(guild.id, "Shoutout", 10, kind="custom")
-    await db.add_coins(guild.id, user.id, 10)
+    await db.add_coins(user.id, 10)
     res = await db.purchase_item(guild.id, item_id, user.id)
     assert res["ok"]
 
@@ -249,7 +249,7 @@ async def test_title_autocomplete_offers_only_earned_titles(bot):
     assert [c.value for c in choices] == ["none"]
 
     titled = next(a for a in ACHIEVEMENTS if a.reward.get("title"))
-    await db.try_award_achievement(guild.id, user.id, titled.key)
+    await db.try_award_achievement(user.id, titled.key)
     choices = await cog._title_ac(interaction, "")
     assert titled.reward["title"] in [c.value for c in choices]
 

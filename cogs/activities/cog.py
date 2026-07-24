@@ -26,6 +26,12 @@ Coins ride the existing economy tables (db.add_coins et al.), and loot rides
 the shared inventory (utils/db/items.py), so earnings from any activity spend
 anywhere coins/items do (/shop, /pay, /coin gamble, /inventory sell).
 
+Stats, tools, and cooldowns are GLOBAL — keyed by user, not (guild, user). A
+pickaxe bought in one server digs in all of them, and a cooldown claimed
+anywhere applies everywhere (which is what stops /work being farmed once per
+server). Each server still owns whether an activity is enabled and how long
+its cooldown lasts.
+
 Slash command budget: two flat commands (/work, /rob) plus two groups
 (/mine …, /adventure …) whose subcommands cost no extra top-level slots —
 hunt, explore, and the Manage-Server settings all live under /adventure.
@@ -100,7 +106,8 @@ log = logging.getLogger("NanoBot.activities")
 
 
 class Activities(commands.Cog):
-    """Work, mine, hunt, explore, and rob for NanoCoins — per server."""
+    """Work, mine, hunt, explore, and rob for NanoCoins — stats, tools, and
+    cooldowns are per user and shared across servers."""
 
     def __init__(self, bot: commands.Bot):
         self.bot = bot
@@ -108,12 +115,12 @@ class Activities(commands.Cog):
         # (the /daily pattern), mirroring cogs.fishing.Fishing._locks.
         self._locks = h.KeyedLocks()
 
-    def _lock(self, guild_id: int, user_id: int):
+    def _lock(self, user_id: int):
         # Returns an async context manager; existing `async with self._lock(...)`
         # call sites are unchanged. KeyedLocks refcounts holder + waiters and
         # drops an entry when the last interested task releases, so the map no
         # longer grows for the lifetime of the process.
-        return self._locks.hold((guild_id, user_id))
+        return self._locks.hold(user_id)
 
     def _money(self, econ: dict, amount: int) -> str:
         return h.fmt_coins(amount, econ["currency_name"], econ["currency_emoji"])
@@ -164,9 +171,9 @@ class Activities(commands.Cog):
             return await ctx.reply(
                 embed=h.err("Working is disabled on this server."), ephemeral=True
             )
-        before = await db.get_activity_stats(ctx.guild.id, ctx.author.id)
+        before = await db.get_activity_stats(ctx.author.id)
         retry = await db.try_claim_activity(
-            ctx.guild.id, ctx.author.id, "work", time.time(), cfg["work_cooldown"]
+            ctx.author.id, "work", time.time(), cfg["work_cooldown"]
         )
         if retry:
             return await ctx.reply(
@@ -177,13 +184,13 @@ class Activities(commands.Cog):
                 ephemeral=True,
             )
 
-        stats = await db.get_activity_stats(ctx.guild.id, ctx.author.id)
+        stats = await db.get_activity_stats(ctx.author.id)
         info = career_info(stats["work_shifts"])
         old_info = career_info(before["work_shifts"])
         pay = roll_work_pay(random.random(), info["bonus"])
         scene = pick_work_scene(random.random())
         econ = await db.get_econ_config(ctx.guild.id)
-        new_bal = await db.add_coins(ctx.guild.id, ctx.author.id, pay)
+        new_bal = await db.add_coins(ctx.author.id, pay)
 
         desc = f"{scene}\nYou earned {self._money(econ, pay)}.\nBalance: {self._money(econ, new_bal)}"
         if info["tier"] > old_info["tier"]:
@@ -231,7 +238,7 @@ class Activities(commands.Cog):
                 embed=h.err("Mining is disabled on this server."), ephemeral=True
             )
         retry = await db.try_claim_activity(
-            ctx.guild.id, ctx.author.id, "mine", time.time(), cfg["mine_cooldown"]
+            ctx.author.id, "mine", time.time(), cfg["mine_cooldown"]
         )
         if retry:
             return await ctx.reply(
@@ -250,15 +257,15 @@ class Activities(commands.Cog):
             embed.set_footer(text=self._next_up(cfg, "mine"))
             return await ctx.reply(embed=embed)
 
-        stats = await db.get_activity_stats(ctx.guild.id, ctx.author.id)
+        stats = await db.get_activity_stats(ctx.author.id)
         pickaxe = pickaxe_info(stats["pickaxe_level"])
         ore_key = pick_ore(random.random(), pickaxe["luck"])
         ore = ORES[ore_key]
-        await db.add_item(ctx.guild.id, ctx.author.id, ore_key, 1)
+        await db.add_item(ctx.author.id, ore_key, 1)
 
         desc = f"You dig up {ore['emoji']} **{ore['name']}**!"
         if roll_mine_treasure_key(random.random()):
-            await db.add_item(ctx.guild.id, ctx.author.id, "treasure_key", 1)
+            await db.add_item(ctx.author.id, "treasure_key", 1)
             desc += f"\n{item_catalogue.display('treasure_key')} You also found a treasure key!"
         desc += "\n\nSell it with `/inventory sell`."
         embed = h.ok(desc, "⛏️ Dig")
@@ -269,8 +276,8 @@ class Activities(commands.Cog):
     @mine.command(name="upgrade", description="Buy the next pickaxe tier with coins.")
     async def mine_upgrade(self, ctx: commands.Context):
         econ = await db.get_econ_config(ctx.guild.id)
-        async with self._lock(ctx.guild.id, ctx.author.id):
-            stats = await db.get_activity_stats(ctx.guild.id, ctx.author.id)
+        async with self._lock(ctx.author.id):
+            stats = await db.get_activity_stats(ctx.author.id)
             nxt = next_pickaxe(stats["pickaxe_level"])
             if nxt is None:
                 return await ctx.reply(
@@ -279,8 +286,8 @@ class Activities(commands.Cog):
                     ),
                     ephemeral=True,
                 )
-            if not await db.try_debit_coins(ctx.guild.id, ctx.author.id, nxt["price"]):
-                balance = await db.get_balance(ctx.guild.id, ctx.author.id)
+            if not await db.try_debit_coins(ctx.author.id, nxt["price"]):
+                balance = await db.get_balance(ctx.author.id)
                 return await ctx.reply(
                     embed=h.err(
                         f"{nxt['emoji']} **{nxt['name']}** costs "
@@ -290,14 +297,13 @@ class Activities(commands.Cog):
                     ephemeral=True,
                 )
             upgraded = await db.set_pickaxe_level(
-                ctx.guild.id,
                 ctx.author.id,
                 stats["pickaxe_level"] + 1,
                 expected=stats["pickaxe_level"],
             )
             if not upgraded:
                 # A racing second upgrade already went through — refund.
-                await db.add_coins(ctx.guild.id, ctx.author.id, nxt["price"])
+                await db.add_coins(ctx.author.id, nxt["price"])
                 return await ctx.reply(
                     embed=h.warn("That upgrade already went through.", "⛏️ Pickaxe"),
                     ephemeral=True,
@@ -317,7 +323,7 @@ class Activities(commands.Cog):
     async def mine_stats(self, ctx: commands.Context):
         cfg = await db.get_activities_config(ctx.guild.id)
         econ = await db.get_econ_config(ctx.guild.id)
-        stats = await db.get_activity_stats(ctx.guild.id, ctx.author.id)
+        stats = await db.get_activity_stats(ctx.author.id)
         pickaxe = pickaxe_info(stats["pickaxe_level"])
         nxt = next_pickaxe(stats["pickaxe_level"])
         desc = (
@@ -330,7 +336,7 @@ class Activities(commands.Cog):
         if nxt:
             # The price used to be invisible until the purchase failed — the
             # only way to learn it was to try to buy and be told you're broke.
-            balance = await db.get_balance(ctx.guild.id, ctx.author.id)
+            balance = await db.get_balance(ctx.author.id)
             afford = (
                 "✅ you can afford it"
                 if balance >= nxt["price"]
@@ -375,7 +381,7 @@ class Activities(commands.Cog):
         whether you can do it right now. (Mods get the settings dump from
         /adventure config.)"""
         cfg = await db.get_activities_config(ctx.guild.id)
-        stats = await db.get_activity_stats(ctx.guild.id, ctx.author.id)
+        stats = await db.get_activity_stats(ctx.author.id)
         embed = h.embed(
             "🧭 Things To Do",
             "Every way to earn beyond `/daily` and `/fish` — each on its own "
@@ -405,7 +411,7 @@ class Activities(commands.Cog):
                 embed=h.err("Hunting is disabled on this server."), ephemeral=True
             )
         retry = await db.try_claim_activity(
-            ctx.guild.id, ctx.author.id, "hunt", time.time(), cfg["hunt_cooldown"]
+            ctx.author.id, "hunt", time.time(), cfg["hunt_cooldown"]
         )
         if retry:
             return await ctx.reply(
@@ -418,21 +424,21 @@ class Activities(commands.Cog):
 
         catch_key = pick_hunt_catch(random.random())
         catch = HUNT_CATCHES[catch_key]
-        await db.add_item(ctx.guild.id, ctx.author.id, catch_key, 1)
+        await db.add_item(ctx.author.id, catch_key, 1)
         econ = await db.get_econ_config(ctx.guild.id)
         desc = f"You bring back {catch['emoji']} **{catch['name']}**!"
 
         if roll_hunt_injury(random.random()):
             fine = hunt_injury_fine(random.random())
             if fine > 0:
-                await db.add_coins(ctx.guild.id, ctx.author.id, -fine)
+                await db.add_coins(ctx.author.id, -fine)
                 desc += (
                     f"\n🤕 You took a tumble on the way back and paid "
                     f"{self._money(econ, fine)} for a bandage."
                 )
 
         if roll_hunt_padlock(random.random()):
-            await db.add_item(ctx.guild.id, ctx.author.id, "padlock", 1)
+            await db.add_item(ctx.author.id, "padlock", 1)
             desc += f"\n{item_catalogue.display('padlock')} You also found a padlock!"
 
         desc += "\n\nSell loot with `/inventory sell`."
@@ -452,7 +458,7 @@ class Activities(commands.Cog):
                 embed=h.err("Exploring is disabled on this server."), ephemeral=True
             )
         retry = await db.try_claim_activity(
-            ctx.guild.id, ctx.author.id, "explore", time.time(), cfg["explore_cooldown"]
+            ctx.author.id, "explore", time.time(), cfg["explore_cooldown"]
         )
         if retry:
             return await ctx.reply(
@@ -475,7 +481,7 @@ class Activities(commands.Cog):
                 EXPLORE_COINS_SMALL if outcome == "coins_small" else EXPLORE_COINS_BIG
             )
             amount = roll_coin_amount(random.random(), lo, hi)
-            new_bal = await db.add_coins(ctx.guild.id, ctx.author.id, amount)
+            new_bal = await db.add_coins(ctx.author.id, amount)
             title = "🧭 Big Find!" if outcome == "coins_big" else "🧭 Explore"
             embed = h.ok(
                 f"{flavor}\nYou found {self._money(econ, amount)}!\n"
@@ -483,7 +489,7 @@ class Activities(commands.Cog):
                 title,
             )
         else:
-            await db.add_item(ctx.guild.id, ctx.author.id, outcome, 1)
+            await db.add_item(ctx.author.id, outcome, 1)
             embed = h.ok(
                 f"{flavor}\nYou found {item_catalogue.display(outcome)}!", "🧭 Explore"
             )
@@ -525,7 +531,7 @@ class Activities(commands.Cog):
                 embed=h.err("You can't rob yourself."), ephemeral=True
             )
 
-        target_effects = await db.get_active_effects(ctx.guild.id, member.id)
+        target_effects = await db.get_active_effects(member.id)
         if "rob_shield" in target_effects:
             return await ctx.reply(
                 embed=h.warn(
@@ -536,7 +542,7 @@ class Activities(commands.Cog):
                 ephemeral=True,
             )
 
-        robber_balance = await db.get_balance(ctx.guild.id, ctx.author.id)
+        robber_balance = await db.get_balance(ctx.author.id)
         if robber_balance < ROB_MIN_ROBBER_BALANCE:
             return await ctx.reply(
                 embed=h.err(
@@ -545,7 +551,7 @@ class Activities(commands.Cog):
                 ),
                 ephemeral=True,
             )
-        target_balance = await db.get_balance(ctx.guild.id, member.id)
+        target_balance = await db.get_balance(member.id)
         if target_balance < ROB_MIN_TARGET_BALANCE:
             return await ctx.reply(
                 embed=h.err(
@@ -556,7 +562,7 @@ class Activities(commands.Cog):
             )
 
         retry = await db.try_claim_activity(
-            ctx.guild.id, ctx.author.id, "rob", time.time(), cfg["rob_cooldown"]
+            ctx.author.id, "rob", time.time(), cfg["rob_cooldown"]
         )
         if retry:
             return await ctx.reply(
@@ -567,21 +573,19 @@ class Activities(commands.Cog):
                 ephemeral=True,
             )
 
-        robber_effects = await db.get_active_effects(ctx.guild.id, ctx.author.id)
+        robber_effects = await db.get_active_effects(ctx.author.id)
         has_luck = "luck" in robber_effects
         if rob_success(random.random(), has_luck):
             steal = rob_steal_amount(random.random(), target_balance)
-            ok = await db.try_debit_coins(ctx.guild.id, member.id, steal)
+            ok = await db.try_debit_coins(member.id, steal)
             if not ok:
                 # The target's balance moved between the check and the debit
                 # (e.g. they spent it) — steal whatever's left instead.
-                fresh_balance = await db.get_balance(ctx.guild.id, member.id)
+                fresh_balance = await db.get_balance(member.id)
                 steal = min(steal, fresh_balance)
-                ok = steal > 0 and await db.try_debit_coins(
-                    ctx.guild.id, member.id, steal
-                )
+                ok = steal > 0 and await db.try_debit_coins(member.id, steal)
             if ok and steal > 0:
-                new_bal = await db.add_coins(ctx.guild.id, ctx.author.id, steal)
+                new_bal = await db.add_coins(ctx.author.id, steal)
                 return await ctx.reply(
                     embed=h.ok(
                         f"🥷 You snuck off with {self._money(econ, steal)} from "
@@ -597,12 +601,12 @@ class Activities(commands.Cog):
                 )
             )
 
-        ok = await db.try_debit_coins(ctx.guild.id, ctx.author.id, ROB_FINE)
+        ok = await db.try_debit_coins(ctx.author.id, ROB_FINE)
         if not ok:
             # Can't cover the full fine — take whatever they have (add_coins
             # clamps at 0, so this never goes negative).
-            await db.add_coins(ctx.guild.id, ctx.author.id, -ROB_FINE)
-        new_bal = await db.get_balance(ctx.guild.id, ctx.author.id)
+            await db.add_coins(ctx.author.id, -ROB_FINE)
+        new_bal = await db.get_balance(ctx.author.id)
         await ctx.reply(
             embed=h.err(
                 f"🚨 You got caught trying to rob {member.display_name} and paid a "

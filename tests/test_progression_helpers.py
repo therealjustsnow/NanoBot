@@ -114,38 +114,37 @@ def test_period_key_changes_across_a_week():
 
 # ── Deterministic weekly picks ───────────────────────────────────────────────────
 def test_pick_weekly_objectives_is_deterministic():
-    a = pick_weekly_objectives(1, 2, "2026-W30", WEEKLY_POOL, 3)
-    b = pick_weekly_objectives(1, 2, "2026-W30", WEEKLY_POOL, 3)
+    a = pick_weekly_objectives(2, "2026-W30", WEEKLY_POOL, 3)
+    b = pick_weekly_objectives(2, "2026-W30", WEEKLY_POOL, 3)
     assert [d.key for d in a] == [d.key for d in b]
 
 
 def test_pick_weekly_objectives_returns_requested_count_and_distinct_entries():
-    picks = pick_weekly_objectives(1, 2, "2026-W30", WEEKLY_POOL, 3)
+    picks = pick_weekly_objectives(2, "2026-W30", WEEKLY_POOL, 3)
     assert len(picks) == 3
     assert len({d.key for d in picks}) == 3
     assert all(p in WEEKLY_POOL for p in picks)
 
 
 def test_pick_weekly_objectives_varies_by_user():
-    a = pick_weekly_objectives(1, 2, "2026-W30", WEEKLY_POOL, 3)
-    b = pick_weekly_objectives(1, 999, "2026-W30", WEEKLY_POOL, 3)
+    a = pick_weekly_objectives(2, "2026-W30", WEEKLY_POOL, 3)
+    b = pick_weekly_objectives(999, "2026-W30", WEEKLY_POOL, 3)
     # Not guaranteed different, but the two users' seeds differ, so at least
     # one of many pool-sized draws should show variation across a handful of
     # different "users" (guards against an accidental constant seed).
     variants = {
-        tuple(d.key for d in pick_weekly_objectives(1, u, "2026-W30", WEEKLY_POOL, 3))
+        tuple(d.key for d in pick_weekly_objectives(u, "2026-W30", WEEKLY_POOL, 3))
         for u in range(20)
     }
     assert len(variants) > 1
 
 
 def test_pick_weekly_objectives_varies_by_period():
-    a = pick_weekly_objectives(1, 2, "2026-W30", WEEKLY_POOL, 3)
-    b = pick_weekly_objectives(1, 2, "2026-W31", WEEKLY_POOL, 3)
+    a = pick_weekly_objectives(2, "2026-W30", WEEKLY_POOL, 3)
+    b = pick_weekly_objectives(2, "2026-W31", WEEKLY_POOL, 3)
     variants = {
         tuple(
-            d.key
-            for d in pick_weekly_objectives(1, 2, f"2026-W{w:02d}", WEEKLY_POOL, 3)
+            d.key for d in pick_weekly_objectives(2, f"2026-W{w:02d}", WEEKLY_POOL, 3)
         )
         for w in range(1, 20)
     }

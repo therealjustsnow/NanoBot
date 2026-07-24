@@ -44,7 +44,7 @@ async def test_flip_win_credits_payout_and_streak(bot, monkeypatch):
 
     guild = config().guilds[0]
     author = config().members[0]
-    await db.add_coins(guild.id, author.id, 500)
+    await db.add_coins(author.id, 500)
     # roll 0.0 -> "heads" always wins.
     monkeypatch.setattr(casino.random, "random", lambda: 0.0)
     # Isolate this balance assertion from the (guild, user, day)-seeded daily
@@ -55,8 +55,8 @@ async def test_flip_win_credits_payout_and_streak(bot, monkeypatch):
     sent = dpytest.get_message()
     assert "Won" in sent.embeds[0].title
     # 500 - 100 (debit) + round(100*1.92) (payout) = 592
-    assert await db.get_balance(guild.id, author.id) == 592
-    stats = await db.get_casino_stats(guild.id, author.id)
+    assert await db.get_balance(author.id) == 592
+    stats = await db.get_casino_stats(author.id)
     assert stats["games"] == 1
     assert stats["streak"] == 1
 
@@ -67,7 +67,7 @@ async def test_flip_loss_debits_and_resets_streak(bot, monkeypatch):
 
     guild = config().guilds[0]
     author = config().members[0]
-    await db.add_coins(guild.id, author.id, 500)
+    await db.add_coins(author.id, 500)
     # roll near 1.0 -> "tails"; betting on heads loses.
     monkeypatch.setattr(casino.random, "random", lambda: 0.999999)
     monkeypatch.setattr(casino, "generate_challenges", lambda *a, **k: [])
@@ -75,8 +75,8 @@ async def test_flip_loss_debits_and_resets_streak(bot, monkeypatch):
     await dpytest.message("!casino flip 100 heads", member=author)
     sent = dpytest.get_message()
     assert "Lost" in sent.embeds[0].title
-    assert await db.get_balance(guild.id, author.id) == 400
-    stats = await db.get_casino_stats(guild.id, author.id)
+    assert await db.get_balance(author.id) == 400
+    stats = await db.get_casino_stats(author.id)
     assert stats["streak"] == 0
 
 
@@ -84,50 +84,50 @@ async def test_flip_loss_debits_and_resets_streak(bot, monkeypatch):
 async def test_flip_insufficient_funds(bot):
     guild = config().guilds[0]
     author = config().members[0]
-    await db.add_coins(guild.id, author.id, 10)
+    await db.add_coins(author.id, 10)
 
     await dpytest.message("!casino flip 100 heads", member=author)
     sent = dpytest.get_message()
     assert "Error" in sent.embeds[0].title
-    assert await db.get_balance(guild.id, author.id) == 10
-    assert (await db.get_casino_stats(guild.id, author.id))["games"] == 0
+    assert await db.get_balance(author.id) == 10
+    assert (await db.get_casino_stats(author.id))["games"] == 0
 
 
 @pytest.mark.cogs("cogs.casino")
 async def test_flip_invalid_side(bot):
     guild = config().guilds[0]
     author = config().members[0]
-    await db.add_coins(guild.id, author.id, 500)
+    await db.add_coins(author.id, 500)
 
     await dpytest.message("!casino flip 100 sideways", member=author)
     sent = dpytest.get_message()
     assert "Error" in sent.embeds[0].title
-    assert await db.get_balance(guild.id, author.id) == 500
+    assert await db.get_balance(author.id) == 500
 
 
 @pytest.mark.cogs("cogs.casino")
 async def test_bet_below_minimum_rejected(bot):
     guild = config().guilds[0]
     author = config().members[0]
-    await db.add_coins(guild.id, author.id, 500)
+    await db.add_coins(author.id, 500)
 
     await dpytest.message("!casino flip 1 heads", member=author)
     sent = dpytest.get_message()
     assert "Error" in sent.embeds[0].title
     assert "between" in sent.embeds[0].description
-    assert await db.get_balance(guild.id, author.id) == 500
+    assert await db.get_balance(author.id) == 500
 
 
 @pytest.mark.cogs("cogs.casino")
 async def test_bet_zero_or_negative_rejected(bot):
     guild = config().guilds[0]
     author = config().members[0]
-    await db.add_coins(guild.id, author.id, 500)
+    await db.add_coins(author.id, 500)
 
     await dpytest.message("!casino dice 0", member=author)
     sent = dpytest.get_message()
     assert "Error" in sent.embeds[0].title
-    assert await db.get_balance(guild.id, author.id) == 500
+    assert await db.get_balance(author.id) == 500
 
 
 @pytest.mark.cogs("cogs.casino")
@@ -136,7 +136,7 @@ async def test_dice_push_refunds_bet(bot, monkeypatch):
 
     guild = config().guilds[0]
     author = config().members[0]
-    await db.add_coins(guild.id, author.id, 500)
+    await db.add_coins(author.id, 500)
     # Both player and dealer roll a total of 7 (die(0.0)=1, die(0.999)=6).
     rolls = iter([0.0, 0.999999, 0.999999, 0.0])
     monkeypatch.setattr(casino.random, "random", lambda: next(rolls))
@@ -145,7 +145,7 @@ async def test_dice_push_refunds_bet(bot, monkeypatch):
     await dpytest.message("!casino dice 100", member=author)
     sent = dpytest.get_message()
     assert "Push" in sent.embeds[0].title
-    assert await db.get_balance(guild.id, author.id) == 500  # bet refunded
+    assert await db.get_balance(author.id) == 500  # bet refunded
 
 
 @pytest.mark.cogs("cogs.casino")
@@ -154,7 +154,7 @@ async def test_slots_triple_seven_awards_jackpot(bot, monkeypatch):
 
     guild = config().guilds[0]
     author = config().members[0]
-    await db.add_coins(guild.id, author.id, 1000)
+    await db.add_coins(author.id, 1000)
     await db.add_to_jackpot(guild.id, 777)
     monkeypatch.setattr(casino.random, "random", lambda: 0.999999)  # all reels -> 7️⃣
     monkeypatch.setattr(casino, "generate_challenges", lambda *a, **k: [])
@@ -165,19 +165,19 @@ async def test_slots_triple_seven_awards_jackpot(bot, monkeypatch):
     assert any("JACKPOT" in (f.name or "") for f in sent.embeds[0].fields)
     assert (await db.get_casino_config(guild.id))["jackpot_pool"] == 0
     # 1000 - 100 (debit) + 4500 (triple-7 payout) + 777 (jackpot) = 6177
-    assert await db.get_balance(guild.id, author.id) == 6177
+    assert await db.get_balance(author.id) == 6177
 
 
 @pytest.mark.cogs("cogs.casino")
 async def test_roulette_unknown_space_rejected(bot):
     guild = config().guilds[0]
     author = config().members[0]
-    await db.add_coins(guild.id, author.id, 500)
+    await db.add_coins(author.id, 500)
 
     await dpytest.message("!casino roulette 100 purple", member=author)
     sent = dpytest.get_message()
     assert "Error" in sent.embeds[0].title
-    assert await db.get_balance(guild.id, author.id) == 500
+    assert await db.get_balance(author.id) == 500
 
 
 @pytest.mark.cogs("cogs.casino")
@@ -186,7 +186,7 @@ async def test_roulette_number_bet_wins(bot, monkeypatch):
 
     guild = config().guilds[0]
     author = config().members[0]
-    await db.add_coins(guild.id, author.id, 500)
+    await db.add_coins(author.id, 500)
     monkeypatch.setattr(casino.random, "random", lambda: 0.0)  # spins to pocket 0
     monkeypatch.setattr(casino, "generate_challenges", lambda *a, **k: [])
 
@@ -194,7 +194,7 @@ async def test_roulette_number_bet_wins(bot, monkeypatch):
     sent = dpytest.get_message()
     assert "Won" in sent.embeds[0].title
     # 500 - 100 + 100*35 = 3900
-    assert await db.get_balance(guild.id, author.id) == 3900
+    assert await db.get_balance(author.id) == 3900
 
 
 @pytest.mark.cogs("cogs.casino")
@@ -203,7 +203,7 @@ async def test_blackjack_deals_and_debits(bot, monkeypatch):
 
     guild = config().guilds[0]
     author = config().members[0]
-    await db.add_coins(guild.id, author.id, 500)
+    await db.add_coins(author.id, 500)
 
     # A fixed, non-shuffled shoe (shoe.pop() takes from the end): dealt order
     # is player 2♠ 7♥ (9, no natural), dealer 3♦ 4♣ (7, no natural).
@@ -215,7 +215,7 @@ async def test_blackjack_deals_and_debits(bot, monkeypatch):
     sent = dpytest.get_message()
     assert sent.embeds
     assert sent.embeds[0].title == "🃏 Blackjack"
-    assert await db.get_balance(guild.id, author.id) == 400  # bet debited, hand open
+    assert await db.get_balance(author.id) == 400  # bet debited, hand open
 
     # The open hand is persisted (restart-safety) the moment it's dealt.
     open_hands = await db.get_open_blackjack_hands()
@@ -237,7 +237,7 @@ async def test_blackjack_hit_persists_shoe_and_hand(bot, monkeypatch):
 
     guild = config().guilds[0]
     author = config().members[0]
-    await db.add_coins(guild.id, author.id, 500)
+    await db.add_coins(author.id, 500)
 
     # Dealt (popped from the end): player 2♠ 7♥ (9), dealer 3♦ 4♣ (7) — no
     # naturals. Next Hit pops 5♣.
@@ -260,7 +260,7 @@ async def test_blackjack_hit_persists_shoe_and_hand(bot, monkeypatch):
     assert row["player"] == view.player_cards
     assert row["shoe"] == view.shoe
     # Bet is still just debited — the hand hasn't settled yet.
-    assert await db.get_balance(guild.id, author.id) == 400
+    assert await db.get_balance(author.id) == 400
 
     await casino_cog._end_blackjack(hand_id)
     await db.delete_blackjack_hand(hand_id)
@@ -273,7 +273,7 @@ async def test_blackjack_stand_settles_and_deletes_row(bot, monkeypatch):
 
     guild = config().guilds[0]
     author = config().members[0]
-    await db.add_coins(guild.id, author.id, 500)
+    await db.add_coins(author.id, 500)
     monkeypatch.setattr(casino, "generate_challenges", lambda *a, **k: [])
 
     # Dealt: player 2♠ 7♥ (9), dealer 3♦ 4♣ (7, must hit); next pop is 10♣,
@@ -297,7 +297,7 @@ async def test_blackjack_stand_settles_and_deletes_row(bot, monkeypatch):
     assert hand_id not in casino_cog._bj_hands
     assert hand_id not in casino_cog._bj_tasks
     # Player 9 loses to dealer 17: bet stays spent, no payout.
-    assert await db.get_balance(guild.id, author.id) == 400
+    assert await db.get_balance(author.id) == 400
 
 
 @pytest.mark.cogs("cogs.casino")
@@ -307,7 +307,7 @@ async def test_blackjack_wrong_user_cannot_press_buttons(bot, monkeypatch):
     guild = config().guilds[0]
     author = config().members[0]
     other = config().members[1]
-    await db.add_coins(guild.id, author.id, 500)
+    await db.add_coins(author.id, 500)
 
     fixed_shoe = [("5", "♣"), ("4", "♣"), ("3", "♦"), ("7", "♥"), ("2", "♠")]
     monkeypatch.setattr(casino, "new_shoe", lambda decks: list(fixed_shoe))
@@ -337,7 +337,7 @@ async def test_blackjack_double_settle_pays_out_once(bot, monkeypatch):
 
     guild = config().guilds[0]
     author = config().members[0]
-    await db.add_coins(guild.id, author.id, 500)
+    await db.add_coins(author.id, 500)
     monkeypatch.setattr(casino, "generate_challenges", lambda *a, **k: [])
 
     fixed_shoe = [("10", "♣"), ("4", "♣"), ("3", "♦"), ("7", "♥"), ("2", "♠")]
@@ -351,11 +351,11 @@ async def test_blackjack_double_settle_pays_out_once(bot, monkeypatch):
     hand_id, view = next(iter(casino_cog._bj_hands.items()))
 
     await view._settle(_FakeInteraction(author.id))
-    balance_after_first = await db.get_balance(guild.id, author.id)
+    balance_after_first = await db.get_balance(author.id)
     second_interaction = _FakeInteraction(author.id)
     await view._settle(second_interaction)  # already _done -> early no-op
 
-    assert await db.get_balance(guild.id, author.id) == balance_after_first
+    assert await db.get_balance(author.id) == balance_after_first
     assert second_interaction.response.sent is not None  # got the "already settled" ack
 
 
@@ -367,7 +367,7 @@ async def test_blackjack_expiry_auto_stands_and_settles(bot, monkeypatch):
 
     guild = config().guilds[0]
     author = config().members[0]
-    await db.add_coins(guild.id, author.id, 500)
+    await db.add_coins(author.id, 500)
     monkeypatch.setattr(casino, "generate_challenges", lambda *a, **k: [])
 
     # Same deterministic hand as the Stand test: player 9 vs dealer -> 17.
@@ -387,11 +387,11 @@ async def test_blackjack_expiry_auto_stands_and_settles(bot, monkeypatch):
     assert await db.get_open_blackjack_hands() == []
     assert hand_id not in casino_cog._bj_hands
     assert hand_id not in casino_cog._bj_tasks
-    assert await db.get_balance(guild.id, author.id) == 400  # player 9 loses to 17
+    assert await db.get_balance(author.id) == 400  # player 9 loses to 17
 
     # A second expire() call (e.g. a duplicate timer fire) is a safe no-op.
     await view.expire()
-    assert await db.get_balance(guild.id, author.id) == 400
+    assert await db.get_balance(author.id) == 400
 
 
 @pytest.mark.cogs("cogs.casino")
@@ -402,8 +402,8 @@ async def test_blackjack_expiry_settles_even_without_a_live_view(bot):
     guild = config().guilds[0]
     author = config().members[0]
     channel = config().channels[0]
-    await db.add_coins(guild.id, author.id, 500)
-    await db.try_debit_coins(guild.id, author.id, 100)  # mirrors the real deal flow
+    await db.add_coins(author.id, 500)
+    await db.try_debit_coins(author.id, 100)  # mirrors the real deal flow
 
     placeholder = await channel.send("placeholder for a restart-restored hand")
     # Player 9 vs dealer 7 (must hit); shoe's last card (10♣) brings the
@@ -441,7 +441,7 @@ async def test_blackjack_expiry_settles_even_without_a_live_view(bot):
 
     assert await db.get_open_blackjack_hands() == []
     assert hand_id not in casino_cog._bj_hands
-    assert await db.get_balance(guild.id, author.id) == 400  # player 9 loses to 17
+    assert await db.get_balance(author.id) == 400  # player 9 loses to 17
 
 
 @pytest.mark.cogs("cogs.casino")
@@ -451,8 +451,8 @@ async def test_restore_schedules_settles_orphaned_hand_with_no_message(bot):
     debited forever, even with nothing to edit."""
     guild = config().guilds[0]
     author = config().members[0]
-    await db.add_coins(guild.id, author.id, 500)
-    await db.try_debit_coins(guild.id, author.id, 100)  # mirrors the real deal flow
+    await db.add_coins(author.id, 500)
+    await db.try_debit_coins(author.id, 100)  # mirrors the real deal flow
 
     hand_id = await db.create_blackjack_hand(
         guild.id,
@@ -474,7 +474,7 @@ async def test_restore_schedules_settles_orphaned_hand_with_no_message(bot):
 
     assert await db.get_open_blackjack_hands() == []
     assert hand_id not in casino_cog._bj_hands
-    assert await db.get_balance(guild.id, author.id) == 400  # player 9 loses to 17
+    assert await db.get_balance(author.id) == 400  # player 9 loses to 17
 
 
 # ── /casino challenge ────────────────────────────────────────────────────────────
@@ -496,7 +496,7 @@ async def test_challenge_auto_claims_and_credits_reward(bot, monkeypatch):
 
     guild = config().guilds[0]
     author = config().members[0]
-    await db.add_coins(guild.id, author.id, 500)
+    await db.add_coins(author.id, 500)
 
     one_challenge = [
         {
@@ -513,16 +513,16 @@ async def test_challenge_auto_claims_and_credits_reward(bot, monkeypatch):
     sent = dpytest.get_message()
     assert "🏆" in (sent.embeds[0].footer.text or "")
     # 500 - 100 (lost the flip) + 150 (challenge reward) = 550
-    assert await db.get_balance(guild.id, author.id) == 550
+    assert await db.get_balance(author.id) == 550
 
     today = int(time.time() // 86400)
-    progress = await db.get_challenge_progress(guild.id, author.id, today, "play_games")
+    progress = await db.get_challenge_progress(author.id, today, "play_games")
     assert progress == {"progress": 1, "claimed": True}
 
     # A second game must not pay the reward again.
     await dpytest.message("!casino flip 100 heads", member=author)
     dpytest.get_message()
-    assert await db.get_balance(guild.id, author.id) == 450  # 550 - 100, no reward
+    assert await db.get_balance(author.id) == 450  # 550 - 100, no reward
 
 
 @pytest.mark.cogs("cogs.casino")
@@ -531,7 +531,7 @@ async def test_challenge_progress_hint_shown_before_completion(bot, monkeypatch)
 
     guild = config().guilds[0]
     author = config().members[0]
-    await db.add_coins(guild.id, author.id, 500)
+    await db.add_coins(author.id, 500)
 
     one_challenge = [
         {
@@ -580,7 +580,7 @@ async def test_toggle_flips_config_and_blocks_play(bot):
     guild = config().guilds[0]
     author = config().members[0]
     await grant_perms(author, manage_guild=True)
-    await db.add_coins(guild.id, author.id, 500)
+    await db.add_coins(author.id, 500)
 
     await dpytest.message("!casino toggle", member=author)
     sent = dpytest.get_message()
@@ -590,7 +590,7 @@ async def test_toggle_flips_config_and_blocks_play(bot):
     await dpytest.message("!casino flip 100 heads", member=author)
     sent = dpytest.get_message()
     assert "disabled" in sent.embeds[0].description
-    assert await db.get_balance(guild.id, author.id) == 500
+    assert await db.get_balance(author.id) == 500
 
     await dpytest.message("!casino toggle", member=author)
     sent = dpytest.get_message()
@@ -610,7 +610,7 @@ async def test_limit_updates_bounds_and_enforces_them(bot):
     guild = config().guilds[0]
     author = config().members[0]
     await grant_perms(author, manage_guild=True)
-    await db.add_coins(guild.id, author.id, 500)
+    await db.add_coins(author.id, 500)
 
     await dpytest.message("!casino limit 5 50", member=author)
     sent = dpytest.get_message()
@@ -623,7 +623,7 @@ async def test_limit_updates_bounds_and_enforces_them(bot):
     await dpytest.message("!casino flip 100 heads", member=author)
     sent = dpytest.get_message()
     assert "between" in sent.embeds[0].description
-    assert await db.get_balance(guild.id, author.id) == 500
+    assert await db.get_balance(author.id) == 500
 
 
 @pytest.mark.cogs("cogs.casino")

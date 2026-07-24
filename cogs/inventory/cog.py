@@ -2,7 +2,9 @@
 cogs/inventory.py
 Generic item inventory — the shared item layer of the NanoCoin economy.
 
-Everything a member owns that isn't coins or bagged fish lives here: bait,
+Items are GLOBAL, exactly like the coin balance: one stack per (user, item),
+carried into every server. Everything a member owns that isn't coins or bagged
+fish lives here: bait,
 consumables, crafting materials, treasure, keys, and event drops. Items are
 defined code-side in the shared catalogue (utils/items.py) and stored as
 (item_key, qty) stacks, so any economy cog can grant, check, or consume items
@@ -51,12 +53,12 @@ class Inventory(commands.Cog):
         # economy /daily pattern) so a double-send can't double-apply.
         self._locks = h.KeyedLocks()
 
-    def _lock(self, guild_id: int, user_id: int):
+    def _lock(self, user_id: int):
         # Returns an async context manager; existing `async with self._lock(...)`
         # call sites are unchanged. KeyedLocks refcounts holder + waiters and
         # drops an entry when the last interested task releases, so the map no
         # longer grows for the lifetime of the process.
-        return self._locks.hold((guild_id, user_id))
+        return self._locks.hold(user_id)
 
     def _money(self, econ: dict, amount: int) -> str:
         return h.fmt_coins(amount, econ["currency_name"], econ["currency_emoji"])
@@ -75,9 +77,7 @@ class Inventory(commands.Cog):
     ) -> list[discord.app_commands.Choice[str]]:
         q = (current or "").strip().lower()
         stacks = (
-            await db.get_inventory(interaction.guild_id, interaction.user.id)
-            if interaction.guild_id
-            else []
+            await db.get_inventory(interaction.user.id) if interaction.guild_id else []
         )
         choices: list[discord.app_commands.Choice[str]] = []
         for stack in stacks:
@@ -144,8 +144,8 @@ class Inventory(commands.Cog):
             await self._show(ctx)
 
     async def _show(self, ctx: commands.Context):
-        stacks = await db.get_inventory(ctx.guild.id, ctx.author.id)
-        effects = await db.get_active_effects(ctx.guild.id, ctx.author.id)
+        stacks = await db.get_inventory(ctx.author.id)
+        effects = await db.get_active_effects(ctx.author.id)
         if not stacks and not effects:
             return await ctx.reply(
                 embed=h.info(
@@ -211,7 +211,7 @@ class Inventory(commands.Cog):
                 ephemeral=True,
             )
         qty = max(1, min(int(qty or 1), MAX_BULK))
-        async with self._lock(ctx.guild.id, ctx.author.id):
+        async with self._lock(ctx.author.id):
             if d.key == "treasure_chest":
                 return await self._open_chest(ctx, qty)
             if not d.effect:
@@ -231,8 +231,8 @@ class Inventory(commands.Cog):
                 qty = min(qty, max(1, EFFECT_MAX_USES // per_uses))
             uses = per_uses * qty
             duration = per_duration * qty
-            if not await db.try_consume_item(ctx.guild.id, ctx.author.id, d.key, qty):
-                have = await db.get_item_qty(ctx.guild.id, ctx.author.id, d.key)
+            if not await db.try_consume_item(ctx.author.id, d.key, qty):
+                have = await db.get_item_qty(ctx.author.id, d.key)
                 return await ctx.reply(
                     embed=h.err(
                         f"You need **{qty}** × {item_catalog.display(d.key)} "
@@ -241,7 +241,6 @@ class Inventory(commands.Cog):
                     ephemeral=True,
                 )
             await db.grant_effect(
-                ctx.guild.id,
                 ctx.author.id,
                 d.effect["key"],
                 float(d.effect.get("magnitude", 0)),
@@ -266,9 +265,9 @@ class Inventory(commands.Cog):
 
     async def _open_chest(self, ctx: commands.Context, qty: int):
         """Chests need a key each: consume chest+key pairs, pay coins."""
-        gid, uid = ctx.guild.id, ctx.author.id
-        keys = await db.get_item_qty(gid, uid, "treasure_key")
-        chests = await db.get_item_qty(gid, uid, "treasure_chest")
+        uid = ctx.author.id
+        keys = await db.get_item_qty(uid, "treasure_key")
+        chests = await db.get_item_qty(uid, "treasure_chest")
         qty = min(qty, keys, chests)
         if qty <= 0:
             return await ctx.reply(
@@ -278,16 +277,16 @@ class Inventory(commands.Cog):
                 ),
                 ephemeral=True,
             )
-        if not await db.try_consume_item(gid, uid, "treasure_chest", qty):
+        if not await db.try_consume_item(uid, "treasure_chest", qty):
             return await ctx.reply(
                 embed=h.err("Those chests just vanished — try again.")
             )
-        if not await db.try_consume_item(gid, uid, "treasure_key", qty):
-            await db.add_item(gid, uid, "treasure_chest", qty)
+        if not await db.try_consume_item(uid, "treasure_key", qty):
+            await db.add_item(uid, "treasure_chest", qty)
             return await ctx.reply(embed=h.err("Your keys just vanished — try again."))
         coins = sum(chest_payout(random.random()) for _ in range(qty))
-        await db.add_coins(gid, uid, coins)
-        econ = await db.get_econ_config(gid)
+        await db.add_coins(uid, coins)
+        econ = await db.get_econ_config(ctx.guild.id)  # currency label only
         await ctx.reply(
             embed=h.embed(
                 "🧰 Chest Opened!" if qty == 1 else f"🧰 {qty} Chests Opened!",
@@ -321,12 +320,10 @@ class Inventory(commands.Cog):
                 embed=h.warn(f"{item_catalog.display(d.key)} can't be sold."),
                 ephemeral=True,
             )
-        async with self._lock(ctx.guild.id, ctx.author.id):
-            have = await db.get_item_qty(ctx.guild.id, ctx.author.id, d.key)
+        async with self._lock(ctx.author.id):
+            have = await db.get_item_qty(ctx.author.id, d.key)
             count = have if qty is None else max(1, min(int(qty), MAX_BULK))
-            if count <= 0 or not await db.try_consume_item(
-                ctx.guild.id, ctx.author.id, d.key, count
-            ):
+            if count <= 0 or not await db.try_consume_item(ctx.author.id, d.key, count):
                 return await ctx.reply(
                     embed=h.err(
                         f"You have **{have}** × {item_catalog.display(d.key)} to sell."
@@ -334,7 +331,7 @@ class Inventory(commands.Cog):
                     ephemeral=True,
                 )
             coins = d.value * count
-            await db.add_coins(ctx.guild.id, ctx.author.id, coins)
+            await db.add_coins(ctx.author.id, coins)
         econ = await db.get_econ_config(ctx.guild.id)
         await ctx.reply(
             embed=h.ok(
@@ -374,10 +371,8 @@ class Inventory(commands.Cog):
                 ephemeral=True,
             )
         qty = max(1, min(int(qty or 1), MAX_BULK))
-        if not await db.transfer_item(
-            ctx.guild.id, ctx.author.id, member.id, d.key, qty
-        ):
-            have = await db.get_item_qty(ctx.guild.id, ctx.author.id, d.key)
+        if not await db.transfer_item(ctx.author.id, member.id, d.key, qty):
+            have = await db.get_item_qty(ctx.author.id, d.key)
             return await ctx.reply(
                 embed=h.err(
                     f"You have **{have}** × {item_catalog.display(d.key)} — "

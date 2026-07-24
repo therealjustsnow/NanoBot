@@ -325,7 +325,7 @@ def test_challenge_label_and_short_label_cover_every_pool_key():
 
 
 def test_generate_challenges_picks_distinct_keys_within_range():
-    challenges = generate_challenges(1, 2, 100)
+    challenges = generate_challenges(2, 100)
     assert len(challenges) == CHALLENGE_COUNT
     keys = [c["chal_key"] for c in challenges]
     assert len(set(keys)) == len(keys)  # no duplicate challenge kind in one day
@@ -337,13 +337,13 @@ def test_generate_challenges_picks_distinct_keys_within_range():
 
 
 def test_generate_challenges_is_deterministic_per_seed():
-    a = generate_challenges(111, 222, 42)
-    b = generate_challenges(111, 222, 42)
+    a = generate_challenges(222, 42)
+    b = generate_challenges(222, 42)
     assert a == b
 
 
 def test_generate_challenges_varies_by_day_or_user():
-    a = generate_challenges(111, 222, 42)
-    b = generate_challenges(111, 222, 43)
-    c = generate_challenges(111, 333, 42)
+    a = generate_challenges(222, 42)
+    b = generate_challenges(222, 43)
+    c = generate_challenges(333, 42)
     assert a != b or a != c

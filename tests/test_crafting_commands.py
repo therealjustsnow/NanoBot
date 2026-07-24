@@ -22,27 +22,27 @@ async def test_bare_craft_lists_recipes(bot):
 async def test_make_succeeds_and_consumes_materials(bot):
     guild = config().guilds[0]
     author = config().members[0]
-    await db.add_item(guild.id, author.id, "pelt", 5)
+    await db.add_item(author.id, "pelt", 5)
 
     await dpytest.message("!craft make fur_coat", member=author)
     sent = dpytest.get_message()
     assert "Crafted" in sent.embeds[0].title
-    assert await db.get_item_qty(guild.id, author.id, "pelt") == 0
-    assert await db.get_item_qty(guild.id, author.id, "craft_fur_coat") == 1
+    assert await db.get_item_qty(author.id, "pelt") == 0
+    assert await db.get_item_qty(author.id, "craft_fur_coat") == 1
 
 
 @pytest.mark.cogs("cogs.crafting")
 async def test_make_missing_materials_reports_error_and_consumes_nothing(bot):
     guild = config().guilds[0]
     author = config().members[0]
-    await db.add_item(guild.id, author.id, "pelt", 2)  # need 5
+    await db.add_item(author.id, "pelt", 2)  # need 5
 
     await dpytest.message("!craft make fur_coat", member=author)
     sent = dpytest.get_message()
     assert "Error" in sent.embeds[0].title
     assert "pelt" in sent.embeds[0].description.lower()
-    assert await db.get_item_qty(guild.id, author.id, "pelt") == 2
-    assert await db.get_item_qty(guild.id, author.id, "craft_fur_coat") == 0
+    assert await db.get_item_qty(author.id, "pelt") == 2
+    assert await db.get_item_qty(author.id, "craft_fur_coat") == 0
 
 
 @pytest.mark.cogs("cogs.crafting")
@@ -57,13 +57,13 @@ async def test_make_unknown_recipe(bot):
 async def test_make_with_qty_multiplies_inputs_and_output(bot):
     guild = config().guilds[0]
     author = config().members[0]
-    await db.add_item(guild.id, author.id, "pelt", 15)  # 3x fur_coat needs 15
+    await db.add_item(author.id, "pelt", 15)  # 3x fur_coat needs 15
 
     await dpytest.message("!craft make fur_coat 3", member=author)
     sent = dpytest.get_message()
     assert "Crafted" in sent.embeds[0].title
-    assert await db.get_item_qty(guild.id, author.id, "pelt") == 0
-    assert await db.get_item_qty(guild.id, author.id, "craft_fur_coat") == 3
+    assert await db.get_item_qty(author.id, "pelt") == 0
+    assert await db.get_item_qty(author.id, "craft_fur_coat") == 3
 
 
 @pytest.mark.cogs("cogs.crafting")
@@ -71,13 +71,13 @@ async def test_make_qty_partial_shortfall_refunds_nothing_consumed(bot):
     guild = config().guilds[0]
     author = config().members[0]
     # Enough pelt for 2x fur_coat (10) but the command asks for 3x (needs 15).
-    await db.add_item(guild.id, author.id, "pelt", 10)
+    await db.add_item(author.id, "pelt", 10)
 
     await dpytest.message("!craft make fur_coat 3", member=author)
     sent = dpytest.get_message()
     assert "Error" in sent.embeds[0].title
-    assert await db.get_item_qty(guild.id, author.id, "pelt") == 10
-    assert await db.get_item_qty(guild.id, author.id, "craft_fur_coat") == 0
+    assert await db.get_item_qty(author.id, "pelt") == 10
+    assert await db.get_item_qty(author.id, "craft_fur_coat") == 0
 
 
 @pytest.mark.cogs("cogs.crafting")
@@ -104,12 +104,12 @@ async def test_craft_output_can_be_used_via_inventory(bot):
     consumable's effect is armed the same way any other consumable is."""
     guild = config().guilds[0]
     author = config().members[0]
-    await db.add_item(guild.id, author.id, "meat", 3)
-    await db.add_item(guild.id, author.id, "coal", 2)
+    await db.add_item(author.id, "meat", 3)
+    await db.add_item(author.id, "coal", 2)
 
     await dpytest.message("!craft make campfire_feast", member=author)
     dpytest.get_message()
-    assert await db.get_item_qty(guild.id, author.id, "craft_campfire_feast") == 1
+    assert await db.get_item_qty(author.id, "craft_campfire_feast") == 1
 
 
 @pytest.mark.cogs("cogs.crafting")
@@ -118,11 +118,11 @@ async def test_multi_input_shortfall_refunds_earlier_inputs(bot):
     LAST input is short, the already-consumed gold_ore must come back."""
     guild = config().guilds[0]
     author = config().members[0]
-    await db.add_item(guild.id, author.id, "gold_ore", 2)
+    await db.add_item(author.id, "gold_ore", 2)
     # No diamond at all.
 
     await dpytest.message("!craft make gem_ring", member=author)
     sent = dpytest.get_message()
     assert "diamond" in str(sent.embeds[0].to_dict()).lower()
-    assert await db.get_item_qty(guild.id, author.id, "gold_ore") == 2
-    assert await db.get_item_qty(guild.id, author.id, "craft_gem_ring") == 0
+    assert await db.get_item_qty(author.id, "gold_ore") == 2
+    assert await db.get_item_qty(author.id, "craft_gem_ring") == 0

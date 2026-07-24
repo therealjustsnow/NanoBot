@@ -1,6 +1,13 @@
 """
 cogs/economy.py
-Per-guild NanoCoin economy.
+NanoCoin economy — GLOBAL wallets, per-guild settings.
+
+A member's wallet, daily streak, and lifetime contribution belong to the
+*user*: coins earned in one server spend in every other one, and /daily is a
+single claim per day across the whole bot (not one per server). What each
+server still owns is its own settings — currency name/emoji, daily amount,
+streak bonus, co-op/raid rewards — and its own shop, /squad and /raid boards.
+See docs/global-economy.md for the full scope split.
 
 Members hold a coin balance, claim a daily reward (with a consecutive-day
 streak bonus), and pay each other. They also reward co-op activity: /squad
@@ -27,14 +34,14 @@ Commands
   /pay <member> <amount>         → send coins to someone
   /squad [member…] [activity]    → co-op reward, teammates confirm (alias: coop)
   /raid [activity]               → group co-op join board (alias: event)
-  /coin top [page]               → richest members
-  /coin contrib [page]           → top contributors (alias: contributions)
+  /coin top [page] [scope]       → richest members (this server or global)
+  /coin contrib [page] [scope]   → top contributors (alias: contributions)
   /coin gamble <amount>          → bet coins to double them (alias: bet)
   /coin grant <amount> [member…] → add coins        (tag up to 5, or blank for
                                                        a 25-member picker) (Manage Server)
   /coin take <amount> [member…]  → remove coins     (tag up to 5, or blank for
                                                        a 25-member picker) (Manage Server)
-  /coin reset [member]           → wipe balances    (Manage Server)
+  /coin reset [member]           → wipe a global wallet   (bot owner)
   /coin daily <amount>           → set daily reward (Manage Server)
   /coin streakbonus <amount>     → per-day bonus    (Manage Server)
   /coin coop <amount>            → set co-op reward (Manage Server)
@@ -65,6 +72,7 @@ from discord.ext import commands
 
 from utils import db
 from utils import helpers as h
+from utils.helpers import SCOPE_CHOICES
 
 from .constants import COIN_MAX, COOP_CONFIRM_TIMEOUT, RAID_TIMEOUT, _DEFAULT_SHOP_ITEMS
 from .helpers import (
@@ -80,13 +88,14 @@ log = logging.getLogger("NanoBot.economy")
 
 
 class Economy(commands.Cog):
-    """NanoCoin balances, daily rewards, and transfers — per server."""
+    """NanoCoin balances, daily rewards, and transfers — one wallet per user,
+    shared by every server the bot is in."""
 
     def __init__(self, bot: commands.Bot):
         self.bot = bot
-        # Per-(guild, user) locks serialize the read-check-write in /daily so two
-        # concurrent invocations can't both pass the cooldown check and
-        # double-claim. Entries free themselves once idle (KeyedLocks).
+        # Per-user locks serialize the read-check-write in /daily. The claim
+        # is global, so the two racing invocations this guards against can be
+        # in two different servers. Entries free themselves once idle.
         self._daily_locks = h.KeyedLocks()
         # Open /raid boards + pending /squad confirms, keyed by id: the live view
         # + its expiry timer. Persisted in SQLite (economy_raids/economy_squads)
@@ -112,11 +121,11 @@ class Economy(commands.Cog):
         self._raid_tasks.clear()
         self._squad_tasks.clear()
 
-    def _daily_lock(self, guild_id: int, user_id: int):
+    def _daily_lock(self, user_id: int):
         # Returns an async context manager; existing `async with` call sites
         # are unchanged. KeyedLocks refcounts holder + waiters and drops an
         # entry when the last interested task releases.
-        return self._daily_locks.hold((guild_id, user_id))
+        return self._daily_locks.hold(user_id)
 
     async def _cfg(self, guild_id: int) -> dict:
         return await db.get_econ_config(guild_id)
@@ -135,7 +144,9 @@ class Economy(commands.Cog):
             "category": "🪙 Economy",
             "short": "Check a coin balance",
             "usage": "balance [member]",
-            "desc": "Shows the coin balance and server wealth rank for you or another member.",
+            "desc": "Shows the coin balance, global wealth rank, and contribution "
+            "rank for you or another member. Balances are global — the same "
+            "wallet in every server.",
             "args": ["member — whose balance to show (defaults to you)"],
             "perms": "None",
             "example": "{prefix}balance\n{prefix}bal @Friend",
@@ -153,19 +164,20 @@ class Economy(commands.Cog):
                 embed=h.err("Bots don't hold coins."), ephemeral=True
             )
         cfg = await self._cfg(ctx.guild.id)
-        res = await db.get_econ_rank(ctx.guild.id, member.id)
+        res = await db.get_econ_rank(member.id)
         coins = res[1] if res else 0
         rank_pos = res[0] if res else None
-        contrib = await db.get_contrib_rank(ctx.guild.id, member.id)
+        contrib = await db.get_contrib_rank(member.id)
 
         embed = h.embed(f"{cfg['currency_emoji']} {member.display_name}", color=h.BLUE)
         embed.set_thumbnail(url=member.display_avatar.url)
         embed.add_field(name="Balance", value=self._money(cfg, coins), inline=True)
         embed.add_field(
-            name="Rank",
+            name="Global rank",
             value=f"**#{rank_pos}**" if rank_pos else "Unranked",
             inline=True,
         )
+        embed.set_footer(text="One wallet — the same balance in every server.")
         if contrib:
             embed.add_field(
                 name="🤝 Contribution",
@@ -193,8 +205,8 @@ class Economy(commands.Cog):
     @commands.guild_only()
     async def daily(self, ctx: commands.Context):
         cfg = await self._cfg(ctx.guild.id)
-        async with self._daily_lock(ctx.guild.id, ctx.author.id):
-            last_daily, streak = await db.get_daily_state(ctx.guild.id, ctx.author.id)
+        async with self._daily_lock(ctx.author.id):
+            last_daily, streak = await db.get_daily_state(ctx.author.id)
             res = compute_daily(
                 time.time(),
                 last_daily,
@@ -218,10 +230,8 @@ class Economy(commands.Cog):
                     ephemeral=True,
                 )
 
-            new_bal = await db.add_coins(ctx.guild.id, ctx.author.id, res["total"])
-            await db.set_daily_state(
-                ctx.guild.id, ctx.author.id, time.time(), res["streak"]
-            )
+            new_bal = await db.add_coins(ctx.author.id, res["total"])
+            await db.set_daily_state(ctx.author.id, time.time(), res["streak"])
         desc = f"You claimed {self._money(cfg, res['total'])}!"
         if res["streak"] > 1:
             desc += f"\n🔥 **{res['streak']}-day streak**"
@@ -260,14 +270,14 @@ class Economy(commands.Cog):
                 embed=h.err("Amount must be positive."), ephemeral=True
             )
 
-        ok = await db.transfer_coins(ctx.guild.id, ctx.author.id, member.id, amount)
+        ok = await db.transfer_coins(ctx.author.id, member.id, amount)
         if not ok:
-            bal = await db.get_balance(ctx.guild.id, ctx.author.id)
+            bal = await db.get_balance(ctx.author.id)
             return await ctx.reply(
                 embed=h.err(f"Not enough coins. You have {self._money(cfg, bal)}."),
                 ephemeral=True,
             )
-        new_bal = await db.get_balance(ctx.guild.id, ctx.author.id)
+        new_bal = await db.get_balance(ctx.author.id)
         await ctx.reply(
             embed=h.ok(
                 f"Sent {self._money(cfg, amount)} to {member.mention}.\n"
@@ -295,20 +305,38 @@ class Economy(commands.Cog):
     )
     @commands.guild_only()
     async def coin(self, ctx: commands.Context):
-        await self._show_leaderboard(ctx, 1)
+        await self._show_leaderboard(ctx, 1, "server")
 
     # ── /coin top ───────────────────────────────────────────────────────────
     @coin.command(name="top", description="Show the richest members.")
-    @app_commands.describe(page="Page number (10 per page)")
+    @app_commands.describe(
+        page="Page number (10 per page)",
+        scope="This server's members, or every server (wallets are global)",
+    )
+    @app_commands.choices(scope=SCOPE_CHOICES)
     @commands.cooldown(1, 5, commands.BucketType.user)
-    async def coin_top(self, ctx: commands.Context, page: int = 1):
-        await self._show_leaderboard(ctx, page)
+    async def coin_top(
+        self, ctx: commands.Context, page: int = 1, scope: str = "server"
+    ):
+        await self._show_leaderboard(ctx, page, scope)
 
-    async def _show_leaderboard(self, ctx: commands.Context, page: int):
+    async def _show_leaderboard(self, ctx: commands.Context, page: int, scope: str):
+        """Rich list. Wallets are global, so "this server" is that same table
+        filtered to the guild's members — both views rank the same coins."""
         cfg = await self._cfg(ctx.guild.id)
-        page = max(1, page)
         per = 10
-        total = await db.count_econ(ctx.guild.id)
+        if scope == "global":
+            total = await db.count_econ()
+            pages = max(1, (total + per - 1) // per)
+            page = max(1, min(page, pages))
+            offset = (page - 1) * per
+            rows = await db.get_econ_leaderboard(per, offset)
+        else:
+            all_rows = await db.get_econ_leaderboard_for(h.member_ids(ctx.guild))
+            rows, page, pages, total = h.page_rows(
+                all_rows, lambda r: (-r["coins"], r["user_id"]), page, per
+            )
+            offset = (page - 1) * per
         if total == 0:
             return await ctx.reply(
                 embed=h.info(
@@ -316,23 +344,35 @@ class Economy(commands.Cog):
                     f"{cfg['currency_emoji']} Rich List",
                 )
             )
-        pages = (total + per - 1) // per
-        page = min(page, pages)
-        offset = (page - 1) * per
-        rows = await db.get_econ_leaderboard(ctx.guild.id, per, offset)
 
         medals = {1: "🥇", 2: "🥈", 3: "🥉"}
         lines = []
         for i, row in enumerate(rows):
             pos = offset + i + 1
-            member = ctx.guild.get_member(row["user_id"])
-            name = member.display_name if member else f"User {row['user_id']}"
             badge = medals.get(pos, f"`#{pos}`")
-            lines.append(f"{badge} **{name}** — {self._money(cfg, row['coins'])}")
+            lines.append(
+                f"{badge} **{self._name_for(ctx, row['user_id'])}** — "
+                f"{self._money(cfg, row['coins'])}"
+            )
 
-        embed = h.embed(f"{cfg['currency_emoji']} Rich List", "\n".join(lines), h.BLUE)
-        embed.set_footer(text=f"Page {page}/{pages} · {total} members")
+        title = f"{cfg['currency_emoji']} Rich List"
+        if scope == "global":
+            title += " (Global)"
+        embed = h.embed(title, "\n".join(lines), h.BLUE)
+        embed.set_footer(
+            text=f"Page {page}/{pages} · {total} "
+            + ("wallets across every server" if scope == "global" else "members here")
+        )
         await ctx.reply(embed=embed)
+
+    def _name_for(self, ctx: commands.Context, user_id: int) -> str:
+        """Display name for a leaderboard row — a global board can list people
+        who aren't in this server, so fall back to the bot-wide user cache."""
+        member = ctx.guild.get_member(user_id) if ctx.guild else None
+        if member:
+            return member.display_name
+        user = self.bot.get_user(user_id)
+        return user.display_name if user else f"User {user_id}"
 
     # ── /coin gamble ─────────────────────────────────────────────────────────────
     @coin.command(
@@ -348,8 +388,8 @@ class Economy(commands.Cog):
             return await ctx.reply(embed=h.err("Bet must be positive."), ephemeral=True)
         # Atomically reserve the stake so two rapid bets can't spend the same
         # coins. On a win we hand back the stake plus the net winnings.
-        if not await db.try_debit_coins(ctx.guild.id, ctx.author.id, amount):
-            balance = await db.get_balance(ctx.guild.id, ctx.author.id)
+        if not await db.try_debit_coins(ctx.author.id, amount):
+            balance = await db.get_balance(ctx.author.id)
             return await ctx.reply(
                 embed=h.err(f"Not enough coins. You have {self._money(cfg, balance)}."),
                 ephemeral=True,
@@ -357,11 +397,9 @@ class Economy(commands.Cog):
 
         res = resolve_gamble(amount, random.random())
         if res["won"]:
-            new_bal = await db.add_coins(
-                ctx.guild.id, ctx.author.id, amount + res["delta"]
-            )
+            new_bal = await db.add_coins(ctx.author.id, amount + res["delta"])
         else:
-            new_bal = await db.get_balance(ctx.guild.id, ctx.author.id)
+            new_bal = await db.get_balance(ctx.author.id)
         if res["won"]:
             embed = h.ok(
                 f"🎰 You won {self._money(cfg, res['delta'])}!\n"
@@ -379,10 +417,11 @@ class Economy(commands.Cog):
 
     # ── /coin grant ─────────────────────────────────────────────────────────────
     @coin.command(
-        name="grant", description="Add coins to one or more members' balances."
+        name="grant",
+        description="Add coins to one or more members' (global) balances.",
     )
     @app_commands.describe(
-        amount="Coins to add per member",
+        amount="Coins to add to each member's global wallet",
         member="Member to credit (leave every member blank to open a 25-member picker)",
         member2="Another member (optional)",
         member3="Another member (optional)",
@@ -406,10 +445,11 @@ class Economy(commands.Cog):
 
     # ── /coin take ─────────────────────────────────────────────────────────────
     @coin.command(
-        name="take", description="Remove coins from one or more members' balances."
+        name="take",
+        description="Remove coins from one or more members' (global) balances.",
     )
     @app_commands.describe(
-        amount="Coins to remove per member",
+        amount="Coins to remove from each member's global wallet",
         member="Member to debit (leave every member blank to open a 25-member picker)",
         member2="Another member (optional)",
         member3="Another member (optional)",
@@ -476,35 +516,49 @@ class Economy(commands.Cog):
         delta = amount if action == "grant" else -amount
         lines = []
         for m in members:
-            new_bal = await db.add_coins(ctx.guild.id, m.id, delta)
+            new_bal = await db.add_coins(m.id, delta)
             lines.append(f"{m.mention} → {self._money(cfg, new_bal)}")
 
         verb = "Granted" if action == "grant" else "Took"
         prep = "to" if action == "grant" else "from"
-        await ctx.reply(
-            embed=h.ok(
-                f"{verb} {self._money(cfg, amount)} {prep} "
-                f"**{len(members)}** member(s).\n\n" + "\n".join(lines)
-            )
+        embed = h.ok(
+            f"{verb} {self._money(cfg, amount)} {prep} "
+            f"**{len(members)}** member(s).\n\n" + "\n".join(lines)
         )
+        # Wallets are global — say so, so nobody mistakes this for play money
+        # confined to this server.
+        embed.set_footer(text="Wallets are global — this applies in every server.")
+        await ctx.reply(embed=embed)
 
     # ── /coin reset ─────────────────────────────────────────────────────────────
     @coin.command(
-        name="reset", description="Reset coins for one member, or the whole server."
+        name="reset",
+        description="Wipe a wallet, or every wallet (bot owner only).",
     )
-    @app_commands.describe(member="Member to reset (omit to reset everyone)")
-    @commands.has_permissions(manage_guild=True)
+    @app_commands.describe(member="Member whose wallet to wipe (omit to wipe ALL)")
+    @commands.is_owner()
     async def coin_reset(
         self, ctx: commands.Context, member: Optional[discord.Member] = None
     ):
+        # Owner-only since wallets went global: this is no longer "clear this
+        # server's ledger" — it deletes coins the member earned in every other
+        # server too, with no way to put them back. Server staff still adjust
+        # balances with /coin grant and /coin take.
         if member:
-            await db.reset_economy(ctx.guild.id, member.id)
+            await db.reset_economy(member.id)
             return await ctx.reply(
-                embed=h.ok(f"Reset coins for **{member.display_name}**.")
+                embed=h.warn(
+                    f"Wiped **{member.display_name}**'s global wallet — every "
+                    "server, not just this one.",
+                    "Wallet Reset",
+                )
             )
-        removed = await db.reset_economy(ctx.guild.id)
+        removed = await db.reset_economy()
         await ctx.reply(
-            embed=h.ok(f"Reset the whole economy ({removed} accounts cleared).")
+            embed=h.warn(
+                f"Wiped every wallet on the bot ({removed} accounts cleared).",
+                "Economy Reset",
+            )
         )
 
     # ── /coin daily ─────────────────────────────────────────────────────────────
@@ -618,12 +672,28 @@ class Economy(commands.Cog):
         aliases=["contributions"],
         description="Show the top guild contributors (co-op leaderboard).",
     )
-    @app_commands.describe(page="Page number (10 per page)")
+    @app_commands.describe(
+        page="Page number (10 per page)",
+        scope="This server's members, or every server",
+    )
+    @app_commands.choices(scope=SCOPE_CHOICES)
     @commands.cooldown(1, 5, commands.BucketType.user)
-    async def coin_contrib(self, ctx: commands.Context, page: int = 1):
-        page = max(1, page)
+    async def coin_contrib(
+        self, ctx: commands.Context, page: int = 1, scope: str = "server"
+    ):
         per = 10
-        total = await db.count_contrib(ctx.guild.id)
+        if scope == "global":
+            total = await db.count_contrib()
+            pages = max(1, (total + per - 1) // per)
+            page = max(1, min(page, pages))
+            offset = (page - 1) * per
+            rows = await db.get_contrib_leaderboard(per, offset)
+        else:
+            all_rows = await db.get_contrib_leaderboard_for(h.member_ids(ctx.guild))
+            rows, page, pages, total = h.page_rows(
+                all_rows, lambda r: (-r["contribution"], r["user_id"]), page, per
+            )
+            offset = (page - 1) * per
         if total == 0:
             return await ctx.reply(
                 embed=h.info(
@@ -631,24 +701,21 @@ class Economy(commands.Cog):
                     "🤝 Top Contributors",
                 )
             )
-        pages = (total + per - 1) // per
-        page = min(page, pages)
-        offset = (page - 1) * per
-        rows = await db.get_contrib_leaderboard(ctx.guild.id, per, offset)
 
         medals = {1: "🥇", 2: "🥈", 3: "🥉"}
         lines = []
         for i, row in enumerate(rows):
             pos = offset + i + 1
-            member = ctx.guild.get_member(row["user_id"])
-            name = member.display_name if member else f"User {row['user_id']}"
             badge = medals.get(pos, f"`#{pos}`")
             lines.append(
-                f"{badge} **{name}** — {row['contribution']:,} pts "
-                f"· {_rank_title(pos)}"
+                f"{badge} **{self._name_for(ctx, row['user_id'])}** — "
+                f"{row['contribution']:,} pts · {_rank_title(pos)}"
             )
 
-        embed = h.embed("🤝 Top Contributors", "\n".join(lines), h.BLUE)
+        title = "🤝 Top Contributors"
+        if scope == "global":
+            title += " (Global)"
+        embed = h.embed(title, "\n".join(lines), h.BLUE)
         embed.set_footer(text=f"Page {page}/{pages} · {total} contributors")
         await ctx.reply(embed=embed)
 
@@ -1092,7 +1159,7 @@ class Economy(commands.Cog):
                 # Grant failed after charge — refund coins and restore stock
                 # (relative increment: writing back the stale pre-purchase
                 # snapshot would clobber a concurrent buyer's decrement).
-                await db.add_coins(ctx.guild.id, ctx.author.id, item_row["price"])
+                await db.add_coins(ctx.author.id, item_row["price"])
                 if item_row["stock"] != -1:
                     await db.restock_shop_item(ctx.guild.id, item_row["id"])
                 return await ctx.reply(
@@ -1423,11 +1490,7 @@ class Economy(commands.Cog):
             interaction.guild_id, enabled_only=enabled_only, limit=100
         )
         cfg = await self._cfg(interaction.guild_id)
-        balance = (
-            await db.get_balance(interaction.guild_id, interaction.user.id)
-            if enabled_only
-            else 0
-        )
+        balance = await db.get_balance(interaction.user.id) if enabled_only else 0
         choices: list[app_commands.Choice[str]] = []
         for item in items:
             if (

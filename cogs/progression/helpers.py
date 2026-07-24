@@ -2,7 +2,7 @@
 tests/test_progression_helpers.py.
 
 Every random choice here is deterministically seeded (the fishing
-generate_quest / random.Random(f"{guild}:{user}:{...}") pattern), and every
+generate_quest / random.Random(f"{user}:{...}") pattern), and every
 stat-progress computation takes explicit numbers in, numbers out — no DB, no
 Discord.
 """
@@ -35,17 +35,15 @@ def period_key(now: float | None = None) -> str:
     return f"{iso_year}-W{iso_week:02d}"
 
 
-def pick_weekly_objectives(
-    guild_id: int, user_id: int, period: str, pool: list, count: int
-) -> list:
+def pick_weekly_objectives(user_id: int, period: str, pool: list, count: int) -> list:
     """Deterministically pick `count` distinct objective defs from `pool`.
 
-    Seeded on (guild_id, user_id, period), so the same trio always yields the
-    same picks for a given member's week — callers regenerate on demand
-    instead of persisting the selection itself (only the resulting rows are
-    persisted, for their baseline/claimed state).
+    Seeded on (user_id, period) — not the guild — so a member's week is the
+    same set of objectives everywhere, matching the one global row per
+    objective. Callers regenerate on demand instead of persisting the
+    selection itself (only the rows' baseline/claimed state is stored).
     """
-    rng = random.Random(f"{int(guild_id)}:{int(user_id)}:{period}")
+    rng = random.Random(f"{int(user_id)}:{period}")
     return rng.sample(pool, min(count, len(pool)))
 
 

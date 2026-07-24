@@ -2,6 +2,9 @@
 cogs/crafting/cog.py
 Crafting — turn raw materials into refined items using the shared inventory.
 
+Materials and crafted output live in the global inventory, so a recipe can be
+fed by ore mined in one server and bait bought in another.
+
 Crafting rides the existing generic inventory layer (utils/items.py +
 utils/db/items.py): it consumes item stacks a member already owns — ores from
 /mine, pelts/meat from /hunt, bait from /fish, keys/charms from /explore — and
@@ -55,12 +58,12 @@ class Crafting(commands.Cog):
         # race the refund-on-failure path.
         self._locks = h.KeyedLocks()
 
-    def _lock(self, guild_id: int, user_id: int):
+    def _lock(self, user_id: int):
         # Returns an async context manager; existing `async with self._lock(...)`
         # call sites are unchanged. KeyedLocks refcounts holder + waiters and
         # drops an entry when the last interested task releases, so the map no
         # longer grows for the lifetime of the process.
-        return self._locks.hold((guild_id, user_id))
+        return self._locks.hold(user_id)
 
     def _fmt_inputs(self, recipe: RecipeDef, qty: int = 1) -> str:
         parts = [
@@ -87,7 +90,7 @@ class Crafting(commands.Cog):
         q = (current or "").strip().lower()
         inventory: dict[str, int] = {}
         if interaction.guild_id:
-            stacks = await db.get_inventory(interaction.guild_id, interaction.user.id)
+            stacks = await db.get_inventory(interaction.user.id)
             inventory = {s["item_key"]: s["qty"] for s in stacks}
         ready: list[app_commands.Choice[str]] = []
         locked: list[app_commands.Choice[str]] = []
@@ -150,7 +153,7 @@ class Crafting(commands.Cog):
             await self._list(ctx)
 
     async def _list(self, ctx: commands.Context):
-        stacks = await db.get_inventory(ctx.guild.id, ctx.author.id)
+        stacks = await db.get_inventory(ctx.author.id)
         inventory = {s["item_key"]: s["qty"] for s in stacks}
         lines = []
         for key in sorted(RECIPES):
@@ -232,9 +235,9 @@ class Crafting(commands.Cog):
                 ephemeral=True,
             )
         count = clamp_craft_qty(qty)
-        gid, uid = ctx.guild.id, ctx.author.id
-        async with self._lock(gid, uid):
-            stacks = await db.get_inventory(gid, uid)
+        uid = ctx.author.id
+        async with self._lock(uid):
+            stacks = await db.get_inventory(uid)
             inventory = {s["item_key"]: s["qty"] for s in stacks}
             missing = missing_inputs(r, inventory, count)
             if missing:
@@ -255,15 +258,15 @@ class Crafting(commands.Cog):
             shortfall: Optional[str] = None
             for item_key, need in r.inputs.items():
                 total = need * count
-                if await db.try_consume_item(gid, uid, item_key, total):
+                if await db.try_consume_item(uid, item_key, total):
                     consumed.append((item_key, total))
                 else:
                     shortfall = item_key
                     break
             if shortfall is not None:
                 for item_key, amount in consumed:
-                    await db.add_item(gid, uid, item_key, amount)
-                have = await db.get_item_qty(gid, uid, shortfall)
+                    await db.add_item(uid, item_key, amount)
+                have = await db.get_item_qty(uid, shortfall)
                 return await ctx.reply(
                     embed=h.err(
                         f"Materials changed under you — you now only have "
@@ -272,7 +275,7 @@ class Crafting(commands.Cog):
                     ),
                     ephemeral=True,
                 )
-            await db.add_item(gid, uid, r.output_item, r.output_qty * count)
+            await db.add_item(uid, r.output_item, r.output_qty * count)
         await ctx.reply(
             embed=h.ok(
                 f"Crafted **{count}** × {item_catalog.display(r.output_item)} "

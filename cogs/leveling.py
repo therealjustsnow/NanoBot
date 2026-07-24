@@ -142,7 +142,7 @@ class Leveling(commands.Cog):
         coins = cfg["coin_reward"] * new_level if cfg["coin_reward"] else 0
         econ = None
         if coins:
-            await db.add_coins(message.guild.id, member.id, coins)
+            await db.add_coins(member.id, coins)
             econ = await db.get_econ_config(message.guild.id)
 
         if not cfg["announce"]:

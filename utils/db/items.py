@@ -2,10 +2,12 @@
 
 Part of the utils/db package. Three tables shared by every economy feature:
 
-- ``user_items``      — per-member item stacks: (guild, user, item_key) → qty.
+- ``user_items``      — GLOBAL per-user item stacks: (user, item_key) → qty.
+  Items follow the user across servers, exactly like their coin balance.
   Item semantics live in the code-side catalogue (utils/items.py), so new item
   types never need schema changes.
-- ``user_effects``    — active buffs a member has (from consumables, bait, …).
+- ``user_effects``    — active buffs a user has (from consumables, bait, …),
+  also global: a buff armed in one server applies in every server.
   An effect is timed (``expires_at`` epoch) or charge-based (``uses_left``);
   whichever cog cares interprets the effect key — this layer only stores it.
 - ``economy_events``  — running server-wide (or, with guild_id='0', global)
@@ -28,22 +30,20 @@ from ._core import _conn, register_init
 async def _ensure_items_tables():
     await _conn().execute("""
         CREATE TABLE IF NOT EXISTS user_items (
-            guild_id  TEXT NOT NULL,
             user_id   TEXT NOT NULL,
             item_key  TEXT NOT NULL,
             qty       INTEGER NOT NULL DEFAULT 0,
-            PRIMARY KEY (guild_id, user_id, item_key)
+            PRIMARY KEY (user_id, item_key)
         )
     """)
     await _conn().execute("""
         CREATE TABLE IF NOT EXISTS user_effects (
-            guild_id   TEXT NOT NULL,
             user_id    TEXT NOT NULL,
             effect_key TEXT NOT NULL,
             magnitude  REAL NOT NULL DEFAULT 0,
             expires_at REAL NOT NULL DEFAULT 0,
             uses_left  INTEGER NOT NULL DEFAULT 0,
-            PRIMARY KEY (guild_id, user_id, effect_key)
+            PRIMARY KEY (user_id, effect_key)
         )
     """)
     await _conn().execute("""
@@ -65,42 +65,38 @@ async def _ensure_items_tables():
 
 
 # ── Inventory ──────────────────────────────────────────────────────────────────
-async def get_inventory(guild_id: int, user_id: int) -> list[dict]:
+async def get_inventory(user_id: int) -> list[dict]:
     """A member's item stacks: [{item_key, qty}, …] with qty > 0."""
     async with _conn().execute(
         "SELECT item_key, qty FROM user_items "
-        "WHERE guild_id=? AND user_id=? AND qty > 0 ORDER BY item_key ASC",
-        (str(guild_id), str(user_id)),
+        "WHERE user_id=? AND qty > 0 ORDER BY item_key ASC",
+        (str(user_id),),
     ) as cur:
         rows = await cur.fetchall()
     return [{"item_key": r["item_key"], "qty": r["qty"]} for r in rows]
 
 
-async def get_item_qty(guild_id: int, user_id: int, item_key: str) -> int:
+async def get_item_qty(user_id: int, item_key: str) -> int:
     async with _conn().execute(
-        "SELECT qty FROM user_items WHERE guild_id=? AND user_id=? AND item_key=?",
-        (str(guild_id), str(user_id), item_key),
+        "SELECT qty FROM user_items WHERE user_id=? AND item_key=?",
+        (str(user_id), item_key),
     ) as cur:
         row = await cur.fetchone()
     return row["qty"] if row else 0
 
 
-async def add_item(guild_id: int, user_id: int, item_key: str, qty: int = 1) -> int:
+async def add_item(user_id: int, item_key: str, qty: int = 1) -> int:
     """Grant items (atomic upsert). Returns the new quantity."""
     await _conn().execute(
-        "INSERT INTO user_items (guild_id, user_id, item_key, qty) "
-        "VALUES (?,?,?,MAX(0,?)) "
-        "ON CONFLICT(guild_id, user_id, item_key) DO UPDATE SET "
-        "qty=MAX(0, qty + ?)",
-        (str(guild_id), str(user_id), item_key, int(qty), int(qty)),
+        "INSERT INTO user_items (user_id, item_key, qty) VALUES (?,?,MAX(0,?)) "
+        "ON CONFLICT(user_id, item_key) DO UPDATE SET qty=MAX(0, qty + ?)",
+        (str(user_id), item_key, int(qty), int(qty)),
     )
     await _conn().commit()
-    return await get_item_qty(guild_id, user_id, item_key)
+    return await get_item_qty(user_id, item_key)
 
 
-async def try_consume_item(
-    guild_id: int, user_id: int, item_key: str, qty: int = 1
-) -> bool:
+async def try_consume_item(user_id: int, item_key: str, qty: int = 1) -> bool:
     """Atomically spend `qty` of an item only if the member owns that many.
 
     Conditional UPDATE (the try_debit_coins pattern) so two concurrent uses
@@ -110,26 +106,23 @@ async def try_consume_item(
         return False
     cur = await _conn().execute(
         "UPDATE user_items SET qty = qty - ? "
-        "WHERE guild_id=? AND user_id=? AND item_key=? AND qty >= ?",
-        (int(qty), str(guild_id), str(user_id), item_key, int(qty)),
+        "WHERE user_id=? AND item_key=? AND qty >= ?",
+        (int(qty), str(user_id), item_key, int(qty)),
     )
     await _conn().commit()
     return cur.rowcount > 0
 
 
-async def transfer_item(
-    guild_id: int, from_id: int, to_id: int, item_key: str, qty: int = 1
-) -> bool:
+async def transfer_item(from_id: int, to_id: int, item_key: str, qty: int = 1) -> bool:
     """Move items between members. False if the sender is short (atomic debit)."""
-    if not await try_consume_item(guild_id, from_id, item_key, qty):
+    if not await try_consume_item(from_id, item_key, qty):
         return False
-    await add_item(guild_id, to_id, item_key, qty)
+    await add_item(to_id, item_key, qty)
     return True
 
 
 # ── Effects ────────────────────────────────────────────────────────────────────
 async def grant_effect(
-    guild_id: int,
     user_id: int,
     effect_key: str,
     magnitude: float,
@@ -145,13 +138,12 @@ async def grant_effect(
     expires_at = now + duration if duration > 0 else 0
     await _conn().execute(
         "INSERT INTO user_effects "
-        "(guild_id, user_id, effect_key, magnitude, expires_at, uses_left) "
-        "VALUES (?,?,?,?,?,?) "
-        "ON CONFLICT(guild_id, user_id, effect_key) DO UPDATE SET "
+        "(user_id, effect_key, magnitude, expires_at, uses_left) "
+        "VALUES (?,?,?,?,?) "
+        "ON CONFLICT(user_id, effect_key) DO UPDATE SET "
         "magnitude=excluded.magnitude, expires_at=excluded.expires_at, "
         "uses_left=excluded.uses_left",
         (
-            str(guild_id),
             str(user_id),
             effect_key,
             float(magnitude),
@@ -162,22 +154,20 @@ async def grant_effect(
     await _conn().commit()
 
 
-async def get_active_effects(
-    guild_id: int, user_id: int, now: float | None = None
-) -> dict[str, dict]:
+async def get_active_effects(user_id: int, now: float | None = None) -> dict[str, dict]:
     """Live effects for a member: {effect_key: {magnitude, expires_at,
     uses_left}}. Expired timed effects are pruned on read."""
     now = time.time() if now is None else now
     await _conn().execute(
-        "DELETE FROM user_effects WHERE guild_id=? AND user_id=? "
+        "DELETE FROM user_effects WHERE user_id=? "
         "AND expires_at > 0 AND expires_at <= ?",
-        (str(guild_id), str(user_id), float(now)),
+        (str(user_id), float(now)),
     )
     await _conn().commit()
     async with _conn().execute(
         "SELECT effect_key, magnitude, expires_at, uses_left FROM user_effects "
-        "WHERE guild_id=? AND user_id=?",
-        (str(guild_id), str(user_id)),
+        "WHERE user_id=?",
+        (str(user_id),),
     ) as cur:
         rows = await cur.fetchall()
     return {
@@ -190,7 +180,7 @@ async def get_active_effects(
     }
 
 
-async def consume_effect_use(guild_id: int, user_id: int, effect_key: str) -> bool:
+async def consume_effect_use(user_id: int, effect_key: str) -> bool:
     """Spend one charge of a charge-based effect; the row is deleted at zero.
 
     Conditional UPDATE so concurrent consumers can't spend the same charge.
@@ -198,26 +188,25 @@ async def consume_effect_use(guild_id: int, user_id: int, effect_key: str) -> bo
     """
     cur = await _conn().execute(
         "UPDATE user_effects SET uses_left = uses_left - 1 "
-        "WHERE guild_id=? AND user_id=? AND effect_key=? AND uses_left >= 1",
-        (str(guild_id), str(user_id), effect_key),
+        "WHERE user_id=? AND effect_key=? AND uses_left >= 1",
+        (str(user_id), effect_key),
     )
     await _conn().commit()
     if cur.rowcount == 0:
         return False
     await _conn().execute(
         "DELETE FROM user_effects "
-        "WHERE guild_id=? AND user_id=? AND effect_key=? AND uses_left <= 0 "
-        "AND expires_at = 0",
-        (str(guild_id), str(user_id), effect_key),
+        "WHERE user_id=? AND effect_key=? AND uses_left <= 0 AND expires_at = 0",
+        (str(user_id), effect_key),
     )
     await _conn().commit()
     return True
 
 
-async def clear_effect(guild_id: int, user_id: int, effect_key: str) -> None:
+async def clear_effect(user_id: int, effect_key: str) -> None:
     await _conn().execute(
-        "DELETE FROM user_effects WHERE guild_id=? AND user_id=? AND effect_key=?",
-        (str(guild_id), str(user_id), effect_key),
+        "DELETE FROM user_effects WHERE user_id=? AND effect_key=?",
+        (str(user_id), effect_key),
     )
     await _conn().commit()
 
