@@ -413,6 +413,7 @@ class Progression(commands.Cog):
     @progress.command(
         name="title", description="Pick which earned title is shown on your profile."
     )
+    @discord.app_commands.describe(name="Pick one of the titles you've earned")
     async def progress_title(self, ctx: commands.Context, *, name: str):
         guild_id, user_id = ctx.guild.id, ctx.author.id
         earned = await db.get_earned_achievements(guild_id, user_id)
@@ -441,6 +442,32 @@ class Progression(commands.Cog):
         await ctx.reply(
             embed=h.ok(f"Your displayed title is now **{match}**.", "🏷️ Title")
         )
+
+    @progress_title.autocomplete("name")
+    async def _title_ac(self, interaction: discord.Interaction, current: str):
+        """Only titles you've actually earned — plus a clear option — so picking
+        one never needs a trip to /progress achievements."""
+        if not interaction.guild_id:
+            return []
+        q = (current or "").strip().lower()
+        earned = await db.get_earned_achievements(
+            interaction.guild_id, interaction.user.id
+        )
+        titles = earned_titles(earned.keys(), ACHIEVEMENTS_BY_KEY)
+        choices = [
+            discord.app_commands.Choice(
+                name=f"🏷️ {title} ({pts} pts)"[:100], value=title
+            )
+            for title, pts in titles
+            if not q or q in title.lower()
+        ]
+        if not q or q in "none":
+            choices.append(
+                discord.app_commands.Choice(
+                    name="✖️ None — show my highest-points title", value="none"
+                )
+            )
+        return choices[:25]
 
     # ══════════════════════════════════════════════════════════════════════════
     #  /progress prestige  (nested group — still costs no extra top-level slot)

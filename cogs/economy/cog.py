@@ -1053,7 +1053,7 @@ class Economy(commands.Cog):
 
     # ── /shop buy ─────────────────────────────────────────────────────────────────
     @shop.command(name="buy", description="Redeem an item by its id or name.")
-    @app_commands.describe(item="Item id (e.g. 3) or its exact name")
+    @app_commands.describe(item="Pick a reward from the shop list")
     @commands.cooldown(1, 3, commands.BucketType.user)
     async def shop_buy(self, ctx: commands.Context, *, item: str):
         cfg = await self._cfg(ctx.guild.id)
@@ -1117,6 +1117,10 @@ class Economy(commands.Cog):
                 "🎁 Reward Redeemed",
             )
         )
+
+    @shop_buy.autocomplete("item")
+    async def _shop_buy_ac(self, interaction: discord.Interaction, current: str):
+        return await self._shop_choices(interaction, current, enabled_only=True)
 
     # ── /shop add ─────────────────────────────────────────────────────────────────
     @shop.command(name="add", description="Add a shop item (Manage Server).")
@@ -1251,7 +1255,7 @@ class Economy(commands.Cog):
     # ── /shop edit ────────────────────────────────────────────────────────────────
     @shop.command(name="edit", description="Edit a shop item's fields (Manage Server).")
     @app_commands.describe(
-        item="Item id or name",
+        item="Pick the item to edit",
         price="New price",
         description="New description",
         reward="New custom reward text",
@@ -1315,9 +1319,13 @@ class Economy(commands.Cog):
             embed=h.ok(f"Updated **{record['name']}** (`#{record['id']}`).")
         )
 
+    @shop_edit.autocomplete("item")
+    async def _shop_edit_ac(self, interaction: discord.Interaction, current: str):
+        return await self._shop_choices(interaction, current, enabled_only=False)
+
     # ── /shop remove ──────────────────────────────────────────────────────────────
     @shop.command(name="remove", description="Delete a shop item (Manage Server).")
-    @app_commands.describe(item="Item id or name")
+    @app_commands.describe(item="Pick the item to delete")
     @commands.has_permissions(manage_guild=True)
     async def shop_remove(self, ctx: commands.Context, *, item: str):
         record = await self._resolve_item(ctx.guild.id, item)
@@ -1327,6 +1335,10 @@ class Economy(commands.Cog):
             )
         await db.remove_shop_item(ctx.guild.id, record["id"])
         await ctx.reply(embed=h.ok(f"Removed **{record['name']}** from the shop."))
+
+    @shop_remove.autocomplete("item")
+    async def _shop_remove_ac(self, interaction: discord.Interaction, current: str):
+        return await self._shop_choices(interaction, current, enabled_only=False)
 
     # ── /shop pending ─────────────────────────────────────────────────────────────
     @shop.command(
@@ -1355,7 +1367,7 @@ class Economy(commands.Cog):
         aliases=["fulfil"],
         description="Mark a pending custom reward as delivered (Manage Server).",
     )
-    @app_commands.describe(purchase_id="The pending purchase id from /shop pending")
+    @app_commands.describe(purchase_id="Pick a pending reward to mark delivered")
     @commands.has_permissions(manage_guild=True)
     async def shop_fulfill(self, ctx: commands.Context, purchase_id: int):
         res = await db.fulfill_purchase(ctx.guild.id, purchase_id, ctx.author.id)
@@ -1369,7 +1381,73 @@ class Economy(commands.Cog):
             embed=h.ok(f"Marked **{res['item_name']}** for {who} as fulfilled.")
         )
 
+    @shop_fulfill.autocomplete("purchase_id")
+    async def _shop_fulfill_ac(self, interaction: discord.Interaction, current: str):
+        """The fulfil queue as a pick list — the id is a bookkeeping detail mods
+        shouldn't have to copy out of /shop pending."""
+        if not interaction.guild_id:
+            return []
+        q = (current or "").strip().lower()
+        rows = await db.list_pending_purchases(interaction.guild_id, limit=25)
+        choices: list[app_commands.Choice[int]] = []
+        for r in rows:
+            member = (
+                interaction.guild.get_member(r["user_id"])
+                if interaction.guild
+                else None
+            )
+            who = member.display_name if member else f"User {r['user_id']}"
+            if q and q not in r["item_name"].lower() and q not in who.lower():
+                continue
+            choices.append(
+                app_commands.Choice(
+                    name=f"#{r['id']} · {r['item_name']} → {who}"[:100], value=r["id"]
+                )
+            )
+        return choices[:25]
+
     # ── shop helpers ──────────────────────────────────────────────────────────────
+    async def _shop_choices(
+        self,
+        interaction: discord.Interaction,
+        current: str,
+        *,
+        enabled_only: bool,
+    ) -> list[app_commands.Choice[str]]:
+        """Tap-to-pick shop list: nobody should have to remember an item id or
+        type a reward's exact name. Values are ids, which _resolve_item takes."""
+        if not interaction.guild_id:
+            return []
+        q = (current or "").strip().lower()
+        items = await db.list_shop_items(
+            interaction.guild_id, enabled_only=enabled_only, limit=100
+        )
+        cfg = await self._cfg(interaction.guild_id)
+        balance = (
+            await db.get_balance(interaction.guild_id, interaction.user.id)
+            if enabled_only
+            else 0
+        )
+        choices: list[app_commands.Choice[str]] = []
+        for item in items:
+            if (
+                q
+                and q not in item["name"].lower()
+                and not str(item["id"]).startswith(q)
+            ):
+                continue
+            label = f"{item['name']} — {item['price']:,} {cfg['currency_name']}"
+            if enabled_only:
+                label = ("✅ " if balance >= item["price"] else "🔒 ") + label
+            elif not item["enabled"]:
+                label += " (hidden)"
+            if item["stock"] == 0:
+                label += " · sold out"
+            elif item["stock"] > 0:
+                label += f" · {item['stock']} left"
+            choices.append(app_commands.Choice(name=label[:100], value=str(item["id"])))
+        return choices[:25]
+
     async def _resolve_item(self, guild_id: int, ref: str) -> Optional[dict]:
         """Resolve a shop item by numeric id, else by exact (case-insensitive) name."""
         ref = ref.strip()

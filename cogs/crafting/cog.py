@@ -29,6 +29,7 @@ import logging
 from typing import Optional
 
 import discord
+from discord import app_commands
 from discord.ext import commands
 
 from utils import db
@@ -67,6 +68,49 @@ class Crafting(commands.Cog):
             for item_key, need in recipe.inputs.items()
         ]
         return ", ".join(parts)
+
+    def _fmt_inputs_plain(self, recipe: RecipeDef, qty: int = 1) -> str:
+        """Same as _fmt_inputs but markdown-free — autocomplete choice names are
+        plain text, so `**bold**` would show as literal asterisks there."""
+        parts = []
+        for item_key, need in recipe.inputs.items():
+            d = item_catalog.get(item_key)
+            label = d.name if d else item_key
+            parts.append(f"{need * qty}× {label}")
+        return ", ".join(parts)
+
+    async def _recipe_choices(
+        self, interaction: discord.Interaction, current: str
+    ) -> list[app_commands.Choice[str]]:
+        """Recipe picker: craftable-now recipes first, each showing what it makes
+        and what it costs, so nobody has to memorise a recipe key."""
+        q = (current or "").strip().lower()
+        inventory: dict[str, int] = {}
+        if interaction.guild_id:
+            stacks = await db.get_inventory(interaction.guild_id, interaction.user.id)
+            inventory = {s["item_key"]: s["qty"] for s in stacks}
+        ready: list[app_commands.Choice[str]] = []
+        locked: list[app_commands.Choice[str]] = []
+        for key in sorted(RECIPES):
+            recipe = RECIPES[key]
+            out = item_catalog.get(recipe.output_item)
+            out_label = out.name if out else recipe.output_item
+            emoji = out.emoji if out else "🛠️"
+            if q and q not in key.lower() and q not in out_label.lower():
+                continue
+            craftable = not missing_inputs(recipe, inventory)
+            name = (
+                f"{'✅' if craftable else '🔒'} {emoji} {out_label}"
+                f"{'' if recipe.output_qty == 1 else f' ×{recipe.output_qty}'}"
+                f" — needs {self._fmt_inputs_plain(recipe)}"
+            )
+            choice = app_commands.Choice(name=name[:100], value=key)
+            (ready if craftable else locked).append(choice)
+        return (ready + locked)[:25]
+
+    def _recipe_hint(self) -> str:
+        """A few recipe keys to show when someone names one that doesn't exist."""
+        return ", ".join(f"`{k}`" for k in sorted(RECIPES)[:5])
 
     def _fmt_effect(self, effect: dict) -> str:
         if effect.get("duration"):
@@ -124,7 +168,7 @@ class Crafting(commands.Cog):
         )
         embed.set_footer(
             text="✅ craftable right now · ❌ missing materials · "
-            "/craft info <recipe> for details"
+            "use /craft make and pick a recipe from the list"
         )
         await ctx.reply(embed=embed)
 
@@ -132,12 +176,15 @@ class Crafting(commands.Cog):
     @craft.command(
         name="info", description="See a recipe's inputs, output, and effect."
     )
-    @discord.app_commands.describe(recipe="The recipe to look up")
+    @discord.app_commands.describe(recipe="Pick a recipe from the list")
     async def craft_info(self, ctx: commands.Context, *, recipe: str):
         r = find_recipe(recipe)
         if r is None:
             return await ctx.reply(
-                embed=h.err(f"I don't know a recipe called **{recipe}**."),
+                embed=h.err(
+                    f"I don't know a recipe called **{recipe}**. Run `/craft` to "
+                    f"see them all — e.g. {self._recipe_hint()}."
+                ),
                 ephemeral=True,
             )
         out = item_catalog.get(r.output_item)
@@ -152,14 +199,20 @@ class Crafting(commands.Cog):
             embed.add_field(name="On Use", value=self._fmt_effect(out.effect))
         if out and out.value > 0:
             embed.add_field(name="Sell Price", value=f"{out.value:,} coins")
+        embed.set_footer(text=f"Make it with /craft make {r.key}")
         await ctx.reply(embed=embed)
+
+    @craft_info.autocomplete("recipe")
+    async def _craft_info_ac(self, interaction: discord.Interaction, current: str):
+        return await self._recipe_choices(interaction, current)
 
     # ── /craft make ──────────────────────────────────────────────────────────
     @craft.command(
         name="make", description="Craft an item from materials in your inventory."
     )
     @discord.app_commands.describe(
-        recipe="The recipe to craft", qty="How many to craft (default 1)"
+        recipe="Pick a recipe from the list (✅ = you have the materials)",
+        qty="How many to craft (default 1)",
     )
     async def craft_make(self, ctx: commands.Context, recipe: str, qty: int = 1):
         # `recipe` intentionally isn't a keyword-only "consume rest" parameter:
@@ -172,7 +225,10 @@ class Crafting(commands.Cog):
         r = find_recipe(recipe)
         if r is None:
             return await ctx.reply(
-                embed=h.err(f"I don't know a recipe called **{recipe}**."),
+                embed=h.err(
+                    f"I don't know a recipe called **{recipe}**. Run `/craft` to "
+                    f"see them all — e.g. {self._recipe_hint()}."
+                ),
                 ephemeral=True,
             )
         count = clamp_craft_qty(qty)
@@ -224,6 +280,10 @@ class Crafting(commands.Cog):
                 "🛠️ Crafted",
             )
         )
+
+    @craft_make.autocomplete("recipe")
+    async def _craft_make_ac(self, interaction: discord.Interaction, current: str):
+        return await self._recipe_choices(interaction, current)
 
 
 async def setup(bot: commands.Bot):

@@ -61,6 +61,61 @@ class Inventory(commands.Cog):
     def _money(self, econ: dict, amount: int) -> str:
         return h.fmt_coins(amount, econ["currency_name"], econ["currency_emoji"])
 
+    # ── item pickers ─────────────────────────────────────────────────────────
+    # Item names are multi-word ("Lucky Charm") and keys are underscored, so
+    # typing one from memory is the worst part of the inventory. Every item
+    # option is a tap-to-pick list built from what the member actually owns.
+    async def _owned_choices(
+        self,
+        interaction: discord.Interaction,
+        current: str,
+        *,
+        usable_only: bool = False,
+        sellable_only: bool = False,
+    ) -> list[discord.app_commands.Choice[str]]:
+        q = (current or "").strip().lower()
+        stacks = (
+            await db.get_inventory(interaction.guild_id, interaction.user.id)
+            if interaction.guild_id
+            else []
+        )
+        choices: list[discord.app_commands.Choice[str]] = []
+        for stack in stacks:
+            key = stack["item_key"]
+            d = item_catalog.get(key)
+            name = d.name if d else key
+            if usable_only and not (d and (d.effect or key == "treasure_chest")):
+                continue
+            if sellable_only and not (d and d.value > 0):
+                continue
+            if q and q not in key.lower() and q not in name.lower():
+                continue
+            label = f"{d.emoji if d else '📦'} {name} ×{stack['qty']:,}"
+            if sellable_only and d:
+                label += f" — {d.value * stack['qty']:,} coins for the lot"
+            elif d and d.effect:
+                label += f" — {d.effect['key']} +{d.effect.get('magnitude', 0):g}"
+            choices.append(discord.app_commands.Choice(name=label[:100], value=key))
+        return choices[:25]
+
+    async def _catalog_choices(
+        self, interaction: discord.Interaction, current: str
+    ) -> list[discord.app_commands.Choice[str]]:
+        """Every item that exists — for /inventory info, which works on items
+        you don't own yet."""
+        q = (current or "").strip().lower()
+        choices = []
+        for d in item_catalog.ITEMS.values():
+            if q and q not in d.key.lower() and q not in d.name.lower():
+                continue
+            cat = item_catalog.CATEGORY_LABELS.get(d.category, d.category.title())
+            choices.append(
+                discord.app_commands.Choice(
+                    name=f"{d.emoji} {d.name} — {cat}"[:100], value=d.key
+                )
+            )
+        return choices[:25]
+
     # ══════════════════════════════════════════════════════════════════════════
     #  /inventory group
     # ══════════════════════════════════════════════════════════════════════════
@@ -136,7 +191,7 @@ class Inventory(commands.Cog):
     # ── /inventory use ───────────────────────────────────────────────────────
     @inventory.command(name="use", description="Use a consumable item.")
     @discord.app_commands.describe(
-        item="The item to use", qty="How many to use at once (default 1)"
+        item="Pick a usable item you own", qty="How many to use at once (default 1)"
     )
     # NOTE: `item`/`qty` are plain positional params, not `*, item, qty` —
     # discord.py's prefix parser only transforms the first keyword-only
@@ -149,7 +204,10 @@ class Inventory(commands.Cog):
         d = item_catalog.find(item)
         if d is None:
             return await ctx.reply(
-                embed=h.err(f"I don't know any item called **{item}**."),
+                embed=h.err(
+                    f"I don't know any item called **{item}**. Run `/inventory` to "
+                    "see what you own."
+                ),
                 ephemeral=True,
             )
         qty = max(1, min(int(qty or 1), MAX_BULK))
@@ -202,6 +260,10 @@ class Inventory(commands.Cog):
             )
         )
 
+    @inventory_use.autocomplete("item")
+    async def _use_ac(self, interaction: discord.Interaction, current: str):
+        return await self._owned_choices(interaction, current, usable_only=True)
+
     async def _open_chest(self, ctx: commands.Context, qty: int):
         """Chests need a key each: consume chest+key pairs, pay coins."""
         gid, uid = ctx.guild.id, ctx.author.id
@@ -239,7 +301,8 @@ class Inventory(commands.Cog):
         name="sell", description="Sell items from your inventory for coins."
     )
     @discord.app_commands.describe(
-        item="The item to sell", qty="How many to sell (default: all of them)"
+        item="Pick a sellable item you own",
+        qty="How many to sell (default: all of them)",
     )
     async def inventory_sell(
         self, ctx: commands.Context, item: str, qty: Optional[int] = None
@@ -247,7 +310,10 @@ class Inventory(commands.Cog):
         d = item_catalog.find(item)
         if d is None:
             return await ctx.reply(
-                embed=h.err(f"I don't know any item called **{item}**."),
+                embed=h.err(
+                    f"I don't know any item called **{item}**. Run `/inventory` to "
+                    "see what you own."
+                ),
                 ephemeral=True,
             )
         if d.value <= 0:
@@ -278,11 +344,15 @@ class Inventory(commands.Cog):
             )
         )
 
+    @inventory_sell.autocomplete("item")
+    async def _sell_ac(self, interaction: discord.Interaction, current: str):
+        return await self._owned_choices(interaction, current, sellable_only=True)
+
     # ── /inventory give ──────────────────────────────────────────────────────
     @inventory.command(name="give", description="Give items to another member.")
     @discord.app_commands.describe(
         member="Who to give items to",
-        item="The item to give",
+        item="Pick an item you own",
         qty="How many to give (default 1)",
     )
     async def inventory_give(
@@ -323,14 +393,21 @@ class Inventory(commands.Cog):
             )
         )
 
+    @inventory_give.autocomplete("item")
+    async def _give_ac(self, interaction: discord.Interaction, current: str):
+        return await self._owned_choices(interaction, current)
+
     # ── /inventory info ──────────────────────────────────────────────────────
     @inventory.command(name="info", description="See what an item is and does.")
-    @discord.app_commands.describe(item="The item to look up")
+    @discord.app_commands.describe(item="Pick any item to look up")
     async def inventory_info(self, ctx: commands.Context, *, item: str):
         d = item_catalog.find(item)
         if d is None:
             return await ctx.reply(
-                embed=h.err(f"I don't know any item called **{item}**."),
+                embed=h.err(
+                    f"I don't know any item called **{item}**. Pick one from the "
+                    "list, or run `/inventory` to see what you own."
+                ),
                 ephemeral=True,
             )
         embed = h.embed(
@@ -355,6 +432,10 @@ class Inventory(commands.Cog):
                 )
             embed.add_field(name="On Use", value=eff)
         await ctx.reply(embed=embed)
+
+    @inventory_info.autocomplete("item")
+    async def _info_ac(self, interaction: discord.Interaction, current: str):
+        return await self._catalog_choices(interaction, current)
 
 
 async def setup(bot: commands.Bot):

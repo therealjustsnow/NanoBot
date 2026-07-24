@@ -66,6 +66,7 @@ Tests cover pure-Python utilities and the SQLite layer (in-memory), no live Disc
 - `tests/test_progression_db.py` — progression accessors in `utils/db/` against in-memory SQLite (`try_award_achievement` once-only INSERT OR IGNORE, weekly-objective baseline snapshot + the claim UPDATE that re-verifies completion in its WHERE clause, the prestige CAS)
 - `tests/test_crafting_helpers.py` — crafting registry validation from `cogs/crafting/` (all recipe input/output keys resolve in the item catalogue, the ≤1.5× sellable-output value cap, `find_recipe`/`missing_inputs`), plus the db-level consume-then-refund-on-partial-failure path
 - `tests/test_db_isolation.py` — regression guard that `db._DB_PATH`/`db._db` route through the package to `utils/db/_core`, so fixture monkeypatches genuinely redirect `db.init()` instead of opening the real `data/nanobot.db`
+- `tests/test_autocomplete.py` — the economy's tap-to-pick option lists: a registration guard that every picker option (`/craft make|info`, `/fish sell|buy`, `/inventory use|sell|give|info`, `/shop buy|edit|remove|fulfill`, `/progress title`, `/casino roulette|flip`) still carries an autocomplete or static choices, plus behaviour tests calling each callback with a stub interaction against a real DB
 - `tests/test_no_duplicate_commands.py` — static check that no two cogs register the same top-level command name or alias
 - `tests/test_obs.py` — correlation ids, the logging filter, and the JSONL event sink in `utils/obs.py`
 - `tests/test_gatekeeper.py` — perceptual (difference) hash helpers + the join-time `_evaluate` mute-decision logic in `cogs/gatekeeper.py` (the slash-only `/gatekeeper` group isn't dispatchable via dpytest); gatekeeper DB accessors live in `tests/test_db.py`
@@ -309,6 +310,8 @@ The bot supports three invocation styles simultaneously:
 The `NanoBot` class in `main.py` overrides `get_prefix()` to look up per-guild prefixes from the `prefixes` table. It also maintains a `last_message_authors` dict per channel so `moderation.py` can target the last sender without requiring a user argument.
 
 Tag shortcuts are detected in `on_message`: if a message matches no command but matches a guild tag name after the prefix, the tag fires automatically.
+
+**Pickers over typing (mobile-first rule):** any string/int option whose valid values come from a known set — a recipe key, a species in your bag, a catalogue item, a shop item id, an earned title, a roulette space — gets an `@<command>.autocomplete("<param>")` callback (or static `@app_commands.choices` when there are only two or three), so phone users tap instead of typing a name from memory. Choice *names* are plain text (no markdown), capped at 100 chars, max 25 entries, and are built from the caller's own state where that helps: ✅/🔒 affordability or craftable-now markers, owned quantities, prices. Autocomplete callbacks live next to their command in the cog and must stay cheap (a couple of DB reads — Discord gives them ~3s). `tests/test_autocomplete.py` guards both the registration (every listed option still offers suggestions) and the callbacks' behaviour.
 
 ### Configuration
 

@@ -25,7 +25,7 @@ Commands
   /fish                       → cast your line (same as /fish cast)
   /fish cast                  → cast your line (cooldown per server)
   /fish bag                   → what you've caught, grouped by species
-  /fish sell [fish]           → sell one species — or everything — for coins
+  /fish sell [fish|all]       → sell one species — or everything — for coins
   /fish rod                   → your rod + the next upgrade
   /fish upgrade               → buy the next rod tier with coins
   /fish dex                   → species collection progress
@@ -404,14 +404,19 @@ class Fishing(commands.Cog):
         name="sell",
         description="Sell your catch for coins — one species, or everything.",
     )
-    @app_commands.describe(fish="Which fish to sell (leave blank to sell everything)")
+    @app_commands.describe(
+        fish="Pick a species from your bag (leave blank to sell everything)"
+    )
     async def fish_sell(self, ctx: commands.Context, *, fish: Optional[str] = None):
         key = None
-        if fish is not None:
+        if fish is not None and fish.strip().lower() not in ("all", "everything", "*"):
             key = find_fish(fish)
             if key is None:
                 return await ctx.reply(
-                    embed=h.err(f"I don't know a fish called **{fish}**."),
+                    embed=h.err(
+                        f"I don't know a fish called **{fish}**. Check `/fish bag`, "
+                        "or run `/fish sell` with no fish to sell everything."
+                    ),
                     ephemeral=True,
                 )
         econ = await db.get_econ_config(ctx.guild.id)
@@ -445,6 +450,42 @@ class Fishing(commands.Cog):
         if quest_note:
             desc += f"\n{quest_note}"
         await ctx.reply(embed=h.ok(desc, "💰 Sold"))
+
+    @fish_sell.autocomplete("fish")
+    async def _fish_sell_ac(self, interaction: discord.Interaction, current: str):
+        """Pick from what's actually in your bag — no typing species names."""
+        q = (current or "").strip().lower()
+        bag = (
+            await db.get_bag(interaction.guild_id, interaction.user.id)
+            if interaction.guild_id
+            else []
+        )
+        choices: list[app_commands.Choice[str]] = []
+        total = sum(row["total_value"] for row in bag)
+        if bag and (not q or q in "everything" or q in "all"):
+            choices.append(
+                app_commands.Choice(
+                    name=f"💰 Everything in your bag — {total:,} coins", value="all"
+                )
+            )
+        for row in bag:
+            entry = FISH.get(row["fish_key"])
+            if not entry:
+                continue
+            if (
+                q
+                and q not in row["fish_key"].lower()
+                and q not in entry["name"].lower()
+            ):
+                continue
+            choices.append(
+                app_commands.Choice(
+                    name=f"{entry['emoji']} {entry['name']} ×{row['qty']} — "
+                    f"{row['total_value']:,} coins"[:100],
+                    value=row["fish_key"],
+                )
+            )
+        return choices[:25]
 
     # ── /fish rod ────────────────────────────────────────────────────────────
     @fish.command(name="rod", description="See your rod and the next upgrade.")
@@ -679,16 +720,18 @@ class Fishing(commands.Cog):
     # ── /fish buy ────────────────────────────────────────────────────────────
     @fish.command(name="buy", description="Buy bait or fishing consumables with coins.")
     @app_commands.describe(
-        item="Which item to buy (Worm, Shrimp, Glowgrub, Treasure Magnet, XP Potion)",
+        item="Pick an item from the bait shop list",
         qty="How many to buy (default 1)",
     )
     async def fish_buy(self, ctx: commands.Context, item: str, qty: int = 1):
         d = item_catalog.find(item)
         if d is None or not d.key.startswith(("bait_", "fish_")) or d.price <= 0:
+            stock = ", ".join(
+                f"{s.name} ({s.price:,})" for s in self._bait_shop_items()
+            )
             return await ctx.reply(
                 embed=h.err(
-                    f"**{item}** isn't sold at the bait shop. Try Worm, Shrimp, "
-                    "Glowgrub, Treasure Magnet, or XP Potion."
+                    f"**{item}** isn't sold at the bait shop. In stock: {stock}."
                 ),
                 ephemeral=True,
             )
@@ -715,6 +758,39 @@ class Fishing(commands.Cog):
                 "🛒 Bought",
             )
         )
+
+    def _bait_shop_items(self) -> list:
+        """Everything /fish buy sells, cheapest first."""
+        return sorted(
+            (
+                d
+                for d in item_catalog.ITEMS.values()
+                if d.key.startswith(("bait_", "fish_")) and d.price > 0
+            ),
+            key=lambda d: d.price,
+        )
+
+    @fish_buy.autocomplete("item")
+    async def _fish_buy_ac(self, interaction: discord.Interaction, current: str):
+        """Bait shop as a tap-to-pick list, priced and marked by affordability."""
+        q = (current or "").strip().lower()
+        balance = (
+            await db.get_balance(interaction.guild_id, interaction.user.id)
+            if interaction.guild_id
+            else 0
+        )
+        choices: list[app_commands.Choice[str]] = []
+        for d in self._bait_shop_items():
+            if q and q not in d.key.lower() and q not in d.name.lower():
+                continue
+            mark = "✅" if balance >= d.price else "🔒"
+            choices.append(
+                app_commands.Choice(
+                    name=f"{mark} {d.emoji} {d.name} — {d.price:,} coins"[:100],
+                    value=d.key,
+                )
+            )
+        return choices[:25]
 
     # ── /fish bait ───────────────────────────────────────────────────────────
     @fish.command(

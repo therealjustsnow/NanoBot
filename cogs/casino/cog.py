@@ -371,6 +371,12 @@ class Casino(commands.Cog):
     # ── /casino flip ─────────────────────────────────────────────────────────
     @casino.command(name="flip", description="Bet on a 50/50 coin flip.")
     @app_commands.describe(bet="How many coins to bet", side="heads or tails")
+    @app_commands.choices(
+        side=[
+            app_commands.Choice(name="🪙 Heads", value="heads"),
+            app_commands.Choice(name="🪙 Tails", value="tails"),
+        ]
+    )
     async def casino_flip(self, ctx: commands.Context, bet: int, side: str):
         cfg = await db.get_casino_config(ctx.guild.id)
         if not cfg["enabled"]:
@@ -583,6 +589,35 @@ class Casino(commands.Cog):
         embed = h.embed(title, desc, color)
         self._set_result_footer(embed, new_stats, chal_hint)
         await ctx.reply(embed=embed)
+
+    @casino_roulette.autocomplete("space")
+    async def _roulette_ac(self, interaction: discord.Interaction, current: str):
+        """Outside bets as a pick list, plus matching straight numbers, so the
+        wheel's betting vocabulary doesn't have to be memorised."""
+        q = (current or "").strip().lower()
+        labels = {
+            "red": ("🔴 Red — pays 2x", "red"),
+            "black": ("⚫ Black — pays 2x", "black"),
+            "odd": ("🔢 Odd — pays 2x", "odd"),
+            "even": ("🔢 Even — pays 2x", "even"),
+            "high": ("⬆️ High (19-36) — pays 2x", "high"),
+            "low": ("⬇️ Low (1-18) — pays 2x", "low"),
+        }
+        choices = [
+            app_commands.Choice(name=label, value=value)
+            for key, (label, value) in labels.items()
+            if not q or q in key
+        ]
+        numbers = range(0, 37)
+        if q.isdigit():
+            numbers = [n for n in numbers if str(n).startswith(q)]
+        elif q:
+            numbers = []
+        for n in numbers:
+            choices.append(
+                app_commands.Choice(name=f"🎯 Number {n} — pays 35x", value=str(n))
+            )
+        return choices[:25]
 
     # ── /casino blackjack ────────────────────────────────────────────────────
     @casino.command(name="blackjack", description="Play blackjack against the dealer.")
