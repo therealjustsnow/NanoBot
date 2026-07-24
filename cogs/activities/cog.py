@@ -38,7 +38,7 @@ Commands
   /mine dig                     → dig for ore
   /mine upgrade                 → buy the next pickaxe tier with coins
   /mine stats                   → your pickaxe + dig stats
-  /adventure                    → show the activities settings overview
+  /adventure                    → what you can do right now + each cooldown
   /adventure hunt               → hunt for pelts/meat/trophies (medium risk)
   /adventure explore            → explore for a long-shot reward
   /rob <member>                 → try to steal a cut of a member's coins
@@ -62,7 +62,10 @@ from utils import items as item_catalogue
 from . import items as _register_items  # noqa: F401 - side-effect: registers item defs
 from .constants import (
     ACTIVITY_COOLDOWN_BOUNDS,
+    ACTIVITY_DEFAULT_COOLDOWNS,
+    ACTIVITY_INFO,
     ACTIVITY_NAMES,
+    COOLDOWN_PRESETS,
     EXPLORE_COINS_BIG,
     EXPLORE_COINS_SMALL,
     EXPLORE_FLAVOR,
@@ -114,6 +117,28 @@ class Activities(commands.Cog):
 
     def _money(self, econ: dict, amount: int) -> str:
         return h.fmt_coins(amount, econ["currency_name"], econ["currency_emoji"])
+
+    # ── shared status helpers ────────────────────────────────────────────────
+    def _remaining(self, cfg: dict, stats: dict, activity: str) -> int:
+        """Seconds left on an activity's cooldown (0 = ready). Read-only — the
+        claim itself still happens atomically in db.try_claim_activity."""
+        last = stats.get(f"last_{activity}", 0) or 0
+        if not last:
+            return 0
+        return max(0, int(cfg[f"{activity}_cooldown"] - (time.time() - last)))
+
+    def _status_line(self, cfg: dict, stats: dict, activity: str) -> str:
+        """ "Ready now" / "Ready in 12m" / "Disabled" for one activity."""
+        if not cfg[f"{activity}_enabled"]:
+            return "❌ Disabled here"
+        remaining = self._remaining(cfg, stats, activity)
+        if remaining:
+            return f"⏳ Ready in {h.fmt_duration(remaining)}"
+        return "✅ Ready now"
+
+    def _next_up(self, cfg: dict, activity: str) -> str:
+        """Footer text telling a member when this activity comes back."""
+        return f"Next {activity} in {h.fmt_duration(cfg[f'{activity}_cooldown'])}"
 
     # ══════════════════════════════════════════════════════════════════════════
     #  /work — flat, safe
@@ -186,8 +211,8 @@ class Activities(commands.Cog):
             "via /inventory sell. Buy better pickaxes to improve your odds. "
             "There's a small chance of a cave-in with no yield.",
             "args": [],
-            "perms": "Admin subcommands live under /activities",
-            "example": "{prefix}mine\n{prefix}mine upgrade",
+            "perms": "None (admin settings live under /adventure)",
+            "example": "{prefix}mine\n{prefix}mine stats\n{prefix}mine upgrade",
         },
     )
     @commands.guild_only()
@@ -218,12 +243,12 @@ class Activities(commands.Cog):
             )
 
         if roll_cave_in(random.random()):
-            return await ctx.reply(
-                embed=h.warn(
-                    "The tunnel collapses behind you — you scramble out empty-handed.",
-                    "⛏️ Cave-In",
-                )
+            embed = h.warn(
+                "The tunnel collapses behind you — you scramble out empty-handed.",
+                "⛏️ Cave-In",
             )
+            embed.set_footer(text=self._next_up(cfg, "mine"))
+            return await ctx.reply(embed=embed)
 
         stats = await db.get_activity_stats(ctx.guild.id, ctx.author.id)
         pickaxe = pickaxe_info(stats["pickaxe_level"])
@@ -236,7 +261,9 @@ class Activities(commands.Cog):
             await db.add_item(ctx.guild.id, ctx.author.id, "treasure_key", 1)
             desc += f"\n{item_catalogue.display('treasure_key')} You also found a treasure key!"
         desc += "\n\nSell it with `/inventory sell`."
-        await ctx.reply(embed=h.ok(desc, "⛏️ Dig"))
+        embed = h.ok(desc, "⛏️ Dig")
+        embed.set_footer(text=self._next_up(cfg, "mine"))
+        await ctx.reply(embed=embed)
 
     # ── /mine upgrade ────────────────────────────────────────────────────────
     @mine.command(name="upgrade", description="Buy the next pickaxe tier with coins.")
@@ -288,16 +315,32 @@ class Activities(commands.Cog):
     @mine.command(name="stats", description="Your pickaxe and dig stats.")
     @commands.cooldown(1, 5, commands.BucketType.user)
     async def mine_stats(self, ctx: commands.Context):
+        cfg = await db.get_activities_config(ctx.guild.id)
+        econ = await db.get_econ_config(ctx.guild.id)
         stats = await db.get_activity_stats(ctx.guild.id, ctx.author.id)
         pickaxe = pickaxe_info(stats["pickaxe_level"])
         nxt = next_pickaxe(stats["pickaxe_level"])
         desc = (
             f"{pickaxe['emoji']} **{pickaxe['name']}** "
             f"(tier {stats['pickaxe_level'] + 1}/{len(PICKAXES)})\n"
-            f"Digs: **{stats['mine_count']:,}**"
+            f"Luck: **{pickaxe['luck']:.0%}** less stone, better rare-ore odds\n"
+            f"Digs: **{stats['mine_count']:,}**\n"
+            f"{self._status_line(cfg, stats, 'mine')}"
         )
         if nxt:
-            desc += f"\n\nNext: {nxt['emoji']} **{nxt['name']}** — buy with `/mine upgrade`."
+            # The price used to be invisible until the purchase failed — the
+            # only way to learn it was to try to buy and be told you're broke.
+            balance = await db.get_balance(ctx.guild.id, ctx.author.id)
+            afford = (
+                "✅ you can afford it"
+                if balance >= nxt["price"]
+                else (f"🔒 you have {self._money(econ, balance)}")
+            )
+            desc += (
+                f"\n\nNext: {nxt['emoji']} **{nxt['name']}** — "
+                f"{self._money(econ, nxt['price'])} ({afford})\n"
+                f"Luck goes to **{nxt['luck']:.0%}**. Buy it with `/mine upgrade`."
+            )
         else:
             desc += "\n\nYou own the best pickaxe there is. 🎉"
         await ctx.reply(embed=h.embed("⛏️ Your Pickaxe", desc, h.BLUE))
@@ -313,9 +356,11 @@ class Activities(commands.Cog):
             "category": "🪙 Economy",
             "short": "Hunt, explore, and tune activities",
             "usage": "adventure [subcommand]",
-            "desc": "Hunt for pelts, meat, and rare trophies (medium risk) or "
-            "explore for a long-shot reward. Admins can enable/disable and tune "
-            "the cooldown for every activity: work, mine, hunt, explore, rob.",
+            "desc": "Run it bare to see every activity, what it pays, and whether "
+            "you're off cooldown. Hunt for pelts, meat, and rare trophies (medium "
+            "risk) or explore for a long-shot reward. Admins can enable/disable "
+            "and tune the cooldown for every activity: work, mine, hunt, explore, "
+            "rob.",
             "args": [],
             "perms": "Admin subcommands require Manage Server",
             "example": "{prefix}adventure hunt\n{prefix}adventure explore",
@@ -323,7 +368,30 @@ class Activities(commands.Cog):
     )
     @commands.guild_only()
     async def adventure(self, ctx: commands.Context):
-        await self._show_activities_config(ctx)
+        await self._show_adventure_overview(ctx)
+
+    async def _show_adventure_overview(self, ctx: commands.Context):
+        """The member-facing landing card: every activity, what it's for, and
+        whether you can do it right now. (Mods get the settings dump from
+        /adventure config.)"""
+        cfg = await db.get_activities_config(ctx.guild.id)
+        stats = await db.get_activity_stats(ctx.guild.id, ctx.author.id)
+        embed = h.embed(
+            "🧭 Things To Do",
+            "Every way to earn beyond `/daily` and `/fish` — each on its own "
+            "cooldown.",
+            h.BLUE,
+        )
+        for activity in ACTIVITY_NAMES:
+            info = ACTIVITY_INFO[activity]
+            embed.add_field(
+                name=f"{info['emoji']} {info['command']}",
+                value=f"{info['blurb']}\n{self._status_line(cfg, stats, activity)} · "
+                f"every {h.fmt_duration(cfg[f'{activity}_cooldown'])}",
+                inline=True,
+            )
+        embed.set_footer(text="Sell what you find with /inventory sell")
+        await ctx.reply(embed=embed)
 
     # ── /adventure hunt — medium risk ────────────────────────────────────────
     @adventure.command(
@@ -368,7 +436,9 @@ class Activities(commands.Cog):
             desc += f"\n{item_catalogue.display('padlock')} You also found a padlock!"
 
         desc += "\n\nSell loot with `/inventory sell`."
-        await ctx.reply(embed=h.embed("🏹 Hunt", desc, h.BLUE))
+        embed = h.embed("🏹 Hunt", desc, h.BLUE)
+        embed.set_footer(text=self._next_up(cfg, "hunt"))
+        await ctx.reply(embed=embed)
 
     # ── /adventure explore — long shot ───────────────────────────────────────
     @adventure.command(
@@ -417,6 +487,7 @@ class Activities(commands.Cog):
             embed = h.ok(
                 f"{flavor}\nYou found {item_catalogue.display(outcome)}!", "🧭 Explore"
             )
+        embed.set_footer(text=self._next_up(cfg, "explore"))
         await ctx.reply(embed=embed)
 
     # ══════════════════════════════════════════════════════════════════════════
@@ -544,10 +615,7 @@ class Activities(commands.Cog):
     @adventure.command(
         name="toggle", description="Enable or disable an activity (Manage Server)."
     )
-    @app_commands.describe(activity="Which activity to toggle")
-    @app_commands.choices(
-        activity=[app_commands.Choice(name=a, value=a) for a in ACTIVITY_NAMES]
-    )
+    @app_commands.describe(activity="Pick an activity (the list shows its state)")
     @commands.has_permissions(manage_guild=True)
     async def activities_toggle(self, ctx: commands.Context, activity: str):
         activity = activity.lower().strip()
@@ -562,15 +630,17 @@ class Activities(commands.Cog):
         state = "enabled" if enabled else "disabled"
         await ctx.reply(embed=h.ok(f"`/{activity}` is now **{state}**."))
 
+    @activities_toggle.autocomplete("activity")
+    async def _toggle_activity_ac(self, interaction: discord.Interaction, current: str):
+        return await self._activity_choices(interaction, current)
+
     @adventure.command(
         name="cooldown",
         description="Set an activity's cooldown, in seconds (Manage Server).",
     )
     @app_commands.describe(
-        activity="Which activity to configure", seconds="Cooldown in seconds"
-    )
-    @app_commands.choices(
-        activity=[app_commands.Choice(name=a, value=a) for a in ACTIVITY_NAMES]
+        activity="Pick an activity (the list shows its current cooldown)",
+        seconds="Pick a preset, or type any number of seconds in range",
     )
     @commands.has_permissions(manage_guild=True)
     async def activities_cooldown(
@@ -585,7 +655,8 @@ class Activities(commands.Cog):
         if not lo <= seconds <= hi:
             return await ctx.reply(
                 embed=h.err(
-                    f"Cooldown for `/{activity}` must be between {lo} and {hi} seconds."
+                    f"Cooldown for `/{activity}` must be between {lo:,} seconds "
+                    f"({h.fmt_duration(lo)}) and {hi:,} seconds ({h.fmt_duration(hi)})."
                 ),
                 ephemeral=True,
             )
@@ -595,6 +666,72 @@ class Activities(commands.Cog):
         await ctx.reply(
             embed=h.ok(f"`/{activity}` cooldown set to **{h.fmt_duration(seconds)}**.")
         )
+
+    @activities_cooldown.autocomplete("activity")
+    async def _cooldown_activity_ac(
+        self, interaction: discord.Interaction, current: str
+    ):
+        return await self._activity_choices(interaction, current)
+
+    @activities_cooldown.autocomplete("seconds")
+    async def _cooldown_seconds_ac(
+        self, interaction: discord.Interaction, current: str
+    ):
+        """Duration presets in plain English, clamped to the picked activity's
+        own bounds — "3 hours" beats counting zeros in 10800 on a phone."""
+        activity = str(getattr(interaction.namespace, "activity", "") or "").lower()
+        lo, hi = ACTIVITY_COOLDOWN_BOUNDS.get(activity, (60, 172_800))
+        default = ACTIVITY_DEFAULT_COOLDOWNS.get(activity)
+        q = (current or "").strip()
+        choices: list[app_commands.Choice[int]] = []
+        if q.isdigit() and lo <= int(q) <= hi:
+            choices.append(
+                app_commands.Choice(
+                    name=f"{int(q):,} seconds ({h.fmt_duration(int(q))})", value=int(q)
+                )
+            )
+        for preset in COOLDOWN_PRESETS:
+            if not lo <= preset <= hi or (q.isdigit() and preset == int(q)):
+                continue
+            if (
+                q
+                and not q.isdigit()
+                and q.lower() not in h.fmt_duration(preset).lower()
+            ):
+                continue
+            if q.isdigit() and not str(preset).startswith(q):
+                continue
+            label = f"{h.fmt_duration(preset)} ({preset:,} seconds)"
+            if preset == default:
+                label += " · default"
+            choices.append(app_commands.Choice(name=label[:100], value=preset))
+        return choices[:25]
+
+    async def _activity_choices(
+        self, interaction: discord.Interaction, current: str
+    ) -> list[app_commands.Choice[str]]:
+        """The five activities with their live state, so a mod can see what
+        they're about to change before they change it."""
+        q = (current or "").strip().lower()
+        cfg = (
+            await db.get_activities_config(interaction.guild_id)
+            if interaction.guild_id
+            else None
+        )
+        choices: list[app_commands.Choice[str]] = []
+        for activity in ACTIVITY_NAMES:
+            if q and q not in activity:
+                continue
+            info = ACTIVITY_INFO[activity]
+            label = f"{info['emoji']} {activity}"
+            if cfg:
+                state = "✅ enabled" if cfg[f"{activity}_enabled"] else "❌ disabled"
+                label += (
+                    f" — {state} · every "
+                    f"{h.fmt_duration(cfg[f'{activity}_cooldown'])}"
+                )
+            choices.append(app_commands.Choice(name=label[:100], value=activity))
+        return choices
 
     @adventure.command(
         name="config", description="Show the activities settings (Manage Server)."
@@ -615,6 +752,10 @@ class Activities(commands.Cog):
                 f"Cooldown: {h.fmt_duration(cooldown)}",
                 inline=True,
             )
+        embed.set_footer(
+            text="Change with /adventure toggle or /adventure cooldown "
+            "(both list every activity)"
+        )
         await ctx.reply(embed=embed)
 
 

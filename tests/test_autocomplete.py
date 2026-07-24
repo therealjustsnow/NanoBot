@@ -53,6 +53,9 @@ _PICKER_OPTIONS = [
     ("progress title", "name"),
     ("casino roulette", "space"),
     ("casino flip", "side"),
+    ("adventure toggle", "activity"),
+    ("adventure cooldown", "activity"),
+    ("adventure cooldown", "seconds"),
 ]
 
 
@@ -63,6 +66,7 @@ _PICKER_OPTIONS = [
     "cogs.crafting",
     "cogs.casino",
     "cogs.progression",
+    "cogs.activities",
 )
 async def test_every_picker_option_offers_suggestions(bot):
     """No economy option should leave a member guessing at free text."""

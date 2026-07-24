@@ -2,12 +2,16 @@
 Command-level tests for cogs/activities/ under dpytest (parse → check → DB → reply).
 """
 
+import time
+import types
+
 import pytest
 from discord.ext import commands
 from discord.ext import test as dpytest
 
 import utils.db as db
 from cogs.activities import (
+    ACTIVITY_COOLDOWN_BOUNDS,
     EXPLORE_COINS_SMALL,
     EXPLORE_OUTCOMES,
     PICKAXES,
@@ -384,11 +388,31 @@ async def test_rob_cooldown_consumed_after_attempt(bot, monkeypatch):
 #  /adventure group (hunt/explore + admin settings)
 # ══════════════════════════════════════════════════════════════════════════════
 @pytest.mark.cogs("cogs.activities")
-async def test_adventure_bare_shows_settings_overview(bot):
+async def test_adventure_bare_shows_member_overview(bot):
+    """Bare /adventure is the member landing card — every activity, what it's
+    for, and whether they're off cooldown (the admin dump is /adventure config)."""
+    guild = config().guilds[0]
     author = config().members[0]
     await dpytest.message("!adventure", member=author)
     sent = dpytest.get_message()
-    assert "Activities Settings" in sent.embeds[0].title
+    embed = sent.embeds[0]
+    assert "Things To Do" in embed.title
+    assert {f.name for f in embed.fields} == {
+        "💼 /work",
+        "⛏️ /mine",
+        "🏹 /adventure hunt",
+        "🧭 /adventure explore",
+        "🥷 /rob",
+    }
+    assert all("Ready now" in f.value for f in embed.fields)
+
+    # A used activity reports its remaining cooldown; a disabled one says so.
+    await db.try_claim_activity(guild.id, author.id, "work", time.time(), 3600)
+    await db.set_activities_config(guild.id, rob_enabled=False)
+    await dpytest.message("!adventure", member=author)
+    fields = {f.name: f.value for f in dpytest.get_message().embeds[0].fields}
+    assert "Ready in" in fields["💼 /work"]
+    assert "Disabled" in fields["🥷 /rob"]
 
 
 @pytest.mark.cogs("cogs.activities")
@@ -437,6 +461,74 @@ async def test_activities_cooldown_sets_value(bot):
     sent = dpytest.get_message()
     assert "Done" in sent.embeds[0].title or "set" in sent.embeds[0].description
     assert (await db.get_activities_config(guild.id))["work_cooldown"] == 120
+
+
+@pytest.mark.cogs("cogs.activities")
+async def test_mine_stats_shows_next_pickaxe_price(bot):
+    """The upgrade price used to be invisible until the purchase failed."""
+    guild = config().guilds[0]
+    author = config().members[0]
+
+    await dpytest.message("!mine stats", member=author)
+    desc = dpytest.get_message().embeds[0].description
+    assert f"{PICKAXES[1]['price']:,}" in desc
+    assert "🔒" in desc  # broke, so the price is flagged as out of reach
+    assert "Ready now" in desc
+
+    # A second member with the coins in hand sees the affordable marker
+    # (separate member because /mine stats carries a 5s per-user cooldown).
+    rich = config().members[1]
+    await db.add_coins(guild.id, rich.id, PICKAXES[1]["price"])
+    await dpytest.message("!mine stats", member=rich)
+    assert "✅ you can afford it" in dpytest.get_message().embeds[0].description
+
+
+@pytest.mark.cogs("cogs.activities")
+async def test_activity_picker_shows_live_state(bot):
+    guild = config().guilds[0]
+    author = config().members[0]
+    cog = bot.get_cog("Activities")
+    interaction = types.SimpleNamespace(guild_id=guild.id, guild=guild, user=author)
+
+    choices = await cog._toggle_activity_ac(interaction, "")
+    assert [c.value for c in choices] == ["work", "mine", "hunt", "explore", "rob"]
+    assert all("✅ enabled" in c.name for c in choices)
+
+    await db.set_activities_config(guild.id, mine_enabled=False, mine_cooldown=120)
+    by_value = {
+        c.value: c.name for c in await cog._cooldown_activity_ac(interaction, "")
+    }
+    assert "❌ disabled" in by_value["mine"] and "2m" in by_value["mine"]
+
+    # Typing narrows the list.
+    assert [c.value for c in await cog._toggle_activity_ac(interaction, "ro")] == [
+        "rob"
+    ]
+
+
+@pytest.mark.cogs("cogs.activities")
+async def test_cooldown_preset_picker_respects_activity_bounds(bot):
+    guild = config().guilds[0]
+    author = config().members[0]
+    cog = bot.get_cog("Activities")
+
+    def interaction(activity):
+        return types.SimpleNamespace(
+            guild_id=guild.id,
+            guild=guild,
+            user=author,
+            namespace=types.SimpleNamespace(activity=activity),
+        )
+
+    presets = await cog._cooldown_seconds_ac(interaction("explore"), "")
+    lo, hi = ACTIVITY_COOLDOWN_BOUNDS["explore"]
+    assert presets and all(lo <= c.value <= hi for c in presets)
+    assert any("default" in c.name for c in presets)  # the 3h default is flagged
+
+    # A typed number in range is offered back first, out-of-range presets aren't.
+    typed = await cog._cooldown_seconds_ac(interaction("work"), "900")
+    assert typed[0].value == 900
+    assert all(c.value >= ACTIVITY_COOLDOWN_BOUNDS["work"][0] for c in typed)
 
 
 @pytest.mark.cogs("cogs.activities")
