@@ -333,6 +333,28 @@ async def test_achievements_prestige_and_objectives_merge(legacy):
     assert rows[0]["claimed"] is True  # already paid — can't be claimed again
 
 
+# ── Migration 2: the per-guild cast cooldown is gone ──────────────────────────
+async def test_fishing_cooldown_setting_is_dropped(legacy):
+    """The cast cooldown became one fixed bot-wide constant; migration 2 drops
+    the column while keeping each guild's on/off switch."""
+    await legacy.execute(
+        "CREATE TABLE fishing_config (guild_id TEXT PRIMARY KEY, "
+        "enabled INTEGER NOT NULL DEFAULT 1, cooldown INTEGER NOT NULL DEFAULT 240)"
+    )
+    await legacy.executemany(
+        "INSERT INTO fishing_config (guild_id, enabled, cooldown) VALUES (?,?,?)",
+        [(str(G1), 0, 240), (str(G2), 1, 30)],
+    )
+    await legacy.commit()
+    await db._run_migrations([(2, globalize.drop_fishing_cooldown_setting)])
+
+    assert await db.get_fishing_config(G1) == {"enabled": False}
+    assert await db.get_fishing_config(G2) == {"enabled": True}
+    # Safe to re-run once the column is already gone.
+    await db._run_migrations([(2, globalize.drop_fishing_cooldown_setting)])
+    assert await db.get_fishing_config(G2) == {"enabled": True}
+
+
 # ── Re-runnability ────────────────────────────────────────────────────────────
 async def test_migration_is_safe_to_run_twice(legacy):
     await legacy.execute(

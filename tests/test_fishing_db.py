@@ -30,18 +30,17 @@ A, B = 1, 2
 # ── Config ─────────────────────────────────────────────────────────────────────
 async def test_config_defaults():
     cfg = await db.get_fishing_config(G)
-    assert cfg == {"enabled": True, "cooldown": 240}
+    assert cfg == {"enabled": True}
 
 
-async def test_config_roundtrip_partial_update():
-    await db.set_fishing_config(G, cooldown=120)
-    cfg = await db.get_fishing_config(G)
-    assert cfg["cooldown"] == 120
-    assert cfg["enabled"] is True  # untouched key keeps its default
+async def test_config_roundtrip():
+    """The only per-guild fishing setting left is the on/off switch — the cast
+    cooldown is a fixed bot-wide constant, not a stored column."""
     await db.set_fishing_config(G, enabled=False)
-    cfg = await db.get_fishing_config(G)
-    assert cfg["enabled"] is False
-    assert cfg["cooldown"] == 120
+    assert (await db.get_fishing_config(G))["enabled"] is False
+    await db.set_fishing_config(G, enabled=True)
+    assert (await db.get_fishing_config(G))["enabled"] is True
+    assert "cooldown" not in await db.get_fishing_config(G)
 
 
 # ── Cast cooldown claim ────────────────────────────────────────────────────────

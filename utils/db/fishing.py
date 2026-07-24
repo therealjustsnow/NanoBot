@@ -11,8 +11,12 @@ per-guild config. Selling/treasure credits coins via db.add_coins.
 
 Everything a *fisher* owns or has earned is GLOBAL (keyed by user_id alone):
 rod tier, XP/level, streak, bag, dex, quests, lifetime earnings. Only
-``fishing_config`` (enabled + cast cooldown) stays per-guild, because that's a
-server's own rules, not the member's progress.
+``fishing_config`` (the on/off switch) stays per-guild, because that's a
+server's own rule, not the member's progress. The cast cooldown is no longer
+stored at all — it's one fixed, bot-wide constant
+(``cogs.fishing.constants.CAST_COOLDOWN``), since the claim it gates is per
+user and a per-server number stopped meaning anything once a member fished in
+two servers.
 """
 
 import time
@@ -24,8 +28,7 @@ async def _ensure_fishing_tables():
     await _conn().execute("""
         CREATE TABLE IF NOT EXISTS fishing_config (
             guild_id  TEXT PRIMARY KEY,
-            enabled   INTEGER NOT NULL DEFAULT 1,
-            cooldown  INTEGER NOT NULL DEFAULT 240
+            enabled   INTEGER NOT NULL DEFAULT 1
         )
     """)
     # Per-fisher aggregates. `earned` is lifetime coins from fishing (sales +
@@ -104,23 +107,22 @@ async def _ensure_fishing_tables():
 # ── Config ─────────────────────────────────────────────────────────────────────
 async def get_fishing_config(guild_id: int) -> dict:
     async with _conn().execute(
-        "SELECT enabled, cooldown FROM fishing_config WHERE guild_id=?",
+        "SELECT enabled FROM fishing_config WHERE guild_id=?",
         (str(guild_id),),
     ) as cur:
         row = await cur.fetchone()
     if row:
-        return {"enabled": bool(row["enabled"]), "cooldown": row["cooldown"]}
-    return {"enabled": True, "cooldown": 240}
+        return {"enabled": bool(row["enabled"])}
+    return {"enabled": True}
 
 
 async def set_fishing_config(guild_id: int, **kwargs) -> None:
     current = await get_fishing_config(guild_id)
     current.update(kwargs)
     await _conn().execute(
-        "INSERT INTO fishing_config (guild_id, enabled, cooldown) VALUES (?,?,?) "
-        "ON CONFLICT(guild_id) DO UPDATE SET enabled=excluded.enabled, "
-        "cooldown=excluded.cooldown",
-        (str(guild_id), 1 if current["enabled"] else 0, int(current["cooldown"])),
+        "INSERT INTO fishing_config (guild_id, enabled) VALUES (?,?) "
+        "ON CONFLICT(guild_id) DO UPDATE SET enabled=excluded.enabled",
+        (str(guild_id), 1 if current["enabled"] else 0),
     )
     await _conn().commit()
 

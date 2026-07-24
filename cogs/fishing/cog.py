@@ -3,12 +3,12 @@ cogs/fishing.py
 Fishing minigame — a direct NanoCoin economy tie-in.
 
 Fishing progress is GLOBAL: rod, XP/level, bag, dex, quests, streak, and
-lifetime earnings belong to the user and follow them into every server. Each
-server still owns whether fishing is enabled and how long the cast cooldown
-is (the cooldown itself is claimed per user, so it can't be dodged by hopping
-servers).
+lifetime earnings belong to the user and follow them into every server. The
+cast cooldown is one fixed bot-wide value (CAST_COOLDOWN, 60s) claimed per
+user, so it can't be dodged by hopping servers; each server only chooses
+whether fishing is enabled at all.
 
-Members cast a line on a per-guild cooldown and pull up fish across seven
+Members cast a line every CAST_COOLDOWN seconds and pull up fish across seven
 rarity tiers (junk → common → uncommon → rare → epic → legendary → treasure).
 Fish land in a bag and sell for NanoCoins; treasure pays coins on the spot.
 Better rods — bought with coins, a deliberate money sink — shift the odds away
@@ -29,7 +29,7 @@ top-level slots.
 Commands
 ──────────────────────────────────────────────────────
   /fish                       → cast your line (same as /fish cast)
-  /fish cast                  → cast your line (cooldown per server)
+  /fish cast                  → cast your line (60s cooldown, bot-wide)
   /fish bag                   → what you've caught, grouped by species
   /fish sell [fish|all]       → sell one species — or everything — for coins
   /fish rod                   → your rod + the next upgrade
@@ -43,7 +43,6 @@ Commands
   /fish quest                 → today's quest and your progress
   /fish events                → active fishing events and time left
   /fish toggle                → enable/disable fishing     (Manage Server)
-  /fish cooldown <seconds>    → set the cast cooldown      (Manage Server)
   /fish event <key> [minutes] → force-start a fishing event (Manage Server)
   /fish config                → show settings              (Manage Server)
 """
@@ -64,8 +63,7 @@ from utils import items as item_catalog
 
 from . import items as _fishing_items  # noqa: F401 - registers bait/consumable defs
 from .constants import (
-    COOLDOWN_MAX,
-    COOLDOWN_MIN,
+    CAST_COOLDOWN,
     EVENT_DURATION_RANGE,
     EVENT_LABELS,
     EVENT_POOL,
@@ -136,10 +134,11 @@ class Fishing(commands.Cog):
             "category": "🪙 Economy",
             "short": "Catch and sell fish for coins",
             "usage": "fish [subcommand]",
-            "desc": "Cast a line, collect fish across seven rarity tiers, and sell "
-            "them for coins. Buy better rods to improve your odds, climb the "
-            "earnings leaderboard, and complete the species dex. Admins can "
-            "toggle fishing and tune the cast cooldown.",
+            "desc": "Cast a line every 60 seconds, collect fish across seven "
+            "rarity tiers, and sell them for coins. Buy better rods to improve "
+            "your odds, climb the earnings leaderboard, and complete the species "
+            "dex. Your rod, level, bag, and dex are the same in every server. "
+            "Admins can turn fishing on or off here.",
             "args": [],
             "perms": "Admin subcommands require Manage Server",
             "example": "{prefix}fish\n{prefix}fish sell\n{prefix}fish rod",
@@ -161,7 +160,7 @@ class Fishing(commands.Cog):
             return await ctx.reply(
                 embed=h.err("Fishing is disabled on this server."), ephemeral=True
             )
-        retry = await db.try_claim_cast(ctx.author.id, time.time(), cfg["cooldown"])
+        retry = await db.try_claim_cast(ctx.author.id, time.time(), CAST_COOLDOWN)
         if retry:
             return await ctx.reply(
                 embed=h.warn(
@@ -914,25 +913,6 @@ class Fishing(commands.Cog):
         else:
             await ctx.reply(embed=h.ok("Fishing is now **disabled**."))
 
-    @fish.command(name="cooldown", description="Set how many seconds between casts.")
-    @app_commands.describe(
-        seconds=f"Seconds between casts ({COOLDOWN_MIN}–{COOLDOWN_MAX})"
-    )
-    @commands.has_permissions(manage_guild=True)
-    async def fish_cooldown(self, ctx: commands.Context, seconds: int):
-        if not COOLDOWN_MIN <= seconds <= COOLDOWN_MAX:
-            return await ctx.reply(
-                embed=h.err(
-                    f"Cooldown must be between {COOLDOWN_MIN} and "
-                    f"{COOLDOWN_MAX} seconds."
-                ),
-                ephemeral=True,
-            )
-        await db.set_fishing_config(ctx.guild.id, cooldown=seconds)
-        await ctx.reply(
-            embed=h.ok(f"Cast cooldown set to **{h.fmt_duration(seconds)}**.")
-        )
-
     @fish.command(name="event", description="Force-start a fishing event.")
     @app_commands.describe(
         key="Which event to start", minutes="Duration in minutes (default 15)"
@@ -971,7 +951,9 @@ class Fishing(commands.Cog):
             name="Enabled", value="✅ Yes" if cfg["enabled"] else "❌ No", inline=True
         )
         embed.add_field(
-            name="Cast cooldown", value=h.fmt_duration(cfg["cooldown"]), inline=True
+            name="Cast cooldown",
+            value=f"{h.fmt_duration(CAST_COOLDOWN)} (fixed, bot-wide)",
+            inline=True,
         )
         embed.add_field(name="Species", value=str(len(FISH)), inline=True)
         embed.add_field(

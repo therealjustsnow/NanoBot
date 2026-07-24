@@ -256,3 +256,61 @@ async def test_prestige_confirm_success_advances_rank_and_charges_coins(bot):
     sent = dpytest.get_message()
     assert "Error" in sent.embeds[0].title
     assert (await db.get_progression(author.id))["prestige"] == 1
+
+
+# ── /profile — the whole account on one card ──────────────────────────────────
+@pytest.mark.cogs("cogs.progression")
+async def test_profile_card_covers_every_feature(bot):
+    author = config().members[0]
+    await db.add_coins(author.id, 2_500)
+    await db.record_catch(author.id, "tuna", 18.0, 90)
+    await db.add_fishing_xp(author.id, 300)
+    await db.add_fishing_earned(author.id, 900)
+    await db.record_casino_game(author.id, 100, 400)
+    await db.try_claim_activity(author.id, "work", 1_000.0, 3600)
+    await db.add_item(author.id, "iron_ore", 7)
+
+    await dpytest.message("!profile", member=author)
+    embed = dpytest.get_message().embeds[0]
+    assert author.display_name in embed.title
+    names = {f.name for f in embed.fields}
+    assert names == {
+        "🪙 Wallet",
+        "🎣 Fishing",
+        "🎰 Casino",
+        "💼 Work & Adventure",
+        "🎒 Inventory",
+        "🏅 Progression",
+    }
+    fields = {f.name: f.value for f in embed.fields}
+    # (the exact number moves — checking the card evaluates achievements and
+    # pays their coin rewards, which is the intended behaviour)
+    assert "NanoCoins" in fields["🪙 Wallet"] and "Global rank" in fields["🪙 Wallet"]
+    assert "Tuna" in fields["🎣 Fishing"]  # personal best named, not just a number
+    assert "game" in fields["🎰 Casino"] and "Biggest win" in fields["🎰 Casino"]
+    assert "shift" in fields["💼 Work & Adventure"]
+    assert "**7** items" in fields["🎒 Inventory"]
+    # Counts are pluralised properly — "1 shift", not "1 shifts".
+    assert "**1** shift\n" in fields["💼 Work & Adventure"]
+    assert "every server" in embed.footer.text
+
+
+@pytest.mark.cogs("cogs.progression")
+async def test_profile_of_another_member_does_not_award_them_achievements(bot):
+    """Looking someone up must not silently evaluate (and pay) their
+    achievements — same rule as /progress."""
+    author, other = config().members[0], config().members[1]
+    await db.add_coins(other.id, 5_000)  # would cross balance_1k if evaluated
+
+    await dpytest.message(f"!profile {other.mention}", member=author)
+    dpytest.get_message()
+    assert await db.get_earned_achievements(other.id) == {}
+
+
+@pytest.mark.cogs("cogs.progression")
+async def test_profile_works_on_a_brand_new_account(bot):
+    """A member who has never played still gets a card, not an error."""
+    author = config().members[0]
+    await dpytest.message("!profile", member=author)
+    embed = dpytest.get_message().embeds[0]
+    assert "Hasn't played yet" in {f.name: f.value for f in embed.fields}["🎰 Casino"]

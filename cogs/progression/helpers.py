@@ -35,6 +35,12 @@ def period_key(now: float | None = None) -> str:
     return f"{iso_year}-W{iso_week:02d}"
 
 
+def count_label(n: int, word: str, plural: str | None = None) -> str:
+    """ "**1** shift" / "**2** shifts" — the profile card counts a lot of things
+    and "1 shifts" reads badly on every one of them."""
+    return f"**{n:,}** {word if n == 1 else (plural or word + 's')}"
+
+
 def pick_weekly_objectives(user_id: int, period: str, pool: list, count: int) -> list:
     """Deterministically pick `count` distinct objective defs from `pool`.
 

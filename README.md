@@ -667,10 +667,13 @@ Per-server message XP and levels (Mee6-style curve). **Off by default** -- enabl
 
 ### 🪙 Economy
 
-**NanoCoin** currency with a **global wallet**: your balance, inventory, and progression belong to your account, not to one server — earn coins fishing in one community and spend them in another. Each server still sets its own currency name and emoji, reward amounts, shop, and which economy features are enabled. Earn coins from `/daily` (and optionally from leveling up), then spend or gamble them. See [`docs/global-economy.md`](docs/global-economy.md) for the full scope split and the one-time migration.
+**NanoCoin** currency with a **global wallet**: your balance, inventory, and progression belong to your account, not to one server — earn coins fishing in one community and spend them in another. Each server still sets its own currency name and emoji, reward amounts, shop, and which economy features are enabled. Earn coins from `/daily` (and optionally from leveling up), then spend or gamble them.
+
+📖 **New to the economy? Read the [Player Guide](docs/player-guide.md)** — a beginner-friendly tour of fishing, jobs, the casino, crafting, achievements, and the global account, with every command in one place. For the architecture behind the global wallet (and the one-time migration), see [`docs/global-economy.md`](docs/global-economy.md).
 
 | Command | Description |
 |---------|-------------|
+| `/profile [user]` | The whole account on one card — wallet, fishing, casino, work, items, progression (alias: `/card`) |
 | `/balance [user]` | Show a coin balance and global rank |
 | `/daily` | Claim the daily reward (24h cooldown, consecutive-day streak bonus) |
 | `/pay <user> <amount>` | Transfer coins to another member |

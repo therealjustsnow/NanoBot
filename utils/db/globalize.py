@@ -411,3 +411,31 @@ async def globalize_economy(conn):
         FROM progression p GROUP BY p.user_id
         """,
     )
+
+
+@migration(2)
+async def drop_fishing_cooldown_setting(conn):
+    """Retire the per-guild cast cooldown — it's one fixed value now.
+
+    The cast claim is per user, so a per-server cooldown stopped meaning
+    anything the moment a member fished in two servers (whichever server they
+    cast in last set everyone's pace). `cogs.fishing.constants.CAST_COOLDOWN`
+    replaces the column; the guild keeps its on/off switch. Idempotent: skipped
+    once the column is gone.
+    """
+    async with conn.execute("PRAGMA table_info(fishing_config)") as cur:
+        cols = {row["name"] for row in await cur.fetchall()}
+    if "cooldown" not in cols:
+        return
+    log.info("Dropping the per-guild fishing cooldown setting …")
+    await conn.execute("DROP TABLE IF EXISTS fishing_config_new")
+    await conn.execute(
+        "CREATE TABLE fishing_config_new ("
+        "guild_id TEXT PRIMARY KEY, enabled INTEGER NOT NULL DEFAULT 1)"
+    )
+    await conn.execute(
+        "INSERT INTO fishing_config_new (guild_id, enabled) "
+        "SELECT guild_id, enabled FROM fishing_config"
+    )
+    await conn.execute("DROP TABLE fishing_config")
+    await conn.execute("ALTER TABLE fishing_config_new RENAME TO fishing_config")
