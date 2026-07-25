@@ -71,6 +71,7 @@ from discord import app_commands
 from discord.ext import commands
 
 from utils import db
+from utils import globalxp
 from utils import helpers as h
 from utils.helpers import SCOPE_CHOICES
 
@@ -232,6 +233,9 @@ class Economy(commands.Cog):
 
             new_bal = await db.add_coins(ctx.author.id, res["total"])
             await db.set_daily_state(ctx.author.id, time.time(), res["streak"])
+            # Account-wide XP: one flat award per claim, the same in every
+            # server no matter what this guild pays in coins.
+            await globalxp.award(ctx.author.id, "daily")
         desc = f"You claimed {self._money(cfg, res['total'])}!"
         if res["streak"] > 1:
             desc += f"\n🔥 **{res['streak']}-day streak**"
@@ -1149,6 +1153,7 @@ class Economy(commands.Cog):
                 embed=h.err(self._buy_failure_text(res, cfg)), ephemeral=True
             )
 
+        await globalxp.award(ctx.author.id, "shop")
         item_row = res["item"]
         if record["kind"] == "role":
             try:

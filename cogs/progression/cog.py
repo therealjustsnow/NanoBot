@@ -64,7 +64,6 @@ Commands
   /progress title <name>           → pick which earned title is shown on your profile
   /progress prestige                → prestige requirements + your current rank
   /progress prestige confirm        → spend achievement points + coins to prestige
-  /profile [member]                → the whole account on one card (alias: card)
 """
 
 import asyncio
@@ -75,18 +74,9 @@ import discord
 from discord.ext import commands
 
 from utils import db
+from utils import globalxp
 from utils import helpers as h
 from utils import items as item_catalog
-
-# Pure (Discord-free, side-effect-free) data + helpers from the feature
-# packages, imported for /profile's ladder *names* only — the same
-# pure-module-only borrowing cogs/images.py does from cogs/fun/sources.py. No
-# cog class, state, or command is touched; all the numbers still come from the
-# db accessors via stats.py.
-from cogs.activities.constants import PICKAXES
-from cogs.activities.helpers import career_info, pickaxe_info
-from cogs.fishing.constants import FISH, RODS
-from cogs.fishing.helpers import fmt_weight, level_progress, rod_info
 
 from . import stats as stats_mod
 from .constants import (
@@ -97,7 +87,6 @@ from .constants import (
 from .definitions import ACHIEVEMENTS, ACHIEVEMENTS_BY_KEY, WEEKLY_POOL
 from .helpers import (
     can_prestige,
-    count_label,
     earned_titles,
     objective_complete,
     objective_progress,
@@ -157,6 +146,13 @@ class Progression(commands.Cog):
         return notes
 
     # ── Achievement evaluation ───────────────────────────────────────────────
+    async def evaluate_achievements(self, user_id: int):
+        """Public entry point for other features (the /profile card) to refresh
+        someone's achievements before displaying them. Optional coupling: the
+        caller looks the cog up with bot.get_cog and skips this if progression
+        isn't loaded — no import, no hard dependency."""
+        return await self._evaluate_achievements(user_id)
+
     async def _evaluate_achievements(self, user_id: int):
         """Award any achievement whose threshold is newly crossed. Returns the
         list of (AchievementDef, reward_notes) newly earned THIS call.
@@ -175,6 +171,7 @@ class Progression(commands.Cog):
         for a in pending:
             if stats.get(a.stat, 0) >= a.threshold:
                 if await db.try_award_achievement(user_id, a.key):
+                    await globalxp.award(user_id, "achievement")
                     notes = await self._grant_reward(user_id, a.reward)
                     newly.append((a, notes))
         return newly
@@ -230,164 +227,6 @@ class Progression(commands.Cog):
         if selected and any(t == selected for t, _pts in titles):
             return selected
         return titles[0][0] if titles else ""
-
-    # ══════════════════════════════════════════════════════════════════════════
-    #  /profile — the whole account on one card
-    # ══════════════════════════════════════════════════════════════════════════
-    @commands.hybrid_command(
-        name="profile",
-        aliases=["card"],
-        description="Your whole economy account on one card — the same in every server.",
-        extras={
-            "category": "🪙 Economy",
-            "short": "Your whole account on one card",
-            "usage": "profile [member]",
-            "desc": "Everything about your account in one place: wallet and rank, "
-            "fishing level and rod, casino record, work career and pickaxe, "
-            "inventory size and active buffs, achievements, and prestige. Your "
-            "account is global — this card looks the same in every server.",
-            "args": ["member — whose profile to show (defaults to you)"],
-            "perms": "None",
-            "example": "{prefix}profile\n{prefix}profile @Friend",
-        },
-    )
-    @commands.guild_only()
-    @discord.app_commands.describe(member="Whose profile to show (defaults to you)")
-    @commands.cooldown(1, 5, commands.BucketType.user)
-    async def profile(
-        self, ctx: commands.Context, member: Optional[discord.Member] = None
-    ):
-        member = member or ctx.author
-        if member.bot:
-            return await ctx.reply(
-                embed=h.err("Bots don't have a profile."), ephemeral=True
-            )
-        user_id = member.id
-        # Everything here is one account's data, so the card is assembled from
-        # the batched stat registry (each source row read once) plus a handful
-        # of extras — not one query per line.
-        if member.id == ctx.author.id:
-            # Same rule as /progress: only ever evaluate the viewer's own
-            # achievements, so looking someone up can't silently award them.
-            await self._evaluate_achievements(user_id)
-        stats = await stats_mod.compute_stats(user_id)
-        econ = await db.get_econ_config(ctx.guild.id)
-        fisher = await db.get_fisher(user_id)
-        activity = await db.get_activity_stats(user_id)
-        casino = await db.get_casino_stats(user_id)
-        effects = await db.get_active_effects(user_id)
-        coin_rank = await db.get_econ_rank(user_id)
-        contrib = await db.get_contrib_rank(user_id)
-        earned = await db.get_earned_achievements(user_id)
-        progression = await db.get_progression(user_id)
-        title = await self._profile_title(user_id)
-
-        def money(amount: int) -> str:
-            return h.fmt_coins(
-                int(amount), econ["currency_name"], econ["currency_emoji"]
-            )
-
-        header = []
-        if title:
-            header.append(f"🏷️ **{title}**")
-        if progression["prestige"]:
-            header.append(f"⭐ {prestige_title(progression['prestige'])}")
-        embed = h.embed(
-            f"📇 {member.display_name}",
-            (
-                " · ".join(header)
-                if header
-                else "No title yet — earn one with 🏅 achievements."
-            ),
-            h.BLUE,
-        )
-        embed.set_thumbnail(url=member.display_avatar.url)
-
-        # ── Wallet ──
-        wallet = money(stats.get("balance", 0))
-        if coin_rank:
-            wallet += f"\nGlobal rank **#{coin_rank[0]}**"
-        if contrib:
-            wallet += f"\n🤝 **{contrib[1]:,}** contribution (#{contrib[0]})"
-        embed.add_field(name="🪙 Wallet", value=wallet, inline=True)
-
-        # ── Fishing ──
-        level, into, needed = level_progress(fisher["xp"])
-        rod = rod_info(fisher["rod_level"])
-        fishing = (
-            f"Level **{level}** ({into}/{needed} XP)\n"
-            f"{rod['emoji']} {rod['name']} · tier {fisher['rod_level'] + 1}/{len(RODS)}\n"
-            f"{count_label(fisher['caught'], 'catch', 'catches')} · "
-            f"{money(fisher['earned'])} earned\n"
-            f"📖 Dex {count_label(int(stats.get('fish_dex_size', 0)), 'species', 'species')}"
-        )
-        if fisher["best_key"] and fisher["best_key"] in FISH:
-            best = FISH[fisher["best_key"]]
-            fishing += (
-                f"\n🏆 {best['emoji']} {best['name']} "
-                f"({fmt_weight(fisher['best_weight'])})"
-            )
-        if fisher["streak_days"]:
-            fishing += f"\n🔥 **{fisher['streak_days']}**-day streak"
-        embed.add_field(name="🎣 Fishing", value=fishing, inline=True)
-
-        # ── Casino ──
-        if casino["games"]:
-            net = casino["won"] - casino["wagered"]
-            embed.add_field(
-                name="🎰 Casino",
-                value=f"{count_label(casino['games'], 'game')} · "
-                f"{count_label(casino['wins'], 'win')}\n"
-                f"Net {money(net)}\n"
-                f"Biggest win {money(casino['biggest_win'])}\n"
-                f"Best streak **{casino['best_streak']}**",
-                inline=True,
-            )
-        else:
-            embed.add_field(
-                name="🎰 Casino", value="Hasn't played yet — `/casino`", inline=True
-            )
-
-        # ── Work & adventure ──
-        career = career_info(activity["work_shifts"])
-        pickaxe = pickaxe_info(activity["pickaxe_level"])
-        embed.add_field(
-            name="💼 Work & Adventure",
-            value=f"{career['title']} · {count_label(activity['work_shifts'], 'shift')}\n"
-            f"{pickaxe['emoji']} {pickaxe['name']} · tier "
-            f"{activity['pickaxe_level'] + 1}/{len(PICKAXES)}\n"
-            f"⛏️ {count_label(activity['mine_count'], 'dig')} · "
-            f"🏹 {count_label(activity['hunt_count'], 'hunt')}\n"
-            f"🧭 {count_label(activity['explore_count'], 'trip')} · "
-            f"🥷 {count_label(activity['rob_count'], 'heist')}",
-            inline=True,
-        )
-
-        # ── Inventory ──
-        inventory = count_label(int(stats.get("items_owned", 0)), "item")
-        if effects:
-            inventory += "\n" + "\n".join(
-                f"✨ `{key}` +{eff['magnitude']:g}"
-                for key, eff in sorted(effects.items())[:3]
-            )
-        else:
-            inventory += "\nNo buffs active"
-        embed.add_field(name="🎒 Inventory", value=inventory, inline=True)
-
-        # ── Progression ──
-        points = total_points(earned.keys(), ACHIEVEMENTS_BY_KEY)
-        embed.add_field(
-            name="🏅 Progression",
-            value=f"**{len(earned)}/{len(ACHIEVEMENTS)}** achievements\n"
-            f"**{points:,}** points\n"
-            f"⭐ Prestige **{progression['prestige']}**/{PRESTIGE_MAX}",
-            inline=True,
-        )
-        embed.set_footer(
-            text="One account, every server · /progress for achievements, "
-            "/fish stats and /casino stats for more"
-        )
-        await ctx.reply(embed=embed)
 
     # ══════════════════════════════════════════════════════════════════════════
     #  /progress  group

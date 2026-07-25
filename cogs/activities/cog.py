@@ -62,6 +62,7 @@ from discord import app_commands
 from discord.ext import commands
 
 from utils import db
+from utils import globalxp
 from utils import helpers as h
 from utils import items as item_catalogue
 
@@ -184,6 +185,7 @@ class Activities(commands.Cog):
                 ephemeral=True,
             )
 
+        await globalxp.award(ctx.author.id, "activity")
         stats = await db.get_activity_stats(ctx.author.id)
         info = career_info(stats["work_shifts"])
         old_info = career_info(before["work_shifts"])
@@ -249,6 +251,7 @@ class Activities(commands.Cog):
                 ephemeral=True,
             )
 
+        await globalxp.award(ctx.author.id, "activity")
         if roll_cave_in(random.random()):
             embed = h.warn(
                 "The tunnel collapses behind you — you scramble out empty-handed.",
@@ -422,6 +425,7 @@ class Activities(commands.Cog):
                 ephemeral=True,
             )
 
+        await globalxp.award(ctx.author.id, "activity")
         catch_key = pick_hunt_catch(random.random())
         catch = HUNT_CATCHES[catch_key]
         await db.add_item(ctx.author.id, catch_key, 1)
@@ -470,6 +474,7 @@ class Activities(commands.Cog):
                 ephemeral=True,
             )
 
+        await globalxp.award(ctx.author.id, "activity")
         outcome = pick_explore_outcome(random.random())
         flavor = EXPLORE_FLAVOR[outcome]
         econ = await db.get_econ_config(ctx.guild.id)
@@ -573,6 +578,7 @@ class Activities(commands.Cog):
                 ephemeral=True,
             )
 
+        await globalxp.award(ctx.author.id, "activity")
         robber_effects = await db.get_active_effects(ctx.author.id)
         has_luck = "luck" in robber_effects
         if rob_success(random.random(), has_luck):

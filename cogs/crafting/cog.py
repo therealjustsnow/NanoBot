@@ -36,6 +36,7 @@ from discord import app_commands
 from discord.ext import commands
 
 from utils import db
+from utils import globalxp
 from utils import helpers as h
 from utils import items as item_catalog
 
@@ -276,6 +277,7 @@ class Crafting(commands.Cog):
                     ephemeral=True,
                 )
             await db.add_item(uid, r.output_item, r.output_qty * count)
+        await globalxp.award(uid, "craft")
         await ctx.reply(
             embed=h.ok(
                 f"Crafted **{count}** × {item_catalog.display(r.output_item)} "

@@ -57,6 +57,7 @@ from discord import app_commands
 from discord.ext import commands
 
 from utils import db
+from utils import globalxp
 from utils import helpers as h
 from utils.helpers import SCOPE_CHOICES
 from utils import items as item_catalog
@@ -222,6 +223,7 @@ class Fishing(commands.Cog):
             ),
         )
 
+        await globalxp.award(ctx.author.id, "fish_cast")
         rarity = pick_rarity(random.random(), total_luck)
         key = pick_fish(rarity, random.random())
         entry = FISH[key]
@@ -350,6 +352,7 @@ class Fishing(commands.Cog):
             await db.add_fishing_earned(ctx.author.id, coins)
         if xp:
             await db.add_fishing_xp(ctx.author.id, xp)
+        await globalxp.award(ctx.author.id, "quest")
         econ = await db.get_econ_config(ctx.guild.id)
         return f"✅ Daily quest complete! +{self._money(econ, coins)}, +{xp} XP"
 
@@ -433,6 +436,7 @@ class Fishing(commands.Cog):
                 )
             new_bal = await db.add_coins(ctx.author.id, total)
             await db.add_fishing_earned(ctx.author.id, total)
+            await globalxp.award(ctx.author.id, "fish_sell")
 
         today = int(time.time() // 86400)
         qgen = generate_quest(ctx.author.id, today)

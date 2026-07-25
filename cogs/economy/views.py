@@ -9,6 +9,7 @@ from typing import TYPE_CHECKING, Callable, Optional
 import discord
 
 from utils import db
+from utils import globalxp
 from utils import helpers as h
 
 from .constants import COOP_CONFIRM_TIMEOUT, RAID_TIMEOUT
@@ -212,6 +213,7 @@ class SquadView(discord.ui.View):
         for uid in party:
             await db.add_coins(uid, reward)
             await db.add_contribution(uid, reward)
+            await globalxp.award(uid, "coop")
         for child in self.children:
             child.disabled = True
         activity = f" for **{self.activity}**" if self.activity else ""
@@ -569,6 +571,7 @@ class RaidView(discord.ui.View):
         for uid in self.participants:
             await db.add_coins(uid, reward)
             await db.add_contribution(uid, reward)
+            await globalxp.award(uid, "coop")
         for child in self.children:
             child.disabled = True
         what = f" for **{self.activity}**" if self.activity else ""

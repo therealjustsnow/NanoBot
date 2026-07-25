@@ -61,6 +61,7 @@ from discord import app_commands
 from discord.ext import commands
 
 from utils import db
+from utils import globalxp
 from utils import helpers as h
 from utils.helpers import SCOPE_CHOICES
 
@@ -158,6 +159,7 @@ class Casino(commands.Cog):
         if net < 0:
             await db.add_to_jackpot(guild_id, round(-net * JACKPOT_FEED_RATE))
         stats = await db.record_casino_game(user_id, bet, final_payout)
+        await globalxp.award(user_id, "casino_game")
         hint = await self._bump_challenges(user_id, bet, final_payout, guild_id)
         return final_payout, stats, hint
 
@@ -219,6 +221,7 @@ class Casino(commands.Cog):
             if row["progress"] >= target and not row["claimed"]:
                 if await db.try_claim_challenge(user_id, today, key):
                     await db.add_coins(user_id, reward)
+                    await globalxp.award(user_id, "quest")
                     econ = await db.get_econ_config(guild_id)
                     completed_notes.append(
                         f"🏆 Challenge done — {label}! +{self._money(econ, reward)}"

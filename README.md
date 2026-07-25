@@ -641,11 +641,11 @@ Requires a Groq API key in config or the `GROQ_API_KEY` environment variable. Fr
 
 ### 📈 Leveling
 
-Per-server message XP and levels (Mee6-style curve). **Off by default** -- enable it with `/level toggle on`. Members earn XP per message (rate-limited by a per-member cooldown); reaching a level can grant a role reward and, optionally, NanoCoins.
+Per-server message XP and levels (Mee6-style curve). **Off by default** -- enable it with `/level toggle on`. This is the *server's* progression and stays fully admin-configurable; it sits alongside the **global account level** (hard-coded, earned from normalized actions anywhere) which appears next to it on `/rank` and on `/profile` — see [`docs/identity-and-levels.md`](docs/identity-and-levels.md). Members earn XP per message (rate-limited by a per-member cooldown); reaching a level can grant a role reward and, optionally, NanoCoins.
 
 | Command | Description |
 |---------|-------------|
-| `/rank [user]` | Show a member's level, rank, and XP progress card |
+| `/rank [user]` | Show a member's server level and rank, plus their global account level |
 | `/level top [page]` | Server XP leaderboard |
 
 **Admin subcommands** *(Manage Server):*
@@ -673,7 +673,10 @@ Per-server message XP and levels (Mee6-style curve). **Off by default** -- enabl
 
 | Command | Description |
 |---------|-------------|
-| `/profile [user]` | The whole account on one card — wallet, fishing, casino, work, items, progression (alias: `/card`) |
+| `/profile [user]` | Your account **card image** — global level, this server's level, coins, fishing, casino, work, items, achievements, prestige emblem and equipped badges (alias: `/card`) |
+| `/profile cosmetics` | Banners, borders, nameplates and badges you own — and how to unlock the rest |
+| `/profile equip <name>` | Wear a cosmetic on your card (`/profile unequip` to remove) |
+| `/profile badges [user]` | The badge gallery |
 | `/balance [user]` | Show a coin balance and global rank |
 | `/daily` | Claim the daily reward (24h cooldown, consecutive-day streak bonus) |
 | `/pay <user> <amount>` | Transfer coins to another member |

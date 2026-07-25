@@ -31,3 +31,4 @@ Thumbs.db
 /i-have-adhd/
 # Local caveman plugin (claude plugin setup)
 .claude/plugins/caveman/
+dpytest_*.dat

@@ -60,23 +60,92 @@ cooldown right now.
 
 ## 📇 Your profile card
 
-`/profile` (also `/card`, or `/profile @someone`) puts your whole account on
-one card:
+`/profile` draws your whole account as an **image you can share** — avatar,
+name, your equipped cosmetics, and everything you've built:
 
-| Section | What it shows |
+| On the card | What it shows |
 |---|---|
-| 🪙 Wallet | Balance, your global rank, co-op contribution points |
-| 🎣 Fishing | Level + XP progress, current rod, catches, earnings, dex size, personal-best fish, daily streak |
-| 🎰 Casino | Games played, wins, net winnings, biggest win, best streak |
-| 💼 Work & Adventure | Career title + shifts, pickaxe tier, digs, hunts, trips, heists |
-| 🎒 Inventory | How many items you're carrying and any active buffs |
-| 🏅 Progression | Achievements earned, points, prestige rank |
+| 🌐 Global level | Your account level + XP bar (see below) |
+| 🏠 Server level | This server's level + XP bar |
+| ⭐ Prestige emblem | A rank pin on your avatar — the metal and star change as you climb |
+| 🪙 Coins | Your global balance |
+| 🏅 Achievements | How many you've earned, and your points |
+| 🎣 Fishing | Level and current rod |
+| 🎰 Casino | Net winnings and games played |
+| 💼 Work & Mining | Career title and pickaxe tier |
+| 🎒 Items | How many you're carrying |
+| 🎖️ Badges | Up to six badges you've equipped |
 
-Your chosen **title** and prestige star appear at the top. Because your
-account is global, the card looks the same in every server.
+Your **banner**, **border**, **nameplate** and **badges** are all yours to
+pick — see [Cosmetics](#-badges-banners-and-cosmetics).
 
 Want more detail on one area? `/fish stats`, `/casino stats`,
 `/mine stats`, `/progress`.
+
+---
+
+## 🌐 Two levels: global and server
+
+There are two separate level systems, and they never interfere with each other.
+
+**Global level** — your *account*. It goes up when you do almost anything with
+the bot: chatting, fishing, casino games, activities, claiming `/daily`,
+finishing quests, earning achievements. Every action is worth the same fixed
+amount in every server: nobody can configure it, speed it up, or slow it down.
+Level 10 is a few evenings; level 87 is a long-running account.
+
+**Server level** — *this community's* XP, exactly as before. Server admins set
+the XP rate, the cooldown, role rewards, and announcements, and they can turn
+it off entirely. It measures how active you are here.
+
+```
+Global Level: 87        ← the same in every server
+Server Level: 24        ← this server only
+```
+
+Both are on your profile card, and `/rank` shows them side by side.
+
+A server running 5× XP doesn't earn you global levels any faster, and a server
+with leveling switched off doesn't stop your global progress.
+
+---
+
+## 🎖️ Badges, banners, and cosmetics
+
+Your card is customisable. Four kinds of cosmetic:
+
+| Slot | What it changes | How many |
+|---|---|---|
+| **Banner** | The artwork behind your card | 1 |
+| **Border** | The frame around it | 1 |
+| **Nameplate** | The plate behind your name | 1 |
+| **Badges** | The row along the bottom | up to 6 |
+
+| Command | What it does |
+|---|---|
+| `/profile cosmetics [slot]` | Everything you own, and how to unlock the rest |
+| `/profile equip <name>` | Wear it (the slot is worked out for you) |
+| `/profile unequip <name>` | Take it off — or pass a slot name to clear it |
+| `/profile badges [member]` | The badge gallery, yours or someone else's |
+
+**How you unlock them**
+
+- **Global level** — Steel Frame at 10, Frosted Glass at 15, Ember at 25,
+  Gilded Frame at 40, Aurora + the Veteran badge at 50, Neon Strip at 60,
+  Ascended at 100.
+- **Prestige** — Royal Velvet at prestige 1, the Prestige Frame at 3, plus
+  Prestige I/V/X badges.
+- **Playing** — Deep Current (250 fish), Fishing Master (1,000 fish), Casino
+  Champion (1,000 games), Tycoon (1,000,000 coins), Grinder (500 shifts).
+- **Staff & events** — Developer, Contributor, Early Supporter, Beta Tester,
+  Event Winner and seasonal drops are handed out, not earned by grinding.
+
+Anything you've earned unlocks automatically the next time you open your own
+card — you'll see a "🎁 Unlocked" line above it.
+
+**Prestige looks the part.** Instead of a number, prestige shows as an emblem
+pinned to your avatar: bronze, then silver, gold, amethyst and radiant, with an
+extra star point at each tier.
 
 ---
 
@@ -387,6 +456,8 @@ Your personal rank on `/balance`, `/fish stats` and `/casino stats` is your
   streak bonus is the only edge you control.
 - **Don't rob broke people.** Minimum balances are enforced, and a padlocked
   target just wastes your 4-hour cooldown.
+- **Open `/profile` now and then.** Cosmetics you've earned only unlock when
+  you look at your own card.
 - **Check `/progress weekly` on Mondays.** The objectives are picked for you
   and pay well.
 
@@ -419,6 +490,20 @@ Use it: `/inventory use <bait>`. Check `/fish bait` to confirm it's armed.
 **Fishing/casino/rob doesn't work here.**
 The server has that feature switched off. Ask a moderator, or play it in
 another server — your progress is the same account either way.
+
+**What's the difference between my global level and my server level?**
+Global level is your account across every server and nobody can configure it.
+Server level is this community's chat XP, tuned by its admins. Both are on
+`/profile` and `/rank`.
+
+**How do I get badges?**
+Play (fishing, casino, work, prestige, global levels) and they unlock
+automatically when you open `/profile`. A few — Developer, Beta Tester, Event
+Winner — are handed out by staff. Equip up to six with `/profile equip`.
+
+**Can I change my card's background?**
+Yes: `/profile cosmetics` lists the banners, borders and nameplates you own,
+and `/profile equip <name>` puts one on.
 
 **Where did `/fish cooldown` go?**
 The cast cooldown is now a fixed 60 seconds for everyone, so there's nothing
