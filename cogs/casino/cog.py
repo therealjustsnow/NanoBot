@@ -3,6 +3,12 @@ cogs/casino/cog.py
 Casino minigames — a NanoCoin economy sink/faucet with a shared progressive
 jackpot and a pair of daily challenges.
 
+Player stats, streaks, and daily challenges are GLOBAL (per user): your record
+follows you between servers, and the two daily challenges are one set a day,
+not one per server. The table limits, the on/off switch, and the progressive
+jackpot pool stay per-guild — a pot fed by one server's losses belongs to that
+server.
+
 Five bet-and-resolve games (flip, dice, slots, roulette, blackjack) all debit
 the bet up front via the atomic economy API, resolve the outcome from an
 explicit random roll (or, for blackjack, an explicit shuffled shoe) through
@@ -38,7 +44,7 @@ Commands
   /casino jackpot                  → see the progressive jackpot pool
   /casino challenge                → today's 2 daily challenges + your progress
   /casino stats [member]           → games, wins, wagered, net, biggest win, streak
-  /casino top [page]               → leaderboard by net winnings
+  /casino top [page] [scope]       → net-winnings board (this server or global)
   /casino limit <min> <max>        → set bet bounds              (Manage Server)
   /casino toggle                   → enable/disable casino games (Manage Server)
   /casino config                   → show settings                (Manage Server)
@@ -55,7 +61,9 @@ from discord import app_commands
 from discord.ext import commands
 
 from utils import db
+from utils import globalxp
 from utils import helpers as h
+from utils.helpers import SCOPE_CHOICES
 
 from .constants import (
     BJ_TIMEOUT,
@@ -113,12 +121,12 @@ class Casino(commands.Cog):
             task.cancel()
         self._bj_tasks.clear()
 
-    def _lock(self, guild_id: int, user_id: int):
+    def _lock(self, user_id: int):
         # Returns an async context manager; existing `async with self._lock(...)`
         # call sites are unchanged. KeyedLocks refcounts holder + waiters and
         # drops an entry when the last interested task releases, so the map no
         # longer grows for the lifetime of the process.
-        return self._locks.hold((guild_id, user_id))
+        return self._locks.hold(user_id)
 
     def _money(self, econ: dict, amount: int) -> str:
         return h.fmt_coins(amount, econ["currency_name"], econ["currency_emoji"])
@@ -137,20 +145,22 @@ class Casino(commands.Cog):
         loss, record the game, bump today's challenges, and return
         (final_payout, updated_stats, challenge_footer_hint).
 
-        Caller must already hold `self._lock(guild_id, user_id)` and must have
-        already debited `bet`.
+        `guild_id` is only for the guild-scoped jackpot pool + settings; the
+        wallet, stats, and challenges it touches are all global. Caller must
+        already hold `self._lock(user_id)` and must have already debited `bet`.
         """
         final_payout = raw_payout
         if raw_payout > bet:
             new_streak = streak + 1
             final_payout = apply_streak_bonus(raw_payout, new_streak)
         if final_payout > 0:
-            await db.add_coins(guild_id, user_id, final_payout)
+            await db.add_coins(user_id, final_payout)
         net = final_payout - bet
         if net < 0:
             await db.add_to_jackpot(guild_id, round(-net * JACKPOT_FEED_RATE))
-        stats = await db.record_casino_game(guild_id, user_id, bet, final_payout)
-        hint = await self._bump_challenges(guild_id, user_id, bet, final_payout)
+        stats = await db.record_casino_game(user_id, bet, final_payout)
+        await globalxp.award(user_id, "casino_game")
+        hint = await self._bump_challenges(user_id, bet, final_payout, guild_id)
         return final_payout, stats, hint
 
     def _set_result_footer(
@@ -167,10 +177,13 @@ class Casino(commands.Cog):
 
     # ── Daily challenges ─────────────────────────────────────────────────────
     async def _bump_challenges(
-        self, guild_id: int, user_id: int, bet: int, payout: int
+        self, user_id: int, bet: int, payout: int, guild_id: int
     ) -> Optional[str]:
         """Advance today's 2 daily challenges for one settled game and
         auto-claim any that just completed.
+
+        Challenges and their payouts are global; `guild_id` is display-only —
+        it picks up this server's currency name/emoji for the footer.
 
         Returns a short footer hint — a completion announcement takes
         priority, else the first still-open challenge's progress — or None if
@@ -178,7 +191,7 @@ class Casino(commands.Cog):
         """
         won = payout > bet
         today = int(time.time() // 86400)
-        challenges = generate_challenges(guild_id, user_id, today)
+        challenges = generate_challenges(user_id, today)
         completed_notes: list[str] = []
         progress_notes: list[str] = []
         for chal in challenges:
@@ -188,7 +201,7 @@ class Casino(commands.Cog):
                 chal["reward"],
                 chal["label"],
             )
-            current = await db.get_challenge_progress(guild_id, user_id, today, key)
+            current = await db.get_challenge_progress(user_id, today, key)
             if current["claimed"]:
                 continue
             amount, mode = 0, "add"
@@ -203,11 +216,12 @@ class Casino(commands.Cog):
             if mode == "add" and amount <= 0:
                 continue
             row = await db.bump_challenge_progress(
-                guild_id, user_id, today, key, target, amount, mode=mode
+                user_id, today, key, target, amount, mode=mode
             )
             if row["progress"] >= target and not row["claimed"]:
-                if await db.try_claim_challenge(guild_id, user_id, today, key):
-                    await db.add_coins(guild_id, user_id, reward)
+                if await db.try_claim_challenge(user_id, today, key):
+                    await db.add_coins(user_id, reward)
+                    await globalxp.award(user_id, "quest")
                     econ = await db.get_econ_config(guild_id)
                     completed_notes.append(
                         f"🏆 Challenge done — {label}! +{self._money(econ, reward)}"
@@ -334,7 +348,7 @@ class Casino(commands.Cog):
     async def _do_overview(self, ctx: commands.Context):
         cfg = await db.get_casino_config(ctx.guild.id)
         econ = await db.get_econ_config(ctx.guild.id)
-        stats = await db.get_casino_stats(ctx.guild.id, ctx.author.id)
+        stats = await db.get_casino_stats(ctx.author.id)
         desc = (
             "🪙 **flip** <bet> <heads|tails> — 50/50, pays 1.92x\n"
             "🎲 **dice** <bet> — 2d6 vs the dealer, pays 2.1x\n"
@@ -371,6 +385,12 @@ class Casino(commands.Cog):
     # ── /casino flip ─────────────────────────────────────────────────────────
     @casino.command(name="flip", description="Bet on a 50/50 coin flip.")
     @app_commands.describe(bet="How many coins to bet", side="heads or tails")
+    @app_commands.choices(
+        side=[
+            app_commands.Choice(name="🪙 Heads", value="heads"),
+            app_commands.Choice(name="🪙 Tails", value="tails"),
+        ]
+    )
     async def casino_flip(self, ctx: commands.Context, bet: int, side: str):
         cfg = await db.get_casino_config(ctx.guild.id)
         if not cfg["enabled"]:
@@ -387,9 +407,9 @@ class Casino(commands.Cog):
             return await ctx.reply(embed=h.err(err), ephemeral=True)
 
         econ = await db.get_econ_config(ctx.guild.id)
-        async with self._lock(ctx.guild.id, ctx.author.id):
-            if not await db.try_debit_coins(ctx.guild.id, ctx.author.id, bet):
-                balance = await db.get_balance(ctx.guild.id, ctx.author.id)
+        async with self._lock(ctx.author.id):
+            if not await db.try_debit_coins(ctx.author.id, bet):
+                balance = await db.get_balance(ctx.author.id)
                 return await ctx.reply(
                     embed=h.err(
                         f"You need {self._money(econ, bet)} to play — you have "
@@ -397,7 +417,7 @@ class Casino(commands.Cog):
                     ),
                     ephemeral=True,
                 )
-            stats = await db.get_casino_stats(ctx.guild.id, ctx.author.id)
+            stats = await db.get_casino_stats(ctx.author.id)
             outcome = resolve_flip(bet, choice, random.random())
             final_payout, new_stats, chal_hint = await self._settle_common(
                 ctx.guild.id, ctx.author.id, bet, stats["streak"], outcome["payout"]
@@ -430,9 +450,9 @@ class Casino(commands.Cog):
             return await ctx.reply(embed=h.err(err), ephemeral=True)
 
         econ = await db.get_econ_config(ctx.guild.id)
-        async with self._lock(ctx.guild.id, ctx.author.id):
-            if not await db.try_debit_coins(ctx.guild.id, ctx.author.id, bet):
-                balance = await db.get_balance(ctx.guild.id, ctx.author.id)
+        async with self._lock(ctx.author.id):
+            if not await db.try_debit_coins(ctx.author.id, bet):
+                balance = await db.get_balance(ctx.author.id)
                 return await ctx.reply(
                     embed=h.err(
                         f"You need {self._money(econ, bet)} to play — you have "
@@ -440,7 +460,7 @@ class Casino(commands.Cog):
                     ),
                     ephemeral=True,
                 )
-            stats = await db.get_casino_stats(ctx.guild.id, ctx.author.id)
+            stats = await db.get_casino_stats(ctx.author.id)
             outcome = resolve_dice(
                 bet,
                 (random.random(), random.random()),
@@ -484,9 +504,9 @@ class Casino(commands.Cog):
 
         econ = await db.get_econ_config(ctx.guild.id)
         jackpot_award = 0
-        async with self._lock(ctx.guild.id, ctx.author.id):
-            if not await db.try_debit_coins(ctx.guild.id, ctx.author.id, bet):
-                balance = await db.get_balance(ctx.guild.id, ctx.author.id)
+        async with self._lock(ctx.author.id):
+            if not await db.try_debit_coins(ctx.author.id, bet):
+                balance = await db.get_balance(ctx.author.id)
                 return await ctx.reply(
                     embed=h.err(
                         f"You need {self._money(econ, bet)} to play — you have "
@@ -494,7 +514,7 @@ class Casino(commands.Cog):
                     ),
                     ephemeral=True,
                 )
-            stats = await db.get_casino_stats(ctx.guild.id, ctx.author.id)
+            stats = await db.get_casino_stats(ctx.author.id)
             outcome = resolve_slots(
                 bet, (random.random(), random.random(), random.random())
             )
@@ -504,7 +524,7 @@ class Casino(commands.Cog):
             if outcome["jackpot_win"]:
                 jackpot_award = await db.try_claim_jackpot(ctx.guild.id)
                 if jackpot_award:
-                    await db.add_coins(ctx.guild.id, ctx.author.id, jackpot_award)
+                    await db.add_coins(ctx.author.id, jackpot_award)
 
         reels = " ".join(outcome["reels"])
         if outcome["outcome"] == "triple":
@@ -555,9 +575,9 @@ class Casino(commands.Cog):
             return await ctx.reply(embed=h.err(err), ephemeral=True)
 
         econ = await db.get_econ_config(ctx.guild.id)
-        async with self._lock(ctx.guild.id, ctx.author.id):
-            if not await db.try_debit_coins(ctx.guild.id, ctx.author.id, bet):
-                balance = await db.get_balance(ctx.guild.id, ctx.author.id)
+        async with self._lock(ctx.author.id):
+            if not await db.try_debit_coins(ctx.author.id, bet):
+                balance = await db.get_balance(ctx.author.id)
                 return await ctx.reply(
                     embed=h.err(
                         f"You need {self._money(econ, bet)} to play — you have "
@@ -565,7 +585,7 @@ class Casino(commands.Cog):
                     ),
                     ephemeral=True,
                 )
-            stats = await db.get_casino_stats(ctx.guild.id, ctx.author.id)
+            stats = await db.get_casino_stats(ctx.author.id)
             number = spin_number(random.random())
             outcome = resolve_roulette(bet, parsed_space, number)
             final_payout, new_stats, chal_hint = await self._settle_common(
@@ -584,6 +604,35 @@ class Casino(commands.Cog):
         self._set_result_footer(embed, new_stats, chal_hint)
         await ctx.reply(embed=embed)
 
+    @casino_roulette.autocomplete("space")
+    async def _roulette_ac(self, interaction: discord.Interaction, current: str):
+        """Outside bets as a pick list, plus matching straight numbers, so the
+        wheel's betting vocabulary doesn't have to be memorised."""
+        q = (current or "").strip().lower()
+        labels = {
+            "red": ("🔴 Red — pays 2x", "red"),
+            "black": ("⚫ Black — pays 2x", "black"),
+            "odd": ("🔢 Odd — pays 2x", "odd"),
+            "even": ("🔢 Even — pays 2x", "even"),
+            "high": ("⬆️ High (19-36) — pays 2x", "high"),
+            "low": ("⬇️ Low (1-18) — pays 2x", "low"),
+        }
+        choices = [
+            app_commands.Choice(name=label, value=value)
+            for key, (label, value) in labels.items()
+            if not q or q in key
+        ]
+        numbers = range(0, 37)
+        if q.isdigit():
+            numbers = [n for n in numbers if str(n).startswith(q)]
+        elif q:
+            numbers = []
+        for n in numbers:
+            choices.append(
+                app_commands.Choice(name=f"🎯 Number {n} — pays 35x", value=str(n))
+            )
+        return choices[:25]
+
     # ── /casino blackjack ────────────────────────────────────────────────────
     @casino.command(name="blackjack", description="Play blackjack against the dealer.")
     @app_commands.describe(bet="How many coins to bet")
@@ -598,9 +647,9 @@ class Casino(commands.Cog):
             return await ctx.reply(embed=h.err(err), ephemeral=True)
 
         econ = await db.get_econ_config(ctx.guild.id)
-        async with self._lock(ctx.guild.id, ctx.author.id):
-            if not await db.try_debit_coins(ctx.guild.id, ctx.author.id, bet):
-                balance = await db.get_balance(ctx.guild.id, ctx.author.id)
+        async with self._lock(ctx.author.id):
+            if not await db.try_debit_coins(ctx.author.id, bet):
+                balance = await db.get_balance(ctx.author.id)
                 return await ctx.reply(
                     embed=h.err(
                         f"You need {self._money(econ, bet)} to play — you have "
@@ -608,7 +657,7 @@ class Casino(commands.Cog):
                     ),
                     ephemeral=True,
                 )
-            stats = await db.get_casino_stats(ctx.guild.id, ctx.author.id)
+            stats = await db.get_casino_stats(ctx.author.id)
             streak = stats["streak"]
             shoe = new_shoe(BLACKJACK_DECKS)
             random.shuffle(shoe)
@@ -684,7 +733,7 @@ class Casino(commands.Cog):
         in casino_blackjack already holds the lock, so it calls
         _settle_blackjack_locked directly instead.
         """
-        async with self._lock(guild_id, user_id):
+        async with self._lock(user_id):
             return await self._settle_blackjack_locked(
                 guild_id, user_id, bet, streak, player_cards, dealer_cards
             )
@@ -699,7 +748,7 @@ class Casino(commands.Cog):
         dealer_cards: list,
     ) -> dict:
         """Same as settle_blackjack_hand, assuming the caller already holds
-        self._lock(guild_id, user_id)."""
+        self._lock(user_id)."""
         outcome = settle_blackjack(bet, player_cards, dealer_cards)
         econ = await db.get_econ_config(guild_id)
         final_payout, new_stats, chal_hint = await self._settle_common(
@@ -764,7 +813,7 @@ class Casino(commands.Cog):
     async def casino_challenge(self, ctx: commands.Context):
         econ = await db.get_econ_config(ctx.guild.id)
         today = int(time.time() // 86400)
-        challenges = generate_challenges(ctx.guild.id, ctx.author.id, today)
+        challenges = generate_challenges(ctx.author.id, today)
         embed = h.embed(
             "🎯 Daily Casino Challenges",
             "Play flip, dice, slots, roulette, or blackjack to make progress. "
@@ -773,7 +822,7 @@ class Casino(commands.Cog):
         )
         for chal in challenges:
             row = await db.get_challenge_progress(
-                ctx.guild.id, ctx.author.id, today, chal["chal_key"]
+                ctx.author.id, today, chal["chal_key"]
             )
             progress = min(row["progress"], chal["target"])
             if row["claimed"]:
@@ -800,9 +849,9 @@ class Casino(commands.Cog):
         member = member or ctx.author
         if member.bot:
             return await ctx.reply(embed=h.err("Bots don't gamble."), ephemeral=True)
-        stats = await db.get_casino_stats(ctx.guild.id, member.id)
+        stats = await db.get_casino_stats(member.id)
         econ = await db.get_econ_config(ctx.guild.id)
-        rank = await db.get_casino_rank(ctx.guild.id, member.id)
+        rank = await db.get_casino_rank(member.id)
         net = stats["won"] - stats["wagered"]
 
         embed = h.embed(f"🎰 {member.display_name}", color=h.BLUE)
@@ -827,42 +876,64 @@ class Casino(commands.Cog):
             inline=True,
         )
         embed.add_field(
-            name="Rank", value=f"**#{rank[0]}**" if rank else "Unranked", inline=True
+            name="Global rank",
+            value=f"**#{rank[0]}**" if rank else "Unranked",
+            inline=True,
         )
         await ctx.reply(embed=embed)
 
     # ── /casino top ──────────────────────────────────────────────────────────
-    @casino.command(name="top", description="The server's top net winners.")
-    @app_commands.describe(page="Page number (10 per page)")
+    @casino.command(name="top", description="Top net winners, here or everywhere.")
+    @app_commands.describe(
+        page="Page number (10 per page)",
+        scope="This server's members, or every server (stats are global)",
+    )
+    @app_commands.choices(scope=SCOPE_CHOICES)
     @commands.cooldown(1, 5, commands.BucketType.user)
-    async def casino_top(self, ctx: commands.Context, page: int = 1):
+    async def casino_top(
+        self, ctx: commands.Context, page: int = 1, scope: str = "server"
+    ):
         econ = await db.get_econ_config(ctx.guild.id)
-        page = max(1, page)
         per = 10
-        total = await db.count_casino_players(ctx.guild.id)
+        if scope == "global":
+            total = await db.count_casino_players()
+            pages = max(1, (total + per - 1) // per)
+            page = max(1, min(page, pages))
+            offset = (page - 1) * per
+            rows = await db.get_casino_leaderboard(per, offset)
+        else:
+            all_rows = await db.get_casino_leaderboard_for(h.member_ids(ctx.guild))
+            rows, page, pages, total = h.page_rows(
+                all_rows, lambda r: (-r["net"], r["user_id"]), page, per
+            )
+            offset = (page - 1) * per
         if total == 0:
             return await ctx.reply(
                 embed=h.info("No one has played yet. Try `/casino`!", "🎰 Players")
             )
-        pages = (total + per - 1) // per
-        page = min(page, pages)
-        offset = (page - 1) * per
-        rows = await db.get_casino_leaderboard(ctx.guild.id, per, offset)
 
         medals = {1: "🥇", 2: "🥈", 3: "🥉"}
         lines = []
         for i, row in enumerate(rows):
             pos = offset + i + 1
-            member = ctx.guild.get_member(row["user_id"])
-            name = member.display_name if member else f"User {row['user_id']}"
             badge = medals.get(pos, f"`#{pos}`")
             lines.append(
-                f"{badge} **{name}** — net {self._money(econ, row['net'])} "
-                f"({row['games']:,} games)"
+                f"{badge} **{self._name_for(ctx, row['user_id'])}** — "
+                f"net {self._money(econ, row['net'])} ({row['games']:,} games)"
             )
-        embed = h.embed("🎰 Top Winners", "\n".join(lines), h.BLUE)
+        title = "🎰 Top Winners" + (" (Global)" if scope == "global" else "")
+        embed = h.embed(title, "\n".join(lines), h.BLUE)
         embed.set_footer(text=f"Page {page}/{pages} · {total} players")
         await ctx.reply(embed=embed)
+
+    def _name_for(self, ctx: commands.Context, user_id: int) -> str:
+        """Display name for a leaderboard row — a global board lists players who
+        may not be in this server."""
+        member = ctx.guild.get_member(user_id) if ctx.guild else None
+        if member:
+            return member.display_name
+        user = self.bot.get_user(user_id)
+        return user.display_name if user else f"User {user_id}"
 
     # ══════════════════════════════════════════════════════════════════════════
     #  Admin subcommands (Manage Server)

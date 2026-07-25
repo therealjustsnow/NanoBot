@@ -133,6 +133,34 @@ async def close() -> None:
         _db = None
 
 
+# Bound-parameter budget for one "… WHERE user_id IN (…)" query. SQLite's
+# modern default cap is 32k, older builds 999 — 900 is safe everywhere and the
+# chunk loop makes the caller's guild size irrelevant.
+_IN_CHUNK = 900
+
+
+async def rows_for_users(base_sql: str, user_ids, *, positive_col: str | None = None):
+    """Run `base_sql` restricted to `user_ids`, chunking the IN clause.
+
+    The economy tables are global (one row per user), so a *server*-scoped view
+    of one — a guild leaderboard, say — is the global table filtered to that
+    guild's members. `base_sql` is a complete SELECT with no WHERE clause of its
+    own; `positive_col` optionally drops zero rows. Both are code-side constants,
+    never caller input. Rows come back unordered and unpaged: the caller sorts
+    and slices, since the result is bounded by the guild's member list.
+    """
+    ids = [str(u) for u in dict.fromkeys(user_ids)]
+    rows: list = []
+    for start in range(0, len(ids), _IN_CHUNK):
+        chunk = ids[start : start + _IN_CHUNK]
+        sql = f"{base_sql} WHERE user_id IN ({','.join('?' * len(chunk))})"
+        if positive_col:
+            sql += f" AND {positive_col} > 0"
+        async with _conn().execute(sql, chunk) as cur:
+            rows.extend(await cur.fetchall())
+    return rows
+
+
 async def _ensure_columns(table: str, columns: dict[str, str]) -> None:
     """Idempotently add any missing columns to *table*.
 

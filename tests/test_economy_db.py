@@ -24,116 +24,116 @@ A, B, C = 1, 2, 3
 
 
 async def test_add_and_clamp():
-    assert await db.add_coins(G, A, 100) == 100
-    assert await db.add_coins(G, A, 50) == 150
-    assert await db.add_coins(G, A, -1000) == 0
+    assert await db.add_coins(A, 100) == 100
+    assert await db.add_coins(A, 50) == 150
+    assert await db.add_coins(A, -1000) == 0
 
 
 async def test_set_is_absolute():
-    await db.add_coins(G, A, 500)
-    await db.set_coins(G, A, 20)
-    assert await db.get_balance(G, A) == 20
+    await db.add_coins(A, 500)
+    await db.set_coins(A, 20)
+    assert await db.get_balance(A) == 20
 
 
 async def test_transfer_success():
-    await db.add_coins(G, A, 100)
-    assert await db.transfer_coins(G, A, B, 40) is True
-    assert await db.get_balance(G, A) == 60
-    assert await db.get_balance(G, B) == 40
+    await db.add_coins(A, 100)
+    assert await db.transfer_coins(A, B, 40) is True
+    assert await db.get_balance(A) == 60
+    assert await db.get_balance(B) == 40
 
 
 async def test_transfer_insufficient_funds():
-    await db.add_coins(G, A, 30)
-    assert await db.transfer_coins(G, A, B, 40) is False
-    assert await db.get_balance(G, A) == 30
-    assert await db.get_balance(G, B) == 0
+    await db.add_coins(A, 30)
+    assert await db.transfer_coins(A, B, 40) is False
+    assert await db.get_balance(A) == 30
+    assert await db.get_balance(B) == 0
 
 
 async def test_transfer_rejects_nonpositive():
-    await db.add_coins(G, A, 30)
-    assert await db.transfer_coins(G, A, B, 0) is False
-    assert await db.transfer_coins(G, A, B, -5) is False
+    await db.add_coins(A, 30)
+    assert await db.transfer_coins(A, B, 0) is False
+    assert await db.transfer_coins(A, B, -5) is False
 
 
 async def test_try_debit_success_and_balance():
-    await db.add_coins(G, A, 100)
-    assert await db.try_debit_coins(G, A, 40) is True
-    assert await db.get_balance(G, A) == 60
+    await db.add_coins(A, 100)
+    assert await db.try_debit_coins(A, 40) is True
+    assert await db.get_balance(A) == 60
 
 
 async def test_try_debit_insufficient_leaves_balance():
-    await db.add_coins(G, A, 30)
-    assert await db.try_debit_coins(G, A, 40) is False
-    assert await db.get_balance(G, A) == 30
+    await db.add_coins(A, 30)
+    assert await db.try_debit_coins(A, 40) is False
+    assert await db.get_balance(A) == 30
 
 
 async def test_try_debit_no_account_is_false():
-    assert await db.try_debit_coins(G, A, 10) is False
+    assert await db.try_debit_coins(A, 10) is False
 
 
 async def test_try_debit_rejects_nonpositive():
-    await db.add_coins(G, A, 50)
-    assert await db.try_debit_coins(G, A, 0) is False
-    assert await db.try_debit_coins(G, A, -5) is False
-    assert await db.get_balance(G, A) == 50
+    await db.add_coins(A, 50)
+    assert await db.try_debit_coins(A, 0) is False
+    assert await db.try_debit_coins(A, -5) is False
+    assert await db.get_balance(A) == 50
 
 
 async def test_try_debit_exact_balance_allowed():
-    await db.add_coins(G, A, 40)
-    assert await db.try_debit_coins(G, A, 40) is True
-    assert await db.get_balance(G, A) == 0
+    await db.add_coins(A, 40)
+    assert await db.try_debit_coins(A, 40) is True
+    assert await db.get_balance(A) == 0
     # A second debit of the now-empty account fails.
-    assert await db.try_debit_coins(G, A, 1) is False
+    assert await db.try_debit_coins(A, 1) is False
 
 
 async def test_concurrent_debits_cannot_overdraw():
     import asyncio
 
-    await db.add_coins(G, A, 100)
+    await db.add_coins(A, 100)
     # Fire five 40-coin debits at once against a 100 balance: at most two can
     # succeed (the atomic conditional UPDATE serializes them), never overdrawing.
-    results = await asyncio.gather(*(db.try_debit_coins(G, A, 40) for _ in range(5)))
+    results = await asyncio.gather(*(db.try_debit_coins(A, 40) for _ in range(5)))
     assert sum(results) == 2
-    assert await db.get_balance(G, A) == 20
+    assert await db.get_balance(A) == 20
 
 
 async def test_rank_and_leaderboard():
-    await db.add_coins(G, A, 100)
-    await db.add_coins(G, B, 300)
-    await db.add_coins(G, C, 200)
-    assert await db.get_econ_rank(G, B) == (1, 300)
-    assert await db.get_econ_rank(G, A) == (3, 100)
-    top = await db.get_econ_leaderboard(G, limit=10)
+    await db.add_coins(A, 100)
+    await db.add_coins(B, 300)
+    await db.add_coins(C, 200)
+    assert await db.get_econ_rank(B) == (1, 300)
+    assert await db.get_econ_rank(A) == (3, 100)
+    top = await db.get_econ_leaderboard(limit=10)
     assert [r["user_id"] for r in top] == [B, C, A]
 
 
 async def test_rank_none_without_account():
-    assert await db.get_econ_rank(G, 99) is None
+    assert await db.get_econ_rank(99) is None
 
 
 async def test_leaderboard_excludes_zero():
-    await db.add_coins(G, A, 100)
-    await db.set_coins(G, B, 0)
-    assert await db.count_econ(G) == 1
+    await db.add_coins(A, 100)
+    await db.set_coins(B, 0)
+    assert await db.count_econ() == 1
 
 
 async def test_reset_one_and_all():
-    await db.add_coins(G, A, 100)
-    await db.add_coins(G, B, 100)
-    assert await db.reset_economy(G, A) == 1
-    assert await db.get_balance(G, A) == 0
-    assert await db.reset_economy(G) == 1  # only B left
-    assert await db.count_econ(G) == 0
+    await db.add_coins(A, 100)
+    await db.add_coins(B, 100)
+    assert await db.reset_economy(A) == 1
+    assert await db.get_balance(A) == 0
+    assert await db.reset_economy() == 1  # only B left
+    assert await db.count_econ() == 0
 
 
 async def test_daily_state_round_trip():
-    assert await db.get_daily_state(G, A) == (0.0, 0)
-    await db.set_daily_state(G, A, 12345.0, 3)
-    assert await db.get_daily_state(G, A) == (12345.0, 3)
+    assert await db.get_daily_state(A) == (0.0, 0)
+    await db.set_daily_state(A, 12345.0, 3)
+    assert await db.get_daily_state(A) == (12345.0, 3)
     # set_daily_state must not clobber an existing balance
-    await db.set_coins(G, B, 500)
-    await db.set_daily_state(G, B, 999.0, 1)
-    assert await db.get_balance(G, B) == 500
+    await db.set_coins(B, 500)
+    await db.set_daily_state(B, 999.0, 1)
+    assert await db.get_balance(B) == 500
 
 
 async def test_config_defaults_and_partial_update():
@@ -170,30 +170,30 @@ async def test_coop_and_raid_config_defaults_and_update():
 
 # ── Contribution (lifetime co-op stat) ───────────────────────────────────────────
 async def test_contribution_accumulates_independent_of_coins():
-    assert await db.get_contribution(G, A) == 0
-    assert await db.add_contribution(G, A, 50) == 50
-    assert await db.add_contribution(G, A, 50) == 100
+    assert await db.get_contribution(A) == 0
+    assert await db.add_contribution(A, 50) == 50
+    assert await db.add_contribution(A, 50) == 100
     # Spending coins must not touch contribution.
-    await db.add_coins(G, A, 100)
-    await db.add_coins(G, A, -100)
-    assert await db.get_contribution(G, A) == 100
+    await db.add_coins(A, 100)
+    await db.add_coins(A, -100)
+    assert await db.get_contribution(A) == 100
 
 
 async def test_contribution_rank_and_leaderboard():
-    await db.add_contribution(G, A, 100)
-    await db.add_contribution(G, B, 300)
-    await db.add_contribution(G, C, 200)
-    assert await db.get_contrib_rank(G, B) == (1, 300)
-    assert await db.get_contrib_rank(G, A) == (3, 100)
-    assert await db.count_contrib(G) == 3
-    top = await db.get_contrib_leaderboard(G, limit=10)
+    await db.add_contribution(A, 100)
+    await db.add_contribution(B, 300)
+    await db.add_contribution(C, 200)
+    assert await db.get_contrib_rank(B) == (1, 300)
+    assert await db.get_contrib_rank(A) == (3, 100)
+    assert await db.count_contrib() == 3
+    top = await db.get_contrib_leaderboard(limit=10)
     assert [r["user_id"] for r in top] == [B, C, A]
 
 
 async def test_contribution_rank_none_without_points():
-    await db.add_coins(G, A, 500)  # has coins, no contribution
-    assert await db.get_contrib_rank(G, A) is None
-    assert await db.count_contrib(G) == 0
+    await db.add_coins(A, 500)  # has coins, no contribution
+    assert await db.get_contrib_rank(A) is None
+    assert await db.count_contrib() == 0
 
 
 # ── Shop ─────────────────────────────────────────────────────────────────────────
@@ -237,7 +237,7 @@ async def _name_id(guild, name):
 
 
 async def test_purchase_success_debits_and_records():
-    await db.add_coins(G, A, 1000)
+    await db.add_coins(A, 1000)
     iid = await db.add_shop_item(G, "Color", 300, "role", role_id=9)
     res = await db.purchase_item(G, iid, A)
     assert res["ok"] is True
@@ -246,28 +246,28 @@ async def test_purchase_success_debits_and_records():
 
 
 async def test_purchase_insufficient_funds():
-    await db.add_coins(G, A, 100)
+    await db.add_coins(A, 100)
     iid = await db.add_shop_item(G, "Pricey", 300, "custom", payload="z")
     res = await db.purchase_item(G, iid, A)
     assert res["ok"] is False
     assert res["reason"] == "funds"
-    assert await db.get_balance(G, A) == 100  # not charged
+    assert await db.get_balance(A) == 100  # not charged
 
 
 async def test_purchase_stock_decrements_and_sells_out():
-    await db.add_coins(G, A, 1000)
-    await db.add_coins(G, B, 1000)
+    await db.add_coins(A, 1000)
+    await db.add_coins(B, 1000)
     iid = await db.add_shop_item(G, "Limited", 100, "custom", payload="z", stock=1)
     assert (await db.purchase_item(G, iid, A))["ok"] is True
     assert (await db.get_shop_item(G, iid))["stock"] == 0
     res = await db.purchase_item(G, iid, B)
     assert res["ok"] is False
     assert res["reason"] == "out_of_stock"
-    assert await db.get_balance(G, B) == 1000  # not charged when sold out
+    assert await db.get_balance(B) == 1000  # not charged when sold out
 
 
 async def test_purchase_stock_refunded_when_funds_short():
-    await db.add_coins(G, A, 50)
+    await db.add_coins(A, 50)
     iid = await db.add_shop_item(G, "Spendy", 100, "custom", payload="z", stock=2)
     res = await db.purchase_item(G, iid, A)
     assert res["ok"] is False and res["reason"] == "funds"
@@ -276,7 +276,7 @@ async def test_purchase_stock_refunded_when_funds_short():
 
 
 async def test_purchase_per_user_limit():
-    await db.add_coins(G, A, 1000)
+    await db.add_coins(A, 1000)
     iid = await db.add_shop_item(
         G, "OnePer", 100, "custom", payload="z", per_user_limit=1
     )
@@ -286,7 +286,7 @@ async def test_purchase_per_user_limit():
 
 
 async def test_purchase_cooldown():
-    await db.add_coins(G, A, 1000)
+    await db.add_coins(A, 1000)
     iid = await db.add_shop_item(
         G, "Cooldown", 100, "custom", payload="z", cooldown=999
     )
@@ -297,7 +297,7 @@ async def test_purchase_cooldown():
 
 
 async def test_purchase_disabled_item():
-    await db.add_coins(G, A, 1000)
+    await db.add_coins(A, 1000)
     iid = await db.add_shop_item(G, "Off", 100, "custom", payload="z")
     await db.edit_shop_item(G, iid, enabled=False)
     res = await db.purchase_item(G, iid, A)
@@ -305,7 +305,7 @@ async def test_purchase_disabled_item():
 
 
 async def test_custom_purchase_pending_then_fulfilled():
-    await db.add_coins(G, A, 1000)
+    await db.add_coins(A, 1000)
     iid = await db.add_shop_item(G, "Manual", 100, "custom", payload="loot")
     await db.purchase_item(G, iid, A)
     assert await db.count_pending_purchases(G) == 1
@@ -319,7 +319,7 @@ async def test_custom_purchase_pending_then_fulfilled():
 
 
 async def test_role_purchase_not_in_pending_queue():
-    await db.add_coins(G, A, 1000)
+    await db.add_coins(A, 1000)
     iid = await db.add_shop_item(G, "AutoRole", 100, "role", role_id=5)
     await db.purchase_item(G, iid, A)
     # Role rewards are auto-fulfilled, so they never enter the mod queue.

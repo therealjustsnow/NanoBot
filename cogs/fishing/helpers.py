@@ -201,13 +201,14 @@ def quest_label(quest_key: str, target: int) -> str:
     return "Unknown quest"
 
 
-def generate_quest(guild_id: int, user_id: int, day: int) -> dict:
-    """Deterministically pick the day's quest for a member.
+def generate_quest(user_id: int, day: int) -> dict:
+    """Deterministically pick the day's quest for a user.
 
-    Seeded on (guild_id, user_id, day), so the same trio always yields the same
-    quest — callers regenerate it on demand instead of persisting the pick.
+    Seeded on (user_id, day) — not the guild — so a member sees the *same*
+    quest wherever they fish, matching the one global quest row per day.
+    Callers regenerate it on demand instead of persisting the pick.
     """
-    rng = random.Random(f"{int(guild_id)}:{int(user_id)}:{int(day)}")
+    rng = random.Random(f"{int(user_id)}:{int(day)}")
     kind = rng.choice(["catch_any", "catch_rarity", "earn_coins"])
     if kind == "catch_any":
         lo, hi = QUEST_CATCH_ANY_TARGET

@@ -239,20 +239,19 @@ def test_streak_bonus_coins_scales_and_caps():
 
 # ── Daily quest generation ─────────────────────────────────────────────────────────
 def test_generate_quest_is_deterministic_for_same_inputs():
-    a = generate_quest(1, 2, 100)
-    b = generate_quest(1, 2, 100)
+    a = generate_quest(2, 100)
+    b = generate_quest(2, 100)
     assert a == b
 
 
 def test_generate_quest_varies_by_day_or_user():
-    a = generate_quest(1, 2, 100)
-    b = generate_quest(1, 2, 101)
-    c = generate_quest(1, 3, 100)
+    a = generate_quest(2, 100)
+    b = generate_quest(2, 101)
+    c = generate_quest(3, 100)
     # Not asserting inequality of every field (a coincidence is possible), just
     # that varying an input can change the outcome across a decent sample.
     variants = {
-        generate_quest(1, 2, day)["quest_key"]
-        + str(generate_quest(1, 2, day)["target"])
+        generate_quest(2, day)["quest_key"] + str(generate_quest(2, day)["target"])
         for day in range(50)
     }
     assert len(variants) > 1
@@ -261,7 +260,7 @@ def test_generate_quest_varies_by_day_or_user():
 
 def test_generate_quest_shape_and_reward_consistency():
     for day in range(30):
-        q = generate_quest(42, 7, day)
+        q = generate_quest(7, day)
         assert q["quest_key"] in ("catch_any", "earn_coins") or q[
             "quest_key"
         ].startswith("catch_rarity:")

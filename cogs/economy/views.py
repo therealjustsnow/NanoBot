@@ -9,6 +9,7 @@ from typing import TYPE_CHECKING, Callable, Optional
 import discord
 
 from utils import db
+from utils import globalxp
 from utils import helpers as h
 
 from .constants import COOP_CONFIRM_TIMEOUT, RAID_TIMEOUT
@@ -203,7 +204,6 @@ class SquadView(discord.ui.View):
             )
         self.resolved = True
         cfg = await self.cog._cfg(interaction.guild.id)
-        guild_id = interaction.guild.id
         reward = cfg["coop_reward"]
         party = [self.author_id, *self.partner_ids]
         # Drop the persisted row BEFORE paying: a crash mid-payout then
@@ -211,8 +211,9 @@ class SquadView(discord.ui.View):
         # whose re-confirm would pay the whole party a second time.
         await self.cog._end_squad(self.squad_id)
         for uid in party:
-            await db.add_coins(guild_id, uid, reward)
-            await db.add_contribution(guild_id, uid, reward)
+            await db.add_coins(uid, reward)
+            await db.add_contribution(uid, reward)
+            await globalxp.award(uid, "coop")
         for child in self.children:
             child.disabled = True
         activity = f" for **{self.activity}**" if self.activity else ""
@@ -564,13 +565,13 @@ class RaidView(discord.ui.View):
             )
         self.resolved = True
         reward = cfg["raid_reward"]
-        guild_id = interaction.guild.id
         # Drop the persisted row BEFORE paying (same crash-safety trade as
         # SquadView: under-pay beats a restorable board that double-pays).
         await self.cog._end_raid(self.raid_id)
         for uid in self.participants:
-            await db.add_coins(guild_id, uid, reward)
-            await db.add_contribution(guild_id, uid, reward)
+            await db.add_coins(uid, reward)
+            await db.add_contribution(uid, reward)
+            await globalxp.award(uid, "coop")
         for child in self.children:
             child.disabled = True
         what = f" for **{self.activity}**" if self.activity else ""
@@ -697,7 +698,7 @@ class MassCoinPickerView(discord.ui.View):
         delta = self.amount if self.action == "grant" else -self.amount
         lines = []
         for uid in self.selected:
-            new_bal = await db.add_coins(interaction.guild.id, uid, delta)
+            new_bal = await db.add_coins(uid, delta)
             lines.append(f"<@{uid}> → {self.cog._money(cfg, new_bal)}")
         for child in self.children:
             child.disabled = True

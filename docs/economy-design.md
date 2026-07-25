@@ -12,8 +12,8 @@ reference).
   streak bonuses, limited-time events).
 - Multiple interconnected activities with *distinct risk/reward profiles*,
   not five reskins of the same coin faucet.
-- Healthy competition: guild leaderboards everywhere, plus a cross-server
-  global fishing leaderboard.
+- Healthy competition: every board offers a server view and a global view
+  (the economy itself is global — see `docs/global-economy.md`).
 - Zero schema churn for future content: new items, effects, events, and
   leaderboard stats are **data/registry entries**, not migrations.
 
@@ -40,7 +40,7 @@ Rules that keep the layers decoupled:
   data: items (`user_items`), effects (`user_effects`), and events
   (`economy_events`).
 - **Items are code-defined, DB-referenced.** The DB stores only
-  `(guild_id, user_id, item_key, qty)`; semantics live in the `ItemDef`
+  `(user_id, item_key, qty)` — global, like the wallet; semantics live in the `ItemDef`
   registry (`utils/items.py`). Feature packages register their own items at
   import time (`cogs/fishing/items.py`, `cogs/activities/items.py`), so a new
   item — or a whole new category — never touches the schema. Unknown keys
@@ -86,23 +86,30 @@ ladders, casino house edge, rob fines, shop items.
 - One-winner races: conditional UPDATE guarded on the expected prior state
   (`set_rod_level`, pickaxe upgrades, `try_claim_jackpot`) with refund on
   loss.
-- Multi-step read-check-write flows serialize per `(guild, user)` with an
-  in-cog `asyncio.Lock` (the `/daily` pattern).
+- Multi-step read-check-write flows serialize **per user** with an in-cog
+  `KeyedLocks` hold (the `/daily` pattern). Per-user, not per-`(guild, user)`:
+  the wallet is global, so the two racing calls can be in different servers.
 
-## Global fishing leaderboard
+## Leaderboards
 
-`utils/db/fishing.py` keeps a `GLOBAL_STATS` registry mapping a stat key to a
-whitelisted SQL aggregate over `fishing_stats` grouped by `user_id` across
-all guilds. `/fish global <stat>` builds its choices from the registry, so a
-new global ranking is one registry entry — no query or command changes.
-Guild-scoped boards stay per-feature (`/fish top`, `/casino top`,
-`/coin top`, `/coin contrib`).
+Progress is stored once per user, so a *global* board is a plain `ORDER BY`
+and a *server* board is that same table filtered to the guild's member ids
+(`db.*_leaderboard_for(user_ids)` → `_core.rows_for_users`, chunked at 900
+bound parameters, then ranked/paged by `helpers.page_rows`). `/coin top`,
+`/coin contrib`, `/fish top`, and `/casino top` all take the shared
+`helpers.SCOPE_CHOICES` option and default to this server.
+
+`utils/db/fishing.py` additionally keeps a `GLOBAL_STATS` registry mapping a
+stat key to a whitelisted column on `fishing_stats`; `/fish global <stat>`
+builds its choices from the registry, so a new cross-server ranking is one
+registry entry — no query or command changes.
 
 ## Indexing
 
-Hot paths are point lookups on `(guild_id, user_id[, key])` primary keys.
-Leaderboards ride dedicated `(guild_id, <stat> DESC)` indexes
-(`economy_guild_coins`, `fishing_stats_earned`, casino equivalent). The
-global leaderboard is a full-table aggregate over `fishing_stats` — fine at
-current scale (thousands of rows); if it ever hurts, add a materialized
-per-user rollup table without touching the command surface.
+Hot paths are point lookups on `user_id` (`[, key]`) primary keys.
+Leaderboards ride dedicated `<stat> DESC` indexes (`economy_coins`,
+`economy_contrib`, `fishing_stats_earned`, `casino_stats_net`) — now single-
+column, since dropping `guild_id` from the key made every board a plain
+ordered scan of one row per user instead of a per-guild partition. Server
+views cost one indexed `IN` lookup per 900 members. If a board ever hurts at
+scale, add a materialized rollup without touching the command surface.

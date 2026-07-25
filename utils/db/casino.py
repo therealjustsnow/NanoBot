@@ -1,5 +1,11 @@
-"""utils/db.casino — casino game storage (per-guild config, per-player stats,
-the progressive jackpot pool, persisted blackjack hands, and daily challenges).
+"""utils/db.casino — casino game storage (per-guild config + jackpot, GLOBAL
+per-player stats, persisted blackjack hands, and daily challenges).
+
+Scope split: a player's lifetime stats, streak, and daily challenges follow the
+*user* across servers (keyed by user_id); the table limits, the on/off switch,
+and the progressive jackpot pool stay per-guild, because a house pot fed by one
+server's losses belongs to that server. Open blackjack hands keep a guild/
+channel id — they're a live message to restore, not progression.
 
 Part of the utils/db package. Coins themselves ride the existing economy
 tables (db.try_debit_coins / db.add_coins) — this module only records bet
@@ -9,7 +15,7 @@ blackjack hands (restart-safe Hit/Stand), and daily-challenge progress.
 
 import json
 
-from ._core import _conn, _ensure_columns, register_init
+from ._core import _conn, _ensure_columns, register_init, rows_for_users
 
 
 async def _ensure_casino_tables():
@@ -27,20 +33,18 @@ async def _ensure_casino_tables():
     # count true wins (payout > wagered for that game).
     await _conn().execute("""
         CREATE TABLE IF NOT EXISTS casino_stats (
-            guild_id     TEXT NOT NULL,
-            user_id      TEXT NOT NULL,
+            user_id      TEXT PRIMARY KEY,
             games        INTEGER NOT NULL DEFAULT 0,
             wagered      INTEGER NOT NULL DEFAULT 0,
             won          INTEGER NOT NULL DEFAULT 0,
             biggest_win  INTEGER NOT NULL DEFAULT 0,
             streak       INTEGER NOT NULL DEFAULT 0,
-            best_streak  INTEGER NOT NULL DEFAULT 0,
-            PRIMARY KEY (guild_id, user_id)
+            best_streak  INTEGER NOT NULL DEFAULT 0
         )
     """)
     await _conn().execute(
         "CREATE INDEX IF NOT EXISTS casino_stats_net "
-        "ON casino_stats (guild_id, (won - wagered) DESC)"
+        "ON casino_stats ((won - wagered) DESC)"
     )
     # Lifetime win count — added after the baseline table; drives the
     # win_games daily challenge and the /casino stats "Wins" line.
@@ -67,19 +71,18 @@ async def _ensure_casino_tables():
         )
     """)
 
-    # One row per (guild, user, UTC day, challenge) — see
+    # One row per (user, UTC day, challenge) — see
     # cogs.casino.helpers.generate_challenges for the deterministic pool/
     # target/reward; only progress and the one-time claim guard live here.
     await _conn().execute("""
         CREATE TABLE IF NOT EXISTS casino_challenges (
-            guild_id  TEXT NOT NULL,
             user_id   TEXT NOT NULL,
             day       INTEGER NOT NULL,
             chal_key  TEXT NOT NULL,
             target    INTEGER NOT NULL DEFAULT 0,
             progress  INTEGER NOT NULL DEFAULT 0,
             claimed   INTEGER NOT NULL DEFAULT 0,
-            PRIMARY KEY (guild_id, user_id, day, chal_key)
+            PRIMARY KEY (user_id, day, chal_key)
         )
     """)
     await _conn().commit()
@@ -186,11 +189,11 @@ def _stats_row(row) -> dict:
     }
 
 
-async def get_casino_stats(guild_id: int, user_id: int) -> dict:
+async def get_casino_stats(user_id: int) -> dict:
     async with _conn().execute(
         "SELECT games, wagered, won, biggest_win, streak, best_streak, wins "
-        "FROM casino_stats WHERE guild_id=? AND user_id=?",
-        (str(guild_id), str(user_id)),
+        "FROM casino_stats WHERE user_id=?",
+        (str(user_id),),
     ) as cur:
         row = await cur.fetchone()
     if row:
@@ -206,9 +209,7 @@ async def get_casino_stats(guild_id: int, user_id: int) -> dict:
     }
 
 
-async def record_casino_game(
-    guild_id: int, user_id: int, wagered: int, payout: int
-) -> dict:
+async def record_casino_game(user_id: int, wagered: int, payout: int) -> dict:
     """Record one settled game as a single atomic upsert and return the new stats.
 
     `won` (the payout column) accumulates every payout including pushes; the
@@ -216,7 +217,7 @@ async def record_casino_game(
     for this game), computed directly from the row's own previous values so
     two concurrent games can't corrupt each other's streak.
     """
-    gid, uid = str(guild_id), str(user_id)
+    uid = str(user_id)
     wagered, payout = int(wagered), int(payout)
     win = payout > wagered
     biggest_win_param = payout if win else 0
@@ -225,9 +226,9 @@ async def record_casino_game(
     await _conn().execute(
         """
         INSERT INTO casino_stats
-            (guild_id, user_id, games, wagered, won, biggest_win, streak, best_streak, wins)
-        VALUES (?, ?, 1, ?, ?, ?, ?, ?, ?)
-        ON CONFLICT(guild_id, user_id) DO UPDATE SET
+            (user_id, games, wagered, won, biggest_win, streak, best_streak, wins)
+        VALUES (?, 1, ?, ?, ?, ?, ?, ?)
+        ON CONFLICT(user_id) DO UPDATE SET
             games = games + 1,
             wagered = wagered + excluded.wagered,
             won = won + excluded.won,
@@ -244,7 +245,6 @@ async def record_casino_game(
             wins = wins + excluded.wins
         """,
         (
-            gid,
             uid,
             wagered,
             payout,
@@ -255,50 +255,58 @@ async def record_casino_game(
         ),
     )
     await _conn().commit()
-    return await get_casino_stats(guild_id, user_id)
+    return await get_casino_stats(user_id)
 
 
 # ── Leaderboard (net winnings) ──────────────────────────────────────────────────
-async def get_casino_leaderboard(
-    guild_id: int, limit: int = 10, offset: int = 0
-) -> list[dict]:
+def _leaderboard_row(r) -> dict:
+    return {
+        "user_id": int(r["user_id"]),
+        "games": r["games"],
+        "wagered": r["wagered"],
+        "won": r["won"],
+        "net": r["net"],
+    }
+
+
+async def get_casino_leaderboard(limit: int = 10, offset: int = 0) -> list[dict]:
+    """Biggest net winners across every server."""
     async with _conn().execute(
         "SELECT user_id, games, wagered, won, (won - wagered) AS net "
-        "FROM casino_stats WHERE guild_id=? AND games > 0 "
+        "FROM casino_stats WHERE games > 0 "
         "ORDER BY net DESC, user_id ASC LIMIT ? OFFSET ?",
-        (str(guild_id), int(limit), int(offset)),
+        (int(limit), int(offset)),
     ) as cur:
         rows = await cur.fetchall()
-    return [
-        {
-            "user_id": int(r["user_id"]),
-            "games": r["games"],
-            "wagered": r["wagered"],
-            "won": r["won"],
-            "net": r["net"],
-        }
-        for r in rows
-    ]
+    return [_leaderboard_row(r) for r in rows]
 
 
-async def count_casino_players(guild_id: int) -> int:
+async def get_casino_leaderboard_for(user_ids) -> list[dict]:
+    """The same rows filtered to a set of users (a server-scoped board)."""
+    rows = await rows_for_users(
+        "SELECT user_id, games, wagered, won, (won - wagered) AS net FROM casino_stats",
+        user_ids,
+        positive_col="games",
+    )
+    return [_leaderboard_row(r) for r in rows]
+
+
+async def count_casino_players() -> int:
     async with _conn().execute(
-        "SELECT COUNT(*) FROM casino_stats WHERE guild_id=? AND games > 0",
-        (str(guild_id),),
+        "SELECT COUNT(*) FROM casino_stats WHERE games > 0"
     ) as cur:
         return (await cur.fetchone())[0]
 
 
-async def get_casino_rank(guild_id: int, user_id: int) -> tuple[int, int] | None:
-    """Return (rank, net) by net winnings; None if the player hasn't played."""
-    stats = await get_casino_stats(guild_id, user_id)
+async def get_casino_rank(user_id: int) -> tuple[int, int] | None:
+    """Return (global rank, net) by net winnings; None if they haven't played."""
+    stats = await get_casino_stats(user_id)
     if stats["games"] <= 0:
         return None
     net = stats["won"] - stats["wagered"]
     async with _conn().execute(
-        "SELECT COUNT(*) FROM casino_stats WHERE guild_id=? AND games > 0 "
-        "AND (won - wagered) > ?",
-        (str(guild_id), net),
+        "SELECT COUNT(*) FROM casino_stats WHERE games > 0 AND (won - wagered) > ?",
+        (net,),
     ) as cur:
         ahead = (await cur.fetchone())[0]
     return ahead + 1, net
@@ -441,14 +449,12 @@ async def delete_blackjack_hand(hand_id: int) -> None:
 # ══════════════════════════════════════════════════════════════════════════════
 #  Daily challenges (2/day per member — see cogs.casino.helpers.generate_challenges)
 # ══════════════════════════════════════════════════════════════════════════════
-async def get_challenge_progress(
-    guild_id: int, user_id: int, day: int, chal_key: str
-) -> dict:
+async def get_challenge_progress(user_id: int, day: int, chal_key: str) -> dict:
     """Today's progress on one challenge; zeros if nothing's been recorded yet."""
     async with _conn().execute(
         "SELECT progress, claimed FROM casino_challenges "
-        "WHERE guild_id=? AND user_id=? AND day=? AND chal_key=?",
-        (str(guild_id), str(user_id), int(day), chal_key),
+        "WHERE user_id=? AND day=? AND chal_key=?",
+        (str(user_id), int(day), chal_key),
     ) as cur:
         row = await cur.fetchone()
     if row:
@@ -457,7 +463,6 @@ async def get_challenge_progress(
 
 
 async def bump_challenge_progress(
-    guild_id: int,
     user_id: int,
     day: int,
     chal_key: str,
@@ -470,41 +475,33 @@ async def bump_challenge_progress(
     coins wagered); `mode='max'` keeps a running maximum instead (the
     payout-threshold challenge, where a single game's payout either clears the
     bar or it doesn't). Returns the row's new {progress, claimed}."""
-    gid, uid, day, target, amount = (
-        str(guild_id),
-        str(user_id),
-        int(day),
-        int(target),
-        int(amount),
-    )
+    uid, day, target, amount = str(user_id), int(day), int(target), int(amount)
     if mode == "max":
         seed = max(0, min(target, amount))
         await _conn().execute(
             "INSERT INTO casino_challenges "
-            "(guild_id, user_id, day, chal_key, target, progress, claimed) "
-            "VALUES (?,?,?,?,?,?,0) "
-            "ON CONFLICT(guild_id, user_id, day, chal_key) DO UPDATE SET "
+            "(user_id, day, chal_key, target, progress, claimed) "
+            "VALUES (?,?,?,?,?,0) "
+            "ON CONFLICT(user_id, day, chal_key) DO UPDATE SET "
             "progress = MAX(progress, excluded.progress)",
-            (gid, uid, day, chal_key, target, seed),
+            (uid, day, chal_key, target, seed),
         )
         await _conn().commit()
     elif amount > 0:
         seed = min(target, amount)
         await _conn().execute(
             "INSERT INTO casino_challenges "
-            "(guild_id, user_id, day, chal_key, target, progress, claimed) "
-            "VALUES (?,?,?,?,?,?,0) "
-            "ON CONFLICT(guild_id, user_id, day, chal_key) DO UPDATE SET "
+            "(user_id, day, chal_key, target, progress, claimed) "
+            "VALUES (?,?,?,?,?,0) "
+            "ON CONFLICT(user_id, day, chal_key) DO UPDATE SET "
             "progress = MIN(target, progress + excluded.progress)",
-            (gid, uid, day, chal_key, target, seed),
+            (uid, day, chal_key, target, seed),
         )
         await _conn().commit()
-    return await get_challenge_progress(guild_id, user_id, day, chal_key)
+    return await get_challenge_progress(user_id, day, chal_key)
 
 
-async def try_claim_challenge(
-    guild_id: int, user_id: int, day: int, chal_key: str
-) -> bool:
+async def try_claim_challenge(user_id: int, day: int, chal_key: str) -> bool:
     """Atomically mark a completed challenge claimed (first claimer wins).
 
     Returns False if it isn't at target yet, or was already claimed — the
@@ -513,9 +510,8 @@ async def try_claim_challenge(
     """
     cur = await _conn().execute(
         "UPDATE casino_challenges SET claimed=1 "
-        "WHERE guild_id=? AND user_id=? AND day=? AND chal_key=? "
-        "AND claimed=0 AND progress>=target",
-        (str(guild_id), str(user_id), int(day), chal_key),
+        "WHERE user_id=? AND day=? AND chal_key=? AND claimed=0 AND progress>=target",
+        (str(user_id), int(day), chal_key),
     )
     await _conn().commit()
     return cur.rowcount > 0

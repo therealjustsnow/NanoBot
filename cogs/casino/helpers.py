@@ -294,15 +294,15 @@ def challenge_short_label(chal_key: str) -> str:
     return CHALLENGE_SHORT_LABEL.get(chal_key, "progress")
 
 
-def generate_challenges(guild_id: int, user_id: int, day: int) -> list[dict]:
+def generate_challenges(user_id: int, day: int) -> list[dict]:
     """Deterministically pick CHALLENGE_COUNT distinct daily challenges.
 
-    Seeded on (guild_id, user_id, day) — the same trio always yields the same
-    pool, so callers regenerate it on demand (the fishing generate_quest
-    pattern) instead of persisting the pick; only progress/claimed state is
-    persisted (see utils/db casino_challenges).
+    Seeded on (user_id, day) — not the guild — so a player gets one set of
+    challenges a day no matter which server they play in, matching the one
+    global progress row per challenge. Callers regenerate on demand (the
+    fishing generate_quest pattern); only progress/claimed state is persisted.
     """
-    rng = random.Random(f"{int(guild_id)}:{int(user_id)}:{int(day)}:challenges")
+    rng = random.Random(f"{int(user_id)}:{int(day)}:challenges")
     keys = rng.sample(CHALLENGE_POOL, CHALLENGE_COUNT)
     out = []
     for key in keys:

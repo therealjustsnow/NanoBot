@@ -26,6 +26,12 @@ Coins ride the existing economy tables (db.add_coins et al.), and loot rides
 the shared inventory (utils/db/items.py), so earnings from any activity spend
 anywhere coins/items do (/shop, /pay, /coin gamble, /inventory sell).
 
+Stats, tools, and cooldowns are GLOBAL — keyed by user, not (guild, user). A
+pickaxe bought in one server digs in all of them, and a cooldown claimed
+anywhere applies everywhere (which is what stops /work being farmed once per
+server). Each server still owns whether an activity is enabled and how long
+its cooldown lasts.
+
 Slash command budget: two flat commands (/work, /rob) plus two groups
 (/mine …, /adventure …) whose subcommands cost no extra top-level slots —
 hunt, explore, and the Manage-Server settings all live under /adventure.
@@ -38,7 +44,7 @@ Commands
   /mine dig                     → dig for ore
   /mine upgrade                 → buy the next pickaxe tier with coins
   /mine stats                   → your pickaxe + dig stats
-  /adventure                    → show the activities settings overview
+  /adventure                    → what you can do right now + each cooldown
   /adventure hunt               → hunt for pelts/meat/trophies (medium risk)
   /adventure explore            → explore for a long-shot reward
   /rob <member>                 → try to steal a cut of a member's coins
@@ -56,13 +62,17 @@ from discord import app_commands
 from discord.ext import commands
 
 from utils import db
+from utils import globalxp
 from utils import helpers as h
 from utils import items as item_catalogue
 
 from . import items as _register_items  # noqa: F401 - side-effect: registers item defs
 from .constants import (
     ACTIVITY_COOLDOWN_BOUNDS,
+    ACTIVITY_DEFAULT_COOLDOWNS,
+    ACTIVITY_INFO,
     ACTIVITY_NAMES,
+    COOLDOWN_PRESETS,
     EXPLORE_COINS_BIG,
     EXPLORE_COINS_SMALL,
     EXPLORE_FLAVOR,
@@ -97,7 +107,8 @@ log = logging.getLogger("NanoBot.activities")
 
 
 class Activities(commands.Cog):
-    """Work, mine, hunt, explore, and rob for NanoCoins — per server."""
+    """Work, mine, hunt, explore, and rob for NanoCoins — stats, tools, and
+    cooldowns are per user and shared across servers."""
 
     def __init__(self, bot: commands.Bot):
         self.bot = bot
@@ -105,15 +116,37 @@ class Activities(commands.Cog):
         # (the /daily pattern), mirroring cogs.fishing.Fishing._locks.
         self._locks = h.KeyedLocks()
 
-    def _lock(self, guild_id: int, user_id: int):
+    def _lock(self, user_id: int):
         # Returns an async context manager; existing `async with self._lock(...)`
         # call sites are unchanged. KeyedLocks refcounts holder + waiters and
         # drops an entry when the last interested task releases, so the map no
         # longer grows for the lifetime of the process.
-        return self._locks.hold((guild_id, user_id))
+        return self._locks.hold(user_id)
 
     def _money(self, econ: dict, amount: int) -> str:
         return h.fmt_coins(amount, econ["currency_name"], econ["currency_emoji"])
+
+    # ── shared status helpers ────────────────────────────────────────────────
+    def _remaining(self, cfg: dict, stats: dict, activity: str) -> int:
+        """Seconds left on an activity's cooldown (0 = ready). Read-only — the
+        claim itself still happens atomically in db.try_claim_activity."""
+        last = stats.get(f"last_{activity}", 0) or 0
+        if not last:
+            return 0
+        return max(0, int(cfg[f"{activity}_cooldown"] - (time.time() - last)))
+
+    def _status_line(self, cfg: dict, stats: dict, activity: str) -> str:
+        """ "Ready now" / "Ready in 12m" / "Disabled" for one activity."""
+        if not cfg[f"{activity}_enabled"]:
+            return "❌ Disabled here"
+        remaining = self._remaining(cfg, stats, activity)
+        if remaining:
+            return f"⏳ Ready in {h.fmt_duration(remaining)}"
+        return "✅ Ready now"
+
+    def _next_up(self, cfg: dict, activity: str) -> str:
+        """Footer text telling a member when this activity comes back."""
+        return f"Next {activity} in {h.fmt_duration(cfg[f'{activity}_cooldown'])}"
 
     # ══════════════════════════════════════════════════════════════════════════
     #  /work — flat, safe
@@ -139,9 +172,9 @@ class Activities(commands.Cog):
             return await ctx.reply(
                 embed=h.err("Working is disabled on this server."), ephemeral=True
             )
-        before = await db.get_activity_stats(ctx.guild.id, ctx.author.id)
+        before = await db.get_activity_stats(ctx.author.id)
         retry = await db.try_claim_activity(
-            ctx.guild.id, ctx.author.id, "work", time.time(), cfg["work_cooldown"]
+            ctx.author.id, "work", time.time(), cfg["work_cooldown"]
         )
         if retry:
             return await ctx.reply(
@@ -152,13 +185,14 @@ class Activities(commands.Cog):
                 ephemeral=True,
             )
 
-        stats = await db.get_activity_stats(ctx.guild.id, ctx.author.id)
+        await globalxp.award(ctx.author.id, "activity")
+        stats = await db.get_activity_stats(ctx.author.id)
         info = career_info(stats["work_shifts"])
         old_info = career_info(before["work_shifts"])
         pay = roll_work_pay(random.random(), info["bonus"])
         scene = pick_work_scene(random.random())
         econ = await db.get_econ_config(ctx.guild.id)
-        new_bal = await db.add_coins(ctx.guild.id, ctx.author.id, pay)
+        new_bal = await db.add_coins(ctx.author.id, pay)
 
         desc = f"{scene}\nYou earned {self._money(econ, pay)}.\nBalance: {self._money(econ, new_bal)}"
         if info["tier"] > old_info["tier"]:
@@ -186,8 +220,8 @@ class Activities(commands.Cog):
             "via /inventory sell. Buy better pickaxes to improve your odds. "
             "There's a small chance of a cave-in with no yield.",
             "args": [],
-            "perms": "Admin subcommands live under /activities",
-            "example": "{prefix}mine\n{prefix}mine upgrade",
+            "perms": "None (admin settings live under /adventure)",
+            "example": "{prefix}mine\n{prefix}mine stats\n{prefix}mine upgrade",
         },
     )
     @commands.guild_only()
@@ -206,7 +240,7 @@ class Activities(commands.Cog):
                 embed=h.err("Mining is disabled on this server."), ephemeral=True
             )
         retry = await db.try_claim_activity(
-            ctx.guild.id, ctx.author.id, "mine", time.time(), cfg["mine_cooldown"]
+            ctx.author.id, "mine", time.time(), cfg["mine_cooldown"]
         )
         if retry:
             return await ctx.reply(
@@ -217,33 +251,36 @@ class Activities(commands.Cog):
                 ephemeral=True,
             )
 
+        await globalxp.award(ctx.author.id, "activity")
         if roll_cave_in(random.random()):
-            return await ctx.reply(
-                embed=h.warn(
-                    "The tunnel collapses behind you — you scramble out empty-handed.",
-                    "⛏️ Cave-In",
-                )
+            embed = h.warn(
+                "The tunnel collapses behind you — you scramble out empty-handed.",
+                "⛏️ Cave-In",
             )
+            embed.set_footer(text=self._next_up(cfg, "mine"))
+            return await ctx.reply(embed=embed)
 
-        stats = await db.get_activity_stats(ctx.guild.id, ctx.author.id)
+        stats = await db.get_activity_stats(ctx.author.id)
         pickaxe = pickaxe_info(stats["pickaxe_level"])
         ore_key = pick_ore(random.random(), pickaxe["luck"])
         ore = ORES[ore_key]
-        await db.add_item(ctx.guild.id, ctx.author.id, ore_key, 1)
+        await db.add_item(ctx.author.id, ore_key, 1)
 
         desc = f"You dig up {ore['emoji']} **{ore['name']}**!"
         if roll_mine_treasure_key(random.random()):
-            await db.add_item(ctx.guild.id, ctx.author.id, "treasure_key", 1)
+            await db.add_item(ctx.author.id, "treasure_key", 1)
             desc += f"\n{item_catalogue.display('treasure_key')} You also found a treasure key!"
         desc += "\n\nSell it with `/inventory sell`."
-        await ctx.reply(embed=h.ok(desc, "⛏️ Dig"))
+        embed = h.ok(desc, "⛏️ Dig")
+        embed.set_footer(text=self._next_up(cfg, "mine"))
+        await ctx.reply(embed=embed)
 
     # ── /mine upgrade ────────────────────────────────────────────────────────
     @mine.command(name="upgrade", description="Buy the next pickaxe tier with coins.")
     async def mine_upgrade(self, ctx: commands.Context):
         econ = await db.get_econ_config(ctx.guild.id)
-        async with self._lock(ctx.guild.id, ctx.author.id):
-            stats = await db.get_activity_stats(ctx.guild.id, ctx.author.id)
+        async with self._lock(ctx.author.id):
+            stats = await db.get_activity_stats(ctx.author.id)
             nxt = next_pickaxe(stats["pickaxe_level"])
             if nxt is None:
                 return await ctx.reply(
@@ -252,8 +289,8 @@ class Activities(commands.Cog):
                     ),
                     ephemeral=True,
                 )
-            if not await db.try_debit_coins(ctx.guild.id, ctx.author.id, nxt["price"]):
-                balance = await db.get_balance(ctx.guild.id, ctx.author.id)
+            if not await db.try_debit_coins(ctx.author.id, nxt["price"]):
+                balance = await db.get_balance(ctx.author.id)
                 return await ctx.reply(
                     embed=h.err(
                         f"{nxt['emoji']} **{nxt['name']}** costs "
@@ -263,14 +300,13 @@ class Activities(commands.Cog):
                     ephemeral=True,
                 )
             upgraded = await db.set_pickaxe_level(
-                ctx.guild.id,
                 ctx.author.id,
                 stats["pickaxe_level"] + 1,
                 expected=stats["pickaxe_level"],
             )
             if not upgraded:
                 # A racing second upgrade already went through — refund.
-                await db.add_coins(ctx.guild.id, ctx.author.id, nxt["price"])
+                await db.add_coins(ctx.author.id, nxt["price"])
                 return await ctx.reply(
                     embed=h.warn("That upgrade already went through.", "⛏️ Pickaxe"),
                     ephemeral=True,
@@ -288,16 +324,32 @@ class Activities(commands.Cog):
     @mine.command(name="stats", description="Your pickaxe and dig stats.")
     @commands.cooldown(1, 5, commands.BucketType.user)
     async def mine_stats(self, ctx: commands.Context):
-        stats = await db.get_activity_stats(ctx.guild.id, ctx.author.id)
+        cfg = await db.get_activities_config(ctx.guild.id)
+        econ = await db.get_econ_config(ctx.guild.id)
+        stats = await db.get_activity_stats(ctx.author.id)
         pickaxe = pickaxe_info(stats["pickaxe_level"])
         nxt = next_pickaxe(stats["pickaxe_level"])
         desc = (
             f"{pickaxe['emoji']} **{pickaxe['name']}** "
             f"(tier {stats['pickaxe_level'] + 1}/{len(PICKAXES)})\n"
-            f"Digs: **{stats['mine_count']:,}**"
+            f"Luck: **{pickaxe['luck']:.0%}** less stone, better rare-ore odds\n"
+            f"Digs: **{stats['mine_count']:,}**\n"
+            f"{self._status_line(cfg, stats, 'mine')}"
         )
         if nxt:
-            desc += f"\n\nNext: {nxt['emoji']} **{nxt['name']}** — buy with `/mine upgrade`."
+            # The price used to be invisible until the purchase failed — the
+            # only way to learn it was to try to buy and be told you're broke.
+            balance = await db.get_balance(ctx.author.id)
+            afford = (
+                "✅ you can afford it"
+                if balance >= nxt["price"]
+                else (f"🔒 you have {self._money(econ, balance)}")
+            )
+            desc += (
+                f"\n\nNext: {nxt['emoji']} **{nxt['name']}** — "
+                f"{self._money(econ, nxt['price'])} ({afford})\n"
+                f"Luck goes to **{nxt['luck']:.0%}**. Buy it with `/mine upgrade`."
+            )
         else:
             desc += "\n\nYou own the best pickaxe there is. 🎉"
         await ctx.reply(embed=h.embed("⛏️ Your Pickaxe", desc, h.BLUE))
@@ -313,9 +365,11 @@ class Activities(commands.Cog):
             "category": "🪙 Economy",
             "short": "Hunt, explore, and tune activities",
             "usage": "adventure [subcommand]",
-            "desc": "Hunt for pelts, meat, and rare trophies (medium risk) or "
-            "explore for a long-shot reward. Admins can enable/disable and tune "
-            "the cooldown for every activity: work, mine, hunt, explore, rob.",
+            "desc": "Run it bare to see every activity, what it pays, and whether "
+            "you're off cooldown. Hunt for pelts, meat, and rare trophies (medium "
+            "risk) or explore for a long-shot reward. Admins can enable/disable "
+            "and tune the cooldown for every activity: work, mine, hunt, explore, "
+            "rob.",
             "args": [],
             "perms": "Admin subcommands require Manage Server",
             "example": "{prefix}adventure hunt\n{prefix}adventure explore",
@@ -323,7 +377,30 @@ class Activities(commands.Cog):
     )
     @commands.guild_only()
     async def adventure(self, ctx: commands.Context):
-        await self._show_activities_config(ctx)
+        await self._show_adventure_overview(ctx)
+
+    async def _show_adventure_overview(self, ctx: commands.Context):
+        """The member-facing landing card: every activity, what it's for, and
+        whether you can do it right now. (Mods get the settings dump from
+        /adventure config.)"""
+        cfg = await db.get_activities_config(ctx.guild.id)
+        stats = await db.get_activity_stats(ctx.author.id)
+        embed = h.embed(
+            "🧭 Things To Do",
+            "Every way to earn beyond `/daily` and `/fish` — each on its own "
+            "cooldown.",
+            h.BLUE,
+        )
+        for activity in ACTIVITY_NAMES:
+            info = ACTIVITY_INFO[activity]
+            embed.add_field(
+                name=f"{info['emoji']} {info['command']}",
+                value=f"{info['blurb']}\n{self._status_line(cfg, stats, activity)} · "
+                f"every {h.fmt_duration(cfg[f'{activity}_cooldown'])}",
+                inline=True,
+            )
+        embed.set_footer(text="Sell what you find with /inventory sell")
+        await ctx.reply(embed=embed)
 
     # ── /adventure hunt — medium risk ────────────────────────────────────────
     @adventure.command(
@@ -337,7 +414,7 @@ class Activities(commands.Cog):
                 embed=h.err("Hunting is disabled on this server."), ephemeral=True
             )
         retry = await db.try_claim_activity(
-            ctx.guild.id, ctx.author.id, "hunt", time.time(), cfg["hunt_cooldown"]
+            ctx.author.id, "hunt", time.time(), cfg["hunt_cooldown"]
         )
         if retry:
             return await ctx.reply(
@@ -348,27 +425,30 @@ class Activities(commands.Cog):
                 ephemeral=True,
             )
 
+        await globalxp.award(ctx.author.id, "activity")
         catch_key = pick_hunt_catch(random.random())
         catch = HUNT_CATCHES[catch_key]
-        await db.add_item(ctx.guild.id, ctx.author.id, catch_key, 1)
+        await db.add_item(ctx.author.id, catch_key, 1)
         econ = await db.get_econ_config(ctx.guild.id)
         desc = f"You bring back {catch['emoji']} **{catch['name']}**!"
 
         if roll_hunt_injury(random.random()):
             fine = hunt_injury_fine(random.random())
             if fine > 0:
-                await db.add_coins(ctx.guild.id, ctx.author.id, -fine)
+                await db.add_coins(ctx.author.id, -fine)
                 desc += (
                     f"\n🤕 You took a tumble on the way back and paid "
                     f"{self._money(econ, fine)} for a bandage."
                 )
 
         if roll_hunt_padlock(random.random()):
-            await db.add_item(ctx.guild.id, ctx.author.id, "padlock", 1)
+            await db.add_item(ctx.author.id, "padlock", 1)
             desc += f"\n{item_catalogue.display('padlock')} You also found a padlock!"
 
         desc += "\n\nSell loot with `/inventory sell`."
-        await ctx.reply(embed=h.embed("🏹 Hunt", desc, h.BLUE))
+        embed = h.embed("🏹 Hunt", desc, h.BLUE)
+        embed.set_footer(text=self._next_up(cfg, "hunt"))
+        await ctx.reply(embed=embed)
 
     # ── /adventure explore — long shot ───────────────────────────────────────
     @adventure.command(
@@ -382,7 +462,7 @@ class Activities(commands.Cog):
                 embed=h.err("Exploring is disabled on this server."), ephemeral=True
             )
         retry = await db.try_claim_activity(
-            ctx.guild.id, ctx.author.id, "explore", time.time(), cfg["explore_cooldown"]
+            ctx.author.id, "explore", time.time(), cfg["explore_cooldown"]
         )
         if retry:
             return await ctx.reply(
@@ -394,6 +474,7 @@ class Activities(commands.Cog):
                 ephemeral=True,
             )
 
+        await globalxp.award(ctx.author.id, "activity")
         outcome = pick_explore_outcome(random.random())
         flavor = EXPLORE_FLAVOR[outcome]
         econ = await db.get_econ_config(ctx.guild.id)
@@ -405,7 +486,7 @@ class Activities(commands.Cog):
                 EXPLORE_COINS_SMALL if outcome == "coins_small" else EXPLORE_COINS_BIG
             )
             amount = roll_coin_amount(random.random(), lo, hi)
-            new_bal = await db.add_coins(ctx.guild.id, ctx.author.id, amount)
+            new_bal = await db.add_coins(ctx.author.id, amount)
             title = "🧭 Big Find!" if outcome == "coins_big" else "🧭 Explore"
             embed = h.ok(
                 f"{flavor}\nYou found {self._money(econ, amount)}!\n"
@@ -413,10 +494,11 @@ class Activities(commands.Cog):
                 title,
             )
         else:
-            await db.add_item(ctx.guild.id, ctx.author.id, outcome, 1)
+            await db.add_item(ctx.author.id, outcome, 1)
             embed = h.ok(
                 f"{flavor}\nYou found {item_catalogue.display(outcome)}!", "🧭 Explore"
             )
+        embed.set_footer(text=self._next_up(cfg, "explore"))
         await ctx.reply(embed=embed)
 
     # ══════════════════════════════════════════════════════════════════════════
@@ -454,7 +536,7 @@ class Activities(commands.Cog):
                 embed=h.err("You can't rob yourself."), ephemeral=True
             )
 
-        target_effects = await db.get_active_effects(ctx.guild.id, member.id)
+        target_effects = await db.get_active_effects(member.id)
         if "rob_shield" in target_effects:
             return await ctx.reply(
                 embed=h.warn(
@@ -465,7 +547,7 @@ class Activities(commands.Cog):
                 ephemeral=True,
             )
 
-        robber_balance = await db.get_balance(ctx.guild.id, ctx.author.id)
+        robber_balance = await db.get_balance(ctx.author.id)
         if robber_balance < ROB_MIN_ROBBER_BALANCE:
             return await ctx.reply(
                 embed=h.err(
@@ -474,7 +556,7 @@ class Activities(commands.Cog):
                 ),
                 ephemeral=True,
             )
-        target_balance = await db.get_balance(ctx.guild.id, member.id)
+        target_balance = await db.get_balance(member.id)
         if target_balance < ROB_MIN_TARGET_BALANCE:
             return await ctx.reply(
                 embed=h.err(
@@ -485,7 +567,7 @@ class Activities(commands.Cog):
             )
 
         retry = await db.try_claim_activity(
-            ctx.guild.id, ctx.author.id, "rob", time.time(), cfg["rob_cooldown"]
+            ctx.author.id, "rob", time.time(), cfg["rob_cooldown"]
         )
         if retry:
             return await ctx.reply(
@@ -496,21 +578,20 @@ class Activities(commands.Cog):
                 ephemeral=True,
             )
 
-        robber_effects = await db.get_active_effects(ctx.guild.id, ctx.author.id)
+        await globalxp.award(ctx.author.id, "activity")
+        robber_effects = await db.get_active_effects(ctx.author.id)
         has_luck = "luck" in robber_effects
         if rob_success(random.random(), has_luck):
             steal = rob_steal_amount(random.random(), target_balance)
-            ok = await db.try_debit_coins(ctx.guild.id, member.id, steal)
+            ok = await db.try_debit_coins(member.id, steal)
             if not ok:
                 # The target's balance moved between the check and the debit
                 # (e.g. they spent it) — steal whatever's left instead.
-                fresh_balance = await db.get_balance(ctx.guild.id, member.id)
+                fresh_balance = await db.get_balance(member.id)
                 steal = min(steal, fresh_balance)
-                ok = steal > 0 and await db.try_debit_coins(
-                    ctx.guild.id, member.id, steal
-                )
+                ok = steal > 0 and await db.try_debit_coins(member.id, steal)
             if ok and steal > 0:
-                new_bal = await db.add_coins(ctx.guild.id, ctx.author.id, steal)
+                new_bal = await db.add_coins(ctx.author.id, steal)
                 return await ctx.reply(
                     embed=h.ok(
                         f"🥷 You snuck off with {self._money(econ, steal)} from "
@@ -526,12 +607,12 @@ class Activities(commands.Cog):
                 )
             )
 
-        ok = await db.try_debit_coins(ctx.guild.id, ctx.author.id, ROB_FINE)
+        ok = await db.try_debit_coins(ctx.author.id, ROB_FINE)
         if not ok:
             # Can't cover the full fine — take whatever they have (add_coins
             # clamps at 0, so this never goes negative).
-            await db.add_coins(ctx.guild.id, ctx.author.id, -ROB_FINE)
-        new_bal = await db.get_balance(ctx.guild.id, ctx.author.id)
+            await db.add_coins(ctx.author.id, -ROB_FINE)
+        new_bal = await db.get_balance(ctx.author.id)
         await ctx.reply(
             embed=h.err(
                 f"🚨 You got caught trying to rob {member.display_name} and paid a "
@@ -544,10 +625,7 @@ class Activities(commands.Cog):
     @adventure.command(
         name="toggle", description="Enable or disable an activity (Manage Server)."
     )
-    @app_commands.describe(activity="Which activity to toggle")
-    @app_commands.choices(
-        activity=[app_commands.Choice(name=a, value=a) for a in ACTIVITY_NAMES]
-    )
+    @app_commands.describe(activity="Pick an activity (the list shows its state)")
     @commands.has_permissions(manage_guild=True)
     async def activities_toggle(self, ctx: commands.Context, activity: str):
         activity = activity.lower().strip()
@@ -562,15 +640,17 @@ class Activities(commands.Cog):
         state = "enabled" if enabled else "disabled"
         await ctx.reply(embed=h.ok(f"`/{activity}` is now **{state}**."))
 
+    @activities_toggle.autocomplete("activity")
+    async def _toggle_activity_ac(self, interaction: discord.Interaction, current: str):
+        return await self._activity_choices(interaction, current)
+
     @adventure.command(
         name="cooldown",
         description="Set an activity's cooldown, in seconds (Manage Server).",
     )
     @app_commands.describe(
-        activity="Which activity to configure", seconds="Cooldown in seconds"
-    )
-    @app_commands.choices(
-        activity=[app_commands.Choice(name=a, value=a) for a in ACTIVITY_NAMES]
+        activity="Pick an activity (the list shows its current cooldown)",
+        seconds="Pick a preset, or type any number of seconds in range",
     )
     @commands.has_permissions(manage_guild=True)
     async def activities_cooldown(
@@ -585,7 +665,8 @@ class Activities(commands.Cog):
         if not lo <= seconds <= hi:
             return await ctx.reply(
                 embed=h.err(
-                    f"Cooldown for `/{activity}` must be between {lo} and {hi} seconds."
+                    f"Cooldown for `/{activity}` must be between {lo:,} seconds "
+                    f"({h.fmt_duration(lo)}) and {hi:,} seconds ({h.fmt_duration(hi)})."
                 ),
                 ephemeral=True,
             )
@@ -595,6 +676,72 @@ class Activities(commands.Cog):
         await ctx.reply(
             embed=h.ok(f"`/{activity}` cooldown set to **{h.fmt_duration(seconds)}**.")
         )
+
+    @activities_cooldown.autocomplete("activity")
+    async def _cooldown_activity_ac(
+        self, interaction: discord.Interaction, current: str
+    ):
+        return await self._activity_choices(interaction, current)
+
+    @activities_cooldown.autocomplete("seconds")
+    async def _cooldown_seconds_ac(
+        self, interaction: discord.Interaction, current: str
+    ):
+        """Duration presets in plain English, clamped to the picked activity's
+        own bounds — "3 hours" beats counting zeros in 10800 on a phone."""
+        activity = str(getattr(interaction.namespace, "activity", "") or "").lower()
+        lo, hi = ACTIVITY_COOLDOWN_BOUNDS.get(activity, (60, 172_800))
+        default = ACTIVITY_DEFAULT_COOLDOWNS.get(activity)
+        q = (current or "").strip()
+        choices: list[app_commands.Choice[int]] = []
+        if q.isdigit() and lo <= int(q) <= hi:
+            choices.append(
+                app_commands.Choice(
+                    name=f"{int(q):,} seconds ({h.fmt_duration(int(q))})", value=int(q)
+                )
+            )
+        for preset in COOLDOWN_PRESETS:
+            if not lo <= preset <= hi or (q.isdigit() and preset == int(q)):
+                continue
+            if (
+                q
+                and not q.isdigit()
+                and q.lower() not in h.fmt_duration(preset).lower()
+            ):
+                continue
+            if q.isdigit() and not str(preset).startswith(q):
+                continue
+            label = f"{h.fmt_duration(preset)} ({preset:,} seconds)"
+            if preset == default:
+                label += " · default"
+            choices.append(app_commands.Choice(name=label[:100], value=preset))
+        return choices[:25]
+
+    async def _activity_choices(
+        self, interaction: discord.Interaction, current: str
+    ) -> list[app_commands.Choice[str]]:
+        """The five activities with their live state, so a mod can see what
+        they're about to change before they change it."""
+        q = (current or "").strip().lower()
+        cfg = (
+            await db.get_activities_config(interaction.guild_id)
+            if interaction.guild_id
+            else None
+        )
+        choices: list[app_commands.Choice[str]] = []
+        for activity in ACTIVITY_NAMES:
+            if q and q not in activity:
+                continue
+            info = ACTIVITY_INFO[activity]
+            label = f"{info['emoji']} {activity}"
+            if cfg:
+                state = "✅ enabled" if cfg[f"{activity}_enabled"] else "❌ disabled"
+                label += (
+                    f" — {state} · every "
+                    f"{h.fmt_duration(cfg[f'{activity}_cooldown'])}"
+                )
+            choices.append(app_commands.Choice(name=label[:100], value=activity))
+        return choices
 
     @adventure.command(
         name="config", description="Show the activities settings (Manage Server)."
@@ -615,6 +762,10 @@ class Activities(commands.Cog):
                 f"Cooldown: {h.fmt_duration(cooldown)}",
                 inline=True,
             )
+        embed.set_footer(
+            text="Change with /adventure toggle or /adventure cooldown "
+            "(both list every activity)"
+        )
         await ctx.reply(embed=embed)
 
 

@@ -35,6 +35,7 @@ _ALL_COGS = (
     "cogs.activities",
     "cogs.crafting",
     "cogs.progression",
+    "cogs.identity",
     "cogs.fishing",
     "cogs.gatekeeper",
     "cogs.liverole",

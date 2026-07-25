@@ -178,6 +178,54 @@ ROB_FINE = 200  # coins the robber pays on a failed attempt (a pure sink)
 
 ACTIVITY_NAMES: tuple[str, ...] = ("work", "mine", "hunt", "explore", "rob")
 
+# Player-facing metadata for the five activities: what to type, what it does,
+# and how risky it is. Drives the /adventure overview card and the admin
+# toggle/cooldown pickers, so a new activity describes itself in one place.
+ACTIVITY_INFO: dict[str, dict] = {
+    "work": {
+        "emoji": "💼",
+        "command": "/work",
+        "blurb": "Safe. Steady pay and a career ladder.",
+    },
+    "mine": {
+        "emoji": "⛏️",
+        "command": "/mine",
+        "blurb": "Dig ore to sell. Small cave-in risk.",
+    },
+    "hunt": {
+        "emoji": "🏹",
+        "command": "/adventure hunt",
+        "blurb": "Pelts, meat, rare trophy. Injury risk.",
+    },
+    "explore": {
+        "emoji": "🧭",
+        "command": "/adventure explore",
+        "blurb": "Long shot: usually nothing, sometimes huge.",
+    },
+    "rob": {
+        "emoji": "🥷",
+        "command": "/rob",
+        "blurb": "Steal from a member. Fail and you're fined.",
+    },
+}
+
+# Cooldown values offered by the /adventure cooldown picker, filtered to each
+# activity's own bounds. Typing an exact number still works.
+COOLDOWN_PRESETS: tuple[int, ...] = (
+    60,
+    300,
+    900,
+    1800,
+    2700,
+    3600,
+    7200,
+    10_800,
+    21_600,
+    43_200,
+    86_400,
+    172_800,
+)
+
 ACTIVITY_DEFAULT_COOLDOWNS: dict[str, int] = {
     "work": WORK_COOLDOWN_DEFAULT,
     "mine": MINE_COOLDOWN_DEFAULT,

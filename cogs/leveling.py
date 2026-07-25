@@ -24,6 +24,12 @@ Commands
   /level reward <add|remove|list> [level] [role]            (Manage Server)
   /level ignore <add|remove|list> [channel]                 (Manage Server)
   /level config                  → show current settings    (Manage Server)
+
+Deliberately per-guild: this is the *server's* XP, with the server's rate,
+cooldown, role rewards and announcements. It is not the account-wide level —
+that one is hard-coded and lives in utils/globalxp.py, shown next to this one
+on /rank and on /profile. Neither feeds the other: a 5x-XP server grants no
+extra global XP, and switching this system off doesn't stop global progress.
 """
 
 import logging
@@ -36,6 +42,7 @@ from discord import app_commands
 from discord.ext import commands
 
 from utils import db
+from utils import globalxp
 from utils import helpers as h
 from utils.converters import SafeTextChannel
 
@@ -142,7 +149,7 @@ class Leveling(commands.Cog):
         coins = cfg["coin_reward"] * new_level if cfg["coin_reward"] else 0
         econ = None
         if coins:
-            await db.add_coins(message.guild.id, member.id, coins)
+            await db.add_coins(member.id, coins)
             econ = await db.get_econ_config(message.guild.id)
 
         if not cfg["announce"]:
@@ -226,19 +233,35 @@ class Leveling(commands.Cog):
         level, into, span = level_progress(xp)
         bar = render_bar(into, span)
 
+        # The account-wide level lives alongside this server's — two separate
+        # systems (see utils/globalxp.py), shown together so nobody has to
+        # guess which number a "level" refers to.
+        global_xp = await db.get_global_xp(member.id)
+        g_level, g_into, g_span = globalxp.level_progress(global_xp)
+
         embed = h.embed(f"📈 {member.display_name}", color=h.BLUE)
         embed.set_thumbnail(url=member.display_avatar.url)
-        embed.add_field(name="Level", value=f"**{level}**", inline=True)
+        embed.add_field(name="Server level", value=f"**{level}**", inline=True)
         embed.add_field(
-            name="Rank",
+            name="Server rank",
             value=f"**#{rank_pos}**" if rank_pos else "Unranked",
             inline=True,
         )
-        embed.add_field(name="Total XP", value=f"**{xp:,}**", inline=True)
+        embed.add_field(name="Server XP", value=f"**{xp:,}**", inline=True)
         embed.add_field(
             name=f"Progress to level {level + 1}",
             value=f"`{bar}`  {into:,} / {span:,} XP",
             inline=False,
+        )
+        embed.add_field(
+            name="🌐 Global level",
+            value=f"**{g_level}** · `{render_bar(g_into, g_span)}`  "
+            f"{g_into:,} / {g_span:,} XP",
+            inline=False,
+        )
+        embed.set_footer(
+            text="Server level is this community's XP · global level is your "
+            "whole account — see /profile"
         )
         await ctx.reply(embed=embed)
 

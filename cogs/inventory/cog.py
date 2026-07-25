@@ -2,7 +2,9 @@
 cogs/inventory.py
 Generic item inventory — the shared item layer of the NanoCoin economy.
 
-Everything a member owns that isn't coins or bagged fish lives here: bait,
+Items are GLOBAL, exactly like the coin balance: one stack per (user, item),
+carried into every server. Everything a member owns that isn't coins or bagged
+fish lives here: bait,
 consumables, crafting materials, treasure, keys, and event drops. Items are
 defined code-side in the shared catalogue (utils/items.py) and stored as
 (item_key, qty) stacks, so any economy cog can grant, check, or consume items
@@ -51,15 +53,68 @@ class Inventory(commands.Cog):
         # economy /daily pattern) so a double-send can't double-apply.
         self._locks = h.KeyedLocks()
 
-    def _lock(self, guild_id: int, user_id: int):
+    def _lock(self, user_id: int):
         # Returns an async context manager; existing `async with self._lock(...)`
         # call sites are unchanged. KeyedLocks refcounts holder + waiters and
         # drops an entry when the last interested task releases, so the map no
         # longer grows for the lifetime of the process.
-        return self._locks.hold((guild_id, user_id))
+        return self._locks.hold(user_id)
 
     def _money(self, econ: dict, amount: int) -> str:
         return h.fmt_coins(amount, econ["currency_name"], econ["currency_emoji"])
+
+    # ── item pickers ─────────────────────────────────────────────────────────
+    # Item names are multi-word ("Lucky Charm") and keys are underscored, so
+    # typing one from memory is the worst part of the inventory. Every item
+    # option is a tap-to-pick list built from what the member actually owns.
+    async def _owned_choices(
+        self,
+        interaction: discord.Interaction,
+        current: str,
+        *,
+        usable_only: bool = False,
+        sellable_only: bool = False,
+    ) -> list[discord.app_commands.Choice[str]]:
+        q = (current or "").strip().lower()
+        stacks = (
+            await db.get_inventory(interaction.user.id) if interaction.guild_id else []
+        )
+        choices: list[discord.app_commands.Choice[str]] = []
+        for stack in stacks:
+            key = stack["item_key"]
+            d = item_catalog.get(key)
+            name = d.name if d else key
+            if usable_only and not (d and (d.effect or key == "treasure_chest")):
+                continue
+            if sellable_only and not (d and d.value > 0):
+                continue
+            if q and q not in key.lower() and q not in name.lower():
+                continue
+            label = f"{d.emoji if d else '📦'} {name} ×{stack['qty']:,}"
+            if sellable_only and d:
+                label += f" — {d.value * stack['qty']:,} coins for the lot"
+            elif d and d.effect:
+                label += f" — {d.effect['key']} +{d.effect.get('magnitude', 0):g}"
+            choices.append(discord.app_commands.Choice(name=label[:100], value=key))
+        return choices[:25]
+
+    async def _catalog_choices(
+        self, interaction: discord.Interaction, current: str
+    ) -> list[discord.app_commands.Choice[str]]:
+        """Every item that exists — for /inventory info, which works on items
+        you don't own yet."""
+        q = (current or "").strip().lower()
+        choices = []
+        for d in item_catalog.ITEMS.values():
+            if q and q not in d.key.lower() and q not in d.name.lower():
+                continue
+            cat = item_catalog.CATEGORY_LABELS.get(d.category, d.category.title())
+            choices.append(
+                discord.app_commands.Choice(
+                    name=f"{d.emoji} {d.name} — {cat}"[:100], value=d.key
+                )
+            )
+        return choices[:25]
 
     # ══════════════════════════════════════════════════════════════════════════
     #  /inventory group
@@ -89,8 +144,8 @@ class Inventory(commands.Cog):
             await self._show(ctx)
 
     async def _show(self, ctx: commands.Context):
-        stacks = await db.get_inventory(ctx.guild.id, ctx.author.id)
-        effects = await db.get_active_effects(ctx.guild.id, ctx.author.id)
+        stacks = await db.get_inventory(ctx.author.id)
+        effects = await db.get_active_effects(ctx.author.id)
         if not stacks and not effects:
             return await ctx.reply(
                 embed=h.info(
@@ -136,7 +191,7 @@ class Inventory(commands.Cog):
     # ── /inventory use ───────────────────────────────────────────────────────
     @inventory.command(name="use", description="Use a consumable item.")
     @discord.app_commands.describe(
-        item="The item to use", qty="How many to use at once (default 1)"
+        item="Pick a usable item you own", qty="How many to use at once (default 1)"
     )
     # NOTE: `item`/`qty` are plain positional params, not `*, item, qty` —
     # discord.py's prefix parser only transforms the first keyword-only
@@ -149,11 +204,14 @@ class Inventory(commands.Cog):
         d = item_catalog.find(item)
         if d is None:
             return await ctx.reply(
-                embed=h.err(f"I don't know any item called **{item}**."),
+                embed=h.err(
+                    f"I don't know any item called **{item}**. Run `/inventory` to "
+                    "see what you own."
+                ),
                 ephemeral=True,
             )
         qty = max(1, min(int(qty or 1), MAX_BULK))
-        async with self._lock(ctx.guild.id, ctx.author.id):
+        async with self._lock(ctx.author.id):
             if d.key == "treasure_chest":
                 return await self._open_chest(ctx, qty)
             if not d.effect:
@@ -173,8 +231,8 @@ class Inventory(commands.Cog):
                 qty = min(qty, max(1, EFFECT_MAX_USES // per_uses))
             uses = per_uses * qty
             duration = per_duration * qty
-            if not await db.try_consume_item(ctx.guild.id, ctx.author.id, d.key, qty):
-                have = await db.get_item_qty(ctx.guild.id, ctx.author.id, d.key)
+            if not await db.try_consume_item(ctx.author.id, d.key, qty):
+                have = await db.get_item_qty(ctx.author.id, d.key)
                 return await ctx.reply(
                     embed=h.err(
                         f"You need **{qty}** × {item_catalog.display(d.key)} "
@@ -183,7 +241,6 @@ class Inventory(commands.Cog):
                     ephemeral=True,
                 )
             await db.grant_effect(
-                ctx.guild.id,
                 ctx.author.id,
                 d.effect["key"],
                 float(d.effect.get("magnitude", 0)),
@@ -202,11 +259,15 @@ class Inventory(commands.Cog):
             )
         )
 
+    @inventory_use.autocomplete("item")
+    async def _use_ac(self, interaction: discord.Interaction, current: str):
+        return await self._owned_choices(interaction, current, usable_only=True)
+
     async def _open_chest(self, ctx: commands.Context, qty: int):
         """Chests need a key each: consume chest+key pairs, pay coins."""
-        gid, uid = ctx.guild.id, ctx.author.id
-        keys = await db.get_item_qty(gid, uid, "treasure_key")
-        chests = await db.get_item_qty(gid, uid, "treasure_chest")
+        uid = ctx.author.id
+        keys = await db.get_item_qty(uid, "treasure_key")
+        chests = await db.get_item_qty(uid, "treasure_chest")
         qty = min(qty, keys, chests)
         if qty <= 0:
             return await ctx.reply(
@@ -216,16 +277,16 @@ class Inventory(commands.Cog):
                 ),
                 ephemeral=True,
             )
-        if not await db.try_consume_item(gid, uid, "treasure_chest", qty):
+        if not await db.try_consume_item(uid, "treasure_chest", qty):
             return await ctx.reply(
                 embed=h.err("Those chests just vanished — try again.")
             )
-        if not await db.try_consume_item(gid, uid, "treasure_key", qty):
-            await db.add_item(gid, uid, "treasure_chest", qty)
+        if not await db.try_consume_item(uid, "treasure_key", qty):
+            await db.add_item(uid, "treasure_chest", qty)
             return await ctx.reply(embed=h.err("Your keys just vanished — try again."))
         coins = sum(chest_payout(random.random()) for _ in range(qty))
-        await db.add_coins(gid, uid, coins)
-        econ = await db.get_econ_config(gid)
+        await db.add_coins(uid, coins)
+        econ = await db.get_econ_config(ctx.guild.id)  # currency label only
         await ctx.reply(
             embed=h.embed(
                 "🧰 Chest Opened!" if qty == 1 else f"🧰 {qty} Chests Opened!",
@@ -239,7 +300,8 @@ class Inventory(commands.Cog):
         name="sell", description="Sell items from your inventory for coins."
     )
     @discord.app_commands.describe(
-        item="The item to sell", qty="How many to sell (default: all of them)"
+        item="Pick a sellable item you own",
+        qty="How many to sell (default: all of them)",
     )
     async def inventory_sell(
         self, ctx: commands.Context, item: str, qty: Optional[int] = None
@@ -247,7 +309,10 @@ class Inventory(commands.Cog):
         d = item_catalog.find(item)
         if d is None:
             return await ctx.reply(
-                embed=h.err(f"I don't know any item called **{item}**."),
+                embed=h.err(
+                    f"I don't know any item called **{item}**. Run `/inventory` to "
+                    "see what you own."
+                ),
                 ephemeral=True,
             )
         if d.value <= 0:
@@ -255,12 +320,10 @@ class Inventory(commands.Cog):
                 embed=h.warn(f"{item_catalog.display(d.key)} can't be sold."),
                 ephemeral=True,
             )
-        async with self._lock(ctx.guild.id, ctx.author.id):
-            have = await db.get_item_qty(ctx.guild.id, ctx.author.id, d.key)
+        async with self._lock(ctx.author.id):
+            have = await db.get_item_qty(ctx.author.id, d.key)
             count = have if qty is None else max(1, min(int(qty), MAX_BULK))
-            if count <= 0 or not await db.try_consume_item(
-                ctx.guild.id, ctx.author.id, d.key, count
-            ):
+            if count <= 0 or not await db.try_consume_item(ctx.author.id, d.key, count):
                 return await ctx.reply(
                     embed=h.err(
                         f"You have **{have}** × {item_catalog.display(d.key)} to sell."
@@ -268,7 +331,7 @@ class Inventory(commands.Cog):
                     ephemeral=True,
                 )
             coins = d.value * count
-            await db.add_coins(ctx.guild.id, ctx.author.id, coins)
+            await db.add_coins(ctx.author.id, coins)
         econ = await db.get_econ_config(ctx.guild.id)
         await ctx.reply(
             embed=h.ok(
@@ -278,11 +341,15 @@ class Inventory(commands.Cog):
             )
         )
 
+    @inventory_sell.autocomplete("item")
+    async def _sell_ac(self, interaction: discord.Interaction, current: str):
+        return await self._owned_choices(interaction, current, sellable_only=True)
+
     # ── /inventory give ──────────────────────────────────────────────────────
     @inventory.command(name="give", description="Give items to another member.")
     @discord.app_commands.describe(
         member="Who to give items to",
-        item="The item to give",
+        item="Pick an item you own",
         qty="How many to give (default 1)",
     )
     async def inventory_give(
@@ -304,10 +371,8 @@ class Inventory(commands.Cog):
                 ephemeral=True,
             )
         qty = max(1, min(int(qty or 1), MAX_BULK))
-        if not await db.transfer_item(
-            ctx.guild.id, ctx.author.id, member.id, d.key, qty
-        ):
-            have = await db.get_item_qty(ctx.guild.id, ctx.author.id, d.key)
+        if not await db.transfer_item(ctx.author.id, member.id, d.key, qty):
+            have = await db.get_item_qty(ctx.author.id, d.key)
             return await ctx.reply(
                 embed=h.err(
                     f"You have **{have}** × {item_catalog.display(d.key)} — "
@@ -323,14 +388,21 @@ class Inventory(commands.Cog):
             )
         )
 
+    @inventory_give.autocomplete("item")
+    async def _give_ac(self, interaction: discord.Interaction, current: str):
+        return await self._owned_choices(interaction, current)
+
     # ── /inventory info ──────────────────────────────────────────────────────
     @inventory.command(name="info", description="See what an item is and does.")
-    @discord.app_commands.describe(item="The item to look up")
+    @discord.app_commands.describe(item="Pick any item to look up")
     async def inventory_info(self, ctx: commands.Context, *, item: str):
         d = item_catalog.find(item)
         if d is None:
             return await ctx.reply(
-                embed=h.err(f"I don't know any item called **{item}**."),
+                embed=h.err(
+                    f"I don't know any item called **{item}**. Pick one from the "
+                    "list, or run `/inventory` to see what you own."
+                ),
                 ephemeral=True,
             )
         embed = h.embed(
@@ -355,6 +427,10 @@ class Inventory(commands.Cog):
                 )
             embed.add_field(name="On Use", value=eff)
         await ctx.reply(embed=embed)
+
+    @inventory_info.autocomplete("item")
+    async def _info_ac(self, interaction: discord.Interaction, current: str):
+        return await self._catalog_choices(interaction, current)
 
 
 async def setup(bot: commands.Bot):

@@ -641,11 +641,11 @@ Requires a Groq API key in config or the `GROQ_API_KEY` environment variable. Fr
 
 ### 📈 Leveling
 
-Per-server message XP and levels (Mee6-style curve). **Off by default** -- enable it with `/level toggle on`. Members earn XP per message (rate-limited by a per-member cooldown); reaching a level can grant a role reward and, optionally, NanoCoins.
+Per-server message XP and levels (Mee6-style curve). **Off by default** -- enable it with `/level toggle on`. This is the *server's* progression and stays fully admin-configurable; it sits alongside the **global account level** (hard-coded, earned from normalized actions anywhere) which appears next to it on `/rank` and on `/profile` — see [`docs/identity-and-levels.md`](docs/identity-and-levels.md). Members earn XP per message (rate-limited by a per-member cooldown); reaching a level can grant a role reward and, optionally, NanoCoins.
 
 | Command | Description |
 |---------|-------------|
-| `/rank [user]` | Show a member's level, rank, and XP progress card |
+| `/rank [user]` | Show a member's server level and rank, plus their global account level |
 | `/level top [page]` | Server XP leaderboard |
 
 **Admin subcommands** *(Manage Server):*
@@ -667,23 +667,29 @@ Per-server message XP and levels (Mee6-style curve). **Off by default** -- enabl
 
 ### 🪙 Economy
 
-Per-server **NanoCoin** currency. The currency name and emoji are configurable per server. Earn coins from `/daily` (and optionally from leveling up), then spend or gamble them.
+**NanoCoin** currency with a **global wallet**: your balance, inventory, and progression belong to your account, not to one server — earn coins fishing in one community and spend them in another. Each server still sets its own currency name and emoji, reward amounts, shop, and which economy features are enabled. Earn coins from `/daily` (and optionally from leveling up), then spend or gamble them.
+
+📖 **New to the economy? Read the [Player Guide](docs/player-guide.md)** — a beginner-friendly tour of fishing, jobs, the casino, crafting, achievements, and the global account, with every command in one place. For the architecture behind the global wallet (and the one-time migration), see [`docs/global-economy.md`](docs/global-economy.md).
 
 | Command | Description |
 |---------|-------------|
-| `/balance [user]` | Show a coin balance and rank |
+| `/profile [user]` | Your account **card image** — global level, this server's level, coins, fishing, casino, work, items, achievements, prestige emblem and equipped badges (alias: `/card`) |
+| `/profile cosmetics` | Banners, borders, nameplates and badges you own — and how to unlock the rest |
+| `/profile equip <name>` | Wear a cosmetic on your card (`/profile unequip` to remove) |
+| `/profile badges [user]` | The badge gallery |
+| `/balance [user]` | Show a coin balance and global rank |
 | `/daily` | Claim the daily reward (24h cooldown, consecutive-day streak bonus) |
 | `/pay <user> <amount>` | Transfer coins to another member |
-| `/coin top [page]` | Richest-members leaderboard |
+| `/coin top [page] [scope]` | Richest members — this server's members, or every server |
 | `/coin gamble <amount>` | Double-or-nothing bet (~45% win) |
 
 **Admin subcommands** *(Manage Server):*
 
 | Command | Description |
 |---------|-------------|
-| `/coin grant <user> <amount>` | Add coins to a member's balance |
-| `/coin take <user> <amount>` | Remove coins from a member's balance |
-| `/coin reset [user]` | Reset coins for one member, or the whole server |
+| `/coin grant <user> <amount>` | Add coins to a member's (global) balance |
+| `/coin take <user> <amount>` | Remove coins from a member's (global) balance |
+| `/coin reset [user]` | Wipe a global wallet, or every wallet — **bot owner only** |
 | `/coin daily <amount>` | Set the daily reward amount |
 | `/coin streakbonus <amount>` | Set the per-day streak bonus |
 | `/coin name <name>` | Set the currency name (e.g. NanoCoin) |

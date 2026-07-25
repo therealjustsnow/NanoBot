@@ -350,6 +350,37 @@ def fmt_coins(amount: int, name: str, emoji: str) -> str:
     return f"{emoji} **{amount:,}** {label}"
 
 
+# Every economy leaderboard offers the same two views, so the option is
+# declared once: the underlying rows are global either way, "server" just
+# filters them to the guild's members.
+SCOPE_CHOICES = [
+    discord.app_commands.Choice(name="This server", value="server"),
+    discord.app_commands.Choice(name="Global (every server)", value="global"),
+]
+
+
+def member_ids(guild) -> list[int]:
+    """Human member ids of a guild — the filter that turns a global economy
+    table into a server-scoped leaderboard."""
+    return [m.id for m in guild.members if not m.bot]
+
+
+def page_rows(rows: list, sort_key, page: int, per: int = 10):
+    """Rank a fully-materialised leaderboard and cut one page from it.
+
+    Global economy rows filtered to a guild's members come back unordered (the
+    DB does the membership filter, the caller does the ranking), so sorting and
+    paging live here instead of being duplicated in every board command.
+    Returns (rows_on_page, page, pages, total).
+    """
+    ranked = sorted(rows, key=sort_key)
+    total = len(ranked)
+    pages = max(1, (total + per - 1) // per)
+    page = max(1, min(page, pages))
+    offset = (page - 1) * per
+    return ranked[offset : offset + per], page, pages, total
+
+
 def weighted_pick(table, roll: float):
     """Map a roll in [0, 1) onto a cumulative-weight table [(key, weight), …].
 

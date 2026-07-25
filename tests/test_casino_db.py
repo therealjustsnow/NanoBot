@@ -93,7 +93,7 @@ async def test_jackpot_survives_across_guilds():
 
 # ── Player stats ───────────────────────────────────────────────────────────────
 async def test_stats_defaults():
-    assert await db.get_casino_stats(G, A) == {
+    assert await db.get_casino_stats(A) == {
         "games": 0,
         "wagered": 0,
         "won": 0,
@@ -105,7 +105,7 @@ async def test_stats_defaults():
 
 
 async def test_record_loss_resets_streak_and_tracks_wagered():
-    stats = await db.record_casino_game(G, A, 100, 0)
+    stats = await db.record_casino_game(A, 100, 0)
     assert stats == {
         "games": 1,
         "wagered": 100,
@@ -118,7 +118,7 @@ async def test_record_loss_resets_streak_and_tracks_wagered():
 
 
 async def test_record_win_bumps_streak_and_biggest_win():
-    stats = await db.record_casino_game(G, A, 100, 192)
+    stats = await db.record_casino_game(A, 100, 192)
     assert stats["games"] == 1
     assert stats["won"] == 192
     assert stats["biggest_win"] == 192
@@ -128,9 +128,9 @@ async def test_record_win_bumps_streak_and_biggest_win():
 
 
 async def test_record_win_and_loss_wins_column_only_counts_true_wins():
-    await db.record_casino_game(G, A, 100, 192)  # win
-    await db.record_casino_game(G, A, 100, 100)  # push, not a win
-    stats = await db.record_casino_game(G, A, 100, 0)  # loss
+    await db.record_casino_game(A, 100, 192)  # win
+    await db.record_casino_game(A, 100, 100)  # push, not a win
+    stats = await db.record_casino_game(A, 100, 0)  # loss
     assert stats["wins"] == 1
     assert stats["games"] == 3
 
@@ -140,7 +140,7 @@ async def test_ensure_casino_tables_is_idempotent_for_wins_column():
     # raise on the already-added `wins` column.
     await db._ensure_casino_tables()
     await db._ensure_casino_tables()
-    assert await db.get_casino_stats(G, A) == {
+    assert await db.get_casino_stats(A) == {
         "games": 0,
         "wagered": 0,
         "won": 0,
@@ -152,8 +152,8 @@ async def test_ensure_casino_tables_is_idempotent_for_wins_column():
 
 
 async def test_record_push_neither_extends_nor_resets_streak():
-    await db.record_casino_game(G, A, 100, 192)  # win -> streak 1
-    stats = await db.record_casino_game(G, A, 100, 100)  # push
+    await db.record_casino_game(A, 100, 192)  # win -> streak 1
+    stats = await db.record_casino_game(A, 100, 100)  # push
     assert stats["streak"] == 1  # unchanged
     assert stats["biggest_win"] == 192  # push isn't a bigger "win"
     assert stats["games"] == 2
@@ -162,26 +162,26 @@ async def test_record_push_neither_extends_nor_resets_streak():
 
 
 async def test_win_streak_then_loss_resets():
-    await db.record_casino_game(G, A, 100, 192)
-    await db.record_casino_game(G, A, 100, 192)
-    stats = await db.record_casino_game(G, A, 100, 192)
+    await db.record_casino_game(A, 100, 192)
+    await db.record_casino_game(A, 100, 192)
+    stats = await db.record_casino_game(A, 100, 192)
     assert stats["streak"] == 3
     assert stats["best_streak"] == 3
-    stats = await db.record_casino_game(G, A, 100, 0)  # loss
+    stats = await db.record_casino_game(A, 100, 0)  # loss
     assert stats["streak"] == 0
     assert stats["best_streak"] == 3  # best is retained
 
 
 async def test_biggest_win_only_grows():
-    await db.record_casino_game(G, A, 100, 500)
-    await db.record_casino_game(G, A, 100, 150)
-    assert (await db.get_casino_stats(G, A))["biggest_win"] == 500
+    await db.record_casino_game(A, 100, 500)
+    await db.record_casino_game(A, 100, 150)
+    assert (await db.get_casino_stats(A))["biggest_win"] == 500
 
 
 # ── Leaderboard (net winnings) ──────────────────────────────────────────────────
 async def test_leaderboard_orders_by_net():
-    await db.record_casino_game(G, A, 100, 50)  # net -50
-    await db.record_casino_game(G, B, 100, 300)  # net +200
+    await db.record_casino_game(A, 100, 50)  # net -50
+    await db.record_casino_game(B, 100, 300)  # net +200
     board = await db.get_casino_leaderboard(G)
     assert [r["user_id"] for r in board] == [B, A]
     assert board[0]["net"] == 200
@@ -189,23 +189,26 @@ async def test_leaderboard_orders_by_net():
 
 
 async def test_rank_none_without_games():
-    assert await db.get_casino_rank(G, A) is None
+    assert await db.get_casino_rank(A) is None
 
 
 async def test_rank_and_count():
-    await db.record_casino_game(G, A, 100, 50)
-    await db.record_casino_game(G, B, 100, 300)
-    assert await db.count_casino_players(G) == 2
-    assert await db.get_casino_rank(G, B) == (1, 200)
-    assert await db.get_casino_rank(G, A) == (2, -50)
+    await db.record_casino_game(A, 100, 50)
+    await db.record_casino_game(B, 100, 300)
+    assert await db.count_casino_players() == 2
+    assert await db.get_casino_rank(B) == (1, 200)
+    assert await db.get_casino_rank(A) == (2, -50)
 
 
-async def test_stats_and_leaderboard_scoped_per_guild():
-    await db.record_casino_game(G, A, 100, 50)
-    await db.record_casino_game(999, A, 100, 300)
-    assert (await db.get_casino_stats(G, A))["wagered"] == 100
-    assert (await db.get_casino_stats(999, A))["wagered"] == 100
-    assert await db.count_casino_players(G) == 1
+async def test_stats_follow_the_player_across_servers():
+    """One stat line per player, wherever they played (they used to have a
+    separate, unrelated casino record in every guild)."""
+    await db.record_casino_game(A, 100, 50)  # played in one server
+    await db.record_casino_game(A, 100, 300)  # …and in another
+    stats = await db.get_casino_stats(A)
+    assert stats["wagered"] == 200
+    assert stats["games"] == 2
+    assert await db.count_casino_players() == 1
 
 
 # ── Blackjack hand persistence ──────────────────────────────────────────────────
@@ -308,61 +311,56 @@ DAY = 19000
 
 
 async def test_get_challenge_progress_defaults_to_zero():
-    assert await db.get_challenge_progress(G, A, DAY, "win_games") == {
+    assert await db.get_challenge_progress(A, DAY, "win_games") == {
         "progress": 0,
         "claimed": False,
     }
 
 
 async def test_bump_challenge_progress_add_mode_accumulates_and_clamps():
-    await db.bump_challenge_progress(G, A, DAY, "play_games", 5, 2, mode="add")
-    row = await db.bump_challenge_progress(G, A, DAY, "play_games", 5, 2, mode="add")
+    await db.bump_challenge_progress(A, DAY, "play_games", 5, 2, mode="add")
+    row = await db.bump_challenge_progress(A, DAY, "play_games", 5, 2, mode="add")
     assert row == {"progress": 4, "claimed": False}
     # A third bump would overshoot — progress clamps at target.
-    row = await db.bump_challenge_progress(G, A, DAY, "play_games", 5, 2, mode="add")
+    row = await db.bump_challenge_progress(A, DAY, "play_games", 5, 2, mode="add")
     assert row["progress"] == 5
 
 
 async def test_bump_challenge_progress_max_mode_keeps_running_maximum():
-    await db.bump_challenge_progress(G, A, DAY, "big_payout", 1000, 300, mode="max")
-    row = await db.bump_challenge_progress(
-        G, A, DAY, "big_payout", 1000, 150, mode="max"
-    )
+    await db.bump_challenge_progress(A, DAY, "big_payout", 1000, 300, mode="max")
+    row = await db.bump_challenge_progress(A, DAY, "big_payout", 1000, 150, mode="max")
     assert row["progress"] == 300  # smaller amount doesn't lower the max
-    row = await db.bump_challenge_progress(
-        G, A, DAY, "big_payout", 1000, 700, mode="max"
-    )
+    row = await db.bump_challenge_progress(A, DAY, "big_payout", 1000, 700, mode="max")
     assert row["progress"] == 700
 
 
 async def test_bump_challenge_progress_add_zero_or_negative_is_noop():
-    row = await db.bump_challenge_progress(G, A, DAY, "play_games", 5, 0, mode="add")
+    row = await db.bump_challenge_progress(A, DAY, "play_games", 5, 0, mode="add")
     assert row == {"progress": 0, "claimed": False}
 
 
 async def test_try_claim_challenge_requires_target_reached():
-    await db.bump_challenge_progress(G, A, DAY, "win_games", 3, 2, mode="add")
-    assert await db.try_claim_challenge(G, A, DAY, "win_games") is False
-    await db.bump_challenge_progress(G, A, DAY, "win_games", 3, 1, mode="add")
-    assert await db.try_claim_challenge(G, A, DAY, "win_games") is True
+    await db.bump_challenge_progress(A, DAY, "win_games", 3, 2, mode="add")
+    assert await db.try_claim_challenge(A, DAY, "win_games") is False
+    await db.bump_challenge_progress(A, DAY, "win_games", 3, 1, mode="add")
+    assert await db.try_claim_challenge(A, DAY, "win_games") is True
 
 
 async def test_try_claim_challenge_is_a_one_shot_race_guard():
-    await db.bump_challenge_progress(G, A, DAY, "win_games", 3, 3, mode="add")
-    first = await db.try_claim_challenge(G, A, DAY, "win_games")
-    second = await db.try_claim_challenge(G, A, DAY, "win_games")
+    await db.bump_challenge_progress(A, DAY, "win_games", 3, 3, mode="add")
+    first = await db.try_claim_challenge(A, DAY, "win_games")
+    second = await db.try_claim_challenge(A, DAY, "win_games")
     assert first is True
     assert second is False  # already claimed — no double payout
 
 
-async def test_challenges_scoped_per_guild_user_and_day():
-    await db.bump_challenge_progress(G, A, DAY, "win_games", 3, 1, mode="add")
-    await db.bump_challenge_progress(G, A, DAY + 1, "win_games", 3, 2, mode="add")
-    await db.bump_challenge_progress(G, B, DAY, "win_games", 3, 2, mode="add")
-    await db.bump_challenge_progress(999, A, DAY, "win_games", 3, 2, mode="add")
-    assert (await db.get_challenge_progress(G, A, DAY, "win_games"))["progress"] == 1
-    assert (await db.get_challenge_progress(G, A, DAY + 1, "win_games"))[
-        "progress"
-    ] == 2
-    assert (await db.get_challenge_progress(G, B, DAY, "win_games"))["progress"] == 2
-    assert (await db.get_challenge_progress(999, A, DAY, "win_games"))["progress"] == 2
+async def test_challenges_are_scoped_per_user_and_day_only():
+    """One challenge set per player per day — progress made in any server
+    counts toward the same row, so it can't be farmed once per guild."""
+    await db.bump_challenge_progress(A, DAY, "win_games", 3, 1, mode="add")
+    await db.bump_challenge_progress(A, DAY, "win_games", 3, 1, mode="add")
+    await db.bump_challenge_progress(A, DAY + 1, "win_games", 3, 2, mode="add")
+    await db.bump_challenge_progress(B, DAY, "win_games", 3, 2, mode="add")
+    assert (await db.get_challenge_progress(A, DAY, "win_games"))["progress"] == 2
+    assert (await db.get_challenge_progress(A, DAY + 1, "win_games"))["progress"] == 2
+    assert (await db.get_challenge_progress(B, DAY, "win_games"))["progress"] == 2

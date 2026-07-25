@@ -35,7 +35,7 @@ def _force_single_weekly_pick(monkeypatch):
     monkeypatch.setattr(
         progression_cog,
         "pick_weekly_objectives",
-        lambda guild_id, user_id, period, pool, count: [_FAKE_OBJ],
+        lambda user_id, period, pool, count: [_FAKE_OBJ],
     )
 
 
@@ -53,15 +53,15 @@ async def test_bare_progress_shows_profile(bot):
 async def test_bare_progress_lazily_awards_achievements(bot):
     guild = config().guilds[0]
     author = config().members[0]
-    await db.add_coins(guild.id, author.id, 1_000)  # crosses the balance_1k threshold
+    await db.add_coins(author.id, 1_000)  # crosses the balance_1k threshold
 
     await dpytest.message("!progress", member=author)
     dpytest.get_message()
 
-    earned = await db.get_earned_achievements(guild.id, author.id)
+    earned = await db.get_earned_achievements(author.id)
     assert "balance_1k" in earned
     # Reward (50 coins) landed on top of the 1,000 seeded.
-    assert await db.get_balance(guild.id, author.id) == 1_050
+    assert await db.get_balance(author.id) == 1_050
 
 
 # ── /progress achievements ────────────────────────────────────────────────────────
@@ -69,18 +69,18 @@ async def test_bare_progress_lazily_awards_achievements(bot):
 async def test_achievements_awards_reward_exactly_once(bot):
     guild = config().guilds[0]
     author = config().members[0]
-    await db.add_coins(guild.id, author.id, 1_000)
+    await db.add_coins(author.id, 1_000)
 
     await dpytest.message("!progress achievements", member=author)
     sent = dpytest.get_message()
     assert sent.embeds
-    assert await db.get_balance(guild.id, author.id) == 1_050
+    assert await db.get_balance(author.id) == 1_050
 
     # Re-evaluating (a second view) must NOT grant the reward again.
     await dpytest.message("!progress achievements", member=author)
     dpytest.get_message()
-    assert await db.get_balance(guild.id, author.id) == 1_050
-    earned = await db.get_earned_achievements(guild.id, author.id)
+    assert await db.get_balance(author.id) == 1_050
+    earned = await db.get_earned_achievements(author.id)
     assert list(earned).count("balance_1k") == 1
 
 
@@ -102,14 +102,14 @@ async def test_achievements_for_another_member_does_not_evaluate_them(bot):
     guild = config().guilds[0]
     viewer = config().members[0]
     other = config().members[1]
-    await db.add_coins(guild.id, other.id, 1_000)
+    await db.add_coins(other.id, 1_000)
 
     await dpytest.message(f"!progress achievements {other.mention}", member=viewer)
     dpytest.get_message()
 
     # Looking at someone else's profile must not silently award/pay them.
-    assert await db.get_earned_achievements(guild.id, other.id) == {}
-    assert await db.get_balance(guild.id, other.id) == 1_000
+    assert await db.get_earned_achievements(other.id) == {}
+    assert await db.get_balance(other.id) == 1_000
 
 
 # ── /progress badges ─────────────────────────────────────────────────────────────
@@ -125,7 +125,7 @@ async def test_badges_empty_state(bot):
 async def test_badges_shows_earned_emoji(bot):
     guild = config().guilds[0]
     author = config().members[0]
-    await db.try_award_achievement(guild.id, author.id, "balance_1k")
+    await db.try_award_achievement(author.id, "balance_1k")
 
     await dpytest.message("!progress badges", member=author)
     sent = dpytest.get_message()
@@ -155,21 +155,21 @@ async def test_weekly_autoclaims_completed_objective_exactly_once(bot, monkeypat
     # First view creates the row with baseline = current contribution (0).
     await dpytest.message("!progress weekly", member=author)
     dpytest.get_message()
-    before = await db.get_balance(guild.id, author.id)
+    before = await db.get_balance(author.id)
 
     # Cross the target (100).
-    await db.add_contribution(guild.id, author.id, 100)
+    await db.add_contribution(author.id, 100)
 
     await dpytest.message("!progress weekly", member=author)
     sent = dpytest.get_message()
     assert "coins" in sent.embeds[0].fields[0].value.lower()
-    after_claim = await db.get_balance(guild.id, author.id)
+    after_claim = await db.get_balance(author.id)
     assert after_claim == before + 150  # coins reward, no prestige bonus at rank 0
 
     # A third view must not pay out again.
     await dpytest.message("!progress weekly", member=author)
     dpytest.get_message()
-    assert await db.get_balance(guild.id, author.id) == after_claim
+    assert await db.get_balance(author.id) == after_claim
 
 
 # ── /progress title ────────────────────────────────────────────────────────────────
@@ -185,20 +185,18 @@ async def test_title_rejects_when_nothing_earned(bot):
 async def test_title_selection_roundtrip(bot):
     guild = config().guilds[0]
     author = config().members[0]
-    await db.try_award_achievement(
-        guild.id, author.id, "balance_100k"
-    )  # title "Tycoon"
+    await db.try_award_achievement(author.id, "balance_100k")  # title "Tycoon"
 
     await dpytest.message("!progress title Tycoon", member=author)
     sent = dpytest.get_message()
     assert "Tycoon" in sent.embeds[0].description
 
-    progression = await db.get_progression(guild.id, author.id)
+    progression = await db.get_progression(author.id)
     assert progression["selected_title"] == "Tycoon"
 
     await dpytest.message("!progress title none", member=author)
     dpytest.get_message()
-    progression = await db.get_progression(guild.id, author.id)
+    progression = await db.get_progression(author.id)
     assert progression["selected_title"] == ""
 
 
@@ -216,13 +214,13 @@ async def test_prestige_status_shows_requirements(bot):
 async def test_prestige_confirm_blocked_on_insufficient_points(bot):
     guild = config().guilds[0]
     author = config().members[0]
-    await db.add_coins(guild.id, author.id, 25_000)
+    await db.add_coins(author.id, 25_000)
 
     await dpytest.message("!progress prestige confirm", member=author)
     sent = dpytest.get_message()
     assert "Error" in sent.embeds[0].title
-    assert (await db.get_progression(guild.id, author.id))["prestige"] == 0
-    assert await db.get_balance(guild.id, author.id) == 25_000
+    assert (await db.get_progression(author.id))["prestige"] == 0
+    assert await db.get_balance(author.id) == 25_000
 
 
 @pytest.mark.cogs("cogs.progression")
@@ -231,12 +229,12 @@ async def test_prestige_confirm_blocked_on_insufficient_coins(bot):
     author = config().members[0]
     # 80 + 15 + 10 = 105 >= 100 required points, but no coins seeded.
     for key in ("balance_100k", "contrib_500", "casino_games_10"):
-        await db.try_award_achievement(guild.id, author.id, key)
+        await db.try_award_achievement(author.id, key)
 
     await dpytest.message("!progress prestige confirm", member=author)
     sent = dpytest.get_message()
     assert "Error" in sent.embeds[0].title
-    assert (await db.get_progression(guild.id, author.id))["prestige"] == 0
+    assert (await db.get_progression(author.id))["prestige"] == 0
 
 
 @pytest.mark.cogs("cogs.progression")
@@ -244,17 +242,17 @@ async def test_prestige_confirm_success_advances_rank_and_charges_coins(bot):
     guild = config().guilds[0]
     author = config().members[0]
     for key in ("balance_100k", "contrib_500", "casino_games_10"):
-        await db.try_award_achievement(guild.id, author.id, key)
-    await db.add_coins(guild.id, author.id, 25_000)
+        await db.try_award_achievement(author.id, key)
+    await db.add_coins(author.id, 25_000)
 
     await dpytest.message("!progress prestige confirm", member=author)
     sent = dpytest.get_message()
     assert "Prestige" in sent.embeds[0].title
-    assert (await db.get_progression(guild.id, author.id))["prestige"] == 1
-    assert await db.get_balance(guild.id, author.id) == 0
+    assert (await db.get_progression(author.id))["prestige"] == 1
+    assert await db.get_balance(author.id) == 0
 
     # Confirming again immediately fails — rank 1 needs 200 points / 50,000 coins.
     await dpytest.message("!progress prestige confirm", member=author)
     sent = dpytest.get_message()
     assert "Error" in sent.embeds[0].title
-    assert (await db.get_progression(guild.id, author.id))["prestige"] == 1
+    assert (await db.get_progression(author.id))["prestige"] == 1

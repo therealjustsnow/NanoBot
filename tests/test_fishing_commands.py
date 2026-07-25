@@ -23,7 +23,7 @@ async def test_cast_catches_and_blocks_second_cast(bot, monkeypatch):
     await dpytest.message("!fish", member=author)
     sent = dpytest.get_message()
     assert sent.embeds
-    bag = await db.get_bag(guild.id, author.id)
+    bag = await db.get_bag(author.id)
     assert len(bag) == 1
     assert FISH[bag[0]["fish_key"]]["rarity"] == "common"
 
@@ -31,7 +31,7 @@ async def test_cast_catches_and_blocks_second_cast(bot, monkeypatch):
     await dpytest.message("!fish cast", member=author)
     sent = dpytest.get_message()
     assert "Not Yet" in sent.embeds[0].title
-    assert sum(r["qty"] for r in await db.get_bag(guild.id, author.id)) == 1
+    assert sum(r["qty"] for r in await db.get_bag(author.id)) == 1
 
 
 @pytest.mark.cogs("cogs.fishing")
@@ -43,22 +43,22 @@ async def test_cast_refused_when_disabled(bot):
     await dpytest.message("!fish", member=author)
     sent = dpytest.get_message()
     assert "disabled" in sent.embeds[0].description
-    assert await db.get_bag(guild.id, author.id) == []
+    assert await db.get_bag(author.id) == []
 
 
 @pytest.mark.cogs("cogs.fishing")
 async def test_sell_credits_coins_and_empties_bag(bot):
     guild = config().guilds[0]
     author = config().members[0]
-    await db.record_catch(guild.id, author.id, "salmon", 5.0, 40)
-    await db.record_catch(guild.id, author.id, "boot", 0.5, 1)
+    await db.record_catch(author.id, "salmon", 5.0, 40)
+    await db.record_catch(author.id, "boot", 0.5, 1)
 
     await dpytest.message("!fish sell", member=author)
     sent = dpytest.get_message()
     assert "Sold" in sent.embeds[0].title
-    assert await db.get_balance(guild.id, author.id) == 41
-    assert await db.get_bag(guild.id, author.id) == []
-    assert (await db.get_fisher(guild.id, author.id))["earned"] == 41
+    assert await db.get_balance(author.id) == 41
+    assert await db.get_bag(author.id) == []
+    assert (await db.get_fisher(author.id))["earned"] == 41
 
 
 @pytest.mark.cogs("cogs.fishing")
@@ -73,26 +73,26 @@ async def test_sell_unknown_fish(bot):
 async def test_upgrade_charges_coins_and_advances_rod(bot):
     guild = config().guilds[0]
     author = config().members[0]
-    await db.add_coins(guild.id, author.id, 600)
+    await db.add_coins(author.id, 600)
 
     await dpytest.message("!fish upgrade", member=author)
     sent = dpytest.get_message()
     assert "Upgraded" in sent.embeds[0].title
-    assert (await db.get_fisher(guild.id, author.id))["rod_level"] == 1
-    assert await db.get_balance(guild.id, author.id) == 100  # 600 - 500
+    assert (await db.get_fisher(author.id))["rod_level"] == 1
+    assert await db.get_balance(author.id) == 100  # 600 - 500
 
 
 @pytest.mark.cogs("cogs.fishing")
 async def test_upgrade_insufficient_funds(bot):
     guild = config().guilds[0]
     author = config().members[0]
-    await db.add_coins(guild.id, author.id, 10)
+    await db.add_coins(author.id, 10)
 
     await dpytest.message("!fish upgrade", member=author)
     sent = dpytest.get_message()
     assert "Error" in sent.embeds[0].title
-    assert (await db.get_fisher(guild.id, author.id))["rod_level"] == 0
-    assert await db.get_balance(guild.id, author.id) == 10
+    assert (await db.get_fisher(author.id))["rod_level"] == 0
+    assert await db.get_balance(author.id) == 10
 
 
 @pytest.mark.cogs("cogs.fishing")
@@ -124,39 +124,39 @@ async def test_toggle_flips_config_with_perms(bot):
 async def test_buy_bait_charges_coins_and_grants_item(bot):
     guild = config().guilds[0]
     author = config().members[0]
-    await db.add_coins(guild.id, author.id, 100)
+    await db.add_coins(author.id, 100)
 
     await dpytest.message("!fish buy Worm", member=author)
     sent = dpytest.get_message()
     assert "Bought" in sent.embeds[0].title
-    assert await db.get_balance(guild.id, author.id) == 75  # 100 - 25
-    assert await db.get_item_qty(guild.id, author.id, "bait_worm") == 1
+    assert await db.get_balance(author.id) == 75  # 100 - 25
+    assert await db.get_item_qty(author.id, "bait_worm") == 1
 
 
 @pytest.mark.cogs("cogs.fishing")
 async def test_buy_bait_quantity_multiplies_cost(bot):
     guild = config().guilds[0]
     author = config().members[0]
-    await db.add_coins(guild.id, author.id, 100)
+    await db.add_coins(author.id, 100)
 
     await dpytest.message("!fish buy Worm 3", member=author)
     sent = dpytest.get_message()
     assert "Bought" in sent.embeds[0].title
-    assert await db.get_balance(guild.id, author.id) == 25  # 100 - 3*25
-    assert await db.get_item_qty(guild.id, author.id, "bait_worm") == 3
+    assert await db.get_balance(author.id) == 25  # 100 - 3*25
+    assert await db.get_item_qty(author.id, "bait_worm") == 3
 
 
 @pytest.mark.cogs("cogs.fishing")
 async def test_buy_insufficient_funds(bot):
     guild = config().guilds[0]
     author = config().members[0]
-    await db.add_coins(guild.id, author.id, 10)
+    await db.add_coins(author.id, 10)
 
     await dpytest.message("!fish buy Worm", member=author)
     sent = dpytest.get_message()
     assert "Error" in sent.embeds[0].title
-    assert await db.get_balance(guild.id, author.id) == 10
-    assert await db.get_item_qty(guild.id, author.id, "bait_worm") == 0
+    assert await db.get_balance(author.id) == 10
+    assert await db.get_item_qty(author.id, "bait_worm") == 0
 
 
 @pytest.mark.cogs("cogs.fishing")
@@ -181,8 +181,8 @@ async def test_buy_unknown_item(bot):
 async def test_bait_shows_owned_and_armed(bot):
     guild = config().guilds[0]
     author = config().members[0]
-    await db.add_item(guild.id, author.id, "bait_worm", 2)
-    await db.grant_effect(guild.id, author.id, "fish_bait", 0.05, uses=5)
+    await db.add_item(author.id, "bait_worm", 2)
+    await db.grant_effect(author.id, "fish_bait", 0.05, uses=5)
 
     await dpytest.message("!fish bait", member=author)
     sent = dpytest.get_message()
@@ -207,12 +207,12 @@ async def test_cast_consumes_a_bait_charge(bot, monkeypatch):
     guild = config().guilds[0]
     author = config().members[0]
     monkeypatch.setattr(fishing.random, "random", lambda: 0.5)
-    await db.grant_effect(guild.id, author.id, "fish_bait", 0.05, uses=2)
+    await db.grant_effect(author.id, "fish_bait", 0.05, uses=2)
 
     await dpytest.message("!fish", member=author)
     dpytest.get_message()
 
-    effects = await db.get_active_effects(guild.id, author.id)
+    effects = await db.get_active_effects(author.id)
     assert effects["fish_bait"]["uses_left"] == 1
 
 
@@ -282,7 +282,7 @@ async def test_event_force_start_unknown_key(bot):
 async def test_global_leaderboard_shows_earner(bot):
     guild = config().guilds[0]
     author = config().members[0]
-    await db.record_catch(guild.id, author.id, "salmon", 5.0, 40)
+    await db.record_catch(author.id, "salmon", 5.0, 40)
     await dpytest.message("!fish sell", member=author)
     dpytest.get_message()
 
@@ -304,7 +304,7 @@ async def test_global_leaderboard_unknown_stat(bot):
 async def test_stats_shows_level_field(bot):
     guild = config().guilds[0]
     author = config().members[0]
-    await db.add_fishing_xp(guild.id, author.id, 30)
+    await db.add_fishing_xp(author.id, 30)
 
     await dpytest.message("!fish stats", member=author)
     sent = dpytest.get_message()

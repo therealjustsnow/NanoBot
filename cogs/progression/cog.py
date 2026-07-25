@@ -3,6 +3,10 @@ cogs/progression/cog.py
 Achievements, badges, weekly objectives, and prestige — the long-term
 progression layer sitting on top of the existing economy features.
 
+All progression here is GLOBAL — achievements, titles, weekly objectives, and
+prestige are keyed by user, so a badge earned in one server shows in every
+server and can never be re-earned (or re-paid) by joining another.
+
 Zero cross-cog hooks: achievements and weekly objectives are evaluated
 LAZILY, purely by reading the lifetime stats other features (fishing, the
 casino, activities, the core economy) already persist — through the flat
@@ -21,9 +25,9 @@ member's stats (which happens on every profile/achievements view) can never
 double-pay. Rewarded titles become selectable via `/progress title`; the
 highest-points earned title is shown by default.
 
-Weekly objectives are three deterministically-drawn picks per (guild, member,
-ISO week) — the same `random.Random(f"{guild}:{user}:{period}")` seeding
-fishing's daily quest uses, just keyed by week instead of day. A weekly
+Weekly objectives are three deterministically-drawn picks per (member, ISO
+week) — the same `random.Random(f"{user}:{period}")` seeding fishing's daily
+quest uses, just keyed by week instead of day. A weekly
 objective's "progress" is a lifetime stat minus a baseline snapshotted into
 the row the moment it's first created, so a monotonic lifetime counter (fish
 caught, work shifts, …) becomes a week-scoped counter with no listener on the
@@ -70,6 +74,7 @@ import discord
 from discord.ext import commands
 
 from utils import db
+from utils import globalxp
 from utils import helpers as h
 from utils import items as item_catalog
 
@@ -98,7 +103,8 @@ log = logging.getLogger("NanoBot.progression")
 
 
 class Progression(commands.Cog):
-    """Achievements, badges, weekly objectives, and prestige — per server."""
+    """Achievements, badges, weekly objectives, and prestige — per user,
+    earned once and carried into every server."""
 
     def __init__(self, bot: commands.Bot):
         self.bot = bot
@@ -106,23 +112,21 @@ class Progression(commands.Cog):
         # member (the /daily lock pattern) so a double-click can't double-charge.
         self._locks = h.KeyedLocks()
 
-    def _lock(self, guild_id: int, user_id: int):
+    def _lock(self, user_id: int):
         # Returns an async context manager; existing `async with self._lock(...)`
         # call sites are unchanged. KeyedLocks refcounts holder + waiters and
         # drops an entry when the last interested task releases, so the map no
         # longer grows for the lifetime of the process.
-        return self._locks.hold((guild_id, user_id))
+        return self._locks.hold(user_id)
 
     # ── Reward granting ──────────────────────────────────────────────────────
-    async def _grant_reward(
-        self, guild_id: int, user_id: int, reward: dict
-    ) -> list[str]:
+    async def _grant_reward(self, user_id: int, reward: dict) -> list[str]:
         """Apply a reward dict (only ever called after a reward-earning insert
         actually landed) and return human-readable notes for the embed."""
         notes: list[str] = []
         coins = reward.get("coins")
         if coins:
-            await db.add_coins(guild_id, user_id, coins)
+            await db.add_coins(user_id, coins)
             notes.append(f"{coins:,} coins")
         item_key = reward.get("item")
         if item_key:
@@ -134,7 +138,7 @@ class Progression(commands.Cog):
                     item_key,
                 )
             else:
-                await db.add_item(guild_id, user_id, item_key, qty)
+                await db.add_item(user_id, item_key, qty)
                 notes.append(f"{qty}x {item_def.emoji} {item_def.name}")
         title = reward.get("title")
         if title:
@@ -142,7 +146,14 @@ class Progression(commands.Cog):
         return notes
 
     # ── Achievement evaluation ───────────────────────────────────────────────
-    async def _evaluate_achievements(self, guild_id: int, user_id: int):
+    async def evaluate_achievements(self, user_id: int):
+        """Public entry point for other features (the /profile card) to refresh
+        someone's achievements before displaying them. Optional coupling: the
+        caller looks the cog up with bot.get_cog and skips this if progression
+        isn't loaded — no import, no hard dependency."""
+        return await self._evaluate_achievements(user_id)
+
+    async def _evaluate_achievements(self, user_id: int):
         """Award any achievement whose threshold is newly crossed. Returns the
         list of (AchievementDef, reward_notes) newly earned THIS call.
 
@@ -151,42 +162,37 @@ class Progression(commands.Cog):
         so evaluating ~40 defs costs a handful of DB round-trips, not one per
         achievement.
         """
-        earned = await db.get_earned_achievements(guild_id, user_id)
+        earned = await db.get_earned_achievements(user_id)
         pending = [a for a in ACHIEVEMENTS if a.key not in earned]
         if not pending:
             return []
-        stats = await stats_mod.compute_stats(
-            guild_id, user_id, [a.stat for a in pending]
-        )
+        stats = await stats_mod.compute_stats(user_id, [a.stat for a in pending])
         newly = []
         for a in pending:
             if stats.get(a.stat, 0) >= a.threshold:
-                if await db.try_award_achievement(guild_id, user_id, a.key):
-                    notes = await self._grant_reward(guild_id, user_id, a.reward)
+                if await db.try_award_achievement(user_id, a.key):
+                    await globalxp.award(user_id, "achievement")
+                    notes = await self._grant_reward(user_id, a.reward)
                     newly.append((a, notes))
         return newly
 
     # ── Weekly objective evaluation ──────────────────────────────────────────
-    async def _get_weekly(
-        self, guild_id: int, user_id: int, now: Optional[float] = None
-    ):
+    async def _get_weekly(self, user_id: int, now: Optional[float] = None):
         """This week's (period's) objective rows, auto-claiming any newly
         completed one. Returns (period, [{"def", "progress", "complete",
         "claimed", "newly_claimed", "payout"}, …])."""
         period = period_key(now)
         picks = pick_weekly_objectives(
-            guild_id, user_id, period, WEEKLY_POOL, WEEKLY_OBJECTIVE_COUNT
+            user_id, period, WEEKLY_POOL, WEEKLY_OBJECTIVE_COUNT
         )
-        stats = await stats_mod.compute_stats(
-            guild_id, user_id, [d.stat for d in picks]
-        )
+        stats = await stats_mod.compute_stats(user_id, [d.stat for d in picks])
         results = []
         for d in picks:
             current = stats.get(d.stat, 0)
             # Baseline is snapshotted at *this* current value only the first
             # time this period's row is created — later calls just fetch it.
             row = await db.get_or_create_objective(
-                guild_id, user_id, period, d.key, d.target, current
+                user_id, period, d.key, d.target, current
             )
             progress = objective_progress(current, row["baseline"], row["target"])
             complete = objective_complete(current, row["baseline"], row["target"])
@@ -194,13 +200,11 @@ class Progression(commands.Cog):
             newly_claimed = False
             payout = 0
             if complete and not claimed:
-                if await db.try_claim_objective(
-                    guild_id, user_id, period, d.key, current
-                ):
-                    prog = await db.get_progression(guild_id, user_id)
+                if await db.try_claim_objective(user_id, period, d.key, current):
+                    prog = await db.get_progression(user_id)
                     bonus = prestige_bonus_multiplier(prog["prestige"])
                     payout = round(d.coins * bonus)
-                    await db.add_coins(guild_id, user_id, payout)
+                    await db.add_coins(user_id, payout)
                     newly_claimed = True
                     claimed = True
             results.append(
@@ -215,10 +219,10 @@ class Progression(commands.Cog):
             )
         return period, results
 
-    async def _profile_title(self, guild_id: int, user_id: int) -> str:
-        earned = await db.get_earned_achievements(guild_id, user_id)
+    async def _profile_title(self, user_id: int) -> str:
+        earned = await db.get_earned_achievements(user_id)
         titles = earned_titles(earned.keys(), ACHIEVEMENTS_BY_KEY)
-        progression = await db.get_progression(guild_id, user_id)
+        progression = await db.get_progression(user_id)
         selected = progression["selected_title"]
         if selected and any(t == selected for t, _pts in titles):
             return selected
@@ -259,20 +263,20 @@ class Progression(commands.Cog):
             return await ctx.reply(
                 embed=h.err("Bots don't have a progress profile."), ephemeral=True
             )
-        guild_id, user_id = ctx.guild.id, member.id
+        user_id = member.id
 
         newly = []
         if member.id == ctx.author.id:
             # Only lazily-evaluate/award against the viewer's own stats — looking
             # up someone else's profile shouldn't silently award them anything
             # (they still get evaluated for real whenever they check their own).
-            newly = await self._evaluate_achievements(guild_id, user_id)
-        earned = await db.get_earned_achievements(guild_id, user_id)
+            newly = await self._evaluate_achievements(user_id)
+        earned = await db.get_earned_achievements(user_id)
         points = total_points(earned.keys(), ACHIEVEMENTS_BY_KEY)
-        display_title = await self._profile_title(guild_id, user_id)
-        progression = await db.get_progression(guild_id, user_id)
+        display_title = await self._profile_title(user_id)
+        progression = await db.get_progression(user_id)
         rank = progression["prestige"]
-        period, weekly_rows = await self._get_weekly(guild_id, user_id)
+        period, weekly_rows = await self._get_weekly(user_id)
         weekly_done = sum(1 for w in weekly_rows if w["claimed"])
 
         embed = h.embed(f"📈 {member.display_name}'s Progress", color=h.BLUE)
@@ -312,12 +316,12 @@ class Progression(commands.Cog):
             return await ctx.reply(
                 embed=h.err("Bots don't earn achievements."), ephemeral=True
             )
-        guild_id, user_id = ctx.guild.id, member.id
+        user_id = member.id
 
         newly = []
         if member.id == ctx.author.id:
-            newly = await self._evaluate_achievements(guild_id, user_id)
-        earned = await db.get_earned_achievements(guild_id, user_id)
+            newly = await self._evaluate_achievements(user_id)
+        earned = await db.get_earned_achievements(user_id)
         points = total_points(earned.keys(), ACHIEVEMENTS_BY_KEY)
 
         embed = h.embed(f"🏅 {member.display_name}'s Achievements", color=h.BLUE)
@@ -367,8 +371,8 @@ class Progression(commands.Cog):
             return await ctx.reply(
                 embed=h.err("Bots don't earn badges."), ephemeral=True
             )
-        guild_id, user_id = ctx.guild.id, member.id
-        earned = await db.get_earned_achievements(guild_id, user_id)
+        user_id = member.id
+        earned = await db.get_earned_achievements(user_id)
         if not earned:
             return await ctx.reply(
                 embed=h.info(
@@ -386,8 +390,8 @@ class Progression(commands.Cog):
         name="weekly", description="This week's objectives and your progress."
     )
     async def progress_weekly(self, ctx: commands.Context):
-        guild_id, user_id = ctx.guild.id, ctx.author.id
-        period, rows = await self._get_weekly(guild_id, user_id)
+        user_id = ctx.author.id
+        period, rows = await self._get_weekly(user_id)
         embed = h.embed(f"📅 Weekly Objectives — {period}", color=h.BLUE)
         for row in rows:
             d = row["def"]
@@ -413,13 +417,14 @@ class Progression(commands.Cog):
     @progress.command(
         name="title", description="Pick which earned title is shown on your profile."
     )
+    @discord.app_commands.describe(name="Pick one of the titles you've earned")
     async def progress_title(self, ctx: commands.Context, *, name: str):
-        guild_id, user_id = ctx.guild.id, ctx.author.id
-        earned = await db.get_earned_achievements(guild_id, user_id)
+        user_id = ctx.author.id
+        earned = await db.get_earned_achievements(user_id)
         titles = earned_titles(earned.keys(), ACHIEVEMENTS_BY_KEY)
         cleaned = name.strip()
         if cleaned.lower() in ("none", "clear", "default"):
-            await db.set_selected_title(guild_id, user_id, "")
+            await db.set_selected_title(user_id, "")
             return await ctx.reply(
                 embed=h.ok(
                     "Cleared — your highest-points earned title shows by default.",
@@ -437,10 +442,34 @@ class Progression(commands.Cog):
                 embed=h.err(f"You haven't earned that title. Available: {available}"),
                 ephemeral=True,
             )
-        await db.set_selected_title(guild_id, user_id, match)
+        await db.set_selected_title(user_id, match)
         await ctx.reply(
             embed=h.ok(f"Your displayed title is now **{match}**.", "🏷️ Title")
         )
+
+    @progress_title.autocomplete("name")
+    async def _title_ac(self, interaction: discord.Interaction, current: str):
+        """Only titles you've actually earned — plus a clear option — so picking
+        one never needs a trip to /progress achievements."""
+        if not interaction.guild_id:
+            return []
+        q = (current or "").strip().lower()
+        earned = await db.get_earned_achievements(interaction.user.id)
+        titles = earned_titles(earned.keys(), ACHIEVEMENTS_BY_KEY)
+        choices = [
+            discord.app_commands.Choice(
+                name=f"🏷️ {title} ({pts} pts)"[:100], value=title
+            )
+            for title, pts in titles
+            if not q or q in title.lower()
+        ]
+        if not q or q in "none":
+            choices.append(
+                discord.app_commands.Choice(
+                    name="✖️ None — show my highest-points title", value="none"
+                )
+            )
+        return choices[:25]
 
     # ══════════════════════════════════════════════════════════════════════════
     #  /progress prestige  (nested group — still costs no extra top-level slot)
@@ -452,12 +481,12 @@ class Progression(commands.Cog):
         description="Prestige requirements and your current rank.",
     )
     async def progress_prestige(self, ctx: commands.Context):
-        guild_id, user_id = ctx.guild.id, ctx.author.id
-        progression = await db.get_progression(guild_id, user_id)
+        user_id = ctx.author.id
+        progression = await db.get_progression(user_id)
         rank = progression["prestige"]
-        earned = await db.get_earned_achievements(guild_id, user_id)
+        earned = await db.get_earned_achievements(user_id)
         points = total_points(earned.keys(), ACHIEVEMENTS_BY_KEY)
-        balance = await db.get_balance(guild_id, user_id)
+        balance = await db.get_balance(user_id)
 
         embed = h.embed("⭐ Prestige", color=h.BLUE)
         rank_line = f"**{rank}**/{PRESTIGE_MAX}"
@@ -502,9 +531,9 @@ class Progression(commands.Cog):
         description="Spend achievement points and coins to advance your prestige rank.",
     )
     async def progress_prestige_confirm(self, ctx: commands.Context):
-        guild_id, user_id = ctx.guild.id, ctx.author.id
-        async with self._lock(guild_id, user_id):
-            progression = await db.get_progression(guild_id, user_id)
+        user_id = ctx.author.id
+        async with self._lock(user_id):
+            progression = await db.get_progression(user_id)
             rank = progression["prestige"]
             if rank >= PRESTIGE_MAX:
                 return await ctx.reply(
@@ -513,7 +542,7 @@ class Progression(commands.Cog):
                     ),
                     ephemeral=True,
                 )
-            earned = await db.get_earned_achievements(guild_id, user_id)
+            earned = await db.get_earned_achievements(user_id)
             points = total_points(earned.keys(), ACHIEVEMENTS_BY_KEY)
             req_points, cost = prestige_requirement(rank)
             if points < req_points:
@@ -524,20 +553,18 @@ class Progression(commands.Cog):
                     ),
                     ephemeral=True,
                 )
-            if not await db.try_debit_coins(guild_id, user_id, cost):
-                balance = await db.get_balance(guild_id, user_id)
+            if not await db.try_debit_coins(user_id, cost):
+                balance = await db.get_balance(user_id)
                 return await ctx.reply(
                     embed=h.err(
                         f"Prestiging costs **{cost:,}** coins — you have {balance:,}."
                     ),
                     ephemeral=True,
                 )
-            advanced = await db.try_advance_prestige(
-                guild_id, user_id, rank + 1, expected=rank
-            )
+            advanced = await db.try_advance_prestige(user_id, rank + 1, expected=rank)
             if not advanced:
                 # A second racing confirm already advanced it first — refund.
-                await db.add_coins(guild_id, user_id, cost)
+                await db.add_coins(user_id, cost)
                 return await ctx.reply(
                     embed=h.warn("That prestige already went through.", "⭐ Prestige"),
                     ephemeral=True,

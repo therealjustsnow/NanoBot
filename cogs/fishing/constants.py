@@ -1,9 +1,10 @@
 """Fishing cog constants: the fish catalogue, rarity odds/colors, and rod tiers."""
 
-# Bounds for the per-guild /fish cooldown setting. The 60s default lives with
-# the config row in utils/db/fishing.py.
-COOLDOWN_MIN = 5
-COOLDOWN_MAX = 3600
+# Seconds between casts. One fixed, bot-wide value — not a per-guild setting:
+# the cast claim is per user (global), so a per-server number was ambiguous the
+# moment a member fished in two servers, and it let one server set the pace of
+# everyone's economy. See the balance note on FISH below.
+CAST_COOLDOWN = 60
 
 # Base rarity odds at luck 0 (a bare Twig & String). Must sum to 1.0. Rod luck
 # shifts mass from junk/common up the table — see helpers.rarity_odds.
@@ -33,13 +34,14 @@ RARITIES: dict[str, tuple[str, int]] = {
 # helpers.catch_value), treasure pays 0.5x–1.5x in coins immediately and never
 # enters the bag.
 #
-# Balance guardrail (mirrors cogs/activities/constants.py): EV per cast is
-# ~28 coins at luck 0 and ~62 coins at the luck cap of 1.0 (Golden Rod +
-# level cap + Glowgrub bait reaches it). On the default 240s cooldown that's
-# ~420–930 coins/hour of *active, per-command* play — deliberately the top
-# faucet, but within an order of magnitude of /work (~100–145/h). Guilds that
-# lower the cooldown toward COOLDOWN_MIN are opting into faster inflation;
-# a 60s cooldown multiplies those rates by 4.
+# Balance note (mirrors cogs/activities/constants.py): EV per cast is ~28
+# coins at luck 0 and ~62 coins at the luck cap of 1.0 (Golden Rod + level cap
+# + Glowgrub bait reaches it). At the 60s CAST_COOLDOWN that is ~1,700–3,700
+# coins/hour of *active, per-command* play — by far the biggest faucet in the
+# economy (/work is ~100–145/h), and it takes a full hour of uninterrupted
+# casting to reach. Sinks (rod ladder, pickaxes, shop, prestige, casino house
+# edge) are what hold the line; if prices ever feel trivial, raise this number
+# rather than nerfing individual fish.
 FISH: dict[str, dict] = {
     # ── junk ──
     "boot": {

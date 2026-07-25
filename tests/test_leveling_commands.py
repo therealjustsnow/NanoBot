@@ -80,4 +80,4 @@ async def test_level_up_awards_coins(bot):
 
     assert await db.get_xp(guild.id, author.id) == 290  # 90 + 200
     # 290 XP → level 2, so reward = 10 × 2 = 20 coins.
-    assert await db.get_balance(guild.id, author.id) == 20
+    assert await db.get_balance(author.id) == 20

@@ -43,23 +43,22 @@ def test_default_shop_items_are_well_formed():
 
 
 async def test_daily_lock_serializes_per_user_and_not_across_users():
-    # _daily_lock now returns a KeyedLocks hold (an async context manager) —
-    # the invariant is behavioral: same (guild, user) serializes, different
-    # keys don't block each other, and idle entries are pruned.
+    # _daily_lock returns a KeyedLocks hold (an async context manager) keyed by
+    # user id alone — the wallet is global, so a member claiming /daily in two
+    # servers at once must serialize on the same lock. Different users don't
+    # block each other, and idle entries are pruned.
     cog = Economy(bot=None)
-    async with cog._daily_lock(1, 2):
-        # A different user (or guild) must be acquirable while (1, 2) is held.
-        async with cog._daily_lock(1, 3):
+    async with cog._daily_lock(2):
+        async with cog._daily_lock(3):
             pass
-        async with cog._daily_lock(9, 2):
-            pass
-        # The same key must NOT be re-acquirable while held.
+        # The same user must NOT be re-acquirable while held, whichever server
+        # the second attempt came from.
         import asyncio
 
         import pytest
 
         with pytest.raises(asyncio.TimeoutError):
-            await asyncio.wait_for(cog._daily_lock(1, 2).__aenter__(), timeout=0.05)
+            await asyncio.wait_for(cog._daily_lock(2).__aenter__(), timeout=0.05)
     assert len(cog._daily_locks) == 0  # idle entries pruned
 
 

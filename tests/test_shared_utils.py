@@ -7,6 +7,7 @@ replaced.
 
 import asyncio
 
+from utils import helpers as h
 from utils.helpers import KeyedLocks, fmt_coins, weighted_pick
 
 
@@ -114,3 +115,17 @@ async def test_keyed_locks_independent_keys_dont_block():
         # A different key must be acquirable immediately (no global contention).
         async with locks.hold("b"):
             assert len(locks) == 2
+
+
+# ── Leaderboard paging (server-scoped views of the global economy tables) ──────
+def test_page_rows_ranks_and_pages_a_materialised_board():
+    rows = [{"user_id": i, "coins": i * 10} for i in range(1, 26)]
+    page1, page, pages, total = h.page_rows(
+        rows, lambda r: (-r["coins"], r["user_id"]), 1
+    )
+    assert (page, pages, total) == (1, 3, 25)
+    assert [r["user_id"] for r in page1[:2]] == [25, 24]  # richest first
+    page3, page, pages, _ = h.page_rows(rows, lambda r: (-r["coins"], r["user_id"]), 9)
+    assert page == 3 and len(page3) == 5  # an out-of-range page clamps to the last
+    empty, page, pages, total = h.page_rows([], lambda r: 0, 1)
+    assert (empty, page, pages, total) == ([], 1, 1, 0)

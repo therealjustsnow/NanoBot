@@ -2,7 +2,13 @@
 cogs/fishing.py
 Fishing minigame — a direct NanoCoin economy tie-in.
 
-Members cast a line on a per-guild cooldown and pull up fish across seven
+Fishing progress is GLOBAL: rod, XP/level, bag, dex, quests, streak, and
+lifetime earnings belong to the user and follow them into every server. The
+cast cooldown is one fixed bot-wide value (CAST_COOLDOWN, 60s) claimed per
+user, so it can't be dodged by hopping servers; each server only chooses
+whether fishing is enabled at all.
+
+Members cast a line every CAST_COOLDOWN seconds and pull up fish across seven
 rarity tiers (junk → common → uncommon → rare → epic → legendary → treasure).
 Fish land in a bag and sell for NanoCoins; treasure pays coins on the spot.
 Better rods — bought with coins, a deliberate money sink — shift the odds away
@@ -23,21 +29,20 @@ top-level slots.
 Commands
 ──────────────────────────────────────────────────────
   /fish                       → cast your line (same as /fish cast)
-  /fish cast                  → cast your line (cooldown per server)
+  /fish cast                  → cast your line (60s cooldown, bot-wide)
   /fish bag                   → what you've caught, grouped by species
-  /fish sell [fish]           → sell one species — or everything — for coins
+  /fish sell [fish|all]       → sell one species — or everything — for coins
   /fish rod                   → your rod + the next upgrade
   /fish upgrade               → buy the next rod tier with coins
   /fish dex                   → species collection progress
   /fish stats [member]        → casts, catches, earnings, level, best catch
-  /fish top [page]            → top earners leaderboard (this server)
+  /fish top [page] [scope]    → top earners (this server or every server)
   /fish global [stat] [page]  → cross-server leaderboard
   /fish buy <item> [qty]      → buy bait or an XP potion with coins
   /fish bait                  → your owned bait + what's currently armed
   /fish quest                 → today's quest and your progress
   /fish events                → active fishing events and time left
   /fish toggle                → enable/disable fishing     (Manage Server)
-  /fish cooldown <seconds>    → set the cast cooldown      (Manage Server)
   /fish event <key> [minutes] → force-start a fishing event (Manage Server)
   /fish config                → show settings              (Manage Server)
 """
@@ -52,13 +57,14 @@ from discord import app_commands
 from discord.ext import commands
 
 from utils import db
+from utils import globalxp
 from utils import helpers as h
+from utils.helpers import SCOPE_CHOICES
 from utils import items as item_catalog
 
 from . import items as _fishing_items  # noqa: F401 - registers bait/consumable defs
 from .constants import (
-    COOLDOWN_MAX,
-    COOLDOWN_MIN,
+    CAST_COOLDOWN,
     EVENT_DURATION_RANGE,
     EVENT_LABELS,
     EVENT_POOL,
@@ -96,22 +102,24 @@ log = logging.getLogger("NanoBot.fishing")
 
 
 class Fishing(commands.Cog):
-    """Cast, collect, and sell fish for NanoCoins — per server."""
+    """Cast, collect, and sell fish for NanoCoins — one angler profile per
+    user, shared across servers."""
 
     def __init__(self, bot: commands.Bot):
         self.bot = bot
-        # Per-(guild, user) locks serialize sell/upgrade read-check-write (the
-        # economy /daily pattern) so a double-send can't sell the same fish
-        # twice or buy the same rod twice. Cast needs no lock — its cooldown
+        # Per-user (global — the wallet and bag are too) locks serialize
+        # sell/upgrade read-check-write (the economy /daily pattern) so a
+        # double-send, even from two different servers at once, can't sell the
+        # same fish twice or buy the same rod twice. Cast needs no lock — its cooldown
         # claim is a single atomic upsert in the DB layer.
         self._locks = h.KeyedLocks()
 
-    def _lock(self, guild_id: int, user_id: int):
+    def _lock(self, user_id: int):
         # Returns an async context manager; existing `async with self._lock(...)`
         # call sites are unchanged. KeyedLocks refcounts holder + waiters and
         # drops an entry when the last interested task releases, so the map no
         # longer grows for the lifetime of the process.
-        return self._locks.hold((guild_id, user_id))
+        return self._locks.hold(user_id)
 
     def _money(self, econ: dict, amount: int) -> str:
         return h.fmt_coins(amount, econ["currency_name"], econ["currency_emoji"])
@@ -127,10 +135,11 @@ class Fishing(commands.Cog):
             "category": "🪙 Economy",
             "short": "Catch and sell fish for coins",
             "usage": "fish [subcommand]",
-            "desc": "Cast a line, collect fish across seven rarity tiers, and sell "
-            "them for coins. Buy better rods to improve your odds, climb the "
-            "earnings leaderboard, and complete the species dex. Admins can "
-            "toggle fishing and tune the cast cooldown.",
+            "desc": "Cast a line every 60 seconds, collect fish across seven "
+            "rarity tiers, and sell them for coins. Buy better rods to improve "
+            "your odds, climb the earnings leaderboard, and complete the species "
+            "dex. Your rod, level, bag, and dex are the same in every server. "
+            "Admins can turn fishing on or off here.",
             "args": [],
             "perms": "Admin subcommands require Manage Server",
             "example": "{prefix}fish\n{prefix}fish sell\n{prefix}fish rod",
@@ -152,9 +161,7 @@ class Fishing(commands.Cog):
             return await ctx.reply(
                 embed=h.err("Fishing is disabled on this server."), ephemeral=True
             )
-        retry = await db.try_claim_cast(
-            ctx.guild.id, ctx.author.id, time.time(), cfg["cooldown"]
-        )
+        retry = await db.try_claim_cast(ctx.author.id, time.time(), CAST_COOLDOWN)
         if retry:
             return await ctx.reply(
                 embed=h.warn(
@@ -166,20 +173,18 @@ class Fishing(commands.Cog):
             )
 
         econ = await db.get_econ_config(ctx.guild.id)
-        fisher = await db.get_fisher(ctx.guild.id, ctx.author.id)
+        fisher = await db.get_fisher(ctx.author.id)
         today = int(time.time() // 86400)
 
         # First cast of a new UTC day: bump the login streak + a small bonus.
         streak_note = None
         if fisher["last_day"] != today:
             new_streak = next_streak(fisher["last_day"], today, fisher["streak_days"])
-            if await db.try_claim_daily_streak(
-                ctx.guild.id, ctx.author.id, today, new_streak
-            ):
+            if await db.try_claim_daily_streak(ctx.author.id, today, new_streak):
                 bonus = streak_bonus_coins(new_streak)
                 if bonus:
-                    await db.add_coins(ctx.guild.id, ctx.author.id, bonus)
-                    await db.add_fishing_earned(ctx.guild.id, ctx.author.id, bonus)
+                    await db.add_coins(ctx.author.id, bonus)
+                    await db.add_fishing_earned(ctx.author.id, bonus)
                     streak_note = (
                         f"🔥 **{new_streak}**-day streak! +{self._money(econ, bonus)}"
                     )
@@ -189,12 +194,12 @@ class Fishing(commands.Cog):
         # Luck: rod tier + fishing level + any armed bait/luck effect + a
         # guild-wide lucky-waters event, clamped to the safe [0, MAX_LUCK] range
         # rarity_odds expects (it also clamps internally, this is belt-and-braces).
-        effects = await db.get_active_effects(ctx.guild.id, ctx.author.id)
+        effects = await db.get_active_effects(ctx.author.id)
         events = await db.get_active_events(ctx.guild.id)
         generic_luck = effects.get("luck", {}).get("magnitude", 0.0)
         bait_luck = 0.0
         if "fish_bait" in effects:
-            if await db.consume_effect_use(ctx.guild.id, ctx.author.id, "fish_bait"):
+            if await db.consume_effect_use(ctx.author.id, "fish_bait"):
                 bait_luck = effects["fish_bait"]["magnitude"]
         xp_effect_mult = effects.get("fish_xp", {}).get("magnitude") or 1.0
         event_luck = 0.0
@@ -218,15 +223,16 @@ class Fishing(commands.Cog):
             ),
         )
 
+        await globalxp.award(ctx.author.id, "fish_cast")
         rarity = pick_rarity(random.random(), total_luck)
         key = pick_fish(rarity, random.random())
         entry = FISH[key]
         label, color = RARITIES[rarity]
 
         # Today's quest — regenerated deterministically, created on first read.
-        qgen = generate_quest(ctx.guild.id, ctx.author.id, today)
+        qgen = generate_quest(ctx.author.id, today)
         quest = await db.get_or_create_quest(
-            ctx.guild.id, ctx.author.id, today, qgen["quest_key"], qgen["target"]
+            ctx.author.id, today, qgen["quest_key"], qgen["target"]
         )
 
         old_xp = fisher["xp"]
@@ -234,12 +240,12 @@ class Fishing(commands.Cog):
         if rarity == "treasure":
             coins = treasure_coins(key, random.random())
             coins = max(1, int(coins * value_mult))
-            await db.add_coins(ctx.guild.id, ctx.author.id, coins)
-            await db.add_fishing_earned(ctx.guild.id, ctx.author.id, coins)
+            await db.add_coins(ctx.author.id, coins)
+            await db.add_fishing_earned(ctx.author.id, coins)
             xp_gain = max(
                 1, round(XP_PER_RARITY["treasure"] * xp_effect_mult * xp_event_mult)
             )
-            new_xp = await db.add_fishing_xp(ctx.guild.id, ctx.author.id, xp_gain)
+            new_xp = await db.add_fishing_xp(ctx.author.id, xp_gain)
             quest = await self._bump_quest(ctx, quest, today, kind="earn", coins=coins)
             quest_note = await self._award_quest_if_complete(ctx, today, quest)
 
@@ -261,7 +267,6 @@ class Fishing(commands.Cog):
         value = catch_value(key, weight)
         value = max(1, int(value * value_mult))
         await db.record_catch(
-            ctx.guild.id,
             ctx.author.id,
             key,
             weight,
@@ -269,7 +274,7 @@ class Fishing(commands.Cog):
             track_best=rarity != "junk",
         )
         xp_gain = max(1, round(XP_PER_RARITY[rarity] * xp_effect_mult * xp_event_mult))
-        new_xp = await db.add_fishing_xp(ctx.guild.id, ctx.author.id, xp_gain)
+        new_xp = await db.add_fishing_xp(ctx.author.id, xp_gain)
         quest = await self._bump_quest(ctx, quest, today, kind="catch", rarity=rarity)
         quest_note = await self._award_quest_if_complete(ctx, today, quest)
 
@@ -288,7 +293,7 @@ class Fishing(commands.Cog):
         if quest_note:
             desc += f"\n{quest_note}"
         embed = h.embed(f"{entry['emoji']} {entry['name']}!", desc, color)
-        bag = await db.get_bag(ctx.guild.id, ctx.author.id)
+        bag = await db.get_bag(ctx.author.id)
         embed.set_footer(
             text=f"Bag: {sum(row['qty'] for row in bag)} · Sell with /fish sell"
         )
@@ -329,9 +334,7 @@ class Fishing(commands.Cog):
             amount = coins
         if amount <= 0:
             return quest
-        new_progress = await db.bump_quest_progress(
-            ctx.guild.id, ctx.author.id, today, amount
-        )
+        new_progress = await db.bump_quest_progress(ctx.author.id, today, amount)
         return {**quest, "progress": new_progress}
 
     async def _award_quest_if_complete(
@@ -341,14 +344,15 @@ class Fishing(commands.Cog):
         or None if nothing was awarded."""
         if quest["claimed"] or quest["progress"] < quest["target"]:
             return None
-        if not await db.try_claim_quest_reward(ctx.guild.id, ctx.author.id, today):
+        if not await db.try_claim_quest_reward(ctx.author.id, today):
             return None
         coins, xp = quest_reward(quest["quest_key"], quest["target"])
         if coins:
-            await db.add_coins(ctx.guild.id, ctx.author.id, coins)
-            await db.add_fishing_earned(ctx.guild.id, ctx.author.id, coins)
+            await db.add_coins(ctx.author.id, coins)
+            await db.add_fishing_earned(ctx.author.id, coins)
         if xp:
-            await db.add_fishing_xp(ctx.guild.id, ctx.author.id, xp)
+            await db.add_fishing_xp(ctx.author.id, xp)
+        await globalxp.award(ctx.author.id, "quest")
         econ = await db.get_econ_config(ctx.guild.id)
         return f"✅ Daily quest complete! +{self._money(econ, coins)}, +{xp} XP"
 
@@ -378,7 +382,7 @@ class Fishing(commands.Cog):
     @fish.command(name="bag", description="See the fish you're carrying.")
     @commands.cooldown(1, 5, commands.BucketType.user)
     async def fish_bag(self, ctx: commands.Context):
-        bag = await db.get_bag(ctx.guild.id, ctx.author.id)
+        bag = await db.get_bag(ctx.author.id)
         econ = await db.get_econ_config(ctx.guild.id)
         if not bag:
             return await ctx.reply(
@@ -404,19 +408,24 @@ class Fishing(commands.Cog):
         name="sell",
         description="Sell your catch for coins — one species, or everything.",
     )
-    @app_commands.describe(fish="Which fish to sell (leave blank to sell everything)")
+    @app_commands.describe(
+        fish="Pick a species from your bag (leave blank to sell everything)"
+    )
     async def fish_sell(self, ctx: commands.Context, *, fish: Optional[str] = None):
         key = None
-        if fish is not None:
+        if fish is not None and fish.strip().lower() not in ("all", "everything", "*"):
             key = find_fish(fish)
             if key is None:
                 return await ctx.reply(
-                    embed=h.err(f"I don't know a fish called **{fish}**."),
+                    embed=h.err(
+                        f"I don't know a fish called **{fish}**. Check `/fish bag`, "
+                        "or run `/fish sell` with no fish to sell everything."
+                    ),
                     ephemeral=True,
                 )
         econ = await db.get_econ_config(ctx.guild.id)
-        async with self._lock(ctx.guild.id, ctx.author.id):
-            count, total = await db.sell_catches(ctx.guild.id, ctx.author.id, key)
+        async with self._lock(ctx.author.id):
+            count, total = await db.sell_catches(ctx.author.id, key)
             if count == 0:
                 what = f"any **{FISH[key]['name']}**" if key else "anything to sell"
                 return await ctx.reply(
@@ -425,13 +434,14 @@ class Fishing(commands.Cog):
                     ),
                     ephemeral=True,
                 )
-            new_bal = await db.add_coins(ctx.guild.id, ctx.author.id, total)
-            await db.add_fishing_earned(ctx.guild.id, ctx.author.id, total)
+            new_bal = await db.add_coins(ctx.author.id, total)
+            await db.add_fishing_earned(ctx.author.id, total)
+            await globalxp.award(ctx.author.id, "fish_sell")
 
         today = int(time.time() // 86400)
-        qgen = generate_quest(ctx.guild.id, ctx.author.id, today)
+        qgen = generate_quest(ctx.author.id, today)
         quest = await db.get_or_create_quest(
-            ctx.guild.id, ctx.author.id, today, qgen["quest_key"], qgen["target"]
+            ctx.author.id, today, qgen["quest_key"], qgen["target"]
         )
         quest = await self._bump_quest(ctx, quest, today, kind="earn", coins=total)
         quest_note = await self._award_quest_if_complete(ctx, today, quest)
@@ -446,11 +456,43 @@ class Fishing(commands.Cog):
             desc += f"\n{quest_note}"
         await ctx.reply(embed=h.ok(desc, "💰 Sold"))
 
+    @fish_sell.autocomplete("fish")
+    async def _fish_sell_ac(self, interaction: discord.Interaction, current: str):
+        """Pick from what's actually in your bag — no typing species names."""
+        q = (current or "").strip().lower()
+        bag = await db.get_bag(interaction.user.id) if interaction.guild_id else []
+        choices: list[app_commands.Choice[str]] = []
+        total = sum(row["total_value"] for row in bag)
+        if bag and (not q or q in "everything" or q in "all"):
+            choices.append(
+                app_commands.Choice(
+                    name=f"💰 Everything in your bag — {total:,} coins", value="all"
+                )
+            )
+        for row in bag:
+            entry = FISH.get(row["fish_key"])
+            if not entry:
+                continue
+            if (
+                q
+                and q not in row["fish_key"].lower()
+                and q not in entry["name"].lower()
+            ):
+                continue
+            choices.append(
+                app_commands.Choice(
+                    name=f"{entry['emoji']} {entry['name']} ×{row['qty']} — "
+                    f"{row['total_value']:,} coins"[:100],
+                    value=row["fish_key"],
+                )
+            )
+        return choices[:25]
+
     # ── /fish rod ────────────────────────────────────────────────────────────
     @fish.command(name="rod", description="See your rod and the next upgrade.")
     @commands.cooldown(1, 5, commands.BucketType.user)
     async def fish_rod(self, ctx: commands.Context):
-        fisher = await db.get_fisher(ctx.guild.id, ctx.author.id)
+        fisher = await db.get_fisher(ctx.author.id)
         econ = await db.get_econ_config(ctx.guild.id)
         rod = rod_info(fisher["rod_level"])
         nxt = next_rod(fisher["rod_level"])
@@ -473,16 +515,16 @@ class Fishing(commands.Cog):
     @fish.command(name="upgrade", description="Buy the next rod tier with coins.")
     async def fish_upgrade(self, ctx: commands.Context):
         econ = await db.get_econ_config(ctx.guild.id)
-        async with self._lock(ctx.guild.id, ctx.author.id):
-            fisher = await db.get_fisher(ctx.guild.id, ctx.author.id)
+        async with self._lock(ctx.author.id):
+            fisher = await db.get_fisher(ctx.author.id)
             nxt = next_rod(fisher["rod_level"])
             if nxt is None:
                 return await ctx.reply(
                     embed=h.info("You already own the best rod there is!", "🎣 Maxed"),
                     ephemeral=True,
                 )
-            if not await db.try_debit_coins(ctx.guild.id, ctx.author.id, nxt["price"]):
-                balance = await db.get_balance(ctx.guild.id, ctx.author.id)
+            if not await db.try_debit_coins(ctx.author.id, nxt["price"]):
+                balance = await db.get_balance(ctx.author.id)
                 return await ctx.reply(
                     embed=h.err(
                         f"{nxt['emoji']} **{nxt['name']}** costs "
@@ -492,7 +534,6 @@ class Fishing(commands.Cog):
                     ephemeral=True,
                 )
             upgraded = await db.set_rod_level(
-                ctx.guild.id,
                 ctx.author.id,
                 fisher["rod_level"] + 1,
                 expected=fisher["rod_level"],
@@ -500,7 +541,7 @@ class Fishing(commands.Cog):
             if not upgraded:
                 # Someone (a second racing invocation) already advanced the rod
                 # — hand the coins back.
-                await db.add_coins(ctx.guild.id, ctx.author.id, nxt["price"])
+                await db.add_coins(ctx.author.id, nxt["price"])
                 return await ctx.reply(
                     embed=h.warn("That upgrade already went through.", "🎣 Rod"),
                     ephemeral=True,
@@ -518,7 +559,7 @@ class Fishing(commands.Cog):
     @fish.command(name="dex", description="Your species collection progress.")
     @commands.cooldown(1, 5, commands.BucketType.user)
     async def fish_dex(self, ctx: commands.Context):
-        counts = await db.get_species_counts(ctx.guild.id, ctx.author.id)
+        counts = await db.get_species_counts(ctx.author.id)
         # Treasure never enters the bag/species table, so it isn't collectible.
         collectible = [r for r, _ in RARITIES.items() if r != "treasure"]
         total = sum(len(FISH_BY_RARITY[r]) for r in collectible)
@@ -552,10 +593,10 @@ class Fishing(commands.Cog):
         member = member or ctx.author
         if member.bot:
             return await ctx.reply(embed=h.err("Bots don't fish."), ephemeral=True)
-        fisher = await db.get_fisher(ctx.guild.id, member.id)
+        fisher = await db.get_fisher(member.id)
         econ = await db.get_econ_config(ctx.guild.id)
         rod = rod_info(fisher["rod_level"])
-        rank = await db.get_fishing_rank(ctx.guild.id, member.id)
+        rank = await db.get_fishing_rank(member.id)
 
         embed = h.embed(f"🎣 {member.display_name}", color=h.BLUE)
         embed.set_thumbnail(url=member.display_avatar.url)
@@ -566,7 +607,9 @@ class Fishing(commands.Cog):
         )
         embed.add_field(name="Rod", value=f"{rod['emoji']} {rod['name']}", inline=True)
         embed.add_field(
-            name="Rank", value=f"**#{rank[0]}**" if rank else "Unranked", inline=True
+            name="Global rank",
+            value=f"**#{rank[0]}**" if rank else "Unranked",
+            inline=True,
         )
         level, into, needed = level_progress(fisher["xp"])
         embed.add_field(
@@ -587,39 +630,59 @@ class Fishing(commands.Cog):
         await ctx.reply(embed=embed)
 
     # ── /fish top ────────────────────────────────────────────────────────────
-    @fish.command(name="top", description="The server's top-earning anglers.")
-    @app_commands.describe(page="Page number (10 per page)")
+    @fish.command(name="top", description="Top-earning anglers, here or everywhere.")
+    @app_commands.describe(
+        page="Page number (10 per page)",
+        scope="This server's members, or every server (progress is global)",
+    )
+    @app_commands.choices(scope=SCOPE_CHOICES)
     @commands.cooldown(1, 5, commands.BucketType.user)
-    async def fish_top(self, ctx: commands.Context, page: int = 1):
+    async def fish_top(
+        self, ctx: commands.Context, page: int = 1, scope: str = "server"
+    ):
         econ = await db.get_econ_config(ctx.guild.id)
-        page = max(1, page)
         per = 10
-        total = await db.count_fishers(ctx.guild.id)
+        if scope == "global":
+            total = await db.count_fishers()
+            pages = max(1, (total + per - 1) // per)
+            page = max(1, min(page, pages))
+            offset = (page - 1) * per
+            rows = await db.get_fishing_leaderboard(per, offset)
+        else:
+            all_rows = await db.get_fishing_leaderboard_for(h.member_ids(ctx.guild))
+            rows, page, pages, total = h.page_rows(
+                all_rows, lambda r: (-r["earned"], r["user_id"]), page, per
+            )
+            offset = (page - 1) * per
         if total == 0:
             return await ctx.reply(
                 embed=h.info(
                     "No one has earned anything yet. Try `/fish`!", "🎣 Anglers"
                 )
             )
-        pages = (total + per - 1) // per
-        page = min(page, pages)
-        offset = (page - 1) * per
-        rows = await db.get_fishing_leaderboard(ctx.guild.id, per, offset)
 
         medals = {1: "🥇", 2: "🥈", 3: "🥉"}
         lines = []
         for i, row in enumerate(rows):
             pos = offset + i + 1
-            member = ctx.guild.get_member(row["user_id"])
-            name = member.display_name if member else f"User {row['user_id']}"
             badge = medals.get(pos, f"`#{pos}`")
             lines.append(
-                f"{badge} **{name}** — {self._money(econ, row['earned'])} "
-                f"({row['caught']:,} caught)"
+                f"{badge} **{self._name_for(ctx, row['user_id'])}** — "
+                f"{self._money(econ, row['earned'])} ({row['caught']:,} caught)"
             )
-        embed = h.embed("🎣 Top Anglers", "\n".join(lines), h.BLUE)
+        title = "🎣 Top Anglers" + (" (Global)" if scope == "global" else "")
+        embed = h.embed(title, "\n".join(lines), h.BLUE)
         embed.set_footer(text=f"Page {page}/{pages} · {total} anglers")
         await ctx.reply(embed=embed)
+
+    def _name_for(self, ctx: commands.Context, user_id: int) -> str:
+        """Display name for a leaderboard row — a global board lists anglers who
+        may not be in this server."""
+        member = ctx.guild.get_member(user_id) if ctx.guild else None
+        if member:
+            return member.display_name
+        user = self.bot.get_user(user_id)
+        return user.display_name if user else f"User {user_id}"
 
     # ── /fish global ─────────────────────────────────────────────────────────
     @fish.command(name="global", description="Cross-server fishing leaderboard.")
@@ -679,25 +742,27 @@ class Fishing(commands.Cog):
     # ── /fish buy ────────────────────────────────────────────────────────────
     @fish.command(name="buy", description="Buy bait or fishing consumables with coins.")
     @app_commands.describe(
-        item="Which item to buy (Worm, Shrimp, Glowgrub, Treasure Magnet, XP Potion)",
+        item="Pick an item from the bait shop list",
         qty="How many to buy (default 1)",
     )
     async def fish_buy(self, ctx: commands.Context, item: str, qty: int = 1):
         d = item_catalog.find(item)
         if d is None or not d.key.startswith(("bait_", "fish_")) or d.price <= 0:
+            stock = ", ".join(
+                f"{s.name} ({s.price:,})" for s in self._bait_shop_items()
+            )
             return await ctx.reply(
                 embed=h.err(
-                    f"**{item}** isn't sold at the bait shop. Try Worm, Shrimp, "
-                    "Glowgrub, Treasure Magnet, or XP Potion."
+                    f"**{item}** isn't sold at the bait shop. In stock: {stock}."
                 ),
                 ephemeral=True,
             )
         qty = max(1, min(qty, 100))
         total = d.price * qty
         econ = await db.get_econ_config(ctx.guild.id)
-        async with self._lock(ctx.guild.id, ctx.author.id):
-            if not await db.try_debit_coins(ctx.guild.id, ctx.author.id, total):
-                balance = await db.get_balance(ctx.guild.id, ctx.author.id)
+        async with self._lock(ctx.author.id):
+            if not await db.try_debit_coins(ctx.author.id, total):
+                balance = await db.get_balance(ctx.author.id)
                 return await ctx.reply(
                     embed=h.err(
                         f"{d.emoji} **{d.name}** ×{qty} costs "
@@ -706,7 +771,7 @@ class Fishing(commands.Cog):
                     ),
                     ephemeral=True,
                 )
-            new_qty = await db.add_item(ctx.guild.id, ctx.author.id, d.key, qty)
+            new_qty = await db.add_item(ctx.author.id, d.key, qty)
         await ctx.reply(
             embed=h.ok(
                 f"Bought **{qty}** {d.emoji} **{d.name}** for "
@@ -716,19 +781,50 @@ class Fishing(commands.Cog):
             )
         )
 
+    def _bait_shop_items(self) -> list:
+        """Everything /fish buy sells, cheapest first."""
+        return sorted(
+            (
+                d
+                for d in item_catalog.ITEMS.values()
+                if d.key.startswith(("bait_", "fish_")) and d.price > 0
+            ),
+            key=lambda d: d.price,
+        )
+
+    @fish_buy.autocomplete("item")
+    async def _fish_buy_ac(self, interaction: discord.Interaction, current: str):
+        """Bait shop as a tap-to-pick list, priced and marked by affordability."""
+        q = (current or "").strip().lower()
+        balance = (
+            await db.get_balance(interaction.user.id) if interaction.guild_id else 0
+        )
+        choices: list[app_commands.Choice[str]] = []
+        for d in self._bait_shop_items():
+            if q and q not in d.key.lower() and q not in d.name.lower():
+                continue
+            mark = "✅" if balance >= d.price else "🔒"
+            choices.append(
+                app_commands.Choice(
+                    name=f"{mark} {d.emoji} {d.name} — {d.price:,} coins"[:100],
+                    value=d.key,
+                )
+            )
+        return choices[:25]
+
     # ── /fish bait ───────────────────────────────────────────────────────────
     @fish.command(
         name="bait", description="Your owned bait/consumables and what's armed."
     )
     async def fish_bait(self, ctx: commands.Context):
-        inv = await db.get_inventory(ctx.guild.id, ctx.author.id)
+        inv = await db.get_inventory(ctx.author.id)
         owned_lines = [
             f"{d.emoji} **{d.name}** ×{row['qty']}"
             for row in inv
             if (d := item_catalog.get(row["item_key"]))
             and d.key.startswith(("bait_", "fish_"))
         ]
-        effects = await db.get_active_effects(ctx.guild.id, ctx.author.id)
+        effects = await db.get_active_effects(ctx.author.id)
         armed_lines = []
         if "fish_bait" in effects:
             eff = effects["fish_bait"]
@@ -771,9 +867,9 @@ class Fishing(commands.Cog):
     @fish.command(name="quest", description="Today's fishing quest and your progress.")
     async def fish_quest(self, ctx: commands.Context):
         today = int(time.time() // 86400)
-        qgen = generate_quest(ctx.guild.id, ctx.author.id, today)
+        qgen = generate_quest(ctx.author.id, today)
         quest = await db.get_or_create_quest(
-            ctx.guild.id, ctx.author.id, today, qgen["quest_key"], qgen["target"]
+            ctx.author.id, today, qgen["quest_key"], qgen["target"]
         )
         label = quest_label(quest["quest_key"], quest["target"])
         econ = await db.get_econ_config(ctx.guild.id)
@@ -821,25 +917,6 @@ class Fishing(commands.Cog):
         else:
             await ctx.reply(embed=h.ok("Fishing is now **disabled**."))
 
-    @fish.command(name="cooldown", description="Set how many seconds between casts.")
-    @app_commands.describe(
-        seconds=f"Seconds between casts ({COOLDOWN_MIN}–{COOLDOWN_MAX})"
-    )
-    @commands.has_permissions(manage_guild=True)
-    async def fish_cooldown(self, ctx: commands.Context, seconds: int):
-        if not COOLDOWN_MIN <= seconds <= COOLDOWN_MAX:
-            return await ctx.reply(
-                embed=h.err(
-                    f"Cooldown must be between {COOLDOWN_MIN} and "
-                    f"{COOLDOWN_MAX} seconds."
-                ),
-                ephemeral=True,
-            )
-        await db.set_fishing_config(ctx.guild.id, cooldown=seconds)
-        await ctx.reply(
-            embed=h.ok(f"Cast cooldown set to **{h.fmt_duration(seconds)}**.")
-        )
-
     @fish.command(name="event", description="Force-start a fishing event.")
     @app_commands.describe(
         key="Which event to start", minutes="Duration in minutes (default 15)"
@@ -878,7 +955,9 @@ class Fishing(commands.Cog):
             name="Enabled", value="✅ Yes" if cfg["enabled"] else "❌ No", inline=True
         )
         embed.add_field(
-            name="Cast cooldown", value=h.fmt_duration(cfg["cooldown"]), inline=True
+            name="Cast cooldown",
+            value=f"{h.fmt_duration(CAST_COOLDOWN)} (fixed, bot-wide)",
+            inline=True,
         )
         embed.add_field(name="Species", value=str(len(FISH)), inline=True)
         embed.add_field(
