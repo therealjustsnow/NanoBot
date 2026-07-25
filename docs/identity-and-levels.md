@@ -54,6 +54,28 @@ plus one `await globalxp.award(user_id, "action")` at the site that performs it.
 The message cooldown is per *account*, so chatting in five servers at once
 still earns one message's worth.
 
+## Level-up announcements
+
+An award can fire from anywhere — a chat listener, a `/fish` cast, someone
+*else's* `/raid` payout — and most of those places aren't somewhere a message
+can be sent. So `globalxp.award()` doesn't announce anything; it records the
+level in `global_levels.pending_level` (MAX-merged, so levelling twice before
+delivery names the level they're actually on) and the identity cog delivers it
+the next time it sees the member:
+
+1. **The channel they just used** — `on_message` (they talked) or
+   `on_command_completion` (they ran a command), whichever comes first.
+2. **Their DMs**, if that channel send fails (no permission, deleted channel).
+3. **Nowhere yet** — the level goes back into `pending_level` and is retried
+   the next time they turn up, in any server.
+
+The claim is a conditional UPDATE taken *before* sending and handed back if
+both sends fail, so an announcement can't double-post and can't be silently
+lost. The common path costs one primary-key SELECT per command.
+
+The message names any cosmetic that unlocks at exactly that level, which is
+what makes the milestones feel like rewards rather than a number going up.
+
 ## Cosmetics
 
 Definitions live in `utils/cosmetics.py`; the database stores keys only
@@ -142,6 +164,7 @@ art.
 | A new cosmetic *slot* | One `SlotDef` in `SLOTS` (+ draw it in the card if it's visual) |
 | A new unlock condition | One branch in `is_unlocked` + one in `describe_unlock` |
 | A new global-XP source | One `XP_AWARDS` entry + one `await globalxp.award(...)` |
+| A one-off event drop to a whole server | `/profile grantall <cosmetic> [guild_id]` (bot owner) |
 | Real artwork | Drop PNGs into `assets/profile/<slot>/` |
 | Animated cosmetics | Store a GIF asset and branch in `cosmetic_image` — the def/slot layer doesn't change |
 | A profile theme | A `theme` slot whose palette overrides the card's ink colours |

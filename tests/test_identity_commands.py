@@ -137,3 +137,148 @@ async def test_badges_gallery_lists_progress(bot):
     embed = dpytest.get_message().embeds[0]
     assert "1/" in embed.description
     assert "Veteran" in "\n".join(f.value for f in embed.fields)
+
+
+# ── Global level-up announcements ─────────────────────────────────────────────
+@pytest.mark.cogs("cogs.identity")
+async def test_levelup_announces_in_the_channel_they_used(bot):
+    """First choice: wherever they just talked or ran a command."""
+    author = config().members[0]
+    # One XP short of level 1, then a command that awards.
+    await db.add_global_xp(author.id, globalxp.cum_xp_for_level(1) - 1)
+    await db.set_pending_levelup(author.id, 1)
+
+    await dpytest.message("!profile badges", member=author)
+    dpytest.get_message()  # the badges embed
+    announcement = dpytest.get_message()
+    assert "Global level up" in announcement.embeds[0].title
+    assert "level 1" in announcement.embeds[0].description
+    assert await db.get_pending_levelup(author.id) == 0  # claimed
+
+
+@pytest.mark.cogs("cogs.identity")
+async def test_levelup_is_announced_exactly_once(bot):
+    author = config().members[0]
+    await db.set_pending_levelup(author.id, 4)
+
+    await dpytest.message("!profile badges", member=author)
+    dpytest.get_message()
+    assert "Global level up" in dpytest.get_message().embeds[0].title
+
+    # A second command must not re-announce it.
+    await dpytest.message("!profile badges", member=author)
+    dpytest.get_message()
+    assert dpytest.verify().message().nothing()
+
+
+@pytest.mark.cogs("cogs.identity")
+async def test_levelup_falls_back_to_dm_then_stays_pending(bot, monkeypatch):
+    """Channel blocked → DM. DM blocked too → keep it for next time."""
+    import discord
+
+    author = config().members[0]
+    cog = bot.get_cog("Identity")
+
+    class DeadChannel:
+        async def send(self, *a, **kw):
+            raise discord.Forbidden(_Resp(), "no")
+
+    dmed = []
+
+    async def fake_dm(*a, **kw):
+        dmed.append(kw.get("embed"))
+
+    await db.set_pending_levelup(author.id, 7)
+    monkeypatch.setattr(type(author), "send", fake_dm, raising=False)
+    assert await cog.deliver_levelup(author, DeadChannel()) is True
+    assert dmed and "level 7" in dmed[0].description
+    assert await db.get_pending_levelup(author.id) == 0
+
+    # Now neither works: the level must survive for the next attempt.
+    async def dead_dm(*a, **kw):
+        raise discord.Forbidden(_Resp(), "closed dms")
+
+    await db.set_pending_levelup(author.id, 8)
+    monkeypatch.setattr(type(author), "send", dead_dm, raising=False)
+    assert await cog.deliver_levelup(author, DeadChannel()) is False
+    assert await db.get_pending_levelup(author.id) == 8  # handed back
+
+    # …and it goes out the next time they're reachable anywhere.
+    monkeypatch.setattr(type(author), "send", fake_dm, raising=False)
+    assert await cog.deliver_levelup(author, DeadChannel()) is True
+    assert await db.get_pending_levelup(author.id) == 0
+
+
+class _Resp:
+    status = 403
+    reason = "Forbidden"
+
+
+@pytest.mark.cogs("cogs.identity")
+async def test_awarding_xp_records_the_pending_levelup(bot):
+    """The award itself never sends anything — it records, delivery is separate."""
+    author = config().members[0]
+    await db.add_global_xp(author.id, globalxp.cum_xp_for_level(1) - 1)
+    res = await globalxp.award(author.id, "achievement")
+    assert res["levelled_up"] is True
+    assert await db.get_pending_levelup(author.id) == res["level"]
+
+
+@pytest.mark.cogs("cogs.identity")
+async def test_levelup_message_names_cosmetics_unlocked_at_that_level(bot):
+    author = config().members[0]
+    cog = bot.get_cog("Identity")
+    embed = cog._levelup_embed(author, 25)  # Ember banner unlocks at 25
+    assert "Ember" in "".join(f.value for f in embed.fields)
+
+
+# ── Bulk grant ────────────────────────────────────────────────────────────────
+@pytest.mark.cogs("cogs.identity")
+async def test_grantall_is_owner_only(bot):
+    author = config().members[0]
+    with pytest.raises(commands.NotOwner):
+        await dpytest.message("!profile grantall badge_beta_tester", member=author)
+
+
+@pytest.mark.cogs("cogs.identity")
+async def test_grantall_awards_every_human_member_and_is_idempotent(bot, monkeypatch):
+    guild = config().guilds[0]
+    author = config().members[0]
+    monkeypatch.setattr(bot, "is_owner", _always_owner)
+
+    await dpytest.message("!profile grantall badge_beta_tester", member=author)
+    reply = dpytest.get_message().embeds[0]
+    humans = [m for m in guild.members if not m.bot]
+    assert f"**{len(humans)}** newly granted" in reply.description
+    for member in humans:
+        assert "badge_beta_tester" in await db.get_unlocked_cosmetics(member.id)
+    # Bots are skipped.
+    for member in guild.members:
+        if member.bot:
+            assert await db.get_unlocked_cosmetics(member.id) == {}
+
+    # Re-running only picks up anyone new — nobody is granted twice.
+    await dpytest.message("!profile grantall badge_beta_tester", member=author)
+    again = dpytest.get_message().embeds[0]
+    assert "**0** newly granted" in again.description
+
+
+@pytest.mark.cogs("cogs.identity")
+async def test_grantall_targets_another_server_by_id(bot, monkeypatch):
+    guild = config().guilds[0]
+    author = config().members[0]
+    monkeypatch.setattr(bot, "is_owner", _always_owner)
+
+    await dpytest.message(
+        f"!profile grantall badge_beta_tester {guild.id}", member=author
+    )
+    assert "Bulk Grant" in dpytest.get_message().embeds[0].title
+
+    await dpytest.message(
+        "!profile grantall badge_beta_tester 123456789", member=author
+    )
+    assert "not in a server" in dpytest.get_message().embeds[0].description
+
+
+async def _always_owner(user):
+    return True

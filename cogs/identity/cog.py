@@ -36,7 +36,23 @@ Commands
   /profile unequip <cosmetic>   → take one off (or clear a slot)
   /profile badges [member]      → the badge gallery
   /profile grant <member> <cosmetic>  → award a cosmetic   (bot owner)
+  /profile grantall <cosmetic> [guild] → award it to a whole server (bot owner)
   /profile revoke <member> <cosmetic> → take one back      (bot owner)
+
+Global level-up announcements
+─────────────────────────────
+An award can happen anywhere — a message listener, a /fish cast, someone
+else's /raid payout — so `utils/globalxp` only *records* the level-up
+(`global_levels.pending_level`) and this cog delivers it the next time it sees
+the member, trying in order:
+
+  1. the channel they just talked or ran a command in,
+  2. their DMs,
+  3. nowhere — it stays pending and is retried the next time they turn up in
+     any server.
+
+The claim is atomic and handed back on a failed send, so a level is announced
+exactly once and never silently dropped.
 """
 
 import asyncio
@@ -97,8 +113,69 @@ class Identity(commands.Cog):
             return
         try:
             await globalxp.award_message(message.author.id)
+            await self.deliver_levelup(message.author, message.channel)
         except Exception:  # pragma: no cover - never break message handling
             log.exception("global XP award failed for %s", message.author.id)
+
+    @commands.Cog.listener()
+    async def on_command_completion(self, ctx: commands.Context):
+        """Deliver a pending level-up right after any command finishes.
+
+        Covers the case the message listener can't: a member who only ever uses
+        commands (or whose level-up came from someone else's /raid) still hears
+        about it, in the channel they're already looking at.
+        """
+        if ctx.author.bot:
+            return
+        try:
+            await self.deliver_levelup(ctx.author, ctx.channel)
+        except Exception:  # pragma: no cover - never break command handling
+            log.exception("level-up delivery failed for %s", ctx.author.id)
+
+    async def deliver_levelup(self, user: discord.abc.User, channel) -> bool:
+        """Announce a pending global level-up. Returns True if one went out.
+
+        Channel → DM → keep it pending. The claim is taken first so two
+        deliveries can't both fire, and handed straight back if neither send
+        lands, which is what makes "tell them next time" work.
+        """
+        level = await db.claim_pending_levelup(user.id)
+        if not level:
+            return False
+        embed = self._levelup_embed(user, level)
+        for send in (
+            lambda: channel.send(content=user.mention, embed=embed),
+            lambda: user.send(embed=embed),
+        ):
+            try:
+                await send()
+                return True
+            except (discord.HTTPException, discord.Forbidden, AttributeError):
+                continue
+        # Couldn't reach them anywhere — put it back for next time.
+        await db.set_pending_levelup(user.id, level)
+        log.debug("level-up for %s deferred: nowhere to send", user.id)
+        return False
+
+    def _levelup_embed(self, user: discord.abc.User, level: int) -> discord.Embed:
+        embed = h.embed(
+            "🌐 Global level up!",
+            f"**{user.display_name}** reached **global level {level}** — that's "
+            "your whole account, across every server.",
+            ACCENT,
+        )
+        unlocks = [
+            d.name
+            for d in cosmetics.auto_unlockable()
+            if (d.unlock or {}).get("kind") == "global_level"
+            and int((d.unlock or {}).get("value", 0)) == level
+        ]
+        if unlocks:
+            embed.add_field(
+                name="🎁 Unlocked", value=", ".join(f"**{n}**" for n in unlocks)
+            )
+        embed.set_footer(text="See it on /profile")
+        return embed
 
     # ══════════════════════════════════════════════════════════════════════════
     #  /profile  group
@@ -514,6 +591,94 @@ class Identity(commands.Cog):
                 f"{rarity_marker(d.rarity)} **{d.name}** → {member.mention}."
             )
         )
+
+    @profile.command(
+        name="grantall",
+        description="Award a cosmetic to everyone in a server (bot owner).",
+    )
+    @app_commands.describe(
+        cosmetic="Which cosmetic",
+        guild="Server id to award in (defaults to this server)",
+    )
+    @commands.is_owner()
+    async def profile_grantall(
+        self, ctx: commands.Context, cosmetic: str, guild: Optional[str] = None
+    ):
+        """Bulk grant — for one-off drops like handing a beta badge to everyone
+        who was there. Idempotent: re-running only picks up members who joined
+        since, because each grant is an INSERT OR IGNORE.
+
+        `cosmetic` is a plain positional (a `guild` argument follows it), so a
+        multi-word *name* needs quotes in prefix form — `"Beta Tester"` — or
+        just use the key, `badge_beta_tester`. Slash users pick from the list
+        and never hit this.
+        """
+        d = cosmetics.find(cosmetic)
+        if d is None:
+            return await ctx.reply(
+                embed=h.err(
+                    f"There's no cosmetic called **{cosmetic}**. Multi-word "
+                    'names need quotes here ("Beta Tester"), or use the key '
+                    "(`badge_beta_tester`)."
+                ),
+                ephemeral=True,
+            )
+        target = ctx.guild
+        if guild:
+            raw = guild.strip()
+            if not raw.isdigit():
+                return await ctx.reply(
+                    embed=h.err("Give a numeric server id."), ephemeral=True
+                )
+            target = self.bot.get_guild(int(raw))
+            if target is None:
+                return await ctx.reply(
+                    embed=h.err(f"I'm not in a server with id `{raw}`."),
+                    ephemeral=True,
+                )
+        try:
+            await ctx.defer()
+        except Exception:
+            pass
+        # A big guild may not be fully cached; chunk before counting so nobody
+        # is silently skipped.
+        if not target.chunked:
+            try:
+                await target.chunk()
+            except Exception:
+                log.warning(
+                    "Could not chunk %s — granting to cached members only", target.id
+                )
+
+        granted = already = 0
+        for member in target.members:
+            if member.bot:
+                continue
+            if await db.unlock_cosmetic(member.id, d.key, at=time.time()):
+                granted += 1
+            else:
+                already += 1
+        log.info(
+            "grantall %s → guild %s: %d new, %d already had it",
+            d.key,
+            target.id,
+            granted,
+            already,
+        )
+        await ctx.reply(
+            embed=h.ok(
+                f"Awarded {rarity_marker(d.rarity)} **{d.name}** in "
+                f"**{target.name}**.\n"
+                f"**{granted}** newly granted · **{already}** already had it.\n\n"
+                "They can wear it with `/profile equip "
+                f"{d.name}`.",
+                "🎁 Bulk Grant",
+            )
+        )
+
+    @profile_grantall.autocomplete("cosmetic")
+    async def _grantall_ac(self, interaction: discord.Interaction, current: str):
+        return await self._catalogue_ac(interaction, current)
 
     @profile.command(
         name="revoke", description="Remove a cosmetic from a member (bot owner)."

@@ -3,7 +3,8 @@
 Three user-scoped tables (global, like the rest of the economy — see
 docs/global-economy.md):
 
-- ``global_levels``     — lifetime account XP + the chat-XP cooldown stamp.
+- ``global_levels``     — lifetime account XP, the chat-XP cooldown stamp, and
+  a pending level-up announcement (see ``pending_level`` below).
   The curve and every award value live in ``utils/globalxp.py``; this layer
   only stores the number. Separate from ``user_levels`` (the per-guild chat
   leveling cog), which is untouched and stays guild-scoped.
@@ -20,7 +21,7 @@ utils/cosmetics.py; the DB only ever stores keys, exactly like user_items and
 the item catalogue.
 """
 
-from ._core import _conn, register_init
+from ._core import _conn, _ensure_columns, register_init
 
 
 async def _ensure_identity_tables():
@@ -33,6 +34,14 @@ async def _ensure_identity_tables():
     """)
     await _conn().execute(
         "CREATE INDEX IF NOT EXISTS global_levels_xp ON global_levels (xp DESC)"
+    )
+    await _conn().commit()
+    # A level-up the member hasn't been told about yet. Written when the award
+    # crosses a level and cleared once an announcement actually goes out, so a
+    # level earned while their DMs are closed and their channel is unwritable
+    # is delivered the next time they turn up anywhere. 0 = nothing pending.
+    await _ensure_columns(
+        "global_levels", {"pending_level": "INTEGER NOT NULL DEFAULT 0"}
     )
     await _conn().execute("""
         CREATE TABLE IF NOT EXISTS cosmetic_unlocks (
@@ -97,6 +106,50 @@ async def try_claim_global_message(user_id: int, now: float, cooldown: int) -> b
     )
     await _conn().commit()
     return cur.rowcount > 0
+
+
+# ── Pending level-up announcements ────────────────────────────────────────────
+async def set_pending_levelup(user_id: int, level: int) -> None:
+    """Remember that `user_id` reached `level` and hasn't been told yet.
+
+    MAX, not assignment: if someone levels twice before an announcement lands
+    (or an announcement failed and a later level arrived), the message they
+    eventually get names the level they're actually on.
+    """
+    await _conn().execute(
+        "INSERT INTO global_levels (user_id, pending_level) VALUES (?,?) "
+        "ON CONFLICT(user_id) DO UPDATE SET "
+        "pending_level=MAX(pending_level, excluded.pending_level)",
+        (str(user_id), int(level)),
+    )
+    await _conn().commit()
+
+
+async def get_pending_levelup(user_id: int) -> int:
+    async with _conn().execute(
+        "SELECT pending_level FROM global_levels WHERE user_id=?", (str(user_id),)
+    ) as cur:
+        row = await cur.fetchone()
+    return row["pending_level"] if row else 0
+
+
+async def claim_pending_levelup(user_id: int) -> int:
+    """Atomically take the pending announcement, returning the level (0 if none).
+
+    A conditional UPDATE, so a message and a command completing at the same
+    instant can't both announce the same level. The caller must hand it back
+    with set_pending_levelup if it fails to deliver.
+    """
+    level = await get_pending_levelup(user_id)
+    if level <= 0:
+        return 0
+    cur = await _conn().execute(
+        "UPDATE global_levels SET pending_level=0 "
+        "WHERE user_id=? AND pending_level=?",
+        (str(user_id), int(level)),
+    )
+    await _conn().commit()
+    return level if cur.rowcount > 0 else 0
 
 
 async def get_global_xp_leaderboard(limit: int = 10, offset: int = 0) -> list[dict]:

@@ -16,9 +16,12 @@ Rules that follow from that:
   * Global XP is awarded per *normalized action* (a message, a cast, a game, a
     daily claim) — never by copying or scaling a guild's XP.
 
-Award sites call ``award(user_id, "action")`` and get back a small result dict
-they can use to announce a level-up. Everything is one atomic DB statement, so
-two servers awarding at the same instant can't lose an update.
+Award sites call ``award(user_id, "action")``; nothing else is required of
+them. A level-up is *recorded* here (``pending_level``) rather than announced,
+because half the award sites aren't a place a message can be sent from — the
+identity cog delivers it the next time the member turns up. Everything is one
+atomic DB statement, so two servers awarding at the same instant can't lose an
+update.
 """
 
 import math
@@ -105,6 +108,12 @@ async def award(user_id: int, action: str, *, multiplier: int = 1) -> dict:
         }
     before, after = await db.add_global_xp(user_id, amount)
     old_level, new_level = level_from_xp(before), level_from_xp(after)
+    if new_level > old_level:
+        # Award sites are all over the bot (and some, like the co-op payout,
+        # aren't even the member's own command), so the *announcement* is
+        # decoupled from the award: record it and let whichever cog next sees
+        # this member deliver it. See cogs/identity's delivery chain.
+        await db.set_pending_levelup(user_id, new_level)
     return {
         "awarded": amount,
         "xp": after,

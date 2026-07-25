@@ -105,6 +105,11 @@ Server Level: 24        ← this server only
 
 Both are on your profile card, and `/rank` shows them side by side.
 
+**You'll be told when you level up.** The bot posts it in the channel you were
+using; if it can't talk there it DMs you, and if that's closed too it keeps the
+message and tells you the next time you use a command anywhere. You never miss
+one, and you never get it twice.
+
 A server running 5× XP doesn't earn you global levels any faster, and a server
 with leveling switched off doesn't stop your global progress.
 
