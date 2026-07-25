@@ -150,3 +150,33 @@ async def test_pickaxe_upgrade_race_second_buyer_loses():
 async def test_pickaxe_upgrade_does_not_touch_other_users():
     await db.set_pickaxe_level(A, 1, expected=0)
     assert (await db.get_activity_stats(B))["pickaxe_level"] == 0
+
+
+# ── cross-server farming guard ────────────────────────────────────────────────
+async def test_cooldown_claims_are_global_not_per_guild():
+    """The whole point of keying activities_stats by user_id alone: hopping to
+    another server must not hand back a fresh cooldown."""
+    now = 1000.0
+    assert await db.try_claim_activity(A, "work", now, 3600) == 0
+    # Same user, one second later — the guild isn't part of the claim at all,
+    # so there is no second server to try.
+    assert await db.try_claim_activity(A, "work", now + 1, 3600) > 0
+
+    # Another member is unaffected.
+    assert await db.try_claim_activity(B, "work", now + 1, 3600) == 0
+
+    # And the claim really is one row per user, not one per guild+user.
+    async with db._conn().execute(
+        "SELECT COUNT(*) AS n FROM activities_stats WHERE user_id=?", (str(A),)
+    ) as cur:
+        assert (await cur.fetchone())["n"] == 1
+
+
+async def test_a_short_cooldown_elsewhere_cannot_shorten_a_long_one():
+    """The claim stores only the timestamp, so a later check with a longer
+    cooldown still blocks: a permissive server can't 'clear' a strict one."""
+    now = 2000.0
+    assert await db.try_claim_activity(A, "mine", now, 900) == 0
+    # 15 minutes on, ready under a 900s server but not under a 1800s one.
+    assert await db.try_claim_activity(A, "mine", now + 901, 1800) > 0
+    assert await db.try_claim_activity(A, "mine", now + 1801, 1800) == 0

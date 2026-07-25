@@ -281,6 +281,14 @@ cooldown, and whether you're ready right now.
 
 *(Cooldown lengths are per server — these are the defaults.)*
 
+**One cooldown, everywhere.** These aren't per server. Doing `/work` in one
+server puts it on cooldown in every server you share with the bot, so there's
+no hopping between servers to farm — your coins are one wallet, so your
+cooldowns are one set too. A server admin can switch any activity off for their
+server, and can make a cooldown longer, or up to twice as fast — but no faster
+than that, since a shorter setting anywhere would speed the activity up for
+their members *everywhere*.
+
 **`/work`** is the safe floor. Shifts add up to promotions (🍵 Intern all the
 way to 🏆 Legend of the Office), and each promotion pays a bit more.
 
