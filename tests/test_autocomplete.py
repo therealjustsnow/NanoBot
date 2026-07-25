@@ -56,6 +56,13 @@ _PICKER_OPTIONS = [
     ("adventure toggle", "activity"),
     ("adventure cooldown", "activity"),
     ("adventure cooldown", "seconds"),
+    ("profile cosmetics", "slot"),
+    ("profile equip", "cosmetic"),
+    ("profile unequip", "cosmetic"),
+    ("profile grant", "cosmetic"),
+    ("profile grantall", "cosmetic"),
+    ("profile grantall", "guild"),
+    ("profile revoke", "cosmetic"),
 ]
 
 
@@ -67,6 +74,7 @@ _PICKER_OPTIONS = [
     "cogs.casino",
     "cogs.progression",
     "cogs.activities",
+    "cogs.identity",
 )
 async def test_every_picker_option_offers_suggestions(bot):
     """No economy option should leave a member guessing at free text."""
@@ -284,3 +292,92 @@ async def test_roulette_autocomplete_covers_outside_bets_and_numbers(bot):
         "18",
         "19",
     ]
+
+
+# ── /profile ──────────────────────────────────────────────────────────────────
+@pytest.mark.cogs("cogs.identity")
+async def test_equip_autocomplete_orders_wearable_then_worn_then_locked(bot):
+    """A new account still gets a full list: what it can wear now, and how to
+    earn everything else — the /craft make shape, not an empty box."""
+    from utils import cosmetics
+
+    guild = bot.guilds[0]
+    user = guild.members[0]
+    cog = bot.get_cog("Identity")
+    interaction = _stub_interaction(guild, user)
+
+    choices = await cog._equip_ac(interaction, "")
+    assert choices, "the picker must never come back empty"
+    # The free "default" cosmetics are wearable straight away.
+    assert choices[0].name.startswith("▫️")
+    assert "banner_default" in [c.value for c in choices]
+    locked = [c for c in choices if c.name.startswith("🔒")]
+    assert locked, "locked cosmetics stay listed, with their unlock line"
+    assert cosmetics.describe_unlock(cosmetics.get("banner_ember")) in "".join(
+        c.name for c in locked
+    )
+
+    # Own one and wear it: it moves out of locked and gets the worn marker.
+    await db.unlock_cosmetic(user.id, "banner_ember", at=0)
+    await db.set_equipped(user.id, "banner", ["banner_ember"])
+    choices = await cog._equip_ac(interaction, "")
+    ember = next(c for c in choices if c.value == "banner_ember")
+    assert ember.name.startswith("✅")
+    # Wearable-now entries still sort ahead of the one already on.
+    assert choices.index(ember) > choices.index(
+        next(c for c in choices if c.value == "border_none")
+    )
+    assert all(len(c.name) <= 100 for c in choices)
+
+
+@pytest.mark.cogs("cogs.identity")
+async def test_equip_autocomplete_filters_by_name_key_and_slot(bot):
+    guild = bot.guilds[0]
+    cog = bot.get_cog("Identity")
+    interaction = _stub_interaction(guild, guild.members[0])
+
+    by_name = await cog._equip_ac(interaction, "ember")
+    assert [c.value for c in by_name] == ["banner_ember"]
+
+    by_key = await cog._equip_ac(interaction, "plate_neon")
+    assert [c.value for c in by_key] == ["plate_neon"]
+
+    by_slot = await cog._equip_ac(interaction, "border")
+    assert by_slot and all(c.value.startswith("border_") for c in by_slot)
+
+
+@pytest.mark.cogs("cogs.identity")
+async def test_unequip_autocomplete_lists_only_what_is_worn(bot):
+    guild = bot.guilds[0]
+    user = guild.members[0]
+    cog = bot.get_cog("Identity")
+    interaction = _stub_interaction(guild, user)
+
+    assert await cog._unequip_ac(interaction, "") == []
+
+    await db.set_equipped(user.id, "badge", ["badge_veteran", "badge_angler"])
+    choices = await cog._unequip_ac(interaction, "")
+    values = [c.value for c in choices]
+    # Listed in the order they sit on the card, not catalogue order.
+    assert values[:2] == ["badge_veteran", "badge_angler"]
+    # Multi-value slots also offer the clear-the-lot shortcut the command takes.
+    assert values[-1] == "badge"
+    assert "(2 worn)" in choices[-1].name
+
+
+@pytest.mark.cogs("cogs.identity")
+async def test_grantall_guild_autocomplete_is_owner_only(bot):
+    """The cosmetic catalogue is public; the server list is not, and an
+    autocomplete fires before the command's is_owner check."""
+    guild = bot.guilds[0]
+    user = guild.members[0]
+    cog = bot.get_cog("Identity")
+    interaction = _stub_interaction(guild, user)
+
+    bot.owner_id = user.id + 1
+    assert await cog._grantall_guild_ac(interaction, "") == []
+
+    bot.owner_id = user.id
+    choices = await cog._grantall_guild_ac(interaction, "")
+    assert [c.value for c in choices] == [str(guild.id)]
+    assert "this server" in choices[0].name

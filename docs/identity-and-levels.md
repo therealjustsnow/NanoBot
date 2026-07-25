@@ -92,7 +92,9 @@ catalogue.
 | `badge` | 6 | the showcase row along the bottom |
 
 Adding a slot is one entry. `/profile equip` infers the slot from whatever
-you're equipping, so it needs no changes; the card draws any slot it knows how
+you're equipping, so it needs no changes — and because its picker walks
+`SLOTS`/`COSMETICS` rather than a hard-coded list, a new slot shows up there
+too; the card draws any slot it knows how
 to draw and ignores the rest, which keeps a half-built slot from breaking
 rendering.
 

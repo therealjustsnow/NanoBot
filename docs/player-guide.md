@@ -133,6 +133,11 @@ Your card is customisable. Four kinds of cosmetic:
 | `/profile unequip <name>` | Take it off — or pass a slot name to clear it |
 | `/profile badges [member]` | The badge gallery, yours or someone else's |
 
+On slash commands you never type a cosmetic name: `equip` and `unequip` pop up
+a list you tap. `equip` shows what you can wear now first, then what's already
+on, then the locked ones with what unlocks them — so the list is also the
+answer to "how do I get that one?".
+
 **How you unlock them**
 
 - **Global level** — Steel Frame at 10, Frosted Glass at 15, Ember at 25,
