@@ -80,6 +80,41 @@ def _fill(template: str, member: discord.Member) -> str:
     )
 
 
+# ── Colour picker ─────────────────────────────────────────────────────────────
+# A named palette so nobody has to know a hex code, kept as an autocomplete
+# (not static choices) so any valid #RRGGBB the mod already has still works —
+# whatever they type comes back as the first suggestion once it parses.
+_COLOR_PRESETS = [
+    ("Blurple", "#5865F2"),
+    ("Green", "#57F287"),
+    ("Yellow", "#FEE75C"),
+    ("Red", "#ED4245"),
+    ("Fuchsia", "#EB459E"),
+    ("Orange", "#F57C00"),
+    ("Teal", "#1ABC9C"),
+    ("Purple", "#9B59B6"),
+    ("Pink", "#FFB6C1"),
+    ("White", "#FFFFFF"),
+    ("Dark", "#2B2D31"),
+]
+
+
+async def _color_autocomplete(
+    interaction: discord.Interaction, current: str
+) -> list[app_commands.Choice[str]]:
+    typed = (current or "").strip()
+    choices: list[app_commands.Choice[str]] = []
+    known = {hexval.lower() for _name, hexval in _COLOR_PRESETS}
+    if typed and _is_valid_hex(typed) and typed.lower() not in known:
+        choices.append(app_commands.Choice(name=f"✏️ {typed}", value=typed))
+    q = typed.lower().lstrip("#")
+    for name, hexval in _COLOR_PRESETS:
+        if q and q not in name.lower() and q not in hexval.lower().lstrip("#"):
+            continue
+        choices.append(app_commands.Choice(name=f"{name} — {hexval}", value=hexval))
+    return choices[:25]
+
+
 def _is_valid_hex(color: str) -> bool:
     c = color.lstrip("#")
     if len(c) != 6:
@@ -376,9 +411,10 @@ class Welcome(commands.Cog):
         image_text="Text to draw on the image itself — supports all vars",
         footer_text="Footer text — supports all vars (default: server name)",
         thumbnail='Member avatar by default. Set to "none" to hide, or an https:// URL',
-        color="Embed color as a hex value, e.g. #5865F2",
+        color="Pick a colour, or give a hex value like #5865F2",
         dm="DM the joining user instead of posting in a channel",
     )
+    @app_commands.autocomplete(color=_color_autocomplete)
     @has_admin_perms()
     async def welcome_set(
         self,
@@ -465,9 +501,10 @@ class Welcome(commands.Cog):
         image_text="Text to draw on the image itself — supports all vars",
         footer_text="Footer text — supports all vars (default: server name)",
         thumbnail='Member avatar by default. Set to "none" to hide, or an https:// URL',
-        color="Embed color as a hex value, e.g. #FF5733",
+        color="Pick a colour, or give a hex value like #FF5733",
         dm="DM the leaving user instead of posting in a channel",
     )
+    @app_commands.autocomplete(color=_color_autocomplete)
     @has_admin_perms()
     async def leave_set(
         self,

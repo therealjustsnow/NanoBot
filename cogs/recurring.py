@@ -482,6 +482,53 @@ class Recurring(commands.Cog):
     async def recurring_cancel(self, ctx: commands.Context, reminder_id: str):
         await self._cancel(ctx, reminder_id.strip().lower())
 
+    # ── Tap-to-pick: your own reminder IDs ─────────────────────────────────────
+    async def _reminder_choices(
+        self,
+        interaction: discord.Interaction,
+        current: str,
+        *,
+        paused: bool | None,
+    ) -> list[app_commands.Choice[str]]:
+        """Your reminders, labelled the way /recurring lists them.
+
+        A 6-character id is short enough to type but not to *remember*, which
+        is the whole reason it's shown at set time. `paused` filters to the
+        ones the subcommand can actually act on (None = any), so `resume`
+        never offers a running reminder.
+        """
+        q = (current or "").strip().lower()
+        rows = await db.get_user_recurring(interaction.user.id)  # next_due ASC
+        choices: list[app_commands.Choice[str]] = []
+        for info in rows:
+            if paused is not None and bool(info["paused"]) is not paused:
+                continue
+            label = info.get("label") or info["message"]
+            label = " ".join(str(label).split())
+            if q and q not in info["id"].lower() and q not in label.lower():
+                continue
+            mark = "⏸️" if info["paused"] else "🔁"
+            choices.append(
+                app_commands.Choice(
+                    name=f"{mark} {label[:50]} — every "
+                    f"{h.fmt_interval(int(info['interval']))} · {info['id']}"[:100],
+                    value=info["id"],
+                )
+            )
+        return choices[:25]
+
+    @recurring_pause.autocomplete("reminder_id")
+    async def _pause_ac(self, interaction: discord.Interaction, current: str):
+        return await self._reminder_choices(interaction, current, paused=False)
+
+    @recurring_resume.autocomplete("reminder_id")
+    async def _resume_ac(self, interaction: discord.Interaction, current: str):
+        return await self._reminder_choices(interaction, current, paused=True)
+
+    @recurring_cancel.autocomplete("reminder_id")
+    async def _cancel_ac(self, interaction: discord.Interaction, current: str):
+        return await self._reminder_choices(interaction, current, paused=None)
+
     # ── List ───────────────────────────────────────────────────────────────────
 
     async def _list(self, ctx: commands.Context):

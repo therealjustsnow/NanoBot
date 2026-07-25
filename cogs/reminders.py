@@ -44,6 +44,22 @@ from utils import helpers as h
 
 log = logging.getLogger("NanoBot.reminders")
 
+# Suggestions only — h.duration_picker echoes anything parse_duration accepts,
+# and the duration can still be written at the end of the message instead.
+_REMIND_IN_CHOICES = h.duration_picker(
+    [
+        ("In 5 minutes", "5m"),
+        ("In 15 minutes", "15m"),
+        ("In 30 minutes", "30m"),
+        ("In 1 hour", "1h"),
+        ("In 3 hours", "3h"),
+        ("In 8 hours", "8h"),
+        ("Tomorrow", "1d"),
+        ("In 3 days", "3d"),
+        ("In a week", "7d"),
+    ]
+)
+
 _MAX = 25  # max active reminders per user
 _MIN_SECS = 60  # 1 minute
 _MAX_SECS = 365 * 86400  # 1 year
@@ -348,6 +364,7 @@ class Reminders(commands.Cog):
         time="Duration if not in the message (e.g. 8h, 30m, 2 hours) — ignored if message already has one",
         dm="DM you the reminder (default: yes, falls back to channel if DMs closed)",
     )
+    @app_commands.autocomplete(time=_REMIND_IN_CHOICES)
     @commands.cooldown(1, 5, commands.BucketType.user)
     async def remindme(
         self,
@@ -400,6 +417,7 @@ class Reminders(commands.Cog):
         time="Duration if not in the message (e.g. 1h, 30m)",
         dm="DM them the reminder (default: no — posts a channel ping instead)",
     )
+    @app_commands.autocomplete(time=_REMIND_IN_CHOICES)
     @commands.cooldown(1, 5, commands.BucketType.user)
     async def remind(
         self,

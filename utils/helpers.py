@@ -188,6 +188,47 @@ def fmt_duration(seconds: int) -> str:
     return " ".join(parts[:2])  # cap at 2 units for readability (e.g. "1d 2h")
 
 
+# ── Duration pickers (mobile-first: tap a common one, or type your own) ───────
+def duration_picker(suggestions: "list[tuple[str, str]]"):
+    """Build an app-command autocomplete offering common durations.
+
+    Unlike static `@app_commands.choices`, a suggestion list must never become
+    a *restriction* — every one of these options parses arbitrary input, and
+    "5 minutes isn't in the list" would be a regression. So whatever the caller
+    has typed comes back as the first choice whenever `parse_duration` accepts
+    it, echoed with the parsed length so a typo is visible before they send it.
+
+    `suggestions` is [(label, value)] in the order they should appear; the
+    values are what `parse_duration` will see.
+    """
+
+    async def _autocomplete(interaction, current: str):
+        from discord import app_commands  # local: keeps this module import-light
+
+        typed = (current or "").strip()
+        choices: list = []
+        listed = {value for _label, value in suggestions}
+        if typed and typed not in listed:
+            secs = parse_duration(typed)
+            if secs and secs > 0:
+                choices.append(
+                    app_commands.Choice(
+                        name=f"✏️ {typed} — {fmt_duration(int(secs))}"[:100],
+                        value=typed,
+                    )
+                )
+        q = typed.lower()
+        for label, value in suggestions:
+            if q and q not in label.lower() and q not in value.lower():
+                continue
+            choices.append(
+                app_commands.Choice(name=f"{label} ({value})"[:100], value=value)
+            )
+        return choices[:25]
+
+    return _autocomplete
+
+
 # ── Interval Parsing (recurring reminders) ────────────────────────────────────
 _INTERVAL_KEYWORDS: dict[str, int] = {
     "hourly": 3_600,

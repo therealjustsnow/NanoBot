@@ -78,6 +78,21 @@ from .views import WyrView, RpsView
 
 log = logging.getLogger("NanoBot.fun")
 
+# Poll lengths for /fun wyr. A picker rather than static choices so the
+# free-form forms this cog's own _parse_duration accepts ("1h30m", a bare
+# minute count) stay typable; it clamps anything out of range to 1m–24h.
+_WYR_DURATION_CHOICES = h.duration_picker(
+    [
+        ("15 minutes", "15m"),
+        ("30 minutes", "30m"),
+        ("1 hour (default)", "1h"),
+        ("2 hours", "2h"),
+        ("6 hours", "6h"),
+        ("12 hours", "12h"),
+        ("24 hours (max)", "24h"),
+    ]
+)
+
 
 class Fun(commands.Cog):
     """Fun social interaction and reaction commands."""
@@ -525,6 +540,7 @@ class Fun(commands.Cog):
     @app_commands.describe(
         duration="How long voting lasts (e.g. 30m, 2h, 1h30m). Default: 1h"
     )
+    @app_commands.autocomplete(duration=_WYR_DURATION_CHOICES)
     async def s_wyr(self, i: discord.Interaction, duration: str | None = None):
         secs = _parse_duration(duration)
         question = await cache_db.get_random_wyr()

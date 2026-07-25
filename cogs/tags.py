@@ -133,6 +133,18 @@ def _list_entry(name: str, tag: dict) -> str:
     return f"`{name}`{'  🖼️' if tag.get('image_url') else ''}"
 
 
+def _tag_gist(tag: dict) -> str:
+    """A one-line taste of a tag for the picker.
+
+    Autocomplete choice names are plain text, so newlines and markdown are
+    flattened out rather than shown literally.
+    """
+    text = " ".join((tag.get("content") or "").split())
+    if text:
+        return text[:60]
+    return "image" if tag.get("image_url") else "empty"
+
+
 # ══════════════════════════════════════════════════════════════════════════════
 class Tags(commands.Cog):
     """Quick-access text snippets with optional images — personal or server-wide."""
@@ -433,6 +445,62 @@ class Tags(commands.Cog):
     @app_commands.describe(name="Tag name to delete")
     async def tag_delete(self, ctx: commands.Context, name: str):
         await self._do_delete(ctx, name)
+
+    # ══════════════════════════════════════════════════════════════════════════
+    #  Tap-to-pick: tag names
+    # ══════════════════════════════════════════════════════════════════════════
+    async def _tag_choices(
+        self,
+        interaction: discord.Interaction,
+        current: str,
+        *,
+        editable: bool,
+    ) -> list[app_commands.Choice[str]]:
+        """Tag picker: your personal tags first, then the server's global ones.
+
+        `editable` drops the global tags for anyone without Manage Messages,
+        because /tag edit and /tag delete refuse them anyway — offering a
+        choice the command will reject is worse than offering nothing.
+
+        A personal tag shadows a global one of the same name (that's the
+        lookup order in `db.get_tag`), so the global duplicate is skipped
+        rather than listed as a second identical-looking entry.
+        """
+        if not interaction.guild_id:
+            return []
+        q = (current or "").strip().lower()
+        personal = await db.get_personal_tags(interaction.guild_id, interaction.user.id)
+        perms = getattr(interaction.user, "guild_permissions", None)
+        can_manage = bool(getattr(perms, "manage_messages", False))
+        globals_ = (
+            {}
+            if editable and not can_manage
+            else await db.get_global_tags(interaction.guild_id)
+        )
+        choices: list[app_commands.Choice[str]] = []
+        for mark, source in (("📌", personal), ("🌐", globals_)):
+            for name in sorted(source):
+                if q and q not in name.lower():
+                    continue
+                if source is globals_ and name in personal:
+                    continue
+                choices.append(
+                    app_commands.Choice(
+                        name=f"{mark} {name} — {_tag_gist(source[name])}"[:100],
+                        value=name,
+                    )
+                )
+        return choices[:25]
+
+    @tag_use.autocomplete("name")
+    @tag_preview.autocomplete("name")
+    async def _tag_read_ac(self, interaction: discord.Interaction, current: str):
+        return await self._tag_choices(interaction, current, editable=False)
+
+    @tag_edit.autocomplete("name")
+    @tag_delete.autocomplete("name")
+    async def _tag_write_ac(self, interaction: discord.Interaction, current: str):
+        return await self._tag_choices(interaction, current, editable=True)
 
     # ══════════════════════════════════════════════════════════════════════════
     #  /tag list

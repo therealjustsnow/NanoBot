@@ -93,6 +93,14 @@ from .helpers import (
 
 log = logging.getLogger("NanoBot.birthday")
 
+# Static choices, not an autocomplete — the set is two values and never
+# changes. `_toggle` still accepts the wider on/yes/true/enable vocabulary for
+# prefix users.
+_ON_OFF = [
+    app_commands.Choice(name="On", value="on"),
+    app_commands.Choice(name="Off", value="off"),
+]
+
 
 class Birthday(commands.Cog):
     """Birthday registration + per-server announcements."""
@@ -965,6 +973,7 @@ class Birthday(commands.Cog):
     )
     @commands.has_permissions(manage_guild=True)
     @app_commands.describe(state="on or off")
+    @app_commands.choices(state=_ON_OFF)
     async def birthday_gifs(self, ctx: commands.Context, state: str):
         await self._toggle(ctx, "gif_enabled", state, "Birthday GIFs")
 
@@ -974,12 +983,14 @@ class Birthday(commands.Cog):
     )
     @commands.has_permissions(manage_guild=True)
     @app_commands.describe(state="on or off")
+    @app_commands.choices(state=_ON_OFF)
     async def birthday_voice(self, ctx: commands.Context, state: str):
         await self._toggle(ctx, "vc_enabled", state, "Voice-channel song")
 
     @birthday.command(name="ping", description="Toggle pinging the birthday person.")
     @commands.has_permissions(manage_guild=True)
     @app_commands.describe(state="on or off")
+    @app_commands.choices(state=_ON_OFF)
     async def birthday_ping(self, ctx: commands.Context, state: str):
         await self._toggle(ctx, "ping_enabled", state, "Birthday ping")
 

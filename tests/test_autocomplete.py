@@ -381,3 +381,270 @@ async def test_grantall_guild_autocomplete_is_owner_only(bot):
     choices = await cog._grantall_guild_ac(interaction, "")
     assert [c.value for c in choices] == [str(guild.id)]
     assert "this server" in choices[0].name
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+#  Beyond the economy — the same rule applied to the rest of the surface
+# ══════════════════════════════════════════════════════════════════════════════
+_MOD_PICKER_OPTIONS = [
+    ("tag use", "name"),
+    ("tag preview", "name"),
+    ("tag edit", "name"),
+    ("tag delete", "name"),
+    ("recurring pause", "reminder_id"),
+    ("recurring resume", "reminder_id"),
+    ("recurring cancel", "reminder_id"),
+    ("automod badword remove", "word"),
+    ("automod attachword remove", "word"),
+    ("unban", "user_id"),
+    ("cban", "wait"),
+    ("tempban", "duration"),
+    ("freeze", "duration"),
+    ("slow", "delay"),
+    ("slow", "length"),
+    ("level toggle", "state"),
+    ("level reward", "action"),
+    ("level ignore", "action"),
+    ("birthday gifs", "state"),
+    ("birthday voice", "state"),
+    ("birthday ping", "state"),
+    ("gatekeeper minage", "duration"),
+    ("gatekeeper unmuteage", "duration"),
+    ("gatekeeper kicktimeout", "duration"),
+    ("remindme", "time"),
+    ("remind", "time"),
+    ("welcome set", "color"),
+    ("leave set", "color"),
+]
+
+
+@pytest.mark.cogs(
+    "cogs.tags",
+    "cogs.recurring",
+    "cogs.automod",
+    "cogs.moderation",
+    "cogs.leveling",
+    "cogs.birthday",
+    "cogs.gatekeeper",
+    "cogs.reminders",
+    "cogs.welcome",
+)
+async def test_non_economy_picker_options_offer_suggestions(bot):
+    """The mobile-first picker rule isn't an economy-only rule."""
+    missing = []
+    for qualified_name, param in _MOD_PICKER_OPTIONS:
+        option = _option(bot, qualified_name, param)
+        if not (option.autocomplete or option.choices):
+            missing.append(f"/{qualified_name} <{param}>")
+    assert not missing, "Options with no picker: " + ", ".join(missing)
+
+
+# ── /tag ──────────────────────────────────────────────────────────────────────
+@pytest.mark.cogs("cogs.tags")
+async def test_tag_autocomplete_lists_personal_then_global(bot):
+    guild = bot.guilds[0]
+    user = guild.members[0]
+    cog = bot.get_cog("Tags")
+    interaction = _stub_interaction(guild, user)
+
+    assert await cog._tag_read_ac(interaction, "") == []
+
+    await db.set_tag(guild.id, str(user.id), "mine", "a personal note", None)
+    await db.set_tag(guild.id, "global", "rules", "read the rules", None)
+    choices = await cog._tag_read_ac(interaction, "")
+    assert [c.value for c in choices] == ["mine", "rules"]
+    assert choices[0].name.startswith("📌") and choices[1].name.startswith("🌐")
+    assert "a personal note" in choices[0].name
+
+
+@pytest.mark.cogs("cogs.tags")
+async def test_tag_edit_autocomplete_hides_global_without_manage_messages(bot):
+    """/tag edit refuses a global tag without Manage Messages, so the picker
+    must not offer one."""
+    from tests.conftest import grant_perms
+
+    guild = bot.guilds[0]
+    user = guild.members[0]
+    cog = bot.get_cog("Tags")
+    interaction = _stub_interaction(guild, user)
+
+    await db.set_tag(guild.id, str(user.id), "mine", "personal", None)
+    await db.set_tag(guild.id, "global", "rules", "global", None)
+
+    assert [c.value for c in await cog._tag_write_ac(interaction, "")] == ["mine"]
+    # But reading one is fine for everyone.
+    assert "rules" in [c.value for c in await cog._tag_read_ac(interaction, "")]
+
+    await grant_perms(user, manage_messages=True)
+    assert [c.value for c in await cog._tag_write_ac(interaction, "")] == [
+        "mine",
+        "rules",
+    ]
+
+
+@pytest.mark.cogs("cogs.tags")
+async def test_tag_autocomplete_skips_a_shadowed_global(bot):
+    """A personal tag wins the lookup, so listing both would be a lie."""
+    guild = bot.guilds[0]
+    user = guild.members[0]
+    cog = bot.get_cog("Tags")
+
+    await db.set_tag(guild.id, str(user.id), "same", "mine", None)
+    await db.set_tag(guild.id, "global", "same", "theirs", None)
+    choices = await cog._tag_read_ac(_stub_interaction(guild, user), "")
+    assert [c.value for c in choices] == ["same"]
+    assert choices[0].name.startswith("📌")
+
+
+# ── /recurring ────────────────────────────────────────────────────────────────
+@pytest.mark.cogs("cogs.recurring")
+async def test_recurring_autocomplete_scopes_to_the_actionable_state(bot):
+    guild = bot.guilds[0]
+    user = guild.members[0]
+    cog = bot.get_cog("Recurring")
+    interaction = _stub_interaction(guild, user)
+
+    base = {
+        "target_id": str(user.id),
+        "set_by_id": str(user.id),
+        "guild_id": str(guild.id),
+        "channel_id": str(guild.text_channels[0].id),
+        "interval": 86400,
+        "dm": 1,
+        "fire_count": 0,
+    }
+    await db.set_recurring(
+        {**base, "id": "run001", "message": "standup", "next_due": 1, "paused": 0}
+    )
+    await db.set_recurring(
+        {
+            **base,
+            "id": "pau002",
+            "message": "payday",
+            "next_due": 2,
+            "paused": 1,
+            "label": "Payday",
+        }
+    )
+
+    assert [c.value for c in await cog._pause_ac(interaction, "")] == ["run001"]
+    assert [c.value for c in await cog._resume_ac(interaction, "")] == ["pau002"]
+    assert {c.value for c in await cog._cancel_ac(interaction, "")} == {
+        "run001",
+        "pau002",
+    }
+
+    # The label beats the raw message, and the id is still in the name to type.
+    paused = (await cog._resume_ac(interaction, ""))[0]
+    assert "Payday" in paused.name and "pau002" in paused.name
+    assert paused.name.startswith("⏸️")
+
+    # Someone else's reminders are never suggested.
+    other = _stub_interaction(guild, guild.members[1])
+    assert await cog._cancel_ac(other, "") == []
+
+
+# ── /automod ──────────────────────────────────────────────────────────────────
+@pytest.mark.cogs("cogs.automod")
+async def test_automod_word_autocompletes_list_the_configured_words(bot):
+    from cogs.automod.autocomplete import (
+        _attachment_word_autocomplete,
+        _badword_autocomplete,
+    )
+
+    guild = bot.guilds[0]
+    interaction = _stub_interaction(guild, guild.members[0])
+
+    assert await _badword_autocomplete(interaction, "") == []
+
+    await db.add_automod_badword(guild.id, "zebra")
+    await db.add_automod_badword(guild.id, "apple")
+    await db.add_automod_attachment_word(guild.id, "invoice")
+
+    assert [c.value for c in await _badword_autocomplete(interaction, "")] == [
+        "apple",
+        "zebra",
+    ]
+    assert [c.value for c in await _badword_autocomplete(interaction, "zeb")] == [
+        "zebra"
+    ]
+    # The two lists stay separate.
+    assert [c.value for c in await _attachment_word_autocomplete(interaction, "")] == [
+        "invoice"
+    ]
+
+
+# ── /unban ────────────────────────────────────────────────────────────────────
+@pytest.mark.cogs("cogs.moderation")
+async def test_unban_autocomplete_needs_ban_permissions(bot):
+    """Who a server has banned isn't public, and autocomplete fires before the
+    command's own permission check."""
+    import types as _types
+
+    from tests.conftest import grant_perms
+
+    guild = bot.guilds[0]
+    user = guild.members[0]
+    cog = bot.get_cog("Moderation")
+
+    banned = [(4242, "TrollUser#0001"), (99, "Spammer#0002")]
+
+    async def _fake_bans(_guild):
+        return banned
+
+    cog._banned_users = _types.MethodType(lambda self, g: _fake_bans(g), cog)
+
+    interaction = _stub_interaction(guild, user)
+    assert await cog._unban_ac(interaction, "") == []
+
+    await grant_perms(user, ban_members=True)
+    choices = await cog._unban_ac(interaction, "")
+    assert {c.value for c in choices} == {"4242", "99"}
+    assert "TrollUser" in choices[0].name or "TrollUser" in choices[1].name
+
+    # Filtering works on both the name and the raw id.
+    assert [c.value for c in await cog._unban_ac(interaction, "troll")] == ["4242"]
+    assert [c.value for c in await cog._unban_ac(interaction, "99")] == ["99"]
+
+    # The most recent ban is floated to the top.
+    bot.last_banned[guild.id] = 99
+    assert (await cog._unban_ac(interaction, ""))[0].value == "99"
+
+
+# ── duration pickers ──────────────────────────────────────────────────────────
+async def test_duration_picker_suggests_without_restricting():
+    """A duration option must never become a fixed list — every one of these
+    commands parses free-form input."""
+    from utils import helpers as h
+
+    picker = h.duration_picker([("1 hour", "1h"), ("1 day", "1d")])
+
+    listed = await picker(None, "")
+    assert [c.value for c in listed] == ["1h", "1d"]
+
+    # Something unlisted but valid comes back first, with its parsed length so
+    # a typo is visible before sending.
+    typed = await picker(None, "45m")
+    assert typed[0].value == "45m"
+    assert "45m" in typed[0].name
+
+    # Nonsense isn't echoed — only the (filtered) suggestions remain. (A
+    # multi-unit "3h30m" is not a typo the picker hides: parse_duration takes
+    # one unit, so the commands reject it too.)
+    assert [c.value for c in await picker(None, "banana")] == []
+    assert [c.value for c in await picker(None, "3h30m")] == []
+
+    # Typing a listed value doesn't duplicate it.
+    assert [c.value for c in await picker(None, "1h")] == ["1h"]
+
+
+async def test_colour_picker_keeps_hex_typable():
+    from cogs.welcome import _color_autocomplete
+
+    presets = await _color_autocomplete(None, "")
+    assert presets and all(c.value.startswith("#") for c in presets)
+    assert [c.value for c in await _color_autocomplete(None, "green")] == ["#57F287"]
+
+    typed = await _color_autocomplete(None, "#123456")
+    assert typed[0].value == "#123456"
+    assert await _color_autocomplete(None, "nope") == []
