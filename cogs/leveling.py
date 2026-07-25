@@ -48,6 +48,19 @@ from utils.converters import SafeTextChannel
 
 log = logging.getLogger("NanoBot.leveling")
 
+# Two- and three-value options are static choices rather than an autocomplete:
+# the set never changes, so Discord can render them as buttons. Prefix users
+# keep the wider vocabulary the commands already accept (enable/true/…).
+_ON_OFF = [
+    app_commands.Choice(name="On", value="on"),
+    app_commands.Choice(name="Off", value="off"),
+]
+_ADD_REMOVE_LIST = [
+    app_commands.Choice(name="Add", value="add"),
+    app_commands.Choice(name="Remove", value="remove"),
+    app_commands.Choice(name="List", value="list"),
+]
+
 # Per-level coin-reward ceiling. The reward is multiplied by the level reached,
 # so this keeps even high-level payouts reasonable and clear of integer limits.
 _COIN_REWARD_MAX = 1_000_000
@@ -390,6 +403,7 @@ class Leveling(commands.Cog):
     # ── /level toggle ─────────────────────────────────────────────────────────────
     @level.command(name="toggle", description="Turn leveling on or off.")
     @app_commands.describe(state="on or off")
+    @app_commands.choices(state=_ON_OFF)
     @commands.has_permissions(manage_guild=True)
     async def level_toggle(self, ctx: commands.Context, state: str):
         s = state.strip().lower()
@@ -503,6 +517,7 @@ class Leveling(commands.Cog):
         level="Level the reward unlocks at",
         role="Role to grant (for add)",
     )
+    @app_commands.choices(action=_ADD_REMOVE_LIST)
     @commands.has_permissions(manage_guild=True)
     async def level_reward(
         self,
@@ -571,6 +586,7 @@ class Leveling(commands.Cog):
         action="add, remove, or list",
         channel="Channel to ignore (for add/remove)",
     )
+    @app_commands.choices(action=_ADD_REMOVE_LIST)
     @commands.has_permissions(manage_guild=True)
     async def level_ignore(
         self,

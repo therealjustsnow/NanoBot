@@ -62,6 +62,40 @@ from .views import VerifyView
 
 log = logging.getLogger("NanoBot.gatekeeper")
 
+# Duration suggestions for the three threshold commands. These stay pickers
+# rather than static choices because every value here is parsed by
+# h.parse_duration — a mod who wants "45d" must still be able to type it.
+_MIN_AGE_CHOICES = h.duration_picker(
+    [
+        ("1 day", "1d"),
+        ("3 days", "3d"),
+        ("7 days", "7d"),
+        ("14 days", "14d"),
+        ("30 days (default)", "30d"),
+        ("60 days", "60d"),
+        ("90 days", "90d"),
+    ]
+)
+_UNMUTE_AGE_CHOICES = h.duration_picker(
+    [
+        ("30 days", "30d"),
+        ("35 days (default)", "35d"),
+        ("5 weeks", "5w"),
+        ("60 days", "60d"),
+        ("90 days", "90d"),
+    ]
+)
+_KICK_TIMEOUT_CHOICES = h.duration_picker(
+    [
+        ("12 hours", "12h"),
+        ("1 day", "1d"),
+        ("3 days", "3d"),
+        ("7 days (default)", "7d"),
+        ("14 days", "14d"),
+        ("30 days", "30d"),
+    ]
+)
+
 
 class Gatekeeper(commands.Cog):
     """New-account muting and captcha verification."""
@@ -740,6 +774,7 @@ class Gatekeeper(commands.Cog):
     @app_commands.describe(
         duration="e.g. 30d, 2w, 1mo-ish — blank to disable age muting"
     )
+    @app_commands.autocomplete(duration=_MIN_AGE_CHOICES)
     @app_commands.checks.has_permissions(manage_guild=True)
     async def gk_minage(self, interaction: discord.Interaction, duration: str):
         secs = h.parse_duration(duration)
@@ -764,6 +799,7 @@ class Gatekeeper(commands.Cog):
         name="unmuteage", description="Auto-unmute once accounts reach this age."
     )
     @app_commands.describe(duration="e.g. 35d, 5w")
+    @app_commands.autocomplete(duration=_UNMUTE_AGE_CHOICES)
     @app_commands.checks.has_permissions(manage_guild=True)
     async def gk_unmuteage(self, interaction: discord.Interaction, duration: str):
         secs = h.parse_duration(duration)
@@ -786,6 +822,7 @@ class Gatekeeper(commands.Cog):
         name="kicktimeout", description="Kick unverified members after this long."
     )
     @app_commands.describe(duration="e.g. 7d, 48h")
+    @app_commands.autocomplete(duration=_KICK_TIMEOUT_CHOICES)
     @app_commands.checks.has_permissions(manage_guild=True)
     async def gk_kicktimeout(self, interaction: discord.Interaction, duration: str):
         secs = h.parse_duration(duration)

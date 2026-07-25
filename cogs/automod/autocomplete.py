@@ -30,6 +30,38 @@ async def _action_autocomplete(
     ]
 
 
+async def _badword_autocomplete(
+    interaction: discord.Interaction,
+    current: str,
+) -> list[app_commands.Choice[str]]:
+    """Autocomplete for badword remove — the words this guild actually filters.
+
+    Removing a word you can't see the spelling of is guesswork, and the list
+    is admin-only anyway (this command needs Manage Server), so showing it
+    here leaks nothing `/automod badword list` doesn't already show.
+    """
+    words = await db.get_automod_badwords(interaction.guild_id)
+    return _word_choices(words, current)
+
+
+async def _attachment_word_autocomplete(
+    interaction: discord.Interaction,
+    current: str,
+) -> list[app_commands.Choice[str]]:
+    """Autocomplete for attachword remove — same idea, the other list."""
+    words = await db.get_automod_attachment_words(interaction.guild_id)
+    return _word_choices(words, current)
+
+
+def _word_choices(words, current: str) -> list[app_commands.Choice[str]]:
+    q = (current or "").lower()
+    return [
+        app_commands.Choice(name=word[:100], value=word[:100])
+        for word in sorted(words)
+        if q in word.lower()
+    ][:25]
+
+
 async def _regex_pattern_autocomplete(
     interaction: discord.Interaction,
     current: str,

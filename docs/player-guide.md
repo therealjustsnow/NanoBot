@@ -133,6 +133,11 @@ Your card is customisable. Four kinds of cosmetic:
 | `/profile unequip <name>` | Take it off — or pass a slot name to clear it |
 | `/profile badges [member]` | The badge gallery, yours or someone else's |
 
+On slash commands you never type a cosmetic name: `equip` and `unequip` pop up
+a list you tap. `equip` shows what you can wear now first, then what's already
+on, then the locked ones with what unlocks them — so the list is also the
+answer to "how do I get that one?".
+
 **How you unlock them**
 
 - **Global level** — Steel Frame at 10, Frosted Glass at 15, Ember at 25,
@@ -275,6 +280,14 @@ cooldown, and whether you're ready right now.
 | `/rob <member>` | 4 hours | 200 coin fine | 10–20% of their wallet (capped 1,000) |
 
 *(Cooldown lengths are per server — these are the defaults.)*
+
+**One cooldown, everywhere.** These aren't per server. Doing `/work` in one
+server puts it on cooldown in every server you share with the bot, so there's
+no hopping between servers to farm — your coins are one wallet, so your
+cooldowns are one set too. A server admin can switch any activity off for their
+server, and can make a cooldown longer, or up to twice as fast — but no faster
+than that, since a shorter setting anywhere would speed the activity up for
+their members *everywhere*.
 
 **`/work`** is the safe floor. Shifts add up to promotions (🍵 Intern all the
 way to 🏆 Legend of the Office), and each promotion pays a bit more.

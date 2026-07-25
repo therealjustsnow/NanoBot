@@ -7,6 +7,8 @@ import math
 import pytest
 
 from cogs.activities import (
+    ACTIVITY_COOLDOWN_BOUNDS,
+    ACTIVITY_DEFAULT_COOLDOWNS,
     CAREER_LADDER,
     EXPLORE_OUTCOMES,
     HUNT_ODDS,
@@ -20,6 +22,7 @@ from cogs.activities import (
     WORK_PAY_MAX,
     WORK_PAY_MIN,
     career_info,
+    effective_cooldown,
     hunt_injury_fine,
     mine_odds,
     next_career,
@@ -231,3 +234,34 @@ def test_rob_steal_amount_capped():
 def test_rob_steal_amount_never_negative():
     assert rob_steal_amount(0.0, 0) == 0
     assert rob_steal_amount(1.0, 0) == 0
+
+
+# ── cooldown floor (anti cross-server farming) ────────────────────────────────
+def test_effective_cooldown_floors_a_sub_minimum_setting():
+    """Claims are global, so the shortest configured length among a member's
+    servers is the one that governs them. The floor is what keeps one
+    permissive server from farming coins that spend everywhere."""
+    for activity, (floor, ceiling) in ACTIVITY_COOLDOWN_BOUNDS.items():
+        assert effective_cooldown(activity, 1) == floor
+        assert effective_cooldown(activity, 0) == floor
+        assert effective_cooldown(activity, -99) == floor
+        # A server may always go slower.
+        assert effective_cooldown(activity, ceiling) == ceiling
+        assert effective_cooldown(activity, floor + 1) == floor + 1
+
+
+def test_cooldown_floor_is_half_the_default():
+    """Servers keep real freedom (up to 2x faster) without minting: the old
+    60s minimum let /work run 60x its intended rate."""
+    for activity, default in ACTIVITY_DEFAULT_COOLDOWNS.items():
+        floor = ACTIVITY_COOLDOWN_BOUNDS[activity][0]
+        assert floor == default // 2
+        assert floor <= default <= ACTIVITY_COOLDOWN_BOUNDS[activity][1]
+
+
+def test_effective_cooldown_never_degrades_to_no_cooldown():
+    """The one failure mode this must not have. Unknown activity or junk
+    input falls back to a real duration, not zero."""
+    assert effective_cooldown("work", None) == ACTIVITY_DEFAULT_COOLDOWNS["work"]
+    assert effective_cooldown("work", "nonsense") == ACTIVITY_DEFAULT_COOLDOWNS["work"]
+    assert effective_cooldown("not_an_activity", 0) > 0

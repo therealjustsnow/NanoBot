@@ -68,6 +68,58 @@ from .schedules import TimedActionsMixin
 
 log = logging.getLogger("NanoBot.moderation")
 
+# ── Duration pickers ──────────────────────────────────────────────────────────
+# Suggestions, never restrictions: h.duration_picker echoes back whatever the
+# mod types as long as parse_duration accepts it, so an unlisted "3h17m" still
+# works. Each list is tuned to what its command actually allows (slowmode caps
+# at 5 minutes, a timeout at 28 days).
+_SLOW_DELAY_CHOICES = h.duration_picker(
+    [
+        ("Off", "0"),
+        ("5 seconds", "5s"),
+        ("10 seconds", "10s"),
+        ("30 seconds", "30s"),
+        ("1 minute", "1m"),
+        ("2 minutes", "2m"),
+        ("5 minutes (max)", "5m"),
+    ]
+)
+_SLOW_LENGTH_CHOICES = h.duration_picker(
+    [
+        ("10 minutes", "10m"),
+        ("30 minutes", "30m"),
+        ("1 hour", "1h"),
+        ("6 hours", "6h"),
+        ("1 day", "1d"),
+        ("3 days", "3d"),
+    ]
+)
+_TIMEOUT_CHOICES = h.duration_picker(
+    [
+        ("5 minutes", "5m"),
+        ("10 minutes", "10m"),
+        ("30 minutes", "30m"),
+        ("1 hour", "1h"),
+        ("6 hours", "6h"),
+        ("12 hours", "12h"),
+        ("1 day", "1d"),
+        ("7 days", "7d"),
+        ("28 days (max)", "28d"),
+    ]
+)
+_BAN_LENGTH_CHOICES = h.duration_picker(
+    [
+        ("1 hour", "1h"),
+        ("6 hours", "6h"),
+        ("12 hours", "12h"),
+        ("1 day", "1d"),
+        ("3 days", "3d"),
+        ("7 days", "7d"),
+        ("14 days", "14d"),
+        ("30 days", "30d"),
+    ]
+)
+
 
 # ══════════════════════════════════════════════════════════════════════════════
 class Moderation(TimedActionsMixin, commands.Cog):
@@ -77,6 +129,10 @@ class Moderation(TimedActionsMixin, commands.Cog):
         self.bot = bot
         self._slow_tasks = {}
         self._unban_tasks = {}
+        # guild_id → (fetched_at, [(user_id, label)]) for the /unban picker.
+        # Autocomplete fires on every keystroke and the ban list is an HTTP
+        # call, so one fetch is reused for a few seconds of typing.
+        self._ban_cache: dict[int, tuple[float, list[tuple[int, str]]]] = {}
 
     def cog_unload(self):
         """Cancel all pending timed-action tasks so a reload/unload doesn't leak
@@ -122,6 +178,7 @@ class Moderation(TimedActionsMixin, commands.Cog):
         wait="Auto-unban after e.g. 1h 7d",
         message="DM to send the user",
     )
+    @app_commands.autocomplete(wait=_BAN_LENGTH_CHOICES)
     @has_ban_perms()
     async def cban(
         self,
@@ -385,7 +442,7 @@ class Moderation(TimedActionsMixin, commands.Cog):
         },
     )
     @app_commands.describe(
-        user_id="Discord User ID (blank = last banned)", reason="Optional reason"
+        user_id="Pick who to unban (blank = last banned)", reason="Optional reason"
     )
     @has_ban_perms()
     async def unban(
@@ -435,6 +492,62 @@ class Moderation(TimedActionsMixin, commands.Cog):
             ephemeral=True,
         )
         await action_log(ctx, "✅", "unban", detail=f"User ID: `{uid}`")
+
+    # ── Tap-to-pick: who's actually banned ───────────────────────────────────
+    _BAN_CACHE_TTL = 20.0
+    _BAN_FETCH_LIMIT = 200
+
+    async def _banned_users(self, guild) -> list[tuple[int, str]]:
+        """This guild's ban list as (user_id, label), cached for a few seconds.
+
+        Bounded and time-boxed on purpose: Discord gives an autocomplete about
+        three seconds, and a server with thousands of bans must not turn every
+        keystroke into a long paginated fetch. A failure is not an error worth
+        surfacing — the picker just goes quiet and the command still takes a
+        typed ID.
+        """
+        now = datetime.now(timezone.utc).timestamp()
+        cached = self._ban_cache.get(guild.id)
+        if cached and now - cached[0] < self._BAN_CACHE_TTL:
+            return cached[1]
+        entries: list[tuple[int, str]] = []
+        try:
+
+            async def _collect():
+                async for ban in guild.bans(limit=self._BAN_FETCH_LIMIT):
+                    entries.append((ban.user.id, str(ban.user)))
+
+            await asyncio.wait_for(_collect(), timeout=2.5)
+        except (asyncio.TimeoutError, discord.HTTPException, discord.Forbidden):
+            log.debug("ban list fetch failed for %s", guild.id, exc_info=True)
+            if not entries:
+                return cached[1] if cached else []
+        self._ban_cache[guild.id] = (now, entries)
+        return entries
+
+    @unban.autocomplete("user_id")
+    async def _unban_ac(self, interaction: discord.Interaction, current: str):
+        """Nobody has a banned user's snowflake to hand — list them by name.
+
+        Gated on the caller's own Ban Members: autocomplete fires before the
+        command's permission check, and who a server has banned isn't public.
+        """
+        perms = getattr(interaction.user, "guild_permissions", None)
+        if not interaction.guild or not getattr(perms, "ban_members", False):
+            return []
+        q = (current or "").strip().lower()
+        choices: list[app_commands.Choice[str]] = []
+        last = self.bot.last_banned.get(interaction.guild.id)
+        for uid, label in await self._banned_users(interaction.guild):
+            if q and q not in label.lower() and q not in str(uid):
+                continue
+            mark = "↩️ " if uid == last else ""
+            choices.append(
+                app_commands.Choice(name=f"{mark}{label} — {uid}"[:100], value=str(uid))
+            )
+        # The most recent ban is the one being undone most of the time.
+        choices.sort(key=lambda c: not c.name.startswith("↩️"))
+        return choices[:25]
 
     # ══════════════════════════════════════════════════════════════════════════
     #  kick
@@ -542,6 +655,7 @@ class Moderation(TimedActionsMixin, commands.Cog):
         delay="Slowmode delay e.g. 30s 2m 5m (max 5 min). Omit to toggle.",
         length="Auto-disable after e.g. 10m 1h 3d. Omit for indefinite.",
     )
+    @app_commands.autocomplete(delay=_SLOW_DELAY_CHOICES, length=_SLOW_LENGTH_CHOICES)
     @has_channel_perms()
     async def slow(
         self, ctx, delay: Optional[str] = None, length: Optional[str] = None
@@ -942,6 +1056,7 @@ class Moderation(TimedActionsMixin, commands.Cog):
         duration="e.g. 5m 1h 1d (max 28d, default 10m)",
         reason="Optional reason",
     )
+    @app_commands.autocomplete(duration=_TIMEOUT_CHOICES)
     @has_timeout_perms()
     async def freeze(
         self,
@@ -1444,6 +1559,7 @@ class Moderation(TimedActionsMixin, commands.Cog):
         duration="How long — e.g. 1h, 12h, 7d (min 1 minute)",
         reason="Optional reason",
     )
+    @app_commands.autocomplete(duration=_BAN_LENGTH_CHOICES)
     @has_ban_perms()
     async def tempban(
         self,

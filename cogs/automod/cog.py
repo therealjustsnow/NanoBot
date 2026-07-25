@@ -38,10 +38,10 @@ Commands (all /automod, require Manage Server):
   /automod timeout              — Set the timeout duration for the "timeout" action (default 10 min)
   /automod attachments          — Set min attachment count for the Word + Attachment rule
   /automod badword add          — Add a word to the filter
-  /automod badword remove       — Remove a word from the filter
+  /automod badword remove       — Remove a word from the filter (pick from the list)
   /automod badword list         — List all filtered words (ephemeral)
   /automod attachword add       — Add a word to the attachment-word filter
-  /automod attachword remove    — Remove a word from the attachment-word filter
+  /automod attachword remove    — Remove a word from the attachment-word filter (pick from the list)
   /automod attachword list      — List all attachment-word filter words (ephemeral)
   /automod regex add            — Add a regex pattern to the filter
   /automod regex remove         — Remove a regex pattern (autocomplete by label)
@@ -80,6 +80,8 @@ from .helpers import (
 from .actions import _execute_action
 from .autocomplete import (
     _action_autocomplete,
+    _attachment_word_autocomplete,
+    _badword_autocomplete,
     _regex_pattern_autocomplete,
     _rule_autocomplete,
 )
@@ -511,7 +513,8 @@ class AutoMod(commands.Cog):
             )
 
     @badword_group.command(name="remove", description="Remove a word from the filter.")
-    @app_commands.describe(word="The word or phrase to remove")
+    @app_commands.describe(word="Pick a filtered word to remove")
+    @app_commands.autocomplete(word=_badword_autocomplete)
     @has_admin_perms()
     async def bw_remove(self, interaction: discord.Interaction, word: str):
         word = word.lower().strip()
@@ -614,7 +617,8 @@ class AutoMod(commands.Cog):
     @attachword_group.command(
         name="remove", description="Remove a word from the attachment-word filter."
     )
-    @app_commands.describe(word="Word or phrase to remove")
+    @app_commands.describe(word="Pick a filtered word to remove")
+    @app_commands.autocomplete(word=_attachment_word_autocomplete)
     @has_admin_perms()
     async def aw_remove(self, interaction: discord.Interaction, word: str):
         word = word.lower().strip()

@@ -10,6 +10,22 @@ Balance note (checked against the "≤~150 coins/hour of cooldown" guardrail):
            wealth *transfer* (not newly minted coins) plus a fine that's a
            pure sink, so the per-hour income guardrail doesn't apply the same
            way — it never inflates the total coin supply.
+
+Cross-server farming
+────────────────────
+Cooldown *claims* are global (utils/db/activities.py keys the stats row by
+user_id alone), so running /work in one server blocks it in every other one.
+That closes the obvious hole. The lengths above stay per-guild, which leaves a
+subtler one: with coins and items global too, the SHORTEST cooldown among a
+member's servers is the one that actually governs them, and a single permissive
+server would mint coins spendable everywhere.
+
+So each `*_COOLDOWN_MIN` below is a real floor, not a token one — a server may
+make an activity slower without limit, or up to twice as fast, and no faster.
+Halving the default at worst doubles the guardrail rate above; the old 60s
+minimum allowed 60x on /work. `helpers.effective_cooldown` re-applies the floor
+at claim time so a config row written before this (or edited straight in the
+database) can't outlive it.
 """
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -20,7 +36,7 @@ WORK_PAY_MIN = 60
 WORK_PAY_MAX = 140
 
 WORK_COOLDOWN_DEFAULT = 3600  # 1 hour
-WORK_COOLDOWN_MIN = 60
+WORK_COOLDOWN_MIN = WORK_COOLDOWN_DEFAULT // 2  # anti-farm floor, see module docstring
 WORK_COOLDOWN_MAX = 86_400
 
 # Lifetime shift count → (title, flat pay bonus). The highest threshold a
@@ -56,7 +72,7 @@ WORK_SCENES: list[str] = [
 # ══════════════════════════════════════════════════════════════════════════════
 
 MINE_COOLDOWN_DEFAULT = 1800  # 30 minutes
-MINE_COOLDOWN_MIN = 60
+MINE_COOLDOWN_MIN = MINE_COOLDOWN_DEFAULT // 2
 MINE_COOLDOWN_MAX = 86_400
 
 # 8% of digs yield nothing at all (a cave-in), independent of ore rarity.
@@ -101,7 +117,7 @@ PICKAXES: list[dict] = [
 # ══════════════════════════════════════════════════════════════════════════════
 
 HUNT_COOLDOWN_DEFAULT = 2700  # 45 minutes
-HUNT_COOLDOWN_MIN = 60
+HUNT_COOLDOWN_MIN = HUNT_COOLDOWN_DEFAULT // 2
 HUNT_COOLDOWN_MAX = 86_400
 
 HUNT_CATCHES: dict[str, dict] = {
@@ -126,7 +142,7 @@ HUNT_PADLOCK_CHANCE = 0.06  # independent chance of finding a defensive padlock
 # ══════════════════════════════════════════════════════════════════════════════
 
 EXPLORE_COOLDOWN_DEFAULT = 10_800  # 3 hours
-EXPLORE_COOLDOWN_MIN = 300
+EXPLORE_COOLDOWN_MIN = EXPLORE_COOLDOWN_DEFAULT // 2
 EXPLORE_COOLDOWN_MAX = 172_800
 
 EXPLORE_COINS_SMALL = (100, 400)
@@ -156,7 +172,7 @@ EXPLORE_FLAVOR: dict[str, str] = {
 # ══════════════════════════════════════════════════════════════════════════════
 
 ROB_COOLDOWN_DEFAULT = 14_400  # 4 hours
-ROB_COOLDOWN_MIN = 300
+ROB_COOLDOWN_MIN = ROB_COOLDOWN_DEFAULT // 2
 ROB_COOLDOWN_MAX = 172_800
 
 ROB_MIN_ROBBER_BALANCE = 250

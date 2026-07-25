@@ -27,6 +27,13 @@ Slash command budget: ZERO new top-level commands — /profile was already a
 flat command and becomes a group (its `card` fallback is the bare card), so
 everything here rides subcommands.
 
+Every cosmetic option is a tap-to-pick autocomplete (the /craft make + /fish
+buy pattern), because `banner_ember` is not something anyone should type on a
+phone. The pickers share `_cosmetic_choice`/`_matches` so a row reads the same
+wherever it appears, and locked cosmetics stay in the equip list carrying their
+unlock line — the picker answers "how do I get that one?" instead of coming
+back empty on a fresh account.
+
 ──────────────────────────────────────────────────────
 Commands
 ──────────────────────────────────────────────────────
@@ -412,9 +419,36 @@ class Identity(commands.Cog):
         embed.set_footer(text="✅ equipped · ▫️ owned · 🔒 locked")
         await ctx.reply(embed=embed)
 
+    # ── tap-to-pick plumbing ─────────────────────────────────────────────────
+    # Every cosmetic option is a picker (nobody types `banner_ember` from
+    # memory on a phone), and they all render a choice the same way so the
+    # lists read alike wherever they turn up.
+    def _cosmetic_choice(
+        self, d: cosmetics.CosmeticDef, mark: str, detail: str = ""
+    ) -> app_commands.Choice[str]:
+        """One picker row: state marker, rarity, slot, name, then the useful bit.
+
+        Choice names are plain text (no markdown) and hard-capped at 100 chars
+        by Discord, so the detail is what gets truncated, never the name.
+        """
+        label = (
+            f"{mark} {rarity_marker(d.rarity)} "
+            f"{cosmetics.SLOTS[d.slot].label}: {d.name}"
+        )
+        if detail:
+            label += f" — {detail}"
+        return app_commands.Choice(name=label[:100], value=d.key)
+
+    @staticmethod
+    def _matches(d: cosmetics.CosmeticDef, q: str) -> bool:
+        """Filter on anything someone might type: name, key, or slot."""
+        if not q:
+            return True
+        return q in d.name.lower() or q in d.key.lower() or q in d.slot.lower()
+
     # ── /profile equip ───────────────────────────────────────────────────────
     @profile.command(name="equip", description="Wear a cosmetic on your card.")
-    @app_commands.describe(cosmetic="Pick something you own")
+    @app_commands.describe(cosmetic="Pick one — locked ones show how to unlock")
     async def profile_equip(self, ctx: commands.Context, *, cosmetic: str):
         d = cosmetics.find(cosmetic)
         if d is None:
@@ -464,25 +498,39 @@ class Identity(commands.Cog):
 
     @profile_equip.autocomplete("cosmetic")
     async def _equip_ac(self, interaction: discord.Interaction, current: str):
-        """Only what they can actually wear, labelled by slot."""
+        """Tap-to-pick loadout, the /craft make + /fish buy pattern.
+
+        Wearable-now first, then what's already on, then what's still locked
+        with the unlock line attached — so the picker doubles as the "how do I
+        get that one?" answer instead of coming back empty on a new account.
+        The markers match /profile cosmetics: ✅ worn · ▫️ owned · 🔒 locked.
+        """
         q = (current or "").strip().lower()
         owned = await db.get_unlocked_cosmetics(interaction.user.id)
-        choices = []
+        equipped = await db.get_equipped(interaction.user.id)
+        worn = {key for keys in equipped.values() for key in keys}
+        ready: list[app_commands.Choice[str]] = []
+        already: list[app_commands.Choice[str]] = []
+        locked: list[app_commands.Choice[str]] = []
         for d in sorted(
             cosmetics.COSMETICS.values(), key=lambda c: (c.slot, c.sort, c.name)
         ):
+            if not self._matches(d, q):
+                continue
             default = (d.unlock or {}).get("kind") == "default"
-            if d.key not in owned and not default:
-                continue
-            if q and q not in d.name.lower() and q not in d.key.lower():
-                continue
-            label = f"{cosmetics.SLOTS[d.slot].label}: {d.name}"
-            choices.append(app_commands.Choice(name=label[:100], value=d.key))
-        return choices[:25]
+            if d.key in worn:
+                already.append(self._cosmetic_choice(d, "✅", "already worn"))
+            elif d.key in owned or default:
+                ready.append(self._cosmetic_choice(d, "▫️", d.description))
+            else:
+                locked.append(
+                    self._cosmetic_choice(d, "🔒", cosmetics.describe_unlock(d))
+                )
+        return (ready + already + locked)[:25]
 
     # ── /profile unequip ─────────────────────────────────────────────────────
     @profile.command(name="unequip", description="Take a cosmetic off your card.")
-    @app_commands.describe(cosmetic="What to remove (or a whole slot)")
+    @app_commands.describe(cosmetic="Pick what to take off (or clear a whole slot)")
     async def profile_unequip(self, ctx: commands.Context, *, cosmetic: str):
         equipped = await db.get_equipped(ctx.author.id)
         wanted = (cosmetic or "").strip().lower()
@@ -507,25 +555,27 @@ class Identity(commands.Cog):
 
     @profile_unequip.autocomplete("cosmetic")
     async def _unequip_ac(self, interaction: discord.Interaction, current: str):
+        """Only what's actually on the card right now, plus the clear-a-slot
+        shortcuts the command already accepts."""
         q = (current or "").strip().lower()
         equipped = await db.get_equipped(interaction.user.id)
-        choices = []
-        for slot, keys in equipped.items():
-            for key in keys:
+        choices: list[app_commands.Choice[str]] = []
+        for slot in cosmetics.SLOTS:
+            for key in equipped.get(slot, []):
                 d = cosmetics.get(key)
-                if d is None or (q and q not in d.name.lower()):
+                if d is None or not self._matches(d, q):
                     continue
-                choices.append(
-                    app_commands.Choice(
-                        name=f"{cosmetics.SLOTS[slot].label}: {d.name}"[:100],
-                        value=d.key,
-                    )
-                )
+                choices.append(self._cosmetic_choice(d, "✅", "worn — tap to remove"))
+        # Multi-value slots only: for a single-value slot, taking the one thing
+        # off *is* clearing it, so a second entry would just be a duplicate.
         for slot_def in cosmetics.SLOTS.values():
-            if slot_def.max_equipped > 1 and (not q or q in slot_def.key):
+            worn = len(equipped.get(slot_def.key, []))
+            if slot_def.max_equipped > 1 and worn and (not q or q in slot_def.key):
                 choices.append(
                     app_commands.Choice(
-                        name=f"Clear all {slot_def.label.lower()}",
+                        name=f"🧹 Clear all {slot_def.label.lower()} ({worn} worn)"[
+                            :100
+                        ],
                         value=slot_def.key,
                     )
                 )
@@ -598,7 +648,7 @@ class Identity(commands.Cog):
     )
     @app_commands.describe(
         cosmetic="Which cosmetic",
-        guild="Server id to award in (defaults to this server)",
+        guild="Which server to award in (defaults to this one)",
     )
     @commands.is_owner()
     async def profile_grantall(
@@ -680,6 +730,32 @@ class Identity(commands.Cog):
     async def _grantall_ac(self, interaction: discord.Interaction, current: str):
         return await self._catalogue_ac(interaction, current)
 
+    @profile_grantall.autocomplete("guild")
+    async def _grantall_guild_ac(self, interaction: discord.Interaction, current: str):
+        """Server picker, so a bulk grant never needs a hand-typed snowflake.
+
+        Owner-gated: unlike the cosmetic catalogue (which /profile cosmetics
+        already shows everyone), the guild list is not public, and an
+        autocomplete callback fires before the command's is_owner check.
+        """
+        if not await self.bot.is_owner(interaction.user):
+            return []
+        q = (current or "").strip().lower()
+        choices: list[app_commands.Choice[str]] = []
+        for g in sorted(
+            self.bot.guilds, key=lambda g: (-(g.member_count or 0), g.name)
+        ):
+            if q and q not in g.name.lower() and q not in str(g.id):
+                continue
+            here = " · this server" if g.id == interaction.guild_id else ""
+            choices.append(
+                app_commands.Choice(
+                    name=f"{g.name} — {g.member_count or 0:,} members{here}"[:100],
+                    value=str(g.id),
+                )
+            )
+        return choices[:25]
+
     @profile.command(
         name="revoke", description="Remove a cosmetic from a member (bot owner)."
     )
@@ -705,15 +781,14 @@ class Identity(commands.Cog):
     @profile_grant.autocomplete("cosmetic")
     @profile_revoke.autocomplete("cosmetic")
     async def _catalogue_ac(self, interaction: discord.Interaction, current: str):
+        """The whole catalogue — a grant is meant to hand out locked things."""
         q = (current or "").strip().lower()
         return [
-            app_commands.Choice(
-                name=f"{cosmetics.SLOTS[d.slot].label}: {d.name}"[:100], value=d.key
-            )
+            self._cosmetic_choice(d, "🎁", cosmetics.describe_unlock(d))
             for d in sorted(
                 cosmetics.COSMETICS.values(), key=lambda c: (c.slot, c.sort, c.name)
             )
-            if not q or q in d.name.lower() or q in d.key.lower()
+            if self._matches(d, q)
         ][:25]
 
 

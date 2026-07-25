@@ -30,7 +30,11 @@ Stats, tools, and cooldowns are GLOBAL — keyed by user, not (guild, user). A
 pickaxe bought in one server digs in all of them, and a cooldown claimed
 anywhere applies everywhere (which is what stops /work being farmed once per
 server). Each server still owns whether an activity is enabled and how long
-its cooldown lasts.
+its cooldown lasts — with one limit: because the claim is shared, the shortest
+cooldown among a member's servers is the one that governs them, so a per-guild
+length can go up freely but only down to the activity's floor (half the
+default). Every read of a length goes through `Activities._cooldown`, which
+applies that floor. See "Cross-server farming" in constants.py.
 
 Slash command budget: two flat commands (/work, /rob) plus two groups
 (/mine …, /adventure …) whose subcommands cost no extra top-level slots —
@@ -85,6 +89,7 @@ from .constants import (
 )
 from .helpers import (
     career_info,
+    effective_cooldown,
     hunt_injury_fine,
     next_career,
     next_pickaxe,
@@ -127,13 +132,24 @@ class Activities(commands.Cog):
         return h.fmt_coins(amount, econ["currency_name"], econ["currency_emoji"])
 
     # ── shared status helpers ────────────────────────────────────────────────
+    def _cooldown(self, cfg: dict, activity: str) -> int:
+        """This server's cooldown for an activity, floored.
+
+        The single place the length is read. Claims are global (one row per
+        user, not per guild+user), so the shortest length among a member's
+        servers is the one that governs them — the floor is what stops a
+        permissive server from becoming everyone's farm. See the "Cross-server
+        farming" note in constants.py.
+        """
+        return effective_cooldown(activity, cfg[f"{activity}_cooldown"])
+
     def _remaining(self, cfg: dict, stats: dict, activity: str) -> int:
         """Seconds left on an activity's cooldown (0 = ready). Read-only — the
         claim itself still happens atomically in db.try_claim_activity."""
         last = stats.get(f"last_{activity}", 0) or 0
         if not last:
             return 0
-        return max(0, int(cfg[f"{activity}_cooldown"] - (time.time() - last)))
+        return max(0, int(self._cooldown(cfg, activity) - (time.time() - last)))
 
     def _status_line(self, cfg: dict, stats: dict, activity: str) -> str:
         """ "Ready now" / "Ready in 12m" / "Disabled" for one activity."""
@@ -146,7 +162,7 @@ class Activities(commands.Cog):
 
     def _next_up(self, cfg: dict, activity: str) -> str:
         """Footer text telling a member when this activity comes back."""
-        return f"Next {activity} in {h.fmt_duration(cfg[f'{activity}_cooldown'])}"
+        return f"Next {activity} in {h.fmt_duration(self._cooldown(cfg, activity))}"
 
     # ══════════════════════════════════════════════════════════════════════════
     #  /work — flat, safe
@@ -174,7 +190,7 @@ class Activities(commands.Cog):
             )
         before = await db.get_activity_stats(ctx.author.id)
         retry = await db.try_claim_activity(
-            ctx.author.id, "work", time.time(), cfg["work_cooldown"]
+            ctx.author.id, "work", time.time(), self._cooldown(cfg, "work")
         )
         if retry:
             return await ctx.reply(
@@ -240,7 +256,7 @@ class Activities(commands.Cog):
                 embed=h.err("Mining is disabled on this server."), ephemeral=True
             )
         retry = await db.try_claim_activity(
-            ctx.author.id, "mine", time.time(), cfg["mine_cooldown"]
+            ctx.author.id, "mine", time.time(), self._cooldown(cfg, "mine")
         )
         if retry:
             return await ctx.reply(
@@ -396,7 +412,7 @@ class Activities(commands.Cog):
             embed.add_field(
                 name=f"{info['emoji']} {info['command']}",
                 value=f"{info['blurb']}\n{self._status_line(cfg, stats, activity)} · "
-                f"every {h.fmt_duration(cfg[f'{activity}_cooldown'])}",
+                f"every {h.fmt_duration(self._cooldown(cfg, activity))}",
                 inline=True,
             )
         embed.set_footer(text="Sell what you find with /inventory sell")
@@ -414,7 +430,7 @@ class Activities(commands.Cog):
                 embed=h.err("Hunting is disabled on this server."), ephemeral=True
             )
         retry = await db.try_claim_activity(
-            ctx.author.id, "hunt", time.time(), cfg["hunt_cooldown"]
+            ctx.author.id, "hunt", time.time(), self._cooldown(cfg, "hunt")
         )
         if retry:
             return await ctx.reply(
@@ -462,7 +478,7 @@ class Activities(commands.Cog):
                 embed=h.err("Exploring is disabled on this server."), ephemeral=True
             )
         retry = await db.try_claim_activity(
-            ctx.author.id, "explore", time.time(), cfg["explore_cooldown"]
+            ctx.author.id, "explore", time.time(), self._cooldown(cfg, "explore")
         )
         if retry:
             return await ctx.reply(
@@ -567,7 +583,7 @@ class Activities(commands.Cog):
             )
 
         retry = await db.try_claim_activity(
-            ctx.author.id, "rob", time.time(), cfg["rob_cooldown"]
+            ctx.author.id, "rob", time.time(), self._cooldown(cfg, "rob")
         )
         if retry:
             return await ctx.reply(
@@ -663,10 +679,18 @@ class Activities(commands.Cog):
             )
         lo, hi = ACTIVITY_COOLDOWN_BOUNDS[activity]
         if not lo <= seconds <= hi:
+            note = (
+                "\n\nThe minimum is a floor, not a suggestion: cooldowns are "
+                "shared across every server, so a faster setting here would "
+                "speed this activity up for your members everywhere."
+                if seconds < lo
+                else ""
+            )
             return await ctx.reply(
                 embed=h.err(
                     f"Cooldown for `/{activity}` must be between {lo:,} seconds "
-                    f"({h.fmt_duration(lo)}) and {hi:,} seconds ({h.fmt_duration(hi)})."
+                    f"({h.fmt_duration(lo)}) and {hi:,} seconds "
+                    f"({h.fmt_duration(hi)}).{note}"
                 ),
                 ephemeral=True,
             )
@@ -738,7 +762,7 @@ class Activities(commands.Cog):
                 state = "✅ enabled" if cfg[f"{activity}_enabled"] else "❌ disabled"
                 label += (
                     f" — {state} · every "
-                    f"{h.fmt_duration(cfg[f'{activity}_cooldown'])}"
+                    f"{h.fmt_duration(self._cooldown(cfg, activity))}"
                 )
             choices.append(app_commands.Choice(name=label[:100], value=activity))
         return choices
@@ -755,7 +779,7 @@ class Activities(commands.Cog):
         embed = h.embed("🪙 Activities Settings", color=h.BLUE)
         for activity in ACTIVITY_NAMES:
             enabled = cfg[f"{activity}_enabled"]
-            cooldown = cfg[f"{activity}_cooldown"]
+            cooldown = self._cooldown(cfg, activity)
             embed.add_field(
                 name=f"/{activity}",
                 value=f"{'✅ Enabled' if enabled else '❌ Disabled'}\n"
