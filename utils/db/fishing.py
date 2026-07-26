@@ -21,7 +21,17 @@ two servers.
 
 import time
 
-from ._core import _conn, _ensure_columns, register_init, rows_for_users
+from . import _cache
+from ._core import (
+    count_ahead,
+    _commit,
+    _conn,
+    _read_conn,
+    _ensure_columns,
+    fetch_one_returning,
+    register_init,
+    rows_for_users,
+)
 
 
 async def _ensure_fishing_tables():
@@ -50,7 +60,7 @@ async def _ensure_fishing_tables():
         "CREATE INDEX IF NOT EXISTS fishing_stats_earned "
         "ON fishing_stats (earned DESC)"
     )
-    await _conn().commit()
+    await _commit()
     # Fishing XP/levels and the once-a-day streak stamp — added after the
     # baseline table.
     await _ensure_columns(
@@ -61,6 +71,17 @@ async def _ensure_fishing_tables():
             "last_day": "INTEGER NOT NULL DEFAULT 0",
         },
     )
+    # Every other GLOBAL_STATS column needs its own index too (after the
+    # _ensure_columns above, since two of them are added there): without one,
+    # `/fish global <stat>` is a full scan plus a full sort of every angler in
+    # the database — measured ~330x slower than the indexed board at 50k rows —
+    # and it pays that twice, once for the page and once for the COUNT.
+    for _col in ("caught", "casts", "best_weight", "xp", "streak_days"):
+        await _conn().execute(
+            f"CREATE INDEX IF NOT EXISTS fishing_stats_{_col} "
+            f"ON fishing_stats ({_col} DESC)"
+        )
+    await _commit()
     # One row per unsold catch — the bag. Value is fixed at catch time (weight
     # roll included), so selling just sums and deletes.
     await _conn().execute("""
@@ -101,19 +122,21 @@ async def _ensure_fishing_tables():
             PRIMARY KEY (user_id, day)
         )
     """)
-    await _conn().commit()
+    await _commit()
 
 
 # ── Config ─────────────────────────────────────────────────────────────────────
 async def get_fishing_config(guild_id: int) -> dict:
+    cached = _cache.get("fishing_config", guild_id)
+    if cached is not None:
+        return cached
     async with _conn().execute(
         "SELECT enabled FROM fishing_config WHERE guild_id=?",
         (str(guild_id),),
     ) as cur:
         row = await cur.fetchone()
-    if row:
-        return {"enabled": bool(row["enabled"])}
-    return {"enabled": True}
+    enabled = bool(row["enabled"]) if row else True
+    return _cache.put("fishing_config", guild_id, {"enabled": enabled})
 
 
 async def set_fishing_config(guild_id: int, **kwargs) -> None:
@@ -124,7 +147,8 @@ async def set_fishing_config(guild_id: int, **kwargs) -> None:
         "ON CONFLICT(guild_id) DO UPDATE SET enabled=excluded.enabled",
         (str(guild_id), 1 if current["enabled"] else 0),
     )
-    await _conn().commit()
+    await _commit()
+    _cache.invalidate("fishing_config", guild_id)
 
 
 # ── Fisher stats ───────────────────────────────────────────────────────────────
@@ -179,7 +203,7 @@ async def try_claim_cast(user_id: int, now: float, cooldown: int) -> int:
         "WHERE excluded.last_cast - fishing_stats.last_cast >= ?",
         (str(user_id), float(now), int(cooldown)),
     )
-    await _conn().commit()
+    await _commit()
     if cur.rowcount > 0:
         return 0
     fisher = await get_fisher(user_id)
@@ -221,7 +245,7 @@ async def record_catch(
             "WHERE user_id=? AND best_weight < ?",
             (fish_key, float(weight), uid, float(weight)),
         )
-    await _conn().commit()
+    await _commit()
 
 
 async def add_fishing_earned(user_id: int, amount: int) -> None:
@@ -231,7 +255,7 @@ async def add_fishing_earned(user_id: int, amount: int) -> None:
         "ON CONFLICT(user_id) DO UPDATE SET earned=MAX(0, earned + ?)",
         (str(user_id), int(amount), int(amount)),
     )
-    await _conn().commit()
+    await _commit()
 
 
 async def set_rod_level(user_id: int, new_level: int, *, expected: int) -> bool:
@@ -250,7 +274,7 @@ async def set_rod_level(user_id: int, new_level: int, *, expected: int) -> bool:
         "UPDATE fishing_stats SET rod_level=? WHERE user_id=? AND rod_level=?",
         (int(new_level), str(user_id), int(expected)),
     )
-    await _conn().commit()
+    await _commit()
     return cur.rowcount > 0
 
 
@@ -258,16 +282,17 @@ async def set_rod_level(user_id: int, new_level: int, *, expected: int) -> bool:
 async def add_fishing_xp(user_id: int, amount: int) -> int:
     """Add (fishing) XP atomically. Returns the new lifetime XP total."""
     uid = str(user_id)
-    await _conn().execute(
+    row = await fetch_one_returning(
         "INSERT INTO fishing_stats (user_id, xp) VALUES (?,MAX(0,?)) "
         "ON CONFLICT(user_id) DO UPDATE SET xp=MAX(0, xp + ?)",
         (uid, int(amount), int(amount)),
+        returning="xp",
     )
-    await _conn().commit()
-    async with _conn().execute(
-        "SELECT xp FROM fishing_stats WHERE user_id=?", (uid,)
-    ) as cur:
-        row = await cur.fetchone()
+    if row is None:
+        async with _conn().execute(
+            "SELECT xp FROM fishing_stats WHERE user_id=?", (uid,)
+        ) as cur:
+            row = await cur.fetchone()
     return row["xp"] if row else 0
 
 
@@ -284,7 +309,7 @@ async def try_claim_daily_streak(user_id: int, day: int, streak: int) -> bool:
         "WHERE user_id=? AND last_day<?",
         (int(day), int(streak), str(user_id), int(day)),
     )
-    await _conn().commit()
+    await _commit()
     return cur.rowcount > 0
 
 
@@ -302,6 +327,18 @@ async def get_bag(user_id: int) -> list[dict]:
         {"fish_key": r["fish_key"], "qty": r["qty"], "total_value": r["total_value"]}
         for r in rows
     ]
+
+
+async def count_bag(user_id: int) -> int:
+    """How many unsold catches a member is carrying.
+
+    /fish cast only wants the number for its footer; get_bag's GROUP BY builds
+    a per-species breakdown over a bag with no upper bound to produce it.
+    """
+    async with _conn().execute(
+        "SELECT COUNT(*) FROM fishing_catches WHERE user_id=?", (str(user_id),)
+    ) as cur:
+        return (await cur.fetchone())[0]
 
 
 async def sell_catches(user_id: int, fish_key: str | None = None) -> tuple[int, int]:
@@ -324,7 +361,7 @@ async def sell_catches(user_id: int, fish_key: str | None = None) -> tuple[int, 
             sql.replace("SELECT COUNT(*), COALESCE(SUM(value), 0) FROM", "DELETE FROM"),
             params,
         )
-        await _conn().commit()
+        await _commit()
     return count, total
 
 
@@ -341,7 +378,7 @@ async def get_species_counts(user_id: int) -> dict[str, int]:
 # ── Leaderboard (lifetime fishing earnings) ────────────────────────────────────
 async def get_fishing_leaderboard(limit: int = 10, offset: int = 0) -> list[dict]:
     """Top anglers by lifetime earnings, across every server."""
-    async with _conn().execute(
+    async with _read_conn().execute(
         "SELECT user_id, earned, caught FROM fishing_stats WHERE earned > 0 "
         "ORDER BY earned DESC, user_id ASC LIMIT ? OFFSET ?",
         (int(limit), int(offset)),
@@ -367,7 +404,7 @@ async def get_fishing_leaderboard_for(user_ids) -> list[dict]:
 
 
 async def count_fishers() -> int:
-    async with _conn().execute(
+    async with _read_conn().execute(
         "SELECT COUNT(*) FROM fishing_stats WHERE earned > 0"
     ) as cur:
         return (await cur.fetchone())[0]
@@ -378,10 +415,9 @@ async def get_fishing_rank(user_id: int) -> tuple[int, int] | None:
     fisher = await get_fisher(user_id)
     if fisher["earned"] <= 0:
         return None
-    async with _conn().execute(
-        "SELECT COUNT(*) FROM fishing_stats WHERE earned > ?", (fisher["earned"],)
-    ) as cur:
-        ahead = (await cur.fetchone())[0]
+    ahead = await count_ahead(
+        "SELECT COUNT(*) FROM fishing_stats WHERE earned > ?", fisher["earned"]
+    )
     return ahead + 1, fisher["earned"]
 
 
@@ -397,7 +433,7 @@ async def get_or_create_quest(
         "(user_id, day, quest_key, target, progress, claimed) VALUES (?,?,?,?,0,0)",
         (uid, day, quest_key, int(target)),
     )
-    await _conn().commit()
+    await _commit()
     async with _conn().execute(
         "SELECT quest_key, target, progress, claimed FROM fishing_quests "
         "WHERE user_id=? AND day=?",
@@ -426,7 +462,7 @@ async def bump_quest_progress(user_id: int, day: int, amount: int) -> int:
             "WHERE user_id=? AND day=?",
             (int(amount), uid, day),
         )
-        await _conn().commit()
+        await _commit()
     async with _conn().execute(
         "SELECT progress FROM fishing_quests WHERE user_id=? AND day=?",
         (uid, day),
@@ -445,7 +481,7 @@ async def try_claim_quest_reward(user_id: int, day: int) -> bool:
         "WHERE user_id=? AND day=? AND claimed=0 AND progress>=target",
         (str(user_id), int(day)),
     )
-    await _conn().commit()
+    await _commit()
     return cur.rowcount > 0
 
 
@@ -477,7 +513,7 @@ async def get_global_leaderboard(
     stat = GLOBAL_STATS.get(stat_key)
     if stat is None:
         raise ValueError(f"unknown global fishing stat {stat_key!r}")
-    async with _conn().execute(
+    async with _read_conn().execute(
         f"SELECT user_id, {stat['column']} AS val FROM fishing_stats "
         f"WHERE {stat['column']} > 0 "
         f"ORDER BY val {stat['order']}, user_id ASC LIMIT ? OFFSET ?",
@@ -491,7 +527,7 @@ async def count_global_leaderboard(stat_key: str) -> int:
     stat = GLOBAL_STATS.get(stat_key)
     if stat is None:
         raise ValueError(f"unknown global fishing stat {stat_key!r}")
-    async with _conn().execute(
+    async with _read_conn().execute(
         f"SELECT COUNT(*) FROM fishing_stats WHERE {stat['column']} > 0"
     ) as cur:
         return (await cur.fetchone())[0]
@@ -502,7 +538,7 @@ async def get_global_rank(stat_key: str, user_id: int) -> tuple[int, float] | No
     stat = GLOBAL_STATS.get(stat_key)
     if stat is None:
         raise ValueError(f"unknown global fishing stat {stat_key!r}")
-    async with _conn().execute(
+    async with _read_conn().execute(
         f"SELECT {stat['column']} AS val FROM fishing_stats WHERE user_id=?",
         (str(user_id),),
     ) as cur:
@@ -510,10 +546,9 @@ async def get_global_rank(stat_key: str, user_id: int) -> tuple[int, float] | No
     val = row["val"] if row and row["val"] is not None else 0
     if val <= 0:
         return None
-    async with _conn().execute(
-        f"SELECT COUNT(*) FROM fishing_stats WHERE {stat['column']} > ?", (val,)
-    ) as cur:
-        ahead = (await cur.fetchone())[0]
+    ahead = await count_ahead(
+        f"SELECT COUNT(*) FROM fishing_stats WHERE {stat['column']} > ?", val
+    )
     return ahead + 1, val
 
 

@@ -439,6 +439,28 @@ def weighted_pick(table, roll: float):
     return table[-1][0]
 
 
+def spawn_tracked(tasks: dict, key, coro) -> asyncio.Task:
+    """Start a background task under `key`, cancelling whatever it replaces.
+
+    Every restart-safe cog keeps a ``{key: Task}`` dict of live timers —
+    reminders, recurring posts, auto-unbans, gatekeeper unmutes/kicks. Assigning
+    straight into that dict silently orphans the task already sitting there: it
+    keeps running, un-cancellable, and fires alongside its replacement. That is
+    exactly what used to happen when `on_ready` re-fired after a gateway
+    reconnect and every cog re-armed its schedules — one duplicate delivery per
+    reconnect, forever.
+
+    Cancelling first makes re-arming idempotent, so restore paths are safe to
+    run more than once.
+    """
+    old = tasks.get(key)
+    if old is not None and not old.done():
+        old.cancel()
+    task = asyncio.create_task(coro)
+    tasks[key] = task
+    return task
+
+
 class KeyedLocks:
     """Per-key asyncio locks that free themselves when idle.
 

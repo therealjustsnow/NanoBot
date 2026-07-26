@@ -6,7 +6,7 @@ module holds the warning + threshold config accessors and registers its table se
 db.init() creates them in the right order.
 """
 
-from ._core import _conn, register_init
+from ._core import _commit, _conn, register_init
 
 # ══════════════════════════════════════════════════════════════════════════════
 #  Warnings
@@ -36,7 +36,7 @@ async def _ensure_warnings_tables():
             dm_user    INTEGER NOT NULL DEFAULT 1
         )
     """)
-    await _conn().commit()
+    await _commit()
 
 
 async def add_warning(
@@ -53,7 +53,7 @@ async def add_warning(
         "VALUES (?,?,?,?,?,?)",
         (str(guild_id), str(user_id), reason, by_id, by_name, created_at),
     )
-    await _conn().commit()
+    await _commit()
     async with _conn().execute(
         "SELECT COUNT(*) FROM warnings WHERE guild_id=? AND user_id=?",
         (str(guild_id), str(user_id)),
@@ -94,7 +94,7 @@ async def clear_warnings(guild_id: int, user_id: int) -> int:
         "DELETE FROM warnings WHERE guild_id=? AND user_id=?",
         (str(guild_id), str(user_id)),
     )
-    await _conn().commit()
+    await _commit()
     return cur.rowcount
 
 
@@ -122,7 +122,7 @@ async def set_warn_config(
         "ban_at=excluded.ban_at, dm_user=excluded.dm_user",
         (str(guild_id), kick_at, ban_at, 1 if dm_user else 0),
     )
-    await _conn().commit()
+    await _commit()
 
 
 register_init(_ensure_warnings_tables)

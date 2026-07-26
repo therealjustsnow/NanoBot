@@ -70,7 +70,7 @@ Rules that keep the layers decoupled:
 | `/hunt` | 45m | Materials + rare trophy; injury fine risk; drops `/rob` defense |
 | `/explore` | 3h | High variance; treasure keys/chests/charms |
 | `/rob` | 4h | PvP; capped steal, fine on failure, item counterplay (`rob_shield`) |
-| `/fish` | ~60s | High-frequency core loop: XP, streaks, quests, events, bait |
+| `/fish` | ~20s | High-frequency core loop: XP, streaks, quests, events, bait |
 | `/casino …` | none | Pure risk; house edge 3–8%, progressive jackpot as long-shot |
 | `/daily`, `/squad`, `/raid` | 24h/social | Existing social/co-op faucets, unchanged |
 

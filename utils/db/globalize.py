@@ -439,3 +439,22 @@ async def drop_fishing_cooldown_setting(conn):
     )
     await conn.execute("DROP TABLE fishing_config")
     await conn.execute("ALTER TABLE fishing_config_new RENAME TO fishing_config")
+
+
+@migration(3)
+async def rescale_default_casino_limits(conn):
+    """Move guilds still on the old bet caps onto the rebalanced defaults.
+
+    The cast cooldown drop (60s -> 20s) tripled hourly income, so a 1,000-coin
+    ceiling stopped being a meaningful stake. Only rows that still hold the
+    *exact* old defaults are touched — a guild that ran `/casino limit` picked
+    its own numbers and keeps them. Safe to re-run: after the update no row
+    matches the old pair any more (unless an admin deliberately sets it back,
+    which is their call and this migration won't run again anyway).
+    """
+    cur = await conn.execute(
+        "UPDATE casino_config SET min_bet=25, max_bet=3000 "
+        "WHERE min_bet=10 AND max_bet=1000"
+    )
+    if cur.rowcount:
+        log.info("Rescaled default casino bet limits for %d guild(s)", cur.rowcount)

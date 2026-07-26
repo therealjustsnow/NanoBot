@@ -62,12 +62,16 @@ _EXTRACTORS: dict[str, tuple[str, Callable]] = {
 }
 
 
-async def compute_stats(
+async def compute_stats_with_sources(
     user_id: int, keys: "list[str] | None" = None
-) -> dict[str, float]:
-    """Batch-read every requested stat key (default: every registered key),
-    fetching each underlying source exactly once regardless of how many keys
-    ride on it."""
+) -> "tuple[dict[str, float], dict]":
+    """`compute_stats`, plus the raw source rows it read on the way.
+
+    A caller that wants both the derived numbers and the rows behind them — the
+    /profile card wants the whole `fishing_stats`/`casino_stats`/
+    `activities_stats` rows, not just the handful of keys extracted from each —
+    would otherwise re-query rows this call already has in hand.
+    """
     wanted = list(_EXTRACTORS) if keys is None else list(dict.fromkeys(keys))
     needed_sources = {_EXTRACTORS[k][0] for k in wanted if k in _EXTRACTORS}
     raw = {name: await _SOURCES[name](user_id) for name in needed_sources}
@@ -78,7 +82,17 @@ async def compute_stats(
             continue
         source, extract = entry
         out[key] = extract(raw[source])
-    return out
+    return out, raw
+
+
+async def compute_stats(
+    user_id: int, keys: "list[str] | None" = None
+) -> dict[str, float]:
+    """Batch-read every requested stat key (default: every registered key),
+    fetching each underlying source exactly once regardless of how many keys
+    ride on it."""
+    stats, _raw = await compute_stats_with_sources(user_id, keys)
+    return stats
 
 
 def _make_provider(key: str) -> Callable[[int], Awaitable]:

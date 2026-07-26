@@ -131,6 +131,18 @@ class Casino(commands.Cog):
     def _money(self, econ: dict, amount: int) -> str:
         return h.fmt_coins(amount, econ["currency_name"], econ["currency_emoji"])
 
+    async def _short_funds(self, econ: dict, user_id: int, bet: int):
+        """The "you can't cover that bet" embed, built after the lock is gone.
+
+        Every game shares it, and reading the balance here keeps that read (and
+        the reply that follows) off the member's economy lock.
+        """
+        balance = await db.get_balance(user_id)
+        return h.err(
+            f"You need {self._money(econ, bet)} to play — you have "
+            f"{self._money(econ, balance)}."
+        )
+
     def _bet_error(self, cfg: dict, bet: int) -> Optional[str]:
         if bet <= 0:
             return "Bet must be a positive number of coins."
@@ -409,19 +421,20 @@ class Casino(commands.Cog):
 
         econ = await db.get_econ_config(ctx.guild.id)
         async with self._lock(ctx.author.id):
-            if not await db.try_debit_coins(ctx.author.id, bet):
-                balance = await db.get_balance(ctx.author.id)
-                return await ctx.reply(
-                    embed=h.err(
-                        f"You need {self._money(econ, bet)} to play — you have "
-                        f"{self._money(econ, balance)}."
-                    ),
-                    ephemeral=True,
+            # Settle under the lock; the shortfall reply goes out after
+            # releasing it, so a Discord round trip never holds a member's
+            # economy lock.
+            paid = await db.try_debit_coins(ctx.author.id, bet)
+            if paid:
+                stats = await db.get_casino_stats(ctx.author.id)
+                outcome = resolve_flip(bet, choice, random.random())
+                final_payout, new_stats, chal_hint = await self._settle_common(
+                    ctx.guild.id, ctx.author.id, bet, stats["streak"], outcome["payout"]
                 )
-            stats = await db.get_casino_stats(ctx.author.id)
-            outcome = resolve_flip(bet, choice, random.random())
-            final_payout, new_stats, chal_hint = await self._settle_common(
-                ctx.guild.id, ctx.author.id, bet, stats["streak"], outcome["payout"]
+        if not paid:
+            return await ctx.reply(
+                embed=await self._short_funds(econ, ctx.author.id, bet),
+                ephemeral=True,
             )
 
         if outcome["won"]:
@@ -452,23 +465,24 @@ class Casino(commands.Cog):
 
         econ = await db.get_econ_config(ctx.guild.id)
         async with self._lock(ctx.author.id):
-            if not await db.try_debit_coins(ctx.author.id, bet):
-                balance = await db.get_balance(ctx.author.id)
-                return await ctx.reply(
-                    embed=h.err(
-                        f"You need {self._money(econ, bet)} to play — you have "
-                        f"{self._money(econ, balance)}."
-                    ),
-                    ephemeral=True,
+            # Settle under the lock; the shortfall reply goes out after
+            # releasing it, so a Discord round trip never holds a member's
+            # economy lock.
+            paid = await db.try_debit_coins(ctx.author.id, bet)
+            if paid:
+                stats = await db.get_casino_stats(ctx.author.id)
+                outcome = resolve_dice(
+                    bet,
+                    (random.random(), random.random()),
+                    (random.random(), random.random()),
                 )
-            stats = await db.get_casino_stats(ctx.author.id)
-            outcome = resolve_dice(
-                bet,
-                (random.random(), random.random()),
-                (random.random(), random.random()),
-            )
-            final_payout, new_stats, chal_hint = await self._settle_common(
-                ctx.guild.id, ctx.author.id, bet, stats["streak"], outcome["payout"]
+                final_payout, new_stats, chal_hint = await self._settle_common(
+                    ctx.guild.id, ctx.author.id, bet, stats["streak"], outcome["payout"]
+                )
+        if not paid:
+            return await ctx.reply(
+                embed=await self._short_funds(econ, ctx.author.id, bet),
+                ephemeral=True,
             )
 
         rolls_desc = (
@@ -506,26 +520,27 @@ class Casino(commands.Cog):
         econ = await db.get_econ_config(ctx.guild.id)
         jackpot_award = 0
         async with self._lock(ctx.author.id):
-            if not await db.try_debit_coins(ctx.author.id, bet):
-                balance = await db.get_balance(ctx.author.id)
-                return await ctx.reply(
-                    embed=h.err(
-                        f"You need {self._money(econ, bet)} to play — you have "
-                        f"{self._money(econ, balance)}."
-                    ),
-                    ephemeral=True,
+            # Settle under the lock; the shortfall reply goes out after
+            # releasing it, so a Discord round trip never holds a member's
+            # economy lock.
+            paid = await db.try_debit_coins(ctx.author.id, bet)
+            if paid:
+                stats = await db.get_casino_stats(ctx.author.id)
+                outcome = resolve_slots(
+                    bet, (random.random(), random.random(), random.random())
                 )
-            stats = await db.get_casino_stats(ctx.author.id)
-            outcome = resolve_slots(
-                bet, (random.random(), random.random(), random.random())
+                final_payout, new_stats, chal_hint = await self._settle_common(
+                    ctx.guild.id, ctx.author.id, bet, stats["streak"], outcome["payout"]
+                )
+                if outcome["jackpot_win"]:
+                    jackpot_award = await db.try_claim_jackpot(ctx.guild.id)
+                    if jackpot_award:
+                        await db.add_coins(ctx.author.id, jackpot_award)
+        if not paid:
+            return await ctx.reply(
+                embed=await self._short_funds(econ, ctx.author.id, bet),
+                ephemeral=True,
             )
-            final_payout, new_stats, chal_hint = await self._settle_common(
-                ctx.guild.id, ctx.author.id, bet, stats["streak"], outcome["payout"]
-            )
-            if outcome["jackpot_win"]:
-                jackpot_award = await db.try_claim_jackpot(ctx.guild.id)
-                if jackpot_award:
-                    await db.add_coins(ctx.author.id, jackpot_award)
 
         reels = " ".join(outcome["reels"])
         if outcome["outcome"] == "triple":
@@ -577,20 +592,21 @@ class Casino(commands.Cog):
 
         econ = await db.get_econ_config(ctx.guild.id)
         async with self._lock(ctx.author.id):
-            if not await db.try_debit_coins(ctx.author.id, bet):
-                balance = await db.get_balance(ctx.author.id)
-                return await ctx.reply(
-                    embed=h.err(
-                        f"You need {self._money(econ, bet)} to play — you have "
-                        f"{self._money(econ, balance)}."
-                    ),
-                    ephemeral=True,
+            # Settle under the lock; the shortfall reply goes out after
+            # releasing it, so a Discord round trip never holds a member's
+            # economy lock.
+            paid = await db.try_debit_coins(ctx.author.id, bet)
+            if paid:
+                stats = await db.get_casino_stats(ctx.author.id)
+                number = spin_number(random.random())
+                outcome = resolve_roulette(bet, parsed_space, number)
+                final_payout, new_stats, chal_hint = await self._settle_common(
+                    ctx.guild.id, ctx.author.id, bet, stats["streak"], outcome["payout"]
                 )
-            stats = await db.get_casino_stats(ctx.author.id)
-            number = spin_number(random.random())
-            outcome = resolve_roulette(bet, parsed_space, number)
-            final_payout, new_stats, chal_hint = await self._settle_common(
-                ctx.guild.id, ctx.author.id, bet, stats["streak"], outcome["payout"]
+        if not paid:
+            return await ctx.reply(
+                embed=await self._short_funds(econ, ctx.author.id, bet),
+                ephemeral=True,
             )
 
         color_emoji = {"red": "🔴", "black": "⚫", "green": "🟢"}[outcome["color"]]
@@ -649,55 +665,62 @@ class Casino(commands.Cog):
 
         econ = await db.get_econ_config(ctx.guild.id)
         async with self._lock(ctx.author.id):
-            if not await db.try_debit_coins(ctx.author.id, bet):
-                balance = await db.get_balance(ctx.author.id)
-                return await ctx.reply(
-                    embed=h.err(
-                        f"You need {self._money(econ, bet)} to play — you have "
-                        f"{self._money(econ, balance)}."
-                    ),
-                    ephemeral=True,
-                )
-            stats = await db.get_casino_stats(ctx.author.id)
-            streak = stats["streak"]
-            shoe = new_shoe(BLACKJACK_DECKS)
-            random.shuffle(shoe)
-            player_cards = [shoe.pop(), shoe.pop()]
-            dealer_cards = [shoe.pop(), shoe.pop()]
-
-            if is_blackjack(player_cards) or is_blackjack(dealer_cards):
-                # Already holding the lock from the debit above — settle
-                # in-place rather than recursing into settle_blackjack_hand
-                # (which acquires the same non-reentrant lock). Resolves in
-                # one round trip, so there's no open hand to persist.
-                result = await self._settle_blackjack_locked(
-                    ctx.guild.id, ctx.author.id, bet, streak, player_cards, dealer_cards
-                )
-                embed = _bj_embed(
-                    player_cards=player_cards,
-                    dealer_cards=dealer_cards,
-                    hide_dealer=False,
-                    title=result["title"],
-                    color=result["color"],
-                    footer=result["footer"],
-                )
-                return await ctx.reply(embed=embed)
-
-            # Persist the open hand now — bet already debited — before ever
-            # showing the buttons, so a restart mid-hand can resume or
-            # auto-settle it instead of orphaning the bet.
-            created_at = time.time()
-            hand_id = await db.create_blackjack_hand(
-                ctx.guild.id,
-                ctx.channel.id,
-                ctx.author.id,
-                bet,
-                streak,
-                shoe,
-                player_cards,
-                dealer_cards,
-                created_at,
+            # Settle under the lock; the shortfall reply goes out after
+            # releasing it, so a Discord round trip never holds a member's
+            # economy lock.
+            paid = await db.try_debit_coins(ctx.author.id, bet)
+            if paid:
+                stats = await db.get_casino_stats(ctx.author.id)
+                streak = stats["streak"]
+                shoe = new_shoe(BLACKJACK_DECKS)
+                random.shuffle(shoe)
+                player_cards = [shoe.pop(), shoe.pop()]
+                dealer_cards = [shoe.pop(), shoe.pop()]
+                natural = is_blackjack(player_cards) or is_blackjack(dealer_cards)
+                if natural:
+                    # Already holding the lock from the debit above — settle
+                    # in-place rather than recursing into settle_blackjack_hand
+                    # (which acquires the same non-reentrant lock). Resolves in
+                    # one round trip, so there's no open hand to persist.
+                    result = await self._settle_blackjack_locked(
+                        ctx.guild.id,
+                        ctx.author.id,
+                        bet,
+                        streak,
+                        player_cards,
+                        dealer_cards,
+                    )
+                else:
+                    # Persist the open hand now — bet already debited — before
+                    # ever showing the buttons, so a restart mid-hand can resume
+                    # or auto-settle it instead of orphaning the bet.
+                    created_at = time.time()
+                    hand_id = await db.create_blackjack_hand(
+                        ctx.guild.id,
+                        ctx.channel.id,
+                        ctx.author.id,
+                        bet,
+                        streak,
+                        shoe,
+                        player_cards,
+                        dealer_cards,
+                        created_at,
+                    )
+        if not paid:
+            return await ctx.reply(
+                embed=await self._short_funds(econ, ctx.author.id, bet),
+                ephemeral=True,
             )
+        if natural:
+            embed = _bj_embed(
+                player_cards=player_cards,
+                dealer_cards=dealer_cards,
+                hide_dealer=False,
+                title=result["title"],
+                color=result["color"],
+                footer=result["footer"],
+            )
+            return await ctx.reply(embed=embed)
 
         view = BlackjackView(
             self,

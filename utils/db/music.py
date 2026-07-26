@@ -12,7 +12,7 @@ import aiosqlite
 
 from utils import db_crypto
 
-from ._core import _conn, _ensure_columns, register_init
+from ._core import _commit, _conn, _ensure_columns, register_init
 
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -81,7 +81,7 @@ async def _ensure_music_tables() -> None:
         CREATE INDEX IF NOT EXISTS music_history_guild
             ON music_history (guild_id, id);
     """)
-    await _conn().commit()
+    await _commit()
 
     # Migration: add columns to music_settings rows that pre-date persistence.
     await _ensure_columns(
@@ -106,7 +106,7 @@ async def set_music_stay(guild_id: int, value: bool) -> None:
         "ON CONFLICT(guild_id) DO UPDATE SET stay_connected=excluded.stay_connected",
         (str(guild_id), 1 if value else 0),
     )
-    await _conn().commit()
+    await _commit()
 
 
 async def add_autoplaylist_entry(
@@ -125,7 +125,7 @@ async def add_autoplaylist_entry(
                 int(time.time()),
             ),
         )
-        await _conn().commit()
+        await _commit()
         return True
     except db_crypto.INTEGRITY_ERRORS:
         return False
@@ -138,7 +138,7 @@ async def remove_autoplaylist_entry(guild_id: int, url: str) -> bool:
         (str(guild_id), url),
     ) as cur:
         changed = cur.rowcount
-    await _conn().commit()
+    await _commit()
     return changed > 0
 
 
@@ -162,7 +162,7 @@ async def clear_autoplaylist(guild_id: int) -> int:
         (str(guild_id),),
     ) as cur:
         changed = cur.rowcount
-    await _conn().commit()
+    await _commit()
     return changed
 
 
@@ -242,7 +242,7 @@ async def save_music_queue(
             loop_mode,
         ),
     )
-    await _conn().commit()
+    await _commit()
 
 
 async def clear_music_queue(guild_id: int) -> None:
@@ -254,7 +254,7 @@ async def clear_music_queue(guild_id: int) -> None:
         "loop_mode=NULL WHERE guild_id=?",
         (gid,),
     )
-    await _conn().commit()
+    await _commit()
 
 
 async def get_all_persisted_queues() -> list[dict]:
@@ -316,7 +316,7 @@ async def add_music_song_block(
                 str(added_by) if added_by else None,
             ),
         )
-        await _conn().commit()
+        await _commit()
         return True
     except db_crypto.INTEGRITY_ERRORS:
         return False
@@ -327,7 +327,7 @@ async def remove_music_song_block(guild_id: int, pattern: str) -> bool:
         "DELETE FROM music_song_blocklist WHERE guild_id=? AND pattern=?",
         (str(guild_id), pattern.lower().strip()),
     )
-    await _conn().commit()
+    await _commit()
     return cur.rowcount > 0
 
 
@@ -350,7 +350,7 @@ async def add_music_user_block(
             "VALUES (?,?,?)",
             (str(guild_id), str(user_id), str(added_by) if added_by else None),
         )
-        await _conn().commit()
+        await _commit()
         return True
     except db_crypto.INTEGRITY_ERRORS:
         return False
@@ -361,7 +361,7 @@ async def remove_music_user_block(guild_id: int, user_id: int) -> bool:
         "DELETE FROM music_user_blocklist WHERE guild_id=? AND user_id=?",
         (str(guild_id), str(user_id)),
     )
-    await _conn().commit()
+    await _commit()
     return cur.rowcount > 0
 
 
@@ -408,7 +408,7 @@ async def add_music_history(
         "(SELECT id FROM music_history WHERE guild_id=? ORDER BY id DESC LIMIT ?)",
         (gid, gid, keep),
     )
-    await _conn().commit()
+    await _commit()
 
 
 async def get_music_history(guild_id: int, limit: int = 25) -> list[dict]:
@@ -435,7 +435,7 @@ async def clear_music_history(guild_id: int) -> int:
         "DELETE FROM music_history WHERE guild_id=?", (str(guild_id),)
     ) as cur:
         changed = cur.rowcount
-    await _conn().commit()
+    await _commit()
     return changed
 
 

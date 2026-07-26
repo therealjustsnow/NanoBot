@@ -72,8 +72,33 @@ async def test_timed_effect_lifecycle():
     effs = await db.get_active_effects(A, now=1030.0)
     assert effs["luck"]["magnitude"] == 0.5
     assert effs["luck"]["expires_at"] == 1060.0
-    # Expired → pruned on read.
+    # Expired → filtered out of the read.
     assert await db.get_active_effects(A, now=1060.0) == {}
+
+
+async def test_reading_effects_never_writes():
+    """get_active_effects is on /fish cast's hot path; it must not write."""
+    await db.grant_effect(A, "luck", 0.5, duration=60, now=1000.0)
+    async with db._conn().execute("PRAGMA data_version") as cur:
+        before = (await cur.fetchone())[0]
+    assert await db.get_active_effects(A, now=1030.0)
+    assert await db.get_active_effects(A, now=9999.0) == {}
+    # The expired row is still there — a read didn't delete it …
+    async with db._conn().execute("SELECT COUNT(*) FROM user_effects") as cur:
+        assert (await cur.fetchone())[0] == 1
+    async with db._conn().execute("PRAGMA data_version") as cur:
+        assert (await cur.fetchone())[0] == before
+    # … and the sweep is what reclaims it.
+    assert await db.prune_effects(A, now=9999.0) == 1
+    async with db._conn().execute("SELECT COUNT(*) FROM user_effects") as cur:
+        assert (await cur.fetchone())[0] == 0
+
+
+async def test_grant_effect_prunes_expired_rows():
+    await db.grant_effect(A, "luck", 0.5, duration=60, now=1000.0)
+    await db.grant_effect(A, "bait", 1.0, uses=3, now=2000.0)
+    async with db._conn().execute("SELECT effect_key FROM user_effects") as cur:
+        assert [r["effect_key"] for r in await cur.fetchall()] == ["bait"]
 
 
 async def test_regrant_replaces_effect():
@@ -121,10 +146,21 @@ async def test_global_event_visible_everywhere():
 
 async def test_events_expire_and_prune():
     await db.start_event(G, "frenzy", 2.0, 600, now=1000.0)
+    # Reads filter expired rows out without writing — the read path is a read.
     assert await db.get_active_events(G, now=1600.0) == []
-    # Pruned, not just filtered.
+    async with db._conn().execute("SELECT COUNT(*) FROM economy_events") as cur:
+        assert (await cur.fetchone())[0] == 1
+    # Reclaimed by the sweep, which start_event also runs on the way past.
+    assert await db.prune_events(now=1600.0) == 1
     async with db._conn().execute("SELECT COUNT(*) FROM economy_events") as cur:
         assert (await cur.fetchone())[0] == 0
+
+
+async def test_start_event_prunes_expired_rows():
+    await db.start_event(G, "frenzy", 2.0, 600, now=1000.0)
+    await db.start_event(G, "double_xp", 2.0, 600, now=2000.0)
+    async with db._conn().execute("SELECT COUNT(*) FROM economy_events") as cur:
+        assert (await cur.fetchone())[0] == 1
 
 
 async def test_end_event():

@@ -6,7 +6,7 @@ module holds the welcome/leave message accessors and registers its table setup w
 db.init() creates them in the right order.
 """
 
-from ._core import _conn, _ensure_columns, register_init
+from ._core import _commit, _conn, _ensure_columns, register_init
 
 # ══════════════════════════════════════════════════════════════════════════════
 #  Welcome / Leave
@@ -44,7 +44,7 @@ async def _ensure_welcome_tables():
             image_text  TEXT
         )
     """)
-    await _conn().commit()
+    await _commit()
 
     # Migration: add new columns to existing tables that pre-date this change.
     new_columns = {
@@ -106,7 +106,7 @@ async def _set_event_config(table: str, guild_id: int, **kwargs) -> None:
             kwargs.get("image_text"),
         ),
     )
-    await _conn().commit()
+    await _commit()
 
 
 async def get_welcome_config(guild_id: int) -> dict | None:

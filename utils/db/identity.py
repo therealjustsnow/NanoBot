@@ -21,7 +21,14 @@ utils/cosmetics.py; the DB only ever stores keys, exactly like user_items and
 the item catalogue.
 """
 
-from ._core import _conn, _ensure_columns, register_init
+from ._core import (
+    count_ahead,
+    _commit,
+    _conn,
+    _read_conn,
+    _ensure_columns,
+    register_init,
+)
 
 
 async def _ensure_identity_tables():
@@ -35,7 +42,7 @@ async def _ensure_identity_tables():
     await _conn().execute(
         "CREATE INDEX IF NOT EXISTS global_levels_xp ON global_levels (xp DESC)"
     )
-    await _conn().commit()
+    await _commit()
     # A level-up the member hasn't been told about yet. Written when the award
     # crosses a level and cleared once an announcement actually goes out, so a
     # level earned while their DMs are closed and their channel is unwritable
@@ -60,7 +67,7 @@ async def _ensure_identity_tables():
             PRIMARY KEY (user_id, slot, position)
         )
     """)
-    await _conn().commit()
+    await _commit()
 
 
 # ── Global XP ─────────────────────────────────────────────────────────────────
@@ -87,7 +94,7 @@ async def add_global_xp(user_id: int, amount: int) -> tuple[int, int]:
             "ON CONFLICT(user_id) DO UPDATE SET xp = xp + ?",
             (str(user_id), amount, amount),
         )
-        await _conn().commit()
+        await _commit()
     return before, before + amount
 
 
@@ -104,7 +111,7 @@ async def try_claim_global_message(user_id: int, now: float, cooldown: int) -> b
         "WHERE excluded.last_message - global_levels.last_message >= ?",
         (str(user_id), float(now), int(cooldown)),
     )
-    await _conn().commit()
+    await _commit()
     return cur.rowcount > 0
 
 
@@ -122,7 +129,7 @@ async def set_pending_levelup(user_id: int, level: int) -> None:
         "pending_level=MAX(pending_level, excluded.pending_level)",
         (str(user_id), int(level)),
     )
-    await _conn().commit()
+    await _commit()
 
 
 async def get_pending_levelup(user_id: int) -> int:
@@ -148,12 +155,12 @@ async def claim_pending_levelup(user_id: int) -> int:
         "WHERE user_id=? AND pending_level=?",
         (str(user_id), int(level)),
     )
-    await _conn().commit()
+    await _commit()
     return level if cur.rowcount > 0 else 0
 
 
 async def get_global_xp_leaderboard(limit: int = 10, offset: int = 0) -> list[dict]:
-    async with _conn().execute(
+    async with _read_conn().execute(
         "SELECT user_id, xp FROM global_levels WHERE xp > 0 "
         "ORDER BY xp DESC, user_id ASC LIMIT ? OFFSET ?",
         (int(limit), int(offset)),
@@ -167,10 +174,7 @@ async def get_global_xp_rank(user_id: int) -> tuple[int, int] | None:
     xp = await get_global_xp(user_id)
     if xp <= 0:
         return None
-    async with _conn().execute(
-        "SELECT COUNT(*) FROM global_levels WHERE xp > ?", (xp,)
-    ) as cur:
-        ahead = (await cur.fetchone())[0]
+    ahead = await count_ahead("SELECT COUNT(*) FROM global_levels WHERE xp > ?", xp)
     return ahead + 1, xp
 
 
@@ -184,7 +188,7 @@ async def unlock_cosmetic(user_id: int, key: str, *, at: float = 0.0) -> bool:
         "VALUES (?,?,?)",
         (str(user_id), key, float(at)),
     )
-    await _conn().commit()
+    await _commit()
     return cur.rowcount > 0
 
 
@@ -208,7 +212,7 @@ async def revoke_cosmetic(user_id: int, key: str) -> bool:
         "DELETE FROM cosmetic_equipped WHERE user_id=? AND key=?",
         (str(user_id), key),
     )
-    await _conn().commit()
+    await _commit()
     return cur.rowcount > 0
 
 
@@ -244,7 +248,7 @@ async def set_equipped(user_id: int, slot: str, keys: list[str]) -> None:
             "VALUES (?,?,?,?)",
             [(str(user_id), slot, i, key) for i, key in enumerate(keys)],
         )
-    await _conn().commit()
+    await _commit()
 
 
 register_init(_ensure_identity_tables)

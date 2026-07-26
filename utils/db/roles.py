@@ -11,7 +11,7 @@ import json
 import aiosqlite
 
 
-from ._core import _conn, log, register_init
+from ._core import _commit, _conn, log, register_init
 
 # ══════════════════════════════════════════════════════════════════════════════
 #  Role Panels
@@ -42,7 +42,7 @@ async def _ensure_role_panels_tables() -> None:
         );
         CREATE INDEX IF NOT EXISTS rpe_panel ON role_panel_entries (panel_id);
     """)
-    await _conn().commit()
+    await _commit()
 
 
 async def _migrate_role_panel_entries() -> None:
@@ -102,7 +102,7 @@ async def _migrate_role_panel_entries() -> None:
             migrated_entries += 1
         migrated_panels += 1
 
-    await _conn().commit()
+    await _commit()
 
     # Rebuild role_panels without the 'entries' column.
     # SQLite < 3.35 doesn't support DROP COLUMN, so we do a table swap.
@@ -124,7 +124,7 @@ async def _migrate_role_panel_entries() -> None:
         ALTER TABLE role_panels_new RENAME TO role_panels;
         CREATE INDEX IF NOT EXISTS role_panels_guild ON role_panels (guild_id);
     """)
-    await _conn().commit()
+    await _commit()
 
     log.info(
         f"DB migration complete: migrated {migrated_entries} entries across "
@@ -175,7 +175,7 @@ async def create_role_panel(
         "VALUES (?,?,?,?,?)",
         (panel_id, str(guild_id), title, description, mode),
     )
-    await _conn().commit()
+    await _commit()
 
 
 async def get_role_panel(panel_id: str) -> dict | None:
@@ -232,7 +232,7 @@ async def edit_role_panel(
         "UPDATE role_panels SET title=?, description=?, mode=? WHERE id=?",
         (title, description, mode, panel_id),
     )
-    await _conn().commit()
+    await _commit()
 
 
 async def update_role_panel_message(
@@ -243,13 +243,13 @@ async def update_role_panel_message(
         "UPDATE role_panels SET channel_id=?, message_id=? WHERE id=?",
         (str(channel_id), str(message_id), panel_id),
     )
-    await _conn().commit()
+    await _commit()
 
 
 async def delete_role_panel(panel_id: str) -> None:
     """Delete a panel and all its entries (CASCADE handles entries)."""
     await _conn().execute("DELETE FROM role_panels WHERE id=?", (panel_id,))
-    await _conn().commit()
+    await _commit()
 
 
 async def add_role_to_panel(panel_id: str, entry: dict) -> None:
@@ -279,7 +279,7 @@ async def add_role_to_panel(panel_id: str, entry: dict) -> None:
             next_pos,
         ),
     )
-    await _conn().commit()
+    await _commit()
 
 
 async def remove_role_from_panel(panel_id: str, role_id: int) -> None:
@@ -288,7 +288,7 @@ async def remove_role_from_panel(panel_id: str, role_id: int) -> None:
         "DELETE FROM role_panel_entries WHERE panel_id=? AND role_id=?",
         (panel_id, role_id),
     )
-    await _conn().commit()
+    await _commit()
 
 
 async def _init_roles():

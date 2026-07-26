@@ -9,7 +9,7 @@ db.init() creates them in the right order.
 import json
 
 
-from ._core import _conn, log, register_init
+from ._core import _commit, _conn, log, register_init
 
 # ══════════════════════════════════════════════════════════════════════════════
 #  Audit Log
@@ -48,7 +48,7 @@ async def _ensure_auditlog_tables() -> None:
             events      TEXT NOT NULL DEFAULT '[]'
         )
     """)
-    await _conn().commit()
+    await _commit()
 
 
 async def _migrate_auditlog_null_events() -> None:
@@ -73,7 +73,7 @@ async def _migrate_auditlog_null_events() -> None:
         "UPDATE auditlog_config SET events=? WHERE events IS NULL",
         (_AUDIT_ALL_EVENTS_JSON,),
     )
-    await _conn().commit()
+    await _commit()
     log.info(
         f"DB migration: backfilled auditlog events for {null_count} guild(s) "
         f"(was NULL, now all-events)"
@@ -108,7 +108,7 @@ async def set_auditlog_channel(guild_id: int, channel_id: int) -> None:
            ON CONFLICT(guild_id) DO UPDATE SET channel_id=excluded.channel_id""",
         (str(guild_id), str(channel_id), _AUDIT_ALL_EVENTS_JSON),
     )
-    await _conn().commit()
+    await _commit()
 
 
 async def set_auditlog_enabled(guild_id: int, enabled: bool) -> None:
@@ -119,7 +119,7 @@ async def set_auditlog_enabled(guild_id: int, enabled: bool) -> None:
            ON CONFLICT(guild_id) DO UPDATE SET enabled=excluded.enabled""",
         (str(guild_id), 1 if enabled else 0, _AUDIT_ALL_EVENTS_JSON),
     )
-    await _conn().commit()
+    await _commit()
 
 
 async def set_auditlog_events(guild_id: int, events: set[str]) -> None:
@@ -130,7 +130,7 @@ async def set_auditlog_events(guild_id: int, events: set[str]) -> None:
            ON CONFLICT(guild_id) DO UPDATE SET events=excluded.events""",
         (str(guild_id), json.dumps(sorted(events))),
     )
-    await _conn().commit()
+    await _commit()
 
 
 async def _init_auditlog():

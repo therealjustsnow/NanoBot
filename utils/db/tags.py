@@ -6,7 +6,7 @@ module holds the guild/personal text snippet accessors and registers its table s
 db.init() creates them in the right order.
 """
 
-from ._core import _conn
+from ._core import _commit, _conn
 
 # ══════════════════════════════════════════════════════════════════════════════
 #  Tags
@@ -94,7 +94,7 @@ async def set_tag(
                by_name=excluded.by_name""",
         (str(guild_id), scope, name, content, image_url, by_id, by_name),
     )
-    await _conn().commit()
+    await _commit()
 
 
 async def update_tag_image(
@@ -104,7 +104,7 @@ async def update_tag_image(
         "UPDATE tags SET image_url=? WHERE guild_id=? AND scope=? AND name=?",
         (image_url, str(guild_id), scope, name),
     )
-    await _conn().commit()
+    await _commit()
 
 
 async def update_tag_content(
@@ -114,7 +114,7 @@ async def update_tag_content(
         "UPDATE tags SET content=? WHERE guild_id=? AND scope=? AND name=?",
         (content, str(guild_id), scope, name),
     )
-    await _conn().commit()
+    await _commit()
 
 
 async def delete_tag(guild_id: int, scope: str, name: str) -> bool:
@@ -123,7 +123,7 @@ async def delete_tag(guild_id: int, scope: str, name: str) -> bool:
         "DELETE FROM tags WHERE guild_id=? AND scope=? AND name=?",
         (str(guild_id), scope, name),
     )
-    await _conn().commit()
+    await _commit()
     return cur.rowcount > 0
 
 

@@ -6,8 +6,13 @@ docstring in cog.py for the per-game edge summary.
 """
 
 # Per-guild bet bounds (overridable via /casino limit). Config row default.
-DEFAULT_MIN_BET = 10
-DEFAULT_MAX_BET = 1000
+# Scaled 1:1 with income when the cast cooldown went 60s -> 20s: the point of a
+# bet cap is how much of an hour's earnings a member can put on one spin, and
+# leaving it at 1,000 would have quietly made the casino a third as relevant.
+# Migration 3 moves guilds still sitting on the old defaults; a guild that set
+# its own limits with /casino limit keeps them.
+DEFAULT_MIN_BET = 25
+DEFAULT_MAX_BET = 3000
 
 # ── /casino flip ────────────────────────────────────────────────────────────────
 # 50/50 coin flip. Win pays 1.92x total (bet returned + 0.92x profit) → house

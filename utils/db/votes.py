@@ -9,7 +9,7 @@ db.init() creates them in the right order.
 import time
 
 
-from ._core import _conn, register_init
+from ._core import _commit, _conn, register_init
 
 # ══════════════════════════════════════════════════════════════════════════════
 #  Votes
@@ -27,7 +27,7 @@ async def _ensure_votes_table():
             PRIMARY KEY (user_id, site)
         )
     """)
-    await _conn().commit()
+    await _commit()
 
 
 async def record_vote(user_id: int, site: str) -> dict:
@@ -65,7 +65,7 @@ async def record_vote(user_id: int, site: str) -> dict:
                streak=excluded.streak""",
         (uid, site, now, streak, 1 if notify else 0),
     )
-    await _conn().commit()
+    await _commit()
 
     return {
         "user_id": uid,
@@ -100,7 +100,7 @@ async def set_vote_notify(user_id: int, site: str, notify: bool) -> None:
            ON CONFLICT(user_id, site) DO UPDATE SET notify=excluded.notify""",
         (str(user_id), site, 1 if notify else 0),
     )
-    await _conn().commit()
+    await _commit()
 
 
 async def get_all_votes_for_notify() -> list[dict]:

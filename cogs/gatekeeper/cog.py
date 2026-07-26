@@ -133,6 +133,11 @@ class Gatekeeper(commands.Cog):
         self._session = aiohttp.ClientSession()
         self.reload_catalog()
         self.bot.add_view(VerifyView(self))
+        # restore_schedules is dispatched once, from the first on_ready — so a
+        # hot-reload after the bot is up would otherwise leave pending mutes
+        # un-armed. Safe to double up: spawn_tracked cancels what it replaces.
+        if self.bot.is_ready():
+            self.bot.loop.create_task(self.on_restore_schedules())
 
     def cog_unload(self):
         for task in list(self._unmute_tasks.values()):
@@ -233,15 +238,19 @@ class Gatekeeper(commands.Cog):
                     # so don't arm a kick for this member.
                     await self._auto_unmute(guild_id, user_id, 0, key)
                     continue
-                self._unmute_tasks[key] = asyncio.create_task(
-                    self._auto_unmute(guild_id, user_id, remaining, key)
+                h.spawn_tracked(
+                    self._unmute_tasks,
+                    key,
+                    self._auto_unmute(guild_id, user_id, remaining, key),
                 )
             # Arm the kick whenever one is scheduled. Both timers may run at once
             # (e.g. an age mute with verification on); whichever fires first
             # cancels the other.
             if kick_at is not None:
-                self._kick_tasks[key] = asyncio.create_task(
-                    self._auto_kick(guild_id, user_id, max(0, kick_at - now), key)
+                h.spawn_tracked(
+                    self._kick_tasks,
+                    key,
+                    self._auto_kick(guild_id, user_id, max(0, kick_at - now), key),
                 )
 
     # ── Scheduling helpers ──────────────────────────────────────────────────────
@@ -455,12 +464,16 @@ class Gatekeeper(commands.Cog):
 
         now = discord.utils.utcnow().timestamp()
         if unmute_at is not None:
-            self._unmute_tasks[key] = asyncio.create_task(
-                self._auto_unmute(guild.id, member.id, max(0, unmute_at - now), key)
+            h.spawn_tracked(
+                self._unmute_tasks,
+                key,
+                self._auto_unmute(guild.id, member.id, max(0, unmute_at - now), key),
             )
         if kick_at is not None:
-            self._kick_tasks[key] = asyncio.create_task(
-                self._auto_kick(guild.id, member.id, max(0, kick_at - now), key)
+            h.spawn_tracked(
+                self._kick_tasks,
+                key,
+                self._auto_kick(guild.id, member.id, max(0, kick_at - now), key),
             )
 
         log.info(

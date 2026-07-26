@@ -7,7 +7,7 @@ from discord.ext import commands
 from discord.ext import test as dpytest
 
 import utils.db as db
-from cogs.fishing import FISH
+from cogs.fishing import FISH, RODS
 from tests.conftest import config, grant_perms
 
 
@@ -73,13 +73,14 @@ async def test_sell_unknown_fish(bot):
 async def test_upgrade_charges_coins_and_advances_rod(bot):
     guild = config().guilds[0]
     author = config().members[0]
-    await db.add_coins(author.id, 600)
+    price = RODS[1]["price"]
+    await db.add_coins(author.id, price + 100)
 
     await dpytest.message("!fish upgrade", member=author)
     sent = dpytest.get_message()
     assert "Upgraded" in sent.embeds[0].title
     assert (await db.get_fisher(author.id))["rod_level"] == 1
-    assert await db.get_balance(author.id) == 100  # 600 - 500
+    assert await db.get_balance(author.id) == 100
 
 
 @pytest.mark.cogs("cogs.fishing")

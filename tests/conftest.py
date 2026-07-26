@@ -12,12 +12,32 @@ should stay free of the `bot` fixture.
 """
 
 import discord
+import pytest
 import pytest_asyncio
 from discord.ext import test as dpytest
 from discord.ext.test import backend as dpy_backend
 
 import main
 import utils.db as db
+from utils.db import _cache, _core
+
+
+@pytest.fixture(autouse=True)
+def _clear_config_cache():
+    """Drop the per-guild config cache around every test.
+
+    In the bot the cache is emptied by db.init() and lives as long as the one
+    connection does. Tests swap in a fresh database per test — often reusing the
+    same guild ids — so without this a config cached by one test would answer a
+    query in the next.
+    """
+    _cache.clear()
+    _core._board_cache.clear()
+    _core._rank_cache.clear()
+    yield
+    _cache.clear()
+    _core._board_cache.clear()
+    _core._rank_cache.clear()
 
 
 @pytest_asyncio.fixture

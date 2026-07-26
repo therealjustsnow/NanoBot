@@ -320,6 +320,10 @@ class NanoBot(commands.Bot):
         self._music_activity: discord.BaseActivity | None = None
         # Guard so the startup config dump prints once, not on every reconnect.
         self._config_printed: bool = False
+        # Same for schedule restoration: on_ready re-fires on every gateway
+        # re-IDENTIFY, and re-arming already-armed timers is how one reminder
+        # became two. Cogs loaded later re-arm themselves from cog_load.
+        self._schedules_restored: bool = False
         # Shared HTTP server: the health probe and the vote webhook register
         # their routes here, sharing a port when only one is available.
         self.web: HttpServer = HttpServer()
@@ -445,6 +449,31 @@ class NanoBot(commands.Bot):
     @_presence_loop.before_loop
     async def _before_presence_loop(self) -> None:
         await self.wait_until_ready()
+
+    @tasks.loop(hours=24)
+    async def _maintenance_loop(self) -> None:
+        """Daily database housekeeping — see utils/db/maintenance.py.
+
+        Retention prune, WAL checkpoint, and a VACUUM only when there's enough
+        free space to justify rewriting the file. All three are things a
+        never-closing single connection would otherwise never do.
+        """
+        summary = await db.sweep()
+        pruned = summary.get("pruned") or {}
+        if pruned or summary.get("checkpointed") or summary.get("vacuumed"):
+            log.info(
+                "DB maintenance: pruned %s, checkpointed %d WAL page(s)%s",
+                pruned or "nothing",
+                summary.get("checkpointed", 0),
+                ", vacuumed" if summary.get("vacuumed") else "",
+            )
+
+    @_maintenance_loop.before_loop
+    async def _before_maintenance_loop(self) -> None:
+        # Startup is already the busiest minute of the process — let it settle
+        # before rewriting the database.
+        await self.wait_until_ready()
+        await asyncio.sleep(600)
 
     # ── Config application / reload ───────────────────────────────────────────
     def _apply_config(self, cfg: dict) -> None:
@@ -673,7 +702,11 @@ class NanoBot(commands.Bot):
         await self.apply_presence()
         if not self._presence_loop.is_running():
             self._presence_loop.start()
-        self.dispatch("restore_schedules")
+        if not self._maintenance_loop.is_running():
+            self._maintenance_loop.start()
+        if not self._schedules_restored:
+            self._schedules_restored = True
+            self.dispatch("restore_schedules")
         self._install_error_hooks()
         # Dump the active config LAST so it isn't buried under cog-load and
         # gateway chatter. Once only — on_ready can re-fire on reconnect.

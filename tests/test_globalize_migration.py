@@ -355,6 +355,32 @@ async def test_fishing_cooldown_setting_is_dropped(legacy):
     assert await db.get_fishing_config(G2) == {"enabled": True}
 
 
+# ── Migration 3: rebalanced casino bet limits ─────────────────────────────────
+async def test_default_casino_limits_are_rescaled(legacy):
+    """The 20s cast cooldown tripled income, so the stock 10/1,000 bet band was
+    rescaled. Only guilds still on the old defaults move; anyone who ran
+    /casino limit keeps their own numbers."""
+    await legacy.execute(
+        "CREATE TABLE casino_config (guild_id TEXT PRIMARY KEY, "
+        "enabled INTEGER NOT NULL DEFAULT 1, min_bet INTEGER NOT NULL DEFAULT 25, "
+        "max_bet INTEGER NOT NULL DEFAULT 3000, jackpot_pool INTEGER NOT NULL DEFAULT 0)"
+    )
+    await legacy.executemany(
+        "INSERT INTO casino_config (guild_id, min_bet, max_bet) VALUES (?,?,?)",
+        [(str(G1), 10, 1000), (str(G2), 5, 250_000)],
+    )
+    await legacy.commit()
+    await db._run_migrations([(3, globalize.rescale_default_casino_limits)])
+
+    moved = await db.get_casino_config(G1)
+    assert (moved["min_bet"], moved["max_bet"]) == (25, 3000)
+    kept = await db.get_casino_config(G2)
+    assert (kept["min_bet"], kept["max_bet"]) == (5, 250_000)
+    # Re-running changes nothing further.
+    await db._run_migrations([(3, globalize.rescale_default_casino_limits)])
+    assert (await db.get_casino_config(G2))["max_bet"] == 250_000
+
+
 # ── Re-runnability ────────────────────────────────────────────────────────────
 async def test_migration_is_safe_to_run_twice(legacy):
     await legacy.execute(

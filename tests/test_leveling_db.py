@@ -2,6 +2,8 @@
 Tests for the leveling accessors in utils/db/ — in-memory SQLite.
 """
 
+import asyncio
+
 import aiosqlite
 import pytest
 
@@ -32,6 +34,22 @@ async def test_add_xp_accumulates_and_returns_total():
 async def test_add_xp_clamps_at_zero():
     await db.add_xp(G, A, 40)
     assert await db.add_xp(G, A, -100) == 0
+
+
+async def test_concurrent_add_xp_keeps_every_award():
+    """The old read-then-write dropped an award when two messages raced."""
+    await asyncio.gather(*(db.add_xp(G, A, 10) for _ in range(20)))
+    assert await db.get_xp(G, A) == 200
+
+
+async def test_add_xp_uses_returning_when_available(monkeypatch):
+    """The fixture patches the connection in without init(), so RETURNING is
+    off by default — exercise the other branch of fetch_one_returning too."""
+    monkeypatch.setattr(db._core, "_RETURNING_OK", True)
+    assert await db.add_xp(G, B, 30) == 30
+    assert await db.add_xp(G, B, 20) == 50
+    assert await db.add_xp(G, B, -500) == 0
+    assert await db.get_xp(G, B) == 0
 
 
 async def test_set_xp_is_absolute():

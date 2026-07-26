@@ -6,7 +6,15 @@ module holds the leveling XP/reward accessors and registers its table setup with
 db.init() creates them in the right order.
 """
 
-from ._core import _conn, _ensure_columns, register_init
+from . import _cache
+from ._core import (
+    _commit,
+    _conn,
+    _read_conn,
+    _ensure_columns,
+    fetch_one_returning,
+    register_init,
+)
 
 # ══════════════════════════════════════════════════════════════════════════════
 #  Leveling (per-guild XP + level rewards)
@@ -53,17 +61,29 @@ async def _ensure_leveling_tables():
             PRIMARY KEY (guild_id, channel_id)
         )
     """)
-    await _conn().commit()
+    await _commit()
     # Upgrade path for guilds whose level_config predates coin_reward.
     await _ensure_columns("level_config", {"coin_reward": "INTEGER NOT NULL DEFAULT 0"})
 
 
 # ── XP ───────────────────────────────────────────────────────────────────────
 async def add_xp(guild_id: int, user_id: int, amount: int) -> int:
-    """Add (or subtract) XP. Clamps at 0. Returns the new XP total."""
-    new_xp = max(0, await get_xp(guild_id, user_id) + int(amount))
-    await set_xp(guild_id, user_id, new_xp)
-    return new_xp
+    """Add (or subtract) XP atomically. Clamps at 0. Returns the new XP total.
+
+    One SQL statement, like economy.add_coins: the old read-then-write lost an
+    award whenever two of a member's messages were handled concurrently, and
+    this is the highest-frequency write in the bot.
+    """
+    amount = int(amount)
+    row = await fetch_one_returning(
+        "INSERT INTO user_levels (guild_id, user_id, xp) VALUES (?,?,MAX(0,?)) "
+        "ON CONFLICT(guild_id, user_id) DO UPDATE SET xp=MAX(0, xp + ?)",
+        (str(guild_id), str(user_id), amount, amount),
+        returning="xp",
+    )
+    if row is not None:
+        return row["xp"]
+    return await get_xp(guild_id, user_id)
 
 
 async def set_xp(guild_id: int, user_id: int, amount: int) -> None:
@@ -73,7 +93,7 @@ async def set_xp(guild_id: int, user_id: int, amount: int) -> None:
         "ON CONFLICT(guild_id, user_id) DO UPDATE SET xp=excluded.xp",
         (str(guild_id), str(user_id), max(0, int(amount))),
     )
-    await _conn().commit()
+    await _commit()
 
 
 async def get_xp(guild_id: int, user_id: int) -> int:
@@ -89,13 +109,13 @@ async def get_rank(guild_id: int, user_id: int) -> tuple[int, int] | None:
     """Return (rank, xp) for a member; rank is 1-based. None if no XP row."""
     xp = await get_xp(guild_id, user_id)
     if xp <= 0:
-        async with _conn().execute(
+        async with _read_conn().execute(
             "SELECT 1 FROM user_levels WHERE guild_id=? AND user_id=?",
             (str(guild_id), str(user_id)),
         ) as cur:
             if not await cur.fetchone():
                 return None
-    async with _conn().execute(
+    async with _read_conn().execute(
         "SELECT COUNT(*) FROM user_levels WHERE guild_id=? AND xp > ?",
         (str(guild_id), xp),
     ) as cur:
@@ -106,7 +126,7 @@ async def get_rank(guild_id: int, user_id: int) -> tuple[int, int] | None:
 async def get_leaderboard(
     guild_id: int, limit: int = 10, offset: int = 0
 ) -> list[dict]:
-    async with _conn().execute(
+    async with _read_conn().execute(
         "SELECT user_id, xp FROM user_levels WHERE guild_id=? AND xp > 0 "
         "ORDER BY xp DESC, user_id ASC LIMIT ? OFFSET ?",
         (str(guild_id), int(limit), int(offset)),
@@ -116,7 +136,7 @@ async def get_leaderboard(
 
 
 async def count_ranked(guild_id: int) -> int:
-    async with _conn().execute(
+    async with _read_conn().execute(
         "SELECT COUNT(*) FROM user_levels WHERE guild_id=? AND xp > 0",
         (str(guild_id),),
     ) as cur:
@@ -134,12 +154,15 @@ async def reset_levels(guild_id: int, user_id: int | None = None) -> int:
             "DELETE FROM user_levels WHERE guild_id=? AND user_id=?",
             (str(guild_id), str(user_id)),
         )
-    await _conn().commit()
+    await _commit()
     return cur.rowcount
 
 
 # ── Config ─────────────────────────────────────────────────────────────────────
 async def get_level_config(guild_id: int) -> dict:
+    cached = _cache.get("level_config", guild_id)
+    if cached is not None:
+        return cached
     async with _conn().execute(
         "SELECT enabled, xp_min, xp_max, cooldown, announce_channel, announce, "
         "coin_reward FROM level_config WHERE guild_id=?",
@@ -147,26 +170,34 @@ async def get_level_config(guild_id: int) -> dict:
     ) as cur:
         row = await cur.fetchone()
     if row:
-        return {
-            "enabled": bool(row["enabled"]),
-            "xp_min": row["xp_min"],
-            "xp_max": row["xp_max"],
-            "cooldown": row["cooldown"],
-            "announce_channel": (
-                int(row["announce_channel"]) if row["announce_channel"] else None
-            ),
-            "announce": bool(row["announce"]),
-            "coin_reward": row["coin_reward"],
-        }
-    return {
-        "enabled": False,
-        "xp_min": 15,
-        "xp_max": 25,
-        "cooldown": 60,
-        "announce_channel": None,
-        "announce": True,
-        "coin_reward": 0,
-    }
+        return _cache.put(
+            "level_config",
+            guild_id,
+            {
+                "enabled": bool(row["enabled"]),
+                "xp_min": row["xp_min"],
+                "xp_max": row["xp_max"],
+                "cooldown": row["cooldown"],
+                "announce_channel": (
+                    int(row["announce_channel"]) if row["announce_channel"] else None
+                ),
+                "announce": bool(row["announce"]),
+                "coin_reward": row["coin_reward"],
+            },
+        )
+    return _cache.put(
+        "level_config",
+        guild_id,
+        {
+            "enabled": False,
+            "xp_min": 15,
+            "xp_max": 25,
+            "cooldown": 60,
+            "announce_channel": None,
+            "announce": True,
+            "coin_reward": 0,
+        },
+    )
 
 
 async def set_level_config(guild_id: int, **kwargs) -> None:
@@ -193,7 +224,8 @@ async def set_level_config(guild_id: int, **kwargs) -> None:
             int(current["coin_reward"]),
         ),
     )
-    await _conn().commit()
+    await _commit()
+    _cache.invalidate("level_config", guild_id)
 
 
 # ── Role rewards ─────────────────────────────────────────────────────────────
@@ -203,7 +235,7 @@ async def add_level_reward(guild_id: int, level: int, role_id: int) -> None:
         "ON CONFLICT(guild_id, level) DO UPDATE SET role_id=excluded.role_id",
         (str(guild_id), int(level), str(role_id)),
     )
-    await _conn().commit()
+    await _commit()
 
 
 async def remove_level_reward(guild_id: int, level: int) -> bool:
@@ -211,7 +243,7 @@ async def remove_level_reward(guild_id: int, level: int) -> bool:
         "DELETE FROM level_rewards WHERE guild_id=? AND level=?",
         (str(guild_id), int(level)),
     )
-    await _conn().commit()
+    await _commit()
     return cur.rowcount > 0
 
 
@@ -232,7 +264,8 @@ async def add_level_ignored_channel(guild_id: int, channel_id: int) -> None:
         "VALUES (?,?)",
         (str(guild_id), str(channel_id)),
     )
-    await _conn().commit()
+    await _commit()
+    _cache.invalidate("level_ignored_channels", guild_id)
 
 
 async def remove_level_ignored_channel(guild_id: int, channel_id: int) -> bool:
@@ -240,17 +273,23 @@ async def remove_level_ignored_channel(guild_id: int, channel_id: int) -> bool:
         "DELETE FROM level_ignored_channels WHERE guild_id=? AND channel_id=?",
         (str(guild_id), str(channel_id)),
     )
-    await _conn().commit()
+    await _commit()
+    _cache.invalidate("level_ignored_channels", guild_id)
     return cur.rowcount > 0
 
 
 async def get_level_ignored_channels(guild_id: int) -> set[int]:
+    cached = _cache.get("level_ignored_channels", guild_id)
+    if cached is not None:
+        return cached
     async with _conn().execute(
         "SELECT channel_id FROM level_ignored_channels WHERE guild_id=?",
         (str(guild_id),),
     ) as cur:
         rows = await cur.fetchall()
-    return {int(r["channel_id"]) for r in rows}
+    return _cache.put(
+        "level_ignored_channels", guild_id, {int(r["channel_id"]) for r in rows}
+    )
 
 
 register_init(_ensure_leveling_tables)

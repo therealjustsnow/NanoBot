@@ -219,10 +219,17 @@ class Progression(commands.Cog):
             )
         return period, results
 
-    async def _profile_title(self, user_id: int) -> str:
-        earned = await db.get_earned_achievements(user_id)
+    async def _profile_title(
+        self, user_id: int, earned: Optional[dict] = None, progression=None
+    ) -> str:
+        """The title to show. Callers that already hold the member's earned
+        achievements / progression row pass them in rather than paying for the
+        same two reads a second time."""
+        if earned is None:
+            earned = await db.get_earned_achievements(user_id)
         titles = earned_titles(earned.keys(), ACHIEVEMENTS_BY_KEY)
-        progression = await db.get_progression(user_id)
+        if progression is None:
+            progression = await db.get_progression(user_id)
         selected = progression["selected_title"]
         if selected and any(t == selected for t, _pts in titles):
             return selected
@@ -274,8 +281,8 @@ class Progression(commands.Cog):
             newly = await self._evaluate_achievements(user_id)
         earned = await db.get_earned_achievements(user_id)
         points = total_points(earned.keys(), ACHIEVEMENTS_BY_KEY)
-        display_title = await self._profile_title(user_id)
         progression = await db.get_progression(user_id)
+        display_title = await self._profile_title(user_id, earned, progression)
         rank = progression["prestige"]
         period, weekly_rows = await self._get_weekly(user_id)
         weekly_done = sum(1 for w in weekly_rows if w["claimed"])

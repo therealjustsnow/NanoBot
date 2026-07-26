@@ -6,7 +6,7 @@ module holds the timed unban/slowmode schedule accessors and registers its table
 db.init() creates them in the right order.
 """
 
-from ._core import _conn
+from ._core import _commit, _conn
 
 # ══════════════════════════════════════════════════════════════════════════════
 #  Unban schedules
@@ -19,12 +19,12 @@ async def set_unban(key: str, guild_id: int, user_id: int, until: float) -> None
         "ON CONFLICT(key) DO UPDATE SET until=excluded.until",
         (key, str(guild_id), str(user_id), until),
     )
-    await _conn().commit()
+    await _commit()
 
 
 async def remove_unban(key: str) -> None:
     await _conn().execute("DELETE FROM unban_schedules WHERE key=?", (key,))
-    await _conn().commit()
+    await _commit()
 
 
 async def get_all_unbans() -> dict:
@@ -53,14 +53,14 @@ async def set_slow(channel_id: int, guild_id: int, until: float) -> None:
         "ON CONFLICT(channel_id) DO UPDATE SET until=excluded.until",
         (str(channel_id), str(guild_id), until),
     )
-    await _conn().commit()
+    await _commit()
 
 
 async def remove_slow(channel_id: int) -> None:
     await _conn().execute(
         "DELETE FROM slow_schedules WHERE channel_id=?", (str(channel_id),)
     )
-    await _conn().commit()
+    await _commit()
 
 
 async def get_all_slows() -> dict:

@@ -15,7 +15,15 @@ blackjack hands (restart-safe Hit/Stand), and daily-challenge progress.
 
 import json
 
-from ._core import _conn, _ensure_columns, register_init, rows_for_users
+from ._core import (
+    count_ahead,
+    _commit,
+    _conn,
+    _read_conn,
+    _ensure_columns,
+    register_init,
+    rows_for_users,
+)
 
 
 async def _ensure_casino_tables():
@@ -23,8 +31,8 @@ async def _ensure_casino_tables():
         CREATE TABLE IF NOT EXISTS casino_config (
             guild_id      TEXT PRIMARY KEY,
             enabled       INTEGER NOT NULL DEFAULT 1,
-            min_bet       INTEGER NOT NULL DEFAULT 10,
-            max_bet       INTEGER NOT NULL DEFAULT 1000,
+            min_bet       INTEGER NOT NULL DEFAULT 25,
+            max_bet       INTEGER NOT NULL DEFAULT 3000,
             jackpot_pool  INTEGER NOT NULL DEFAULT 0
         )
     """)
@@ -85,7 +93,7 @@ async def _ensure_casino_tables():
             PRIMARY KEY (user_id, day, chal_key)
         )
     """)
-    await _conn().commit()
+    await _commit()
 
 
 # ── Config ─────────────────────────────────────────────────────────────────────
@@ -103,7 +111,7 @@ async def get_casino_config(guild_id: int) -> dict:
             "max_bet": row["max_bet"],
             "jackpot_pool": row["jackpot_pool"],
         }
-    return {"enabled": True, "min_bet": 10, "max_bet": 1000, "jackpot_pool": 0}
+    return {"enabled": True, "min_bet": 25, "max_bet": 3000, "jackpot_pool": 0}
 
 
 async def set_casino_config(guild_id: int, **kwargs) -> None:
@@ -129,7 +137,7 @@ async def set_casino_config(guild_id: int, **kwargs) -> None:
             int(current["max_bet"]),
         ),
     )
-    await _conn().commit()
+    await _commit()
 
 
 # ── Jackpot ────────────────────────────────────────────────────────────────────
@@ -144,7 +152,7 @@ async def add_to_jackpot(guild_id: int, amount: int) -> int:
             "jackpot_pool=jackpot_pool+excluded.jackpot_pool",
             (str(guild_id), amount),
         )
-        await _conn().commit()
+        await _commit()
     return (await get_casino_config(guild_id))["jackpot_pool"]
 
 
@@ -170,7 +178,7 @@ async def try_claim_jackpot(guild_id: int) -> int:
             "WHERE guild_id=? AND jackpot_pool=?",
             (str(guild_id), pot),
         )
-        await _conn().commit()
+        await _commit()
         if cur.rowcount > 0:
             return pot
     return 0
@@ -254,7 +262,7 @@ async def record_casino_game(user_id: int, wagered: int, payout: int) -> dict:
             wins_param,
         ),
     )
-    await _conn().commit()
+    await _commit()
     return await get_casino_stats(user_id)
 
 
@@ -271,7 +279,7 @@ def _leaderboard_row(r) -> dict:
 
 async def get_casino_leaderboard(limit: int = 10, offset: int = 0) -> list[dict]:
     """Biggest net winners across every server."""
-    async with _conn().execute(
+    async with _read_conn().execute(
         "SELECT user_id, games, wagered, won, (won - wagered) AS net "
         "FROM casino_stats WHERE games > 0 "
         "ORDER BY net DESC, user_id ASC LIMIT ? OFFSET ?",
@@ -292,7 +300,7 @@ async def get_casino_leaderboard_for(user_ids) -> list[dict]:
 
 
 async def count_casino_players() -> int:
-    async with _conn().execute(
+    async with _read_conn().execute(
         "SELECT COUNT(*) FROM casino_stats WHERE games > 0"
     ) as cur:
         return (await cur.fetchone())[0]
@@ -304,11 +312,10 @@ async def get_casino_rank(user_id: int) -> tuple[int, int] | None:
     if stats["games"] <= 0:
         return None
     net = stats["won"] - stats["wagered"]
-    async with _conn().execute(
+    ahead = await count_ahead(
         "SELECT COUNT(*) FROM casino_stats WHERE games > 0 AND (won - wagered) > ?",
-        (net,),
-    ) as cur:
-        ahead = (await cur.fetchone())[0]
+        net,
+    )
     return ahead + 1, net
 
 
@@ -369,7 +376,7 @@ async def create_blackjack_hand(
             float(created_at),
         ),
     )
-    await _conn().commit()
+    await _commit()
     return cur.lastrowid
 
 
@@ -378,7 +385,7 @@ async def set_blackjack_message(hand_id: int, message_id: int) -> None:
         "UPDATE casino_blackjack SET message_id=? WHERE hand_id=?",
         (str(message_id), int(hand_id)),
     )
-    await _conn().commit()
+    await _commit()
 
 
 async def update_blackjack_hand(
@@ -395,7 +402,7 @@ async def update_blackjack_hand(
             int(hand_id),
         ),
     )
-    await _conn().commit()
+    await _commit()
 
 
 async def get_blackjack_hand(hand_id: int) -> dict | None:
@@ -435,7 +442,7 @@ async def claim_blackjack_hand(hand_id: int) -> dict | None:
     cur = await _conn().execute(
         "DELETE FROM casino_blackjack WHERE hand_id=?", (int(hand_id),)
     )
-    await _conn().commit()
+    await _commit()
     return row if cur.rowcount > 0 else None
 
 
@@ -443,7 +450,7 @@ async def delete_blackjack_hand(hand_id: int) -> None:
     await _conn().execute(
         "DELETE FROM casino_blackjack WHERE hand_id=?", (int(hand_id),)
     )
-    await _conn().commit()
+    await _commit()
 
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -486,7 +493,7 @@ async def bump_challenge_progress(
             "progress = MAX(progress, excluded.progress)",
             (uid, day, chal_key, target, seed),
         )
-        await _conn().commit()
+        await _commit()
     elif amount > 0:
         seed = min(target, amount)
         await _conn().execute(
@@ -497,7 +504,7 @@ async def bump_challenge_progress(
             "progress = MIN(target, progress + excluded.progress)",
             (uid, day, chal_key, target, seed),
         )
-        await _conn().commit()
+        await _commit()
     return await get_challenge_progress(user_id, day, chal_key)
 
 
@@ -513,7 +520,7 @@ async def try_claim_challenge(user_id: int, day: int, chal_key: str) -> bool:
         "WHERE user_id=? AND day=? AND chal_key=? AND claimed=0 AND progress>=target",
         (str(user_id), int(day), chal_key),
     )
-    await _conn().commit()
+    await _commit()
     return cur.rowcount > 0
 
 

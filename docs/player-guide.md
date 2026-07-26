@@ -48,7 +48,7 @@ was kept, and anything you'd already claimed stayed claimed.
 ## 🚀 Start here (your first five minutes)
 
 1. `/daily` — free coins, once every 24 hours. Come back daily for a streak bonus.
-2. `/fish` — cast a line. You can cast again every **60 seconds**.
+2. `/fish` — cast a line. You can cast again every **20 seconds**.
 3. `/fish sell` — turn your catch into coins (pick "Everything in your bag").
 4. `/work` — a safe paycheck, once an hour.
 5. `/profile` — see everything you've built so far.
@@ -146,7 +146,7 @@ answer to "how do I get that one?".
 - **Prestige** — Royal Velvet at prestige 1, the Prestige Frame at 3, plus
   Prestige I/V/X badges.
 - **Playing** — Deep Current (250 fish), Fishing Master (1,000 fish), Casino
-  Champion (1,000 games), Tycoon (1,000,000 coins), Grinder (500 shifts).
+  Champion (1,000 games), Tycoon (3,000,000 coins), Grinder (500 shifts).
 - **Staff & events** — Developer, Contributor, Early Supporter, Beta Tester,
   Event Winner and seasonal drops are handed out, not earned by grinding.
 
@@ -189,7 +189,7 @@ prestige. Spending is what keeps prices meaningful.
 The biggest earner in the game, and the most hands-on.
 
 ```
-/fish              cast your line          (every 60 seconds)
+/fish              cast your line          (every 20 seconds)
 /fish bag          what you're carrying
 /fish sell [fish]  sell one species, or everything
 /fish rod          your rod + the next upgrade
@@ -205,7 +205,7 @@ The biggest earner in the game, and the most hands-on.
 
 ### What's new
 
-- **The cast cooldown is now a flat 60 seconds for everyone**, everywhere. It
+- **The cast cooldown is now a flat 20 seconds for everyone**, everywhere. It
   used to be a per-server setting; since your fishing progress is one account,
   one cooldown is the only thing that made sense — and it can't be dodged by
   hopping servers.
@@ -230,11 +230,11 @@ coins immediately.
 | Tier | Rod | Price | Luck |
 |---|---|---|---|
 | 1 | 🥢 Twig & String | free | — |
-| 2 | 🎣 Wooden Rod | 500 | 15% |
-| 3 | 🎣 Fiberglass Rod | 2,500 | 30% |
-| 4 | 🎣 Carbon Rod | 8,000 | 45% |
-| 5 | ✨ Golden Rod | 25,000 | 60% |
-| 6 | 🔱 Mythic Trident | 75,000 | 75% |
+| 2 | 🎣 Wooden Rod | 750 | 15% |
+| 3 | 🎣 Fiberglass Rod | 5,000 | 30% |
+| 4 | 🎣 Carbon Rod | 24,000 | 45% |
+| 5 | ✨ Golden Rod | 100,000 | 60% |
+| 6 | 🔱 Mythic Trident | 450,000 | 75% |
 
 Luck pulls the odds away from junk and common and into the good tiers. Buy the
 next one with `/fish upgrade`.
@@ -298,10 +298,10 @@ pickaxes shift the odds toward the good stuff:
 | Tier | Pickaxe | Price |
 |---|---|---|
 | 1 | ✊ Bare Hands | free |
-| 2 | ⛏️ Stone Pickaxe | 500 |
-| 3 | ⛏️ Iron Pickaxe | 2,000 |
-| 4 | ⛏️ Steel Pickaxe | 8,000 |
-| 5 | ⛏️ Obsidian Pickaxe | 25,000 |
+| 2 | ⛏️ Stone Pickaxe | 750 |
+| 3 | ⛏️ Iron Pickaxe | 4,000 |
+| 4 | ⛏️ Steel Pickaxe | 24,000 |
+| 5 | ⛏️ Obsidian Pickaxe | 100,000 |
 
 `/mine stats` shows your tier, your dig count, and exactly what the next
 pickaxe costs. `/mine upgrade` buys it.
@@ -424,7 +424,8 @@ measured from the moment the week's objectives are created, and rewards
 auto-claim when you finish. They're the same three in every server.
 
 **Prestige.** The endgame sink: from rank *N*, advancing needs
-100×(N+1) achievement points **and** 25,000×(N+1) coins, up to rank 10.
+100×(N+1) achievement points **and** 20,000×(N+1)² coins, up to rank 10 —
+so rank 1 costs 20,000 and each rank after it climbs steeply.
 Nothing is reset or lost — you get a ⭐ badge, a Prestige title, and a +5% per
 rank bonus on weekly-objective payouts. `/progress prestige confirm` does it.
 
@@ -539,7 +540,7 @@ Yes: `/profile cosmetics` lists the banners, borders and nameplates you own,
 and `/profile equip <name>` puts one on.
 
 **Where did `/fish cooldown` go?**
-The cast cooldown is now a fixed 60 seconds for everyone, so there's nothing
+The cast cooldown is now a fixed 20 seconds for everyone, so there's nothing
 to configure.
 
 ---

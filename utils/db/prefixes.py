@@ -6,7 +6,7 @@ module holds the per-guild prefix accessors and registers its table setup with _
 db.init() creates them in the right order.
 """
 
-from ._core import _conn
+from ._core import _commit, _conn
 
 # ══════════════════════════════════════════════════════════════════════════════
 #  Prefixes
@@ -27,7 +27,7 @@ async def set_prefix(guild_id: int, prefix: str) -> None:
         "ON CONFLICT(guild_id) DO UPDATE SET prefix=excluded.prefix",
         (str(guild_id), prefix),
     )
-    await _conn().commit()
+    await _commit()
 
 
 async def get_all_prefixes() -> dict[str, str]:

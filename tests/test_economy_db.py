@@ -2,6 +2,8 @@
 Tests for the economy accessors in utils/db/ — in-memory SQLite.
 """
 
+import asyncio
+
 import aiosqlite
 import pytest
 
@@ -399,3 +401,55 @@ async def test_squad_message_id_null_before_set():
     await db.create_squad(G, 111, A, [B], "", created_at=1.0)
     s = (await db.get_open_squads())[0]
     assert s["message_id"] is None
+
+
+# ── Purchase atomicity ────────────────────────────────────────────────────────
+async def test_concurrent_buys_cannot_both_beat_a_per_user_limit():
+    """The limit lives in the INSERT's WHERE clause, so two buys racing on the
+    same await points can't both read "bought = 0" and both succeed."""
+    item_id = await db.add_shop_item(G, "Badge", 10, kind="custom", per_user_limit=1)
+    await db.add_coins(A, 1000)
+
+    results = await asyncio.gather(
+        db.purchase_item(G, item_id, A), db.purchase_item(G, item_id, A)
+    )
+    assert sorted(bool(r["ok"]) for r in results) == [False, True]
+    assert [r["reason"] for r in results if not r["ok"]] == ["limit"]
+    assert await db.count_user_purchases(G, item_id, A) == 1
+    # The loser's coins came back: exactly one purchase was paid for.
+    assert await db.get_balance(A) == 990
+
+
+async def test_purchase_cooldown_is_enforced_in_the_claim():
+    item_id = await db.add_shop_item(G, "Daily", 10, kind="custom", cooldown=3600)
+    await db.add_coins(A, 1000)
+
+    assert (await db.purchase_item(G, item_id, A))["ok"] is True
+    second = await db.purchase_item(G, item_id, A)
+    assert second["ok"] is False
+    assert second["reason"] == "cooldown"
+    assert second["retry_after"] > 0
+    assert await db.get_balance(A) == 990
+
+
+async def test_rejected_claim_restores_stock_and_coins():
+    item_id = await db.add_shop_item(
+        G, "Rare", 10, kind="custom", per_user_limit=1, stock=5
+    )
+    await db.add_coins(A, 1000)
+    await db.purchase_item(G, item_id, A)
+    blocked = await db.purchase_item(G, item_id, A)
+
+    assert blocked["reason"] == "limit"
+    assert (await db.get_shop_item(G, item_id))["stock"] == 4  # only the paid one
+    assert await db.get_balance(A) == 990
+
+
+async def test_transfer_coins_is_all_or_nothing():
+    await db.add_coins(A, 100)
+    assert await db.transfer_coins(A, B, 60) is True
+    assert (await db.get_balance(A), await db.get_balance(B)) == (40, 60)
+    # Short funds: nothing moves at all.
+    assert await db.transfer_coins(A, B, 500) is False
+    assert (await db.get_balance(A), await db.get_balance(B)) == (40, 60)
+    assert await db.transfer_coins(A, B, 0) is False

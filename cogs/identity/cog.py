@@ -85,7 +85,7 @@ from cogs.fishing.helpers import fish_level, rod_info
 from cogs.leveling import level_progress as server_level_progress
 from cogs.progression.definitions import ACHIEVEMENTS, ACHIEVEMENTS_BY_KEY
 from cogs.progression.helpers import earned_titles, prestige_title, total_points
-from cogs.progression.stats import compute_stats
+from cogs.progression.stats import compute_stats_with_sources
 
 from .helpers import equip_result, newly_unlocked, rarity_marker, unlock_context
 
@@ -256,7 +256,10 @@ class Identity(commands.Cog):
         """Gather everything the card draws — and quietly hand out any cosmetic
         the member has newly qualified for. Returns (card_data, unlock_names)."""
         uid = member.id
-        stats = await compute_stats(uid)
+        # One batched read of every economy source row; `raw` hands back the
+        # rows themselves so the fishing/casino/activity sections below don't
+        # re-query what this already fetched.
+        stats, raw = await compute_stats_with_sources(uid)
         econ = await db.get_econ_config(ctx.guild.id)
         gxp = await db.get_global_xp(uid)
         g_level, g_into, g_need = globalxp.level_progress(gxp)
@@ -268,9 +271,9 @@ class Identity(commands.Cog):
 
         progression = await db.get_progression(uid)
         earned = await db.get_earned_achievements(uid)
-        fisher = await db.get_fisher(uid)
-        casino = await db.get_casino_stats(uid)
-        activity = await db.get_activity_stats(uid)
+        fisher = raw["fisher"]
+        casino = raw["casino"]
+        activity = raw["activity"]
 
         # Lazily unlock anything they've earned (own view only, mirroring how
         # achievements are awarded).

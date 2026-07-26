@@ -6,6 +6,7 @@ import aiosqlite
 import pytest
 
 import utils.db as db
+from cogs.casino.constants import DEFAULT_MAX_BET, DEFAULT_MIN_BET
 
 
 @pytest.fixture(autouse=True)
@@ -28,21 +29,26 @@ A, B = 1, 2
 # ── Config ─────────────────────────────────────────────────────────────────────
 async def test_config_defaults():
     cfg = await db.get_casino_config(G)
-    assert cfg == {"enabled": True, "min_bet": 10, "max_bet": 1000, "jackpot_pool": 0}
+    assert cfg == {
+        "enabled": True,
+        "min_bet": DEFAULT_MIN_BET,
+        "max_bet": DEFAULT_MAX_BET,
+        "jackpot_pool": 0,
+    }
 
 
 async def test_config_roundtrip_partial_update():
-    await db.set_casino_config(G, min_bet=25)
+    await db.set_casino_config(G, min_bet=50)
     cfg = await db.get_casino_config(G)
-    assert cfg["min_bet"] == 25
-    assert cfg["max_bet"] == 1000  # untouched key keeps its default
+    assert cfg["min_bet"] == 50
+    assert cfg["max_bet"] == DEFAULT_MAX_BET  # untouched key keeps its default
     assert cfg["enabled"] is True
 
-    await db.set_casino_config(G, enabled=False, max_bet=5000)
+    await db.set_casino_config(G, enabled=False, max_bet=9000)
     cfg = await db.get_casino_config(G)
     assert cfg["enabled"] is False
-    assert cfg["max_bet"] == 5000
-    assert cfg["min_bet"] == 25
+    assert cfg["max_bet"] == 9000
+    assert cfg["min_bet"] == 50
 
 
 async def test_set_config_never_touches_jackpot_pool():

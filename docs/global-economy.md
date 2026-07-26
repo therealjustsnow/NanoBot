@@ -75,7 +75,7 @@ in every other server. So each activity's configurable minimum is a real floor
 (half the default — a server may go slower without limit, or up to 2× faster,
 and no faster). `cogs/activities/helpers.effective_cooldown` re-applies it on
 every read, so a row written before the floor existed can't undercut it either.
-`/fish` sidesteps the question entirely: its cast cooldown is a fixed 60s
+`/fish` sidesteps the question entirely: its cast cooldown is a fixed 20s
 constant with no per-guild setting at all.
 
 ## 3. Migration (`utils/db/globalize.py`, migration 1)

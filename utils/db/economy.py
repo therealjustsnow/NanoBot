@@ -12,7 +12,18 @@ import time
 
 from utils import db_crypto
 
-from ._core import _conn, _ensure_columns, register_init, rows_for_users
+from . import _cache
+from ._core import (
+    count_ahead,
+    _commit,
+    _conn,
+    transaction,
+    _read_conn,
+    _ensure_columns,
+    fetch_one_returning,
+    register_init,
+    rows_for_users,
+)
 
 # ══════════════════════════════════════════════════════════════════════════════
 #  Economy (GLOBAL per-user coin balances + daily claim)
@@ -46,7 +57,7 @@ async def _ensure_economy_tables():
             currency_emoji  TEXT NOT NULL DEFAULT '🪙'
         )
     """)
-    await _conn().commit()
+    await _commit()
     # Lifetime co-op contribution stat (never decreases when coins are spent) and
     # the per-confirmed-co-op reward knob — added after the baseline tables.
     await _ensure_columns("economy", {"contribution": "INTEGER NOT NULL DEFAULT 0"})
@@ -141,7 +152,7 @@ async def _ensure_economy_tables():
             created_at   REAL NOT NULL DEFAULT 0
         )
     """)
-    await _conn().commit()
+    await _commit()
 
 
 # ── Balances (global — one wallet per user) ────────────────────────────────────
@@ -159,7 +170,7 @@ async def set_coins(user_id: int, amount: int) -> None:
         "ON CONFLICT(user_id) DO UPDATE SET coins=excluded.coins",
         (str(user_id), max(0, int(amount))),
     )
-    await _conn().commit()
+    await _commit()
 
 
 async def add_coins(user_id: int, amount: int) -> int:
@@ -170,12 +181,14 @@ async def add_coins(user_id: int, amount: int) -> int:
     coins under concurrent /gamble, /pay, level-ups, etc.).
     """
     amount = int(amount)
-    await _conn().execute(
+    row = await fetch_one_returning(
         "INSERT INTO economy (user_id, coins) VALUES (?,MAX(0,?)) "
         "ON CONFLICT(user_id) DO UPDATE SET coins=MAX(0, coins + ?)",
         (str(user_id), amount, amount),
+        returning="coins",
     )
-    await _conn().commit()
+    if row is not None:
+        return row["coins"]
     return await get_balance(user_id)
 
 
@@ -193,41 +206,42 @@ async def try_debit_coins(user_id: int, amount: int) -> bool:
         "UPDATE economy SET coins = coins - ? WHERE user_id=? AND coins >= ?",
         (int(amount), str(user_id), int(amount)),
     )
-    await _conn().commit()
+    await _commit()
     return cur.rowcount > 0
 
 
 async def transfer_coins(from_id: int, to_id: int, amount: int) -> bool:
     """Move coins between two users. Returns False if amount <= 0 or low funds.
 
-    The debit is an atomic conditional UPDATE, so concurrent transfers can't
-    overdraw the sender.
+    Debit and credit are one transaction: the debit alone is an atomic
+    conditional UPDATE, but committing it separately from the credit meant a
+    crash (or a cancelled task) between the two destroyed the coins outright.
     """
-    if not await try_debit_coins(from_id, amount):
+    if amount <= 0:
         return False
-    await add_coins(to_id, amount)
+    async with transaction():
+        if not await try_debit_coins(from_id, amount):
+            return False
+        await add_coins(to_id, amount)
     return True
 
 
 async def get_econ_rank(user_id: int) -> tuple[int, int] | None:
     """Return (global rank, coins) for a user; None if they have no wallet row."""
-    async with _conn().execute(
+    async with _read_conn().execute(
         "SELECT coins FROM economy WHERE user_id=?", (str(user_id),)
     ) as cur:
         row = await cur.fetchone()
     if row is None:
         return None
     coins = row["coins"]
-    async with _conn().execute(
-        "SELECT COUNT(*) FROM economy WHERE coins > ?", (coins,)
-    ) as cur:
-        ahead = (await cur.fetchone())[0]
+    ahead = await count_ahead("SELECT COUNT(*) FROM economy WHERE coins > ?", coins)
     return ahead + 1, coins
 
 
 async def get_econ_leaderboard(limit: int = 10, offset: int = 0) -> list[dict]:
     """Richest users across every server."""
-    async with _conn().execute(
+    async with _read_conn().execute(
         "SELECT user_id, coins FROM economy WHERE coins > 0 "
         "ORDER BY coins DESC, user_id ASC LIMIT ? OFFSET ?",
         (int(limit), int(offset)),
@@ -237,7 +251,9 @@ async def get_econ_leaderboard(limit: int = 10, offset: int = 0) -> list[dict]:
 
 
 async def count_econ() -> int:
-    async with _conn().execute("SELECT COUNT(*) FROM economy WHERE coins > 0") as cur:
+    async with _read_conn().execute(
+        "SELECT COUNT(*) FROM economy WHERE coins > 0"
+    ) as cur:
         return (await cur.fetchone())[0]
 
 
@@ -265,7 +281,7 @@ async def reset_economy(user_id: int | None = None) -> int:
         cur = await _conn().execute(
             "DELETE FROM economy WHERE user_id=?", (str(user_id),)
         )
-    await _conn().commit()
+    await _commit()
     return cur.rowcount
 
 
@@ -288,11 +304,14 @@ async def set_daily_state(user_id: int, last_daily: float, streak: int) -> None:
         "last_daily=excluded.last_daily, streak=excluded.streak",
         (str(user_id), float(last_daily), int(streak)),
     )
-    await _conn().commit()
+    await _commit()
 
 
 # ── Config ─────────────────────────────────────────────────────────────────────
 async def get_econ_config(guild_id: int) -> dict:
+    cached = _cache.get("economy_config", guild_id)
+    if cached is not None:
+        return cached
     async with _conn().execute(
         "SELECT daily_amount, streak_bonus, currency_name, currency_emoji, "
         "coop_reward, raid_reward, raid_min, raid_max "
@@ -301,26 +320,34 @@ async def get_econ_config(guild_id: int) -> dict:
     ) as cur:
         row = await cur.fetchone()
     if row:
-        return {
-            "daily_amount": row["daily_amount"],
-            "streak_bonus": row["streak_bonus"],
-            "currency_name": row["currency_name"],
-            "currency_emoji": row["currency_emoji"],
-            "coop_reward": row["coop_reward"],
-            "raid_reward": row["raid_reward"],
-            "raid_min": row["raid_min"],
-            "raid_max": row["raid_max"],
-        }
-    return {
-        "daily_amount": 100,
-        "streak_bonus": 0,
-        "currency_name": "NanoCoin",
-        "currency_emoji": "🪙",
-        "coop_reward": 50,
-        "raid_reward": 100,
-        "raid_min": 3,
-        "raid_max": 20,
-    }
+        return _cache.put(
+            "economy_config",
+            guild_id,
+            {
+                "daily_amount": row["daily_amount"],
+                "streak_bonus": row["streak_bonus"],
+                "currency_name": row["currency_name"],
+                "currency_emoji": row["currency_emoji"],
+                "coop_reward": row["coop_reward"],
+                "raid_reward": row["raid_reward"],
+                "raid_min": row["raid_min"],
+                "raid_max": row["raid_max"],
+            },
+        )
+    return _cache.put(
+        "economy_config",
+        guild_id,
+        {
+            "daily_amount": 100,
+            "streak_bonus": 0,
+            "currency_name": "NanoCoin",
+            "currency_emoji": "🪙",
+            "coop_reward": 50,
+            "raid_reward": 100,
+            "raid_min": 3,
+            "raid_max": 20,
+        },
+    )
 
 
 async def set_econ_config(guild_id: int, **kwargs) -> None:
@@ -348,7 +375,8 @@ async def set_econ_config(guild_id: int, **kwargs) -> None:
             int(current["raid_max"]),
         ),
     )
-    await _conn().commit()
+    await _commit()
+    _cache.invalidate("economy_config", guild_id)
 
 
 # ── Contribution (lifetime co-op stat, global) ─────────────────────────────────
@@ -364,7 +392,7 @@ async def add_contribution(user_id: int, amount: int) -> int:
         "ON CONFLICT(user_id) DO UPDATE SET contribution=MAX(0, contribution + ?)",
         (str(user_id), amount, amount),
     )
-    await _conn().commit()
+    await _commit()
     return await get_contribution(user_id)
 
 
@@ -381,15 +409,14 @@ async def get_contrib_rank(user_id: int) -> tuple[int, int] | None:
     points = await get_contribution(user_id)
     if points <= 0:
         return None
-    async with _conn().execute(
-        "SELECT COUNT(*) FROM economy WHERE contribution > ?", (points,)
-    ) as cur:
-        ahead = (await cur.fetchone())[0]
+    ahead = await count_ahead(
+        "SELECT COUNT(*) FROM economy WHERE contribution > ?", points
+    )
     return ahead + 1, points
 
 
 async def get_contrib_leaderboard(limit: int = 10, offset: int = 0) -> list[dict]:
-    async with _conn().execute(
+    async with _read_conn().execute(
         "SELECT user_id, contribution FROM economy WHERE contribution > 0 "
         "ORDER BY contribution DESC, user_id ASC LIMIT ? OFFSET ?",
         (int(limit), int(offset)),
@@ -401,7 +428,7 @@ async def get_contrib_leaderboard(limit: int = 10, offset: int = 0) -> list[dict
 
 
 async def count_contrib() -> int:
-    async with _conn().execute(
+    async with _read_conn().execute(
         "SELECT COUNT(*) FROM economy WHERE contribution > 0"
     ) as cur:
         return (await cur.fetchone())[0]
@@ -475,7 +502,7 @@ async def add_shop_item(
         )
     except db_crypto.INTEGRITY_ERRORS:
         return None
-    await _conn().commit()
+    await _commit()
     return cur.lastrowid
 
 
@@ -513,7 +540,7 @@ async def edit_shop_item(guild_id: int, item_id: int, **fields) -> bool:
         )
     except db_crypto.INTEGRITY_ERRORS:
         return False
-    await _conn().commit()
+    await _commit()
     return cur.rowcount > 0
 
 
@@ -522,7 +549,7 @@ async def remove_shop_item(guild_id: int, item_id: int) -> bool:
         "DELETE FROM shop_items WHERE guild_id=? AND id=?",
         (str(guild_id), int(item_id)),
     )
-    await _conn().commit()
+    await _commit()
     return cur.rowcount > 0
 
 
@@ -585,14 +612,22 @@ async def last_purchase_time(guild_id: int, item_id: int, user_id: int) -> float
 
 
 async def purchase_item(guild_id: int, item_id: int, user_id: int) -> dict:
-    """Atomically attempt a purchase, enforcing stock, per-user limit, cooldown,
-    and funds.
+    """Attempt a purchase, enforcing stock, per-user limit, cooldown, and funds.
 
     Returns a dict with "ok" plus a "reason" on failure
     ("missing"/"disabled"/"limit"/"cooldown"/"out_of_stock"/"funds"), a
     "retry_after" for cooldown failures, and on success "item" + "new_balance".
-    Stock is decremented with an atomic conditional UPDATE and refunded if the
-    coin debit then fails, so a sold-out race can never overspend or oversell.
+
+    Every step is a single atomic statement with an explicit compensation, in
+    the order stock -> coins -> ledger claim, rather than one transaction. That
+    is deliberate: the connection is shared, so a rollback would also discard
+    whatever another coroutine wrote in the meantime (see _core.transaction).
+    Compensating writes can't do that.
+
+    The ledger insert is the claim, and it re-checks the per-user limit and the
+    cooldown *inside the statement*. Reading them first and deciding in Python
+    let two rapid buys of a per_user_limit=1 item both see "bought = 0" and both
+    succeed.
     """
     item = await get_shop_item(guild_id, item_id)
     if not item:
@@ -600,45 +635,34 @@ async def purchase_item(guild_id: int, item_id: int, user_id: int) -> dict:
     if not item["enabled"]:
         return {"ok": False, "reason": "disabled"}
 
-    if item["per_user_limit"] > 0:
-        bought = await count_user_purchases(guild_id, item_id, user_id)
-        if bought >= item["per_user_limit"]:
-            return {"ok": False, "reason": "limit", "item": item}
-    if item["cooldown"] > 0:
-        last = await last_purchase_time(guild_id, item_id, user_id)
-        elapsed = time.time() - last
-        if last and elapsed < item["cooldown"]:
-            return {
-                "ok": False,
-                "reason": "cooldown",
-                "retry_after": int(item["cooldown"] - elapsed),
-                "item": item,
-            }
-
-    # Reserve stock first (atomic), so two buyers can't claim the last unit.
+    # 1. Reserve stock, so two buyers can't claim the last unit.
     if item["stock"] != -1:
         cur = await _conn().execute(
             "UPDATE shop_items SET stock=stock-1 "
             "WHERE guild_id=? AND id=? AND stock>0",
             (str(guild_id), int(item_id)),
         )
-        await _conn().commit()
+        await _commit()
         if cur.rowcount == 0:
             return {"ok": False, "reason": "out_of_stock", "item": item}
 
-    # Charge the buyer; refund the reserved stock if they can't afford it.
+    # 2. Charge the buyer; give the reserved stock back if they can't afford it.
     if not await try_debit_coins(user_id, item["price"]):
         if item["stock"] != -1:
-            await _conn().execute(
-                "UPDATE shop_items SET stock=stock+1 WHERE guild_id=? AND id=?",
-                (str(guild_id), int(item_id)),
-            )
-            await _conn().commit()
+            await restock_shop_item(guild_id, item_id)
         return {"ok": False, "reason": "funds", "item": item}
 
-    await _conn().execute(
-        "INSERT INTO shop_purchases (guild_id, item_id, user_id, item_name, kind, "
-        "price, bought_at, fulfilled) VALUES (?,?,?,?,?,?,?,?)",
+    # 3. Claim the purchase. The WHERE re-checks both gates against the ledger
+    #    it is inserting into, so concurrent buys can't both slip past a limit.
+    now = time.time()
+    cur = await _conn().execute(
+        "INSERT INTO shop_purchases (guild_id, item_id, user_id, item_name, "
+        "kind, price, bought_at, fulfilled) "
+        "SELECT ?,?,?,?,?,?,?,? WHERE "
+        "  (? = 0 OR (SELECT COUNT(*) FROM shop_purchases "
+        "             WHERE guild_id=? AND item_id=? AND user_id=?) < ?) "
+        "  AND (? = 0 OR COALESCE((SELECT MAX(bought_at) FROM shop_purchases "
+        "             WHERE guild_id=? AND item_id=? AND user_id=?), 0) <= ?)",
         (
             str(guild_id),
             int(item_id),
@@ -646,12 +670,40 @@ async def purchase_item(guild_id: int, item_id: int, user_id: int) -> dict:
             item["name"],
             item["kind"],
             item["price"],
-            time.time(),
+            now,
             # Role rewards are granted immediately; custom rewards await a mod.
             1 if item["kind"] == "role" else 0,
+            int(item["per_user_limit"]),
+            str(guild_id),
+            int(item_id),
+            str(user_id),
+            int(item["per_user_limit"]),
+            int(item["cooldown"]),
+            str(guild_id),
+            int(item_id),
+            str(user_id),
+            now - int(item["cooldown"]),
         ),
     )
-    await _conn().commit()
+    await _commit()
+    if cur.rowcount == 0:
+        # A gate rejected it after we charged — undo both compensations and
+        # report which one, for the message.
+        await add_coins(user_id, item["price"])
+        if item["stock"] != -1:
+            await restock_shop_item(guild_id, item_id)
+        if item["per_user_limit"] > 0:
+            bought = await count_user_purchases(guild_id, item_id, user_id)
+            if bought >= item["per_user_limit"]:
+                return {"ok": False, "reason": "limit", "item": item}
+        last = await last_purchase_time(guild_id, item_id, user_id)
+        return {
+            "ok": False,
+            "reason": "cooldown",
+            "retry_after": max(0, int(item["cooldown"] - (now - last))),
+            "item": item,
+        }
+
     new_balance = await get_balance(user_id)
     return {"ok": True, "item": item, "new_balance": new_balance}
 
@@ -667,7 +719,7 @@ async def restock_shop_item(guild_id: int, item_id: int, delta: int = 1) -> None
         "UPDATE shop_items SET stock=stock+? WHERE guild_id=? AND id=? AND stock>=0",
         (int(delta), str(guild_id), int(item_id)),
     )
-    await _conn().commit()
+    await _commit()
 
 
 async def list_pending_purchases(
@@ -717,7 +769,7 @@ async def fulfill_purchase(guild_id: int, purchase_id: int, mod_id: int) -> dict
         "UPDATE shop_purchases SET fulfilled=1, fulfilled_by=? WHERE id=?",
         (str(mod_id), int(purchase_id)),
     )
-    await _conn().commit()
+    await _commit()
     return {
         "id": row["id"],
         "user_id": int(row["user_id"]),
@@ -752,7 +804,7 @@ async def create_raid(
             float(created_at),
         ),
     )
-    await _conn().commit()
+    await _commit()
     return cur.lastrowid
 
 
@@ -761,7 +813,7 @@ async def set_raid_message(raid_id: int, message_id: int) -> None:
         "UPDATE economy_raids SET message_id=? WHERE raid_id=?",
         (str(message_id), int(raid_id)),
     )
-    await _conn().commit()
+    await _commit()
 
 
 async def set_raid_participants(raid_id: int, participants: list[int]) -> None:
@@ -769,12 +821,12 @@ async def set_raid_participants(raid_id: int, participants: list[int]) -> None:
         "UPDATE economy_raids SET participants=? WHERE raid_id=?",
         (json.dumps([int(u) for u in participants]), int(raid_id)),
     )
-    await _conn().commit()
+    await _commit()
 
 
 async def delete_raid(raid_id: int) -> None:
     await _conn().execute("DELETE FROM economy_raids WHERE raid_id=?", (int(raid_id),))
-    await _conn().commit()
+    await _commit()
 
 
 async def get_open_raids() -> list[dict]:
@@ -832,7 +884,7 @@ async def create_squad(
             float(created_at),
         ),
     )
-    await _conn().commit()
+    await _commit()
     return cur.lastrowid
 
 
@@ -841,7 +893,7 @@ async def set_squad_message(squad_id: int, message_id: int) -> None:
         "UPDATE economy_squads SET message_id=? WHERE squad_id=?",
         (str(message_id), int(squad_id)),
     )
-    await _conn().commit()
+    await _commit()
 
 
 async def set_squad_confirmed(squad_id: int, confirmed: list[int]) -> None:
@@ -849,14 +901,14 @@ async def set_squad_confirmed(squad_id: int, confirmed: list[int]) -> None:
         "UPDATE economy_squads SET confirmed=? WHERE squad_id=?",
         (json.dumps([int(u) for u in confirmed]), int(squad_id)),
     )
-    await _conn().commit()
+    await _commit()
 
 
 async def delete_squad(squad_id: int) -> None:
     await _conn().execute(
         "DELETE FROM economy_squads WHERE squad_id=?", (int(squad_id),)
     )
-    await _conn().commit()
+    await _commit()
 
 
 async def get_open_squads() -> list[dict]:
