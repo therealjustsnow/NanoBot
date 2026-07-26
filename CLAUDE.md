@@ -178,7 +178,7 @@ The static scanners `test_no_duplicate_commands.py` and `test_docs_freshness.py`
 
 | Module | Holds |
 |---|---|
-| `help_engine.py` | The `/help` engine: `_CATEGORY_ORDER`, the static `_SLASH_GROUPS` metadata (for pure-slash groups like automod/roles/auditlog that can't carry `extras`), category collection/lookup, embed builders, and the paginated `HelpView`. Walks `bot.commands` at call-time so help never goes stale. `test_docs_freshness` reads this file for the AutoMod-help coverage check. |
+| `help_engine.py` | The `/help` engine: `_CATEGORY_ORDER`, `_CATEGORY_ALIASES` (the keywords `!help <category>` accepts), the static `_SLASH_GROUPS` metadata (for pure-slash groups like automod/roles/auditlog that can't carry `extras`), category collection/lookup, embed builders, and the paginated `HelpView`. Walks `bot.commands` at call-time so help never goes stale. **A category string in a command's `extras` is not self-registering** — it must also be added to `_CATEGORY_ORDER` (or it sorts last) *and* to `_CATEGORY_ALIASES` (or `!help <category>` answers "no command or category named…"); `tests/test_help_categories.py` guards both, plus the rule that unknown categories sort before the Owner/Admin tail. `test_docs_freshness` reads this file for the AutoMod-help coverage check. |
 | `source.py` | Helpers for the `source` command: GitHub URL building (`_gh_url`), related-callable discovery, codebase symbol search. |
 | `cog.py` | The `Utility` cog: the full command surface (`help`, `prefix`, `ping`, `server`, `user`, `source`, …). |
 

@@ -23,8 +23,12 @@ _CATEGORY_ORDER: list[str] = [
     "🛡️ Auto Mod",
     "🎛️ Role Panels",
     "🔴 Live Roles",
+    "🎫 Tickets",
     "🗳️ Voting",
     "🎵 Music",
+    "🪙 Economy",
+    "📈 Leveling",
+    "🎂 Birthdays",
     "🎉 Fun",
     "😄 React",
     "🖼️ Images",
@@ -267,18 +271,16 @@ def _collect_categories(
     for cat in by_cat:
         by_cat[cat].sort(key=lambda e: e["name"])
 
-    # Build ordered result following _CATEGORY_ORDER
-    ordered: dict[str, list[dict]] = {}
-    for cat in _CATEGORY_ORDER:
-        if cat in by_cat:
-            ordered[cat] = by_cat[cat]
+    # Build ordered result following _CATEGORY_ORDER, with any unknown
+    # categories (a new cog whose category isn't listed yet) slotted in
+    # before the Owner/Admin tail rather than after it.
+    known = [cat for cat in _CATEGORY_ORDER if cat in by_cat]
+    unknown = [cat for cat in by_cat if cat not in _CATEGORY_ORDER]
 
-    # Append any unknown categories (new cogs) before returning
-    for cat, cmds in by_cat.items():
-        if cat not in ordered:
-            ordered[cat] = cmds
+    tail = [cat for cat in known if cat in _OWNER_CATEGORIES]
+    head = [cat for cat in known if cat not in _OWNER_CATEGORIES]
 
-    return ordered
+    return {cat: by_cat[cat] for cat in (*head, *unknown, *tail)}
 
 
 def _flat_lookup(bot: commands.Bot) -> dict[str, dict]:
@@ -392,6 +394,85 @@ _CATEGORY_ALIASES: dict[str, str] = {
     "selfroles": "🎛️ Role Panels",
     "selfrole": "🎛️ Role Panels",
     "autogen": "🎛️ Role Panels",
+    # 🔴 Live Roles
+    "liverole": "🔴 Live Roles",
+    "liveroles": "🔴 Live Roles",
+    "live": "🔴 Live Roles",
+    "streaming": "🔴 Live Roles",
+    "golive": "🔴 Live Roles",
+    # 🎵 Music
+    "music": "🎵 Music",
+    "song": "🎵 Music",
+    "songs": "🎵 Music",
+    "play": "🎵 Music",
+    "queue": "🎵 Music",
+    "player": "🎵 Music",
+    "audio": "🎵 Music",
+    "playlist": "🎵 Music",
+    "lyrics": "🎵 Music",
+    # 🎫 Tickets
+    "ticket": "🎫 Tickets",
+    "tickets": "🎫 Tickets",
+    "support": "🎫 Tickets",
+    "helpdesk": "🎫 Tickets",
+    # 🪙 Economy — one category shared by the whole economy family
+    # (economy, fishing, casino, inventory, crafting, activities,
+    #  progression, identity), so it needs keywords for each of them.
+    "economy": "🪙 Economy",
+    "eco": "🪙 Economy",
+    "coins": "🪙 Economy",
+    "coin": "🪙 Economy",
+    "money": "🪙 Economy",
+    "currency": "🪙 Economy",
+    "nanocoin": "🪙 Economy",
+    "balance": "🪙 Economy",
+    "daily": "🪙 Economy",
+    "shop": "🪙 Economy",
+    "gamble": "🪙 Economy",
+    "gambling": "🪙 Economy",
+    "squad": "🪙 Economy",
+    "coop": "🪙 Economy",
+    "raid": "🪙 Economy",
+    "fish": "🪙 Economy",
+    "fishing": "🪙 Economy",
+    "casino": "🪙 Economy",
+    "slots": "🪙 Economy",
+    "blackjack": "🪙 Economy",
+    "roulette": "🪙 Economy",
+    "jackpot": "🪙 Economy",
+    "inventory": "🪙 Economy",
+    "inv": "🪙 Economy",
+    "items": "🪙 Economy",
+    "item": "🪙 Economy",
+    "craft": "🪙 Economy",
+    "crafting": "🪙 Economy",
+    "recipes": "🪙 Economy",
+    "work": "🪙 Economy",
+    "mine": "🪙 Economy",
+    "mining": "🪙 Economy",
+    "hunt": "🪙 Economy",
+    "explore": "🪙 Economy",
+    "rob": "🪙 Economy",
+    "adventure": "🪙 Economy",
+    "activities": "🪙 Economy",
+    "progress": "🪙 Economy",
+    "progression": "🪙 Economy",
+    "achievements": "🪙 Economy",
+    "badges": "🪙 Economy",
+    "prestige": "🪙 Economy",
+    "cosmetics": "🪙 Economy",
+    # 📈 Leveling
+    "leveling": "📈 Leveling",
+    "levelling": "📈 Leveling",
+    "levels": "📈 Leveling",
+    "level": "📈 Leveling",
+    "xp": "📈 Leveling",
+    "rank": "📈 Leveling",
+    # 🎂 Birthdays
+    "birthday": "🎂 Birthdays",
+    "birthdays": "🎂 Birthdays",
+    "bday": "🎂 Birthdays",
+    "bdays": "🎂 Birthdays",
     # 🗳️ Voting
     "vote": "🗳️ Voting",
     "voting": "🗳️ Voting",
