@@ -22,7 +22,9 @@ Commands
   /inventory sell <item> [qty]  → sell sellable items for coins; `item` also
                                   takes a bulk target — `all` for everything
                                   sellable, or a category (`cat:material`) —
-                                  both offered as one-tap rows by the picker
+                                  both offered as one-tap rows by the picker.
+                                  A bulk target previews what would go and
+                                  sells only once the Sell button is pressed.
   /inventory give <member> <item> [qty] → give items to another member
   /inventory info <item>        → what an item is and does
 """
@@ -45,8 +47,10 @@ from .constants import (
     EFFECT_MAX_USES,
     MAX_BULK,
     SELL_ALL_ALIASES,
+    SELL_CONFIRM_TIMEOUT,
 )
 from .helpers import chest_payout
+from .views import SellConfirmView
 
 log = logging.getLogger("NanoBot.inventory")
 
@@ -61,6 +65,9 @@ class Inventory(commands.Cog):
         # Per-(guild, user) locks serialize multi-step use/sell flows (the
         # economy /daily pattern) so a double-send can't double-apply.
         self._locks = h.KeyedLocks()
+        # One live bulk-sell confirmation per member (transient — nothing is
+        # consumed until the button lands, so these need no persistence).
+        self._pending_sell: dict[int, SellConfirmView] = {}
 
     def _lock(self, user_id: int):
         # Returns an async context manager; existing `async with self._lock(...)`
@@ -371,56 +378,46 @@ class Inventory(commands.Cog):
             )
         )
 
-    async def _sell_bulk(
-        self, ctx: commands.Context, category: Optional[str], qty: Optional[int]
-    ):
-        """Sell every sellable stack in one go (optionally one category only).
+    # ── bulk sell (all / one category) ───────────────────────────────────────
+    @staticmethod
+    def _bulk_label(category: Optional[str]) -> str:
+        return (
+            item_catalog.CATEGORY_LABELS.get(category, category.title())
+            if category
+            else "your inventory"
+        )
 
-        Each stack is spent with the same atomic try_consume_item as a single
-        sell, so a stack drained by a concurrent command is skipped rather than
-        paid for, and the coins are credited once for the whole run.
+    @staticmethod
+    def _bulk_plan(
+        stacks: list[dict], category: Optional[str], qty: Optional[int]
+    ) -> list[tuple[str, int, int]]:
+        """What a bulk sell would move: [(item_key, count, coins), …].
+
+        Pure over a stack list, so the preview and the sale that follows it
+        agree on the rules — the sale simply runs it against a fresh read.
         """
         per_stack = None if qty is None else max(1, min(int(qty), MAX_BULK))
-        sold: list[tuple[str, int, int]] = []
-        total = new_bal = 0
-        async with self._lock(ctx.author.id):
-            for stack in await db.get_inventory(ctx.author.id):
-                d = item_catalog.get(stack["item_key"])
-                if d is None or d.value <= 0:
-                    continue
-                if category is not None and d.category != category:
-                    continue
-                count = min(stack["qty"], MAX_BULK)
-                if per_stack is not None:
-                    count = min(count, per_stack)
-                if count <= 0 or not await db.try_consume_item(
-                    ctx.author.id, d.key, count
-                ):
-                    continue
-                total += d.value * count
-                sold.append((d.key, count, d.value * count))
-            if total:
-                new_bal = await db.add_coins(ctx.author.id, total)
-        if not sold:
-            where = (
-                item_catalog.CATEGORY_LABELS.get(category, category.title())
-                if category
-                else "your inventory"
-            )
-            return await ctx.reply(
-                embed=h.warn(
-                    f"Nothing in {where} can be sold right now. Materials and "
-                    "treasure from fishing, mining, and hunting are what sell.",
-                    "🎒 Nothing to Sell",
-                ),
-                ephemeral=True,
-            )
-        econ = await db.get_econ_config(ctx.guild.id)
+        plan = []
+        for stack in stacks:
+            d = item_catalog.get(stack["item_key"])
+            if d is None or d.value <= 0:
+                continue
+            if category is not None and d.category != category:
+                continue
+            count = min(stack["qty"], MAX_BULK)
+            if per_stack is not None:
+                count = min(count, per_stack)
+            if count > 0:
+                plan.append((d.key, count, d.value * count))
+        return plan
+
+    @staticmethod
+    def _plan_field(plan: list[tuple[str, int, int]]) -> str:
+        """The item breakdown, trimmed to fit an embed field's 1024-char cap."""
         lines = [
             f"{item_catalog.display(key)} × **{count:,}** — {coins:,}"
-            for key, count, coins in sold
+            for key, count, coins in plan
         ]
-        # Embed fields cap at 1024 chars, and a full inventory can exceed that.
         body, used = [], 0
         for line in lines:
             if used + len(line) + 1 > 950:
@@ -429,20 +426,102 @@ class Inventory(commands.Cog):
             used += len(line) + 1
         if len(body) < len(lines):
             body.append(f"…and **{len(lines) - len(body)}** more")
-        what = (
-            item_catalog.CATEGORY_LABELS.get(category, category.title())
-            if category
-            else "your inventory"
+        return "\n".join(body)
+
+    async def _sell_bulk(
+        self, ctx: commands.Context, category: Optional[str], qty: Optional[int]
+    ):
+        """Preview a bulk sell and wait for confirmation.
+
+        Nothing is consumed here — a bulk sell empties whole stacks, including
+        treasure someone may have been saving, so it always shows what would go
+        and sells only when the member presses the button.
+        """
+        plan = self._bulk_plan(await db.get_inventory(ctx.author.id), category, qty)
+        if not plan:
+            return await ctx.reply(
+                embed=h.warn(
+                    f"Nothing in {self._bulk_label(category)} can be sold right "
+                    "now. Materials and treasure from fishing, mining, and "
+                    "hunting are what sell.",
+                    "🎒 Nothing to Sell",
+                ),
+                ephemeral=True,
+            )
+        econ = await db.get_econ_config(ctx.guild.id)
+        count = sum(n for _, n, _ in plan)
+        total = sum(c for _, _, c in plan)
+        embed = h.warn(
+            f"This sells **{count:,}** items from {self._bulk_label(category)} "
+            f"for {self._money(econ, total)}.\n"
+            "Items that can't be sold (keys, consumables) stay put.",
+            "💰 Sell these?",
         )
-        items_sold = sum(count for _, count, _ in sold)
+        embed.add_field(name="What will sell", value=self._plan_field(plan))
+        embed.set_footer(
+            text=f"Nothing is sold until you press Sell · expires in "
+            f"{h.fmt_duration(int(SELL_CONFIRM_TIMEOUT))}"
+        )
+        view = SellConfirmView(
+            self,
+            user_id=ctx.author.id,
+            guild_id=ctx.guild.id,
+            category=category,
+            qty=qty,
+            timeout=SELL_CONFIRM_TIMEOUT,
+        )
+        # One pending confirmation per member: a second bulk sell retires the
+        # first, so a stale preview can't be pressed later against a changed
+        # inventory.
+        previous = self._pending_sell.get(ctx.author.id)
+        if previous is not None:
+            await previous.cancel_quietly()
+        self._pending_sell[ctx.author.id] = view
+        view.message = await ctx.reply(embed=embed, view=view)
+
+    def forget_pending_sell(self, user_id: int, view) -> None:
+        """Drop a finished confirmation (called by the view on settle/timeout)."""
+        if self._pending_sell.get(user_id) is view:
+            self._pending_sell.pop(user_id, None)
+
+    async def execute_bulk_sell(
+        self,
+        user_id: int,
+        guild_id: int,
+        category: Optional[str],
+        qty: Optional[int],
+    ) -> discord.Embed:
+        """Run a confirmed bulk sell and return the result embed.
+
+        Each stack is spent with the same atomic try_consume_item as a single
+        sell, so a stack drained since the preview is skipped rather than paid
+        for, and the coins are credited once for the whole run.
+        """
+        sold: list[tuple[str, int, int]] = []
+        total = new_bal = 0
+        async with self._lock(user_id):
+            plan = self._bulk_plan(await db.get_inventory(user_id), category, qty)
+            for key, count, coins in plan:
+                if not await db.try_consume_item(user_id, key, count):
+                    continue
+                total += coins
+                sold.append((key, count, coins))
+            if total:
+                new_bal = await db.add_coins(user_id, total)
+        if not sold:
+            return h.warn(
+                f"Nothing in {self._bulk_label(category)} was left to sell.",
+                "🎒 Nothing to Sell",
+            )
+        econ = await db.get_econ_config(guild_id)
         embed = h.ok(
-            f"Sold **{items_sold:,}** items from {what} for "
-            f"{self._money(econ, total)}.\n"
+            f"Sold **{sum(n for _, n, _ in sold):,}** items from "
+            f"{self._bulk_label(category)} for {self._money(econ, total)}.\n"
             f"Balance: {self._money(econ, new_bal)}",
             "💰 Sold",
         )
-        embed.add_field(name="What sold", value="\n".join(body), inline=False)
-        await ctx.reply(embed=embed)
+        embed.add_field(name="What sold", value=self._plan_field(sold), inline=False)
+        return embed
 
     @inventory_sell.autocomplete("item")
     async def _sell_ac(self, interaction: discord.Interaction, current: str):

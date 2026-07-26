@@ -15,6 +15,11 @@ MAX_BULK = 1000
 SELL_ALL_ALIASES = ("all", "everything", "*")
 CATEGORY_SELL_PREFIX = "cat:"
 
+# A bulk sell clears whole stacks, so it shows a preview and waits for a button
+# press. Nothing is consumed until then, so an unanswered confirmation just
+# expires — long enough to read the list, short enough not to linger.
+SELL_CONFIRM_TIMEOUT = 60.0
+
 # Bulk-using effect items multiplies the granted duration/charges by qty, so
 # without a separate ceiling one command could bank a near-permanent buff
 # (e.g. 1000 lucky charms = 500 hours of luck, or a years-long rob shield).

@@ -236,19 +236,25 @@ async def test_inventory_sell_autocomplete_hides_category_rows_when_pointless(bo
 
 @pytest.mark.cogs("cogs.inventory", "cogs.activities")
 async def test_inventory_sell_accepts_the_bulk_values_it_suggests(bot):
-    """Every value the picker hands back must be a valid sell target."""
+    """Every value the picker hands back must be a valid sell target — each
+    one reaching the confirmation step rather than an unknown-item error."""
     from discord.ext import test as dpytest
 
+    from tests.test_inventory_commands import _FakeInteraction
+
+    cog = bot.get_cog("Inventory")
     author = dpytest.get_config().members[0]
     await db.add_item(author.id, "iron_ore", 2)
     await db.add_item(author.id, "golden_antler", 1)
 
     await dpytest.message("!inventory sell cat:treasure", member=author)
-    dpytest.get_message()
+    assert "Sell these?" in dpytest.get_message().embeds[0].title
+    await cog._pending_sell[author.id]._on_confirm(_FakeInteraction(author.id))
     assert await db.get_item_qty(author.id, "golden_antler") == 0
 
     await dpytest.message("!inventory sell all", member=author)
-    dpytest.get_message()
+    assert "Sell these?" in dpytest.get_message().embeds[0].title
+    await cog._pending_sell[author.id]._on_confirm(_FakeInteraction(author.id))
     assert await db.get_item_qty(author.id, "iron_ore") == 0
     assert await db.get_balance(author.id) == 350
 

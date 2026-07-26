@@ -338,6 +338,12 @@ All 💎 Treasure** — so a stuffed inventory empties in a single tap. Items th
 can't be sold (keys, consumables like 🍀 Lucky Charm) are never included, and
 adding a `qty` caps how many of *each* item goes, e.g. `/inventory sell all 5`.
 
+**Nothing goes without a confirm.** A bulk sell first shows you the full list
+of what would go and what it's worth, with **💰 Sell** and **✖️ Cancel**
+buttons — nothing leaves your inventory until you press Sell. Ignore it and it
+expires after a minute, having sold nothing. (Selling a single item by name is
+unchanged: it goes straight through.)
+
 **Buffs.** Using a consumable stores an effect: either timed (a 🍀 Lucky Charm
 for a while) or charge-based (bait that spends one charge per cast). Active
 effects show at the bottom of `/inventory` and on your `/profile`.
