@@ -47,6 +47,9 @@ _DOMAIN_ORDER = (
     "liverole",
     "tickets",
     "identity",
+    # No tables of its own — the retention/WAL/VACUUM janitor for every other
+    # domain's tables, driven by main.py's daily maintenance loop.
+    "maintenance",
     # No tables of its own — registers migration 1 (per-guild economy → global),
     # so it must be imported after every domain whose tables it rebuilds.
     "globalize",

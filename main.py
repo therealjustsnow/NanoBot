@@ -450,6 +450,31 @@ class NanoBot(commands.Bot):
     async def _before_presence_loop(self) -> None:
         await self.wait_until_ready()
 
+    @tasks.loop(hours=24)
+    async def _maintenance_loop(self) -> None:
+        """Daily database housekeeping — see utils/db/maintenance.py.
+
+        Retention prune, WAL checkpoint, and a VACUUM only when there's enough
+        free space to justify rewriting the file. All three are things a
+        never-closing single connection would otherwise never do.
+        """
+        summary = await db.sweep()
+        pruned = summary.get("pruned") or {}
+        if pruned or summary.get("checkpointed") or summary.get("vacuumed"):
+            log.info(
+                "DB maintenance: pruned %s, checkpointed %d WAL page(s)%s",
+                pruned or "nothing",
+                summary.get("checkpointed", 0),
+                ", vacuumed" if summary.get("vacuumed") else "",
+            )
+
+    @_maintenance_loop.before_loop
+    async def _before_maintenance_loop(self) -> None:
+        # Startup is already the busiest minute of the process — let it settle
+        # before rewriting the database.
+        await self.wait_until_ready()
+        await asyncio.sleep(600)
+
     # ── Config application / reload ───────────────────────────────────────────
     def _apply_config(self, cfg: dict) -> None:
         """Copy the flat config dict onto the bot's runtime attributes."""
@@ -677,6 +702,8 @@ class NanoBot(commands.Bot):
         await self.apply_presence()
         if not self._presence_loop.is_running():
             self._presence_loop.start()
+        if not self._maintenance_loop.is_running():
+            self._maintenance_loop.start()
         if not self._schedules_restored:
             self._schedules_restored = True
             self.dispatch("restore_schedules")
