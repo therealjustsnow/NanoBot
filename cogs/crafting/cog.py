@@ -136,6 +136,7 @@ class Crafting(commands.Cog):
         invoke_without_command=True,
         extras={
             "category": "🪙 Economy",
+            "sub": "🎒 Items & Crafting",
             "short": "Craft new items from your materials",
             "usage": "craft [subcommand]",
             "desc": "Turn materials earned from fishing, mining, hunting, and "

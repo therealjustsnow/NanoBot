@@ -195,6 +195,7 @@ class Identity(commands.Cog):
         fallback="card",
         extras={
             "category": "🪙 Economy",
+            "sub": "🏆 Progress & Profile",
             "short": "Your account card and cosmetics",
             "usage": "profile [subcommand]",
             "desc": "Your whole account on one image: global level, this "

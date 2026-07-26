@@ -327,6 +327,7 @@ class Casino(commands.Cog):
         invoke_without_command=True,
         extras={
             "category": "🪙 Economy",
+            "sub": "🎲 Games",
             "short": "Bet coins on flip, dice, slots, roulette, and blackjack",
             "usage": "casino [subcommand]",
             "desc": "Bet NanoCoins across five games, chase a shared progressive "

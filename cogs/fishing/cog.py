@@ -133,6 +133,7 @@ class Fishing(commands.Cog):
         invoke_without_command=True,
         extras={
             "category": "🪙 Economy",
+            "sub": "🎲 Games",
             "short": "Catch and sell fish for coins",
             "usage": "fish [subcommand]",
             "desc": "Cast a line every 60 seconds, collect fish across seven "
