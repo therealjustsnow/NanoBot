@@ -172,6 +172,7 @@ class Activities(commands.Cog):
         description="Work a shift for coins — safe, steady income.",
         extras={
             "category": "🪙 Economy",
+            "sub": "⛏️ Activities",
             "short": "Work a shift for coins",
             "usage": "work",
             "desc": "Punch the clock for a low-risk paycheck. Racking up shifts "
@@ -230,6 +231,7 @@ class Activities(commands.Cog):
         invoke_without_command=True,
         extras={
             "category": "🪙 Economy",
+            "sub": "⛏️ Activities",
             "short": "Dig for ore",
             "usage": "mine [subcommand]",
             "desc": "Dig for ore — stone, coal, iron, gold, and rare diamond — sold "
@@ -379,6 +381,7 @@ class Activities(commands.Cog):
         invoke_without_command=True,
         extras={
             "category": "🪙 Economy",
+            "sub": "⛏️ Activities",
             "short": "Hunt, explore, and tune activities",
             "usage": "adventure [subcommand]",
             "desc": "Run it bare to see every activity, what it pays, and whether "
@@ -525,6 +528,7 @@ class Activities(commands.Cog):
         description="Try to steal a cut of another member's coins — risky!",
         extras={
             "category": "🪙 Economy",
+            "sub": "⛏️ Activities",
             "short": "Try to steal coins (PvP risk)",
             "usage": "rob <member>",
             "desc": "Attempt to steal 10-20% of a member's balance (capped at 1,000). "

@@ -238,6 +238,7 @@ class Progression(commands.Cog):
         fallback="overview",
         extras={
             "category": "🪙 Economy",
+            "sub": "🏆 Progress & Profile",
             "short": "Achievements, badges, weekly goals, and prestige",
             "usage": "progress [subcommand]",
             "desc": "Your progression profile: achievements earned across fishing, "

@@ -1,7 +1,14 @@
 """Help engine for the utility cog: category model, slash-group metadata, and
 the paginated HelpView. Commands register help metadata via extras={...} on
 their decorator; the engine walks bot.commands at call-time so it never goes
-stale."""
+stale.
+
+Big categories (Music at 40 commands, Economy at 17 spread over eight cogs)
+are broken into subcategories: a command adds extras={"sub": "..."} and the
+category renders one embed field per group instead of one long list. Opting a
+category in means listing its groups in _SUBCATEGORY_ORDER — which also fixes
+their display order, since nothing about a command says where its group
+belongs. tests/test_help_categories.py keeps the two in sync."""
 
 import discord
 from discord.ext import commands
@@ -37,6 +44,36 @@ _CATEGORY_ORDER: list[str] = [
 ]
 
 _OWNER_CATEGORIES: set[str] = {"🔧 Owner / Admin"}
+
+# Categories large enough to warrant grouping, mapped to their groups in
+# display order. A category listed here is *opted in*: every one of its
+# commands must declare extras={"sub": ...} naming one of these groups, and
+# every group must be non-empty (both guarded by tests/test_help_categories).
+# Categories absent from this map render as a flat list, as they always have.
+_SUBCATEGORY_ORDER: dict[str, list[str]] = {
+    "🎵 Music": [
+        "▶️ Play & Queue Up",
+        "⏯️ Playback Controls",
+        "📜 The Queue",
+        "🔊 Sound",
+        "🤖 Modes & Automation",
+        "📚 History & Extras",
+        "🚫 Blocks & Admin",
+    ],
+    "🪙 Economy": [
+        "💰 Wallet & Shop",
+        "🎲 Games",
+        "⛏️ Activities",
+        "🎒 Items & Crafting",
+        "🤝 Co-op",
+        "🏆 Progress & Profile",
+    ],
+}
+
+# Group shown when a command in an opted-in category declares no "sub". The
+# tests forbid this, but help should still render every command if one slips
+# through rather than silently dropping it.
+_UNGROUPED = "📦 More"
 
 # Static entries for pure-slash app_commands.Group trees that cannot carry
 # extras on their decorator. Each entry will appear in the category listing
@@ -209,6 +246,64 @@ def _is_admin_cog(cmd) -> bool:
     return cog is not None and type(cog).__name__ == "Admin"
 
 
+def _sub_rank(sub: str, order: list[str]) -> int:
+    """Sort position of a subcategory; unknown/missing groups sort last."""
+    return order.index(sub) if sub in order else len(order)
+
+
+def _group_by_sub(cat_name: str, cmds: list[dict]) -> list[tuple[str, list[dict]]]:
+    """
+    Split a category's commands into [(group_name, [entry, ...]), ...].
+
+    Returns [] for a category that isn't subcategorized, which is the caller's
+    signal to render the flat list. Empty groups are dropped, so a group whose
+    commands are all hidden (owner-only) doesn't leave a bare heading.
+    """
+    order = _SUBCATEGORY_ORDER.get(cat_name)
+    if not order:
+        return []
+
+    buckets: dict[str, list[dict]] = {}
+    for cmd in cmds:
+        sub = cmd.get("sub") or _UNGROUPED
+        buckets.setdefault(sub if sub in order else _UNGROUPED, []).append(cmd)
+
+    grouped = [(name, buckets[name]) for name in order if name in buckets]
+    if _UNGROUPED in buckets:
+        grouped.append((_UNGROUPED, buckets[_UNGROUPED]))
+    return grouped
+
+
+def _fit_fields(embed: discord.Embed, name: str, lines: list[str]) -> None:
+    """
+    Add `lines` to `embed` under `name`, splitting across continuation fields
+    when they exceed Discord's 1024-char field cap so a growing group can
+    never silently truncate.
+    """
+    chunk: list[str] = []
+    size = 0
+    part = 0
+
+    def flush() -> None:
+        nonlocal chunk, size, part
+        if not chunk:
+            return
+        part += 1
+        embed.add_field(
+            name=name if part == 1 else f"{name} (cont.)",
+            value="\n".join(chunk),
+            inline=False,
+        )
+        chunk, size = [], 0
+
+    for line in lines:
+        if chunk and size + len(line) + 1 > 1024:
+            flush()
+        chunk.append(line)
+        size += len(line) + 1
+    flush()
+
+
 def _collect_categories(
     bot: commands.Bot, *, is_owner: bool = False
 ) -> dict[str, list[dict]]:
@@ -244,6 +339,7 @@ def _collect_categories(
             "name": cmd.name,
             "aliases": list(cmd.aliases) if hasattr(cmd, "aliases") else [],
             "category": cat,
+            "sub": extras.get("sub", ""),
             "short": extras.get("short", cmd.description or "—"),
             "usage": extras.get("usage", cmd.name),
             "desc": extras.get(
@@ -265,11 +361,16 @@ def _collect_categories(
             continue
         by_cat.setdefault(cat, []).append(sg)
 
-    # Sort each category's commands: entries with extras first (has 'usage' key
-    # from extras), slash-groups second, then alphabetically within each group.
-    # Actually just sort alphabetically — natural enough.
-    for cat in by_cat:
-        by_cat[cat].sort(key=lambda e: e["name"])
+    # Sort each category's commands alphabetically. In a subcategorized
+    # category the group's position in _SUBCATEGORY_ORDER leads, so entries
+    # arrive already grouped and any consumer that ignores "sub" still reads
+    # in a sensible order.
+    for cat, entries in by_cat.items():
+        order = _SUBCATEGORY_ORDER.get(cat)
+        if order:
+            entries.sort(key=lambda e: (_sub_rank(e.get("sub", ""), order), e["name"]))
+        else:
+            entries.sort(key=lambda e: e["name"])
 
     # Build ordered result following _CATEGORY_ORDER, with any unknown
     # categories (a new cog whose category isn't listed yet) slotted in
@@ -301,6 +402,7 @@ def _flat_lookup(bot: commands.Bot) -> dict[str, dict]:
             "name": cmd.name,
             "aliases": list(cmd.aliases) if hasattr(cmd, "aliases") else [],
             "category": cat,
+            "sub": extras.get("sub", ""),
             "short": extras.get("short", cmd.description or "—"),
             "usage": extras.get("usage", cmd.name),
             "desc": extras.get(
@@ -514,23 +616,48 @@ _CATEGORY_ALIASES: dict[str, str] = {
 }
 
 
-def _build_category_embed(cat_name: str, cmds: list, prefix: str) -> discord.Embed:
-    """Single-embed view of all commands in one help category."""
-    lines = []
-    for cmd in cmds:
-        is_slash_only = cmd["name"] in _SLASH_GROUP_LOOKUP
-        name_str = f"`/{cmd['name']}`" if is_slash_only else f"`{prefix}{cmd['name']}`"
-        entry = name_str
-        if cmd.get("aliases"):
-            shown = cmd["aliases"][:2]
-            entry += " _(also: " + ", ".join(f"`{a}`" for a in shown) + ")_"
-        entry += f"  —  {cmd['short']}"
-        if cmd.get("perms") and cmd["perms"] not in ("None", "Bot Owner"):
-            entry += f"  · _{cmd['perms']}_"
-        lines.append(entry)
+def _cmd_line(
+    cmd: dict, prefix: str, *, max_aliases: int | None = None, show_perms: bool = False
+) -> str:
+    """One command's listing line, shared by the category and page views."""
+    is_slash_only = cmd["name"] in _SLASH_GROUP_LOOKUP
+    pfx = "/" if is_slash_only else prefix
+    line = f"`{pfx}{cmd['name']}`"
 
+    aliases = cmd.get("aliases") or []
+    if aliases:
+        shown = aliases if max_aliases is None else aliases[:max_aliases]
+        line += " _(also: " + ", ".join(f"`{a}`" for a in shown) + ")_"
+
+    line += f"  —  {cmd['short']}"
+    if show_perms and cmd.get("perms") and cmd["perms"] not in ("None", "Bot Owner"):
+        line += f"  · _{cmd['perms']}_"
+    return line
+
+
+def _build_category_embed(cat_name: str, cmds: list, prefix: str) -> discord.Embed:
+    """
+    Single-embed view of all commands in one help category.
+
+    Subcategorized categories (Music, Economy) render one field per group;
+    everything else keeps the flat description list.
+    """
     e = h.embed(title=cat_name, color=h.BLUE)
-    e.description = "\n".join(lines)
+    groups = _group_by_sub(cat_name, cmds)
+
+    if groups:
+        e.description = f"{len(cmds)} commands, grouped by what they do."
+        for group_name, entries in groups:
+            _fit_fields(
+                e,
+                group_name,
+                [_cmd_line(c, prefix, max_aliases=2, show_perms=True) for c in entries],
+            )
+    else:
+        e.description = "\n".join(
+            _cmd_line(c, prefix, max_aliases=2, show_perms=True) for c in cmds
+        )
+
     e.set_footer(
         text=f"Use `{prefix}help <command>` for full argument details  ·  NanoBot"
     )
@@ -557,7 +684,11 @@ def _build_help_pages(
     cover_lines = []
     for cat, cmds in categories:
         n = len(cmds)
-        cover_lines.append(f"**{cat}** — {n} command{'s' if n != 1 else ''}")
+        line = f"**{cat}** — {n} command{'s' if n != 1 else ''}"
+        groups = _group_by_sub(cat, cmds)
+        if groups:
+            line += f" in {len(groups)} groups"
+        cover_lines.append(line)
 
     cover = h.embed(
         title="⚡ NanoBot — Command Reference",
@@ -578,21 +709,20 @@ def _build_help_pages(
 
     # One page per category
     for i, (category, cmds) in enumerate(categories, start=2):
-        lines = []
-        for cmd in cmds:
-            is_slash_only = cmd["name"] in _SLASH_GROUP_LOOKUP
-            pfx = "/" if is_slash_only else prefix
-            line = f"`{pfx}{cmd['name']}`"
-            if cmd.get("aliases"):
-                line += " _(also: " + ", ".join(f"`{a}`" for a in cmd["aliases"]) + ")_"
-            line += f" — {cmd['short']}"
-            lines.append(line)
-
         e = h.embed(title=category, color=h.BLUE)
-        e.description = (
-            "\n".join(lines)
-            + f"\n\nUse `{prefix}help <command>` for details on any command."
-        )
+        groups = _group_by_sub(category, cmds)
+        tail = f"Use `{prefix}help <command>` for details on any command."
+
+        if groups:
+            e.description = f"{len(cmds)} commands, grouped by what they do."
+            for group_name, entries in groups:
+                _fit_fields(e, group_name, [_cmd_line(c, prefix) for c in entries])
+            e.add_field(name="​", value=tail, inline=False)
+        else:
+            e.description = (
+                "\n".join(_cmd_line(c, prefix) for c in cmds) + f"\n\n{tail}"
+            )
+
         e.set_footer(text=footer(i))
         pages.append(e)
 

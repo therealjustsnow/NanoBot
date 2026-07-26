@@ -143,6 +143,7 @@ class Economy(commands.Cog):
         description="Check your NanoCoin balance, or someone else's.",
         extras={
             "category": "🪙 Economy",
+            "sub": "💰 Wallet & Shop",
             "short": "Check a coin balance",
             "usage": "balance [member]",
             "desc": "Shows the coin balance, global wealth rank, and contribution "
@@ -195,6 +196,7 @@ class Economy(commands.Cog):
         description="Claim your daily NanoCoins. Keep a streak for bonus coins!",
         extras={
             "category": "🪙 Economy",
+            "sub": "💰 Wallet & Shop",
             "short": "Claim daily coins",
             "usage": "daily",
             "desc": "Grants the daily reward. Claim within 48h of your last to grow a streak bonus.",
@@ -250,6 +252,7 @@ class Economy(commands.Cog):
         description="Send some of your NanoCoins to another member.",
         extras={
             "category": "🪙 Economy",
+            "sub": "💰 Wallet & Shop",
             "short": "Send coins to someone",
             "usage": "pay <member> <amount>",
             "desc": "Transfers coins from your balance to another member's.",
@@ -298,6 +301,7 @@ class Economy(commands.Cog):
         invoke_without_command=True,
         extras={
             "category": "🪙 Economy",
+            "sub": "💰 Wallet & Shop",
             "short": "Rich list + economy admin settings",
             "usage": "coin [subcommand]",
             "desc": "View the richest members with /coin top. Admins grant/take coins "
@@ -810,6 +814,7 @@ class Economy(commands.Cog):
         description="Squad up on a guild activity — everyone in the squad earns coins!",
         extras={
             "category": "🪙 Economy",
+            "sub": "🤝 Co-op",
             "short": "Reward a co-op activity",
             "usage": "squad [member] [member2] [member3] [member4] [member5] [activity]",
             "desc": "Reward a group activity (a dungeon, a raid, an event). Tag up to 5 "
@@ -940,6 +945,7 @@ class Economy(commands.Cog):
         description="Start a group co-op anyone can join — the whole party earns coins!",
         extras={
             "category": "🪙 Economy",
+            "sub": "🤝 Co-op",
             "short": "Group co-op reward board",
             "usage": "raid [activity]",
             "desc": "Opens a join board for a big group activity (a raid, an event, a "
@@ -1064,6 +1070,7 @@ class Economy(commands.Cog):
         invoke_without_command=True,
         extras={
             "category": "🪙 Economy",
+            "sub": "💰 Wallet & Shop",
             "short": "Redeem coins for rewards",
             "usage": "shop [subcommand]",
             "desc": "Spend your coins on rewards mods set up: Discord roles or custom "

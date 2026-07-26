@@ -142,6 +142,7 @@ class Inventory(commands.Cog):
         invoke_without_command=True,
         extras={
             "category": "🪙 Economy",
+            "sub": "🎒 Items & Crafting",
             "short": "View, use, sell, and gift your items",
             "usage": "inventory [subcommand]",
             "desc": "Everything you own beyond coins lives here: bait, "

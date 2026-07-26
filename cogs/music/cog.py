@@ -873,6 +873,7 @@ class Music(commands.Cog):
         description="Play a song or playlist — paste a URL or type search terms.",
         extras={
             "category": "🎵 Music",
+            "sub": "▶️ Play & Queue Up",
             "short": "Queue a song or playlist",
             "usage": "play <url | search terms>",
             "desc": (
@@ -935,6 +936,7 @@ class Music(commands.Cog):
         aliases=["pn", "playtop"],
         extras={
             "category": "🎵 Music",
+            "sub": "▶️ Play & Queue Up",
             "short": "Queue a track to play next",
             "usage": "playnext <url | search terms>",
             "desc": "Adds the track to the front of the queue so it plays next. Slash: use /play with mode: Next.",
@@ -952,6 +954,7 @@ class Music(commands.Cog):
         aliases=["playskip", "ps"],
         extras={
             "category": "🎵 Music",
+            "sub": "▶️ Play & Queue Up",
             "short": "Play a track immediately",
             "usage": "playnow <url | search terms>",
             "desc": "Adds the track to the front of the queue and skips the current one. Slash: use /play with mode: Now.",
@@ -969,6 +972,7 @@ class Music(commands.Cog):
         description="Search for a track and pick a result from a menu.",
         extras={
             "category": "🎵 Music",
+            "sub": "▶️ Play & Queue Up",
             "short": "Search and pick a result",
             "usage": "search <terms>",
             "desc": "Shows the top results in a dropdown so you can choose which to queue.",
@@ -1017,6 +1021,7 @@ class Music(commands.Cog):
         description="Vote to skip the current track.",
         extras={
             "category": "🎵 Music",
+            "sub": "⏯️ Playback Controls",
             "short": "Vote-skip the current track",
             "usage": "skip",
             "desc": (
@@ -1071,6 +1076,7 @@ class Music(commands.Cog):
         description="Force-skip the current track (Manage Server).",
         extras={
             "category": "🎵 Music",
+            "sub": "⏯️ Playback Controls",
             "short": "Force-skip a track",
             "usage": "forceskip",
             "desc": "Immediately skips the current track, bypassing the skip vote.",
@@ -1096,6 +1102,7 @@ class Music(commands.Cog):
         description="Skip ahead to a track at a given queue position.",
         extras={
             "category": "🎵 Music",
+            "sub": "📜 The Queue",
             "short": "Jump to a queue position",
             "usage": "jump <position>",
             "desc": "Discards everything before the chosen position and plays it now.",
@@ -1129,6 +1136,7 @@ class Music(commands.Cog):
         description="Stop playback, clear the queue, and leave the channel.",
         extras={
             "category": "🎵 Music",
+            "sub": "⏯️ Playback Controls",
             "short": "Stop and leave the voice channel",
             "usage": "stop",
             "desc": "Stops playback, empties the queue, and disconnects the bot.",
@@ -1169,6 +1177,7 @@ class Music(commands.Cog):
         description="Pause the current track.",
         extras={
             "category": "🎵 Music",
+            "sub": "⏯️ Playback Controls",
             "short": "Pause playback",
             "usage": "pause",
             "desc": "Pauses the current track. Resume with `resume`.",
@@ -1191,6 +1200,7 @@ class Music(commands.Cog):
         description="Resume a paused track.",
         extras={
             "category": "🎵 Music",
+            "sub": "⏯️ Playback Controls",
             "short": "Resume playback",
             "usage": "resume",
             "desc": "Resumes a track that was paused.",
@@ -1213,6 +1223,7 @@ class Music(commands.Cog):
         description="Show the live Now Playing card.",
         extras={
             "category": "🎵 Music",
+            "sub": "⏯️ Playback Controls",
             "short": "Show what's playing",
             "usage": "nowplaying",
             "desc": "Re-posts the interactive Now Playing card with live progress.",
@@ -1241,6 +1252,7 @@ class Music(commands.Cog):
         description="Show the upcoming queue.",
         extras={
             "category": "🎵 Music",
+            "sub": "📜 The Queue",
             "short": "List queued tracks",
             "usage": "queue",
             "desc": "Shows the currently playing track and up to 15 upcoming tracks.",
@@ -1267,6 +1279,7 @@ class Music(commands.Cog):
         description="Move a queued track to a new position.",
         extras={
             "category": "🎵 Music",
+            "sub": "📜 The Queue",
             "short": "Reorder a queued track",
             "usage": "move <from> <to>",
             "desc": "Moves the track at one queue position to another.",
@@ -1302,6 +1315,7 @@ class Music(commands.Cog):
         description="Remove a track from the queue by its position.",
         extras={
             "category": "🎵 Music",
+            "sub": "📜 The Queue",
             "short": "Remove a queued track",
             "usage": "remove <position>",
             "desc": "Removes a track from the queue using the number shown in `queue`.",
@@ -1334,6 +1348,7 @@ class Music(commands.Cog):
         description="Empty the queue (keeps the current track playing).",
         extras={
             "category": "🎵 Music",
+            "sub": "📜 The Queue",
             "short": "Clear the queue",
             "usage": "clear",
             "desc": "Removes every upcoming track. The current track keeps playing.",
@@ -1357,6 +1372,7 @@ class Music(commands.Cog):
         description="Shuffle the queue.",
         extras={
             "category": "🎵 Music",
+            "sub": "📜 The Queue",
             "short": "Shuffle the queue",
             "usage": "shuffle",
             "desc": "Randomly reorders the upcoming tracks in the queue.",
@@ -1379,6 +1395,7 @@ class Music(commands.Cog):
         description="Show, set, or adjust the playback volume (0-200).",
         extras={
             "category": "🎵 Music",
+            "sub": "🔊 Sound",
             "short": "Show or set playback volume",
             "usage": "volume [0-200 | +N | -N]",
             "desc": (
@@ -1430,6 +1447,7 @@ class Music(commands.Cog):
         description="Set or adjust playback speed (0.5-3.0).",
         extras={
             "category": "🎵 Music",
+            "sub": "🔊 Sound",
             "short": "Set playback speed",
             "usage": "speed <0.5-3.0 | +N | -N>",
             "desc": (
@@ -1470,6 +1488,7 @@ class Music(commands.Cog):
         description="Apply an audio effect (bassboost, nightcore, vaporwave…).",
         extras={
             "category": "🎵 Music",
+            "sub": "🔊 Sound",
             "short": "Apply an audio effect",
             "usage": "filter <none|bassboost|nightcore|vaporwave|treble|8d|muffle>",
             "desc": "Applies a DSP effect to playback. Use `none` to clear it.",
@@ -1503,6 +1522,7 @@ class Music(commands.Cog):
         description="Cycle loop mode: off → track → queue.",
         extras={
             "category": "🎵 Music",
+            "sub": "📜 The Queue",
             "short": "Change loop mode",
             "usage": "loop [off|track|queue]",
             "desc": (
@@ -1546,6 +1566,7 @@ class Music(commands.Cog):
         description="Jump to a position in the current track (e.g. 1:30, 90, or +30/-30).",
         extras={
             "category": "🎵 Music",
+            "sub": "⏯️ Playback Controls",
             "short": "Seek within the current track",
             "usage": "seek <position>",
             "desc": (
@@ -1608,6 +1629,7 @@ class Music(commands.Cog):
         description="Restart the current track from the beginning.",
         extras={
             "category": "🎵 Music",
+            "sub": "⏯️ Playback Controls",
             "short": "Restart the current track",
             "usage": "replay",
             "desc": "Seeks the current track back to 0:00.",
@@ -1641,6 +1663,7 @@ class Music(commands.Cog):
         aliases=["save"],
         extras={
             "category": "🎵 Music",
+            "sub": "📚 History & Extras",
             "short": "Save the current track to DMs",
             "usage": "grab",
             "desc": "Sends you a DM with a link to the track that's playing now.",
@@ -1681,6 +1704,7 @@ class Music(commands.Cog):
         aliases=["mhealth", "ythealth"],
         extras={
             "category": "🎵 Music",
+            "sub": "🚫 Blocks & Admin",
             "short": "Probe yt-dlp + proxy/cookies health (owner)",
             "usage": "musichealth",
             "desc": (
@@ -1790,6 +1814,7 @@ class Music(commands.Cog):
         name="lyrics",
         extras={
             "category": "🎵 Music",
+            "sub": "📚 History & Extras",
             "short": "Look up song lyrics",
             "usage": "lyrics [artist - title]",
             "desc": (
@@ -1853,6 +1878,7 @@ class Music(commands.Cog):
         name="guildplay",
         extras={
             "category": "🎵 Music",
+            "sub": "🤖 Modes & Automation",
             "short": "Toggle guild playlist playback",
             "usage": "guildplay [on|off]",
             "desc": (
@@ -1893,6 +1919,7 @@ class Music(commands.Cog):
         name="autoplay",
         extras={
             "category": "🎵 Music",
+            "sub": "🤖 Modes & Automation",
             "short": "Toggle smart autoplay",
             "usage": "autoplay [on|off]",
             "desc": (
@@ -1931,6 +1958,7 @@ class Music(commands.Cog):
         aliases=["247", "stay"],
         extras={
             "category": "🎵 Music",
+            "sub": "🤖 Modes & Automation",
             "short": "Toggle 24/7 stay-connected mode",
             "usage": "radio [on|off]",
             "desc": (
@@ -2094,6 +2122,7 @@ class Music(commands.Cog):
         name="stream",
         extras={
             "category": "🎵 Music",
+            "sub": "▶️ Play & Queue Up",
             "short": "Queue a live stream URL",
             "usage": "stream <url>",
             "desc": (
@@ -2114,6 +2143,7 @@ class Music(commands.Cog):
         aliases=["sp"],
         extras={
             "category": "🎵 Music",
+            "sub": "▶️ Play & Queue Up",
             "short": "Queue a playlist, shuffled",
             "usage": "shuffleplay <playlist url | search>",
             "desc": "Resolves a playlist, shuffles the tracks, then adds them all. Slash: use /play with mode: Shuffle.",
@@ -2146,6 +2176,7 @@ class Music(commands.Cog):
         name="follow",
         extras={
             "category": "🎵 Music",
+            "sub": "🤖 Modes & Automation",
             "short": "Follow you between channels",
             "usage": "follow",
             "desc": (
@@ -2179,6 +2210,7 @@ class Music(commands.Cog):
         name="pldump",
         extras={
             "category": "🎵 Music",
+            "sub": "📜 The Queue",
             "short": "Export the queue to a file",
             "usage": "pldump",
             "desc": "Sends a .txt file listing the URLs of the current and queued tracks.",
@@ -2211,6 +2243,7 @@ class Music(commands.Cog):
         name="blocksong",
         extras={
             "category": "🎵 Music",
+            "sub": "🚫 Blocks & Admin",
             "short": "Block a song from the queue",
             "usage": "blocksong <url | word | phrase>",
             "desc": (
@@ -2244,6 +2277,7 @@ class Music(commands.Cog):
         name="unblocksong",
         extras={
             "category": "🎵 Music",
+            "sub": "🚫 Blocks & Admin",
             "short": "Unblock a song pattern",
             "usage": "unblocksong <pattern>",
             "desc": "Removes a previously blocked URL, word, or phrase.",
@@ -2266,6 +2300,7 @@ class Music(commands.Cog):
         name="blockedsongs",
         extras={
             "category": "🎵 Music",
+            "sub": "🚫 Blocks & Admin",
             "short": "List blocked song patterns",
             "usage": "blockedsongs",
             "desc": "Lists every URL, word, or phrase blocked from the queue.",
@@ -2293,6 +2328,7 @@ class Music(commands.Cog):
         name="blockuser",
         extras={
             "category": "🎵 Music",
+            "sub": "🚫 Blocks & Admin",
             "short": "Block a member from music",
             "usage": "blockuser <member>",
             "desc": "Stops a member from using any music command on this server.",
@@ -2321,6 +2357,7 @@ class Music(commands.Cog):
         name="unblockuser",
         extras={
             "category": "🎵 Music",
+            "sub": "🚫 Blocks & Admin",
             "short": "Unblock a member",
             "usage": "unblockuser <member>",
             "desc": "Removes a member from the music block list.",
@@ -2466,6 +2503,7 @@ class Music(commands.Cog):
         aliases=["played"],
         extras={
             "category": "🎵 Music",
+            "sub": "📚 History & Extras",
             "short": "Show recently played tracks",
             "usage": "history",
             "desc": "Lists the most recently played tracks (newest first).",
@@ -2505,6 +2543,7 @@ class Music(commands.Cog):
         name="clearhistory",
         extras={
             "category": "🎵 Music",
+            "sub": "📚 History & Extras",
             "short": "Clear played history",
             "usage": "clearhistory",
             "desc": "Deletes every entry from this server's played-track history.",
@@ -2631,6 +2670,7 @@ class Music(commands.Cog):
         description="Connect the bot to your voice channel.",
         extras={
             "category": "🎵 Music",
+            "sub": "🤖 Modes & Automation",
             "short": "Join your voice channel",
             "usage": "join",
             "desc": "Connects (or moves) the bot to the voice channel you're in.",
