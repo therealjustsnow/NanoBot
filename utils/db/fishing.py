@@ -24,6 +24,7 @@ import time
 from . import _cache
 from ._core import (
     _conn,
+    _read_conn,
     _ensure_columns,
     fetch_one_returning,
     register_init,
@@ -375,7 +376,7 @@ async def get_species_counts(user_id: int) -> dict[str, int]:
 # ── Leaderboard (lifetime fishing earnings) ────────────────────────────────────
 async def get_fishing_leaderboard(limit: int = 10, offset: int = 0) -> list[dict]:
     """Top anglers by lifetime earnings, across every server."""
-    async with _conn().execute(
+    async with _read_conn().execute(
         "SELECT user_id, earned, caught FROM fishing_stats WHERE earned > 0 "
         "ORDER BY earned DESC, user_id ASC LIMIT ? OFFSET ?",
         (int(limit), int(offset)),
@@ -401,7 +402,7 @@ async def get_fishing_leaderboard_for(user_ids) -> list[dict]:
 
 
 async def count_fishers() -> int:
-    async with _conn().execute(
+    async with _read_conn().execute(
         "SELECT COUNT(*) FROM fishing_stats WHERE earned > 0"
     ) as cur:
         return (await cur.fetchone())[0]
@@ -412,7 +413,7 @@ async def get_fishing_rank(user_id: int) -> tuple[int, int] | None:
     fisher = await get_fisher(user_id)
     if fisher["earned"] <= 0:
         return None
-    async with _conn().execute(
+    async with _read_conn().execute(
         "SELECT COUNT(*) FROM fishing_stats WHERE earned > ?", (fisher["earned"],)
     ) as cur:
         ahead = (await cur.fetchone())[0]
@@ -511,7 +512,7 @@ async def get_global_leaderboard(
     stat = GLOBAL_STATS.get(stat_key)
     if stat is None:
         raise ValueError(f"unknown global fishing stat {stat_key!r}")
-    async with _conn().execute(
+    async with _read_conn().execute(
         f"SELECT user_id, {stat['column']} AS val FROM fishing_stats "
         f"WHERE {stat['column']} > 0 "
         f"ORDER BY val {stat['order']}, user_id ASC LIMIT ? OFFSET ?",
@@ -525,7 +526,7 @@ async def count_global_leaderboard(stat_key: str) -> int:
     stat = GLOBAL_STATS.get(stat_key)
     if stat is None:
         raise ValueError(f"unknown global fishing stat {stat_key!r}")
-    async with _conn().execute(
+    async with _read_conn().execute(
         f"SELECT COUNT(*) FROM fishing_stats WHERE {stat['column']} > 0"
     ) as cur:
         return (await cur.fetchone())[0]
@@ -536,7 +537,7 @@ async def get_global_rank(stat_key: str, user_id: int) -> tuple[int, float] | No
     stat = GLOBAL_STATS.get(stat_key)
     if stat is None:
         raise ValueError(f"unknown global fishing stat {stat_key!r}")
-    async with _conn().execute(
+    async with _read_conn().execute(
         f"SELECT {stat['column']} AS val FROM fishing_stats WHERE user_id=?",
         (str(user_id),),
     ) as cur:
@@ -544,7 +545,7 @@ async def get_global_rank(stat_key: str, user_id: int) -> tuple[int, float] | No
     val = row["val"] if row and row["val"] is not None else 0
     if val <= 0:
         return None
-    async with _conn().execute(
+    async with _read_conn().execute(
         f"SELECT COUNT(*) FROM fishing_stats WHERE {stat['column']} > ?", (val,)
     ) as cur:
         ahead = (await cur.fetchone())[0]

@@ -73,7 +73,7 @@ for _mod in _modules:
 # isolate an on-disk one). Route both package attributes to _core so that
 # contract still holds: reads and writes hit _core's module globals, which are
 # what _conn()/init() consult. Drop the stale copies the loop above made first.
-_CORE_ROUTED = ("_db", "_DB_PATH")
+_CORE_ROUTED = ("_db", "_DB_PATH", "_reader")
 for _name in _CORE_ROUTED:
     globals().pop(_name, None)
 

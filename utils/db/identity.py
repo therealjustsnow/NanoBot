@@ -21,7 +21,7 @@ utils/cosmetics.py; the DB only ever stores keys, exactly like user_items and
 the item catalogue.
 """
 
-from ._core import _conn, _ensure_columns, register_init
+from ._core import _conn, _read_conn, _ensure_columns, register_init
 
 
 async def _ensure_identity_tables():
@@ -153,7 +153,7 @@ async def claim_pending_levelup(user_id: int) -> int:
 
 
 async def get_global_xp_leaderboard(limit: int = 10, offset: int = 0) -> list[dict]:
-    async with _conn().execute(
+    async with _read_conn().execute(
         "SELECT user_id, xp FROM global_levels WHERE xp > 0 "
         "ORDER BY xp DESC, user_id ASC LIMIT ? OFFSET ?",
         (int(limit), int(offset)),
@@ -167,7 +167,7 @@ async def get_global_xp_rank(user_id: int) -> tuple[int, int] | None:
     xp = await get_global_xp(user_id)
     if xp <= 0:
         return None
-    async with _conn().execute(
+    async with _read_conn().execute(
         "SELECT COUNT(*) FROM global_levels WHERE xp > ?", (xp,)
     ) as cur:
         ahead = (await cur.fetchone())[0]

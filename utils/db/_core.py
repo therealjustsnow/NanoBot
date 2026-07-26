@@ -15,7 +15,7 @@ import aiosqlite
 
 from utils import db_crypto, sqlite_timing
 
-from . import _cache
+from . import _cache, _ttl
 
 log = logging.getLogger("NanoBot.db")
 
@@ -29,6 +29,12 @@ _db: aiosqlite.Connection | None = None
 # driver ships its own SQLite. False falls every accessor back to a plain
 # write-then-read.
 _RETURNING_OK: bool = False
+
+# Second connection, read-only (PRAGMA query_only), used by _read_conn() for
+# leaderboards and other whole-table reads. None until init() opens it — and it
+# stays None when the database is in-memory (a test fixture), where a second
+# connection would open a *different* empty database.
+_reader: aiosqlite.Connection | None = None
 
 # Table-setup callables registered by the domain modules at import time. init()
 # awaits them in registration order (which __init__ fixes to the original
@@ -49,13 +55,30 @@ def _conn() -> aiosqlite.Connection:
     return _db
 
 
+def _read_conn() -> aiosqlite.Connection:
+    """The connection for big read-only queries — leaderboards, ranks, counts.
+
+    aiosqlite drives each connection from one worker thread, so everything in
+    the bot queues behind everything else on `_db`. WAL already allows readers
+    alongside the writer; this hands the heavy boards their own connection so a
+    20k-member server leaderboard can't stall a /fish cast.
+
+    Only for queries that are read-only *and* whole in one statement. A read
+    that a write then depends on (get_balance before a debit) must stay on the
+    writer: this connection sees committed data only, so it would miss an
+    in-flight transaction. Falls back to the writer when there is no reader —
+    which is the case in tests, where the fixture injects `_db` directly.
+    """
+    return _reader if _reader is not None else _conn()
+
+
 async def init(encryption_key: str | None = None) -> None:
     """Open the database and create all tables. Call once at bot startup.
 
     When `encryption_key` is set the file is opened through SQLCipher
     (encrypted at rest); see utils/db_crypto.py.
     """
-    global _db, _RETURNING_OK
+    global _db, _reader, _RETURNING_OK
     os.makedirs("data", exist_ok=True)
     _db = await db_crypto.connect(_DB_PATH, encryption_key)
     _db = sqlite_timing.wrap(_db, "nanobot")
@@ -138,6 +161,8 @@ async def init(encryption_key: str | None = None) -> None:
     # Migrations can rewrite config rows (migration 3 does), so start the
     # cache from whatever the schema settled on.
     _cache.clear()
+    _board_cache.clear()
+    _reader = await _open_reader(encryption_key)
     log.info(f"Database ready: {_DB_PATH}")
 
 
@@ -160,9 +185,39 @@ async def fetch_one_returning(sql: str, params, *, returning: str):
     return row
 
 
+async def _open_reader(encryption_key: str | None):
+    """Open the read-only companion connection, or None if it isn't possible.
+
+    Never fatal: the reader is an optimisation, and every caller falls back to
+    the writer without it.
+    """
+    if ":memory:" in _DB_PATH:
+        return None
+    try:
+        reader = await db_crypto.connect(_DB_PATH, encryption_key)
+        reader = sqlite_timing.wrap(reader, "nanobot-ro")
+        for pragma in (
+            "PRAGMA busy_timeout=5000",
+            "PRAGMA temp_store=MEMORY",
+            "PRAGMA cache_size=-16000",
+            "PRAGMA mmap_size=268435456",
+            # Belt and braces: this connection must never write, and SQLite
+            # will refuse rather than let a stray statement through.
+            "PRAGMA query_only=ON",
+        ):
+            await reader.execute(pragma)
+        return reader
+    except Exception:
+        log.warning("Read-only connection unavailable; boards will use the writer")
+        return None
+
+
 async def close() -> None:
-    """Close the database connection cleanly."""
-    global _db
+    """Close the database connections cleanly."""
+    global _db, _reader
+    if _reader:
+        await _reader.close()
+        _reader = None
     if _db:
         await _db.close()
         _db = None
@@ -172,6 +227,17 @@ async def close() -> None:
 # modern default cap is 32k, older builds 999 — 900 is safe everywhere and the
 # chunk loop makes the caller's guild size irrelevant.
 _IN_CHUNK = 900
+
+
+# Server-scoped boards are the one read whose cost scales with guild size: a
+# 20k-member guild fans out to 23 chunked queries and materialises every row,
+# and a page-turn re-runs the lot. Measured at ~45ms idle and ~185ms while casts
+# are streaming through the writer — so the result is memoised for a few
+# seconds. Boards are a snapshot either way; this just stops the snapshot being
+# recomputed for every page button. Never used for anything that gates a
+# decision (see _ttl.py).
+_BOARD_TTL = 30.0
+_board_cache = _ttl.TTLCache(maxsize=32, ttl=_BOARD_TTL)
 
 
 async def rows_for_users(base_sql: str, user_ids, *, positive_col: str | None = None):
@@ -185,15 +251,20 @@ async def rows_for_users(base_sql: str, user_ids, *, positive_col: str | None = 
     and slices, since the result is bounded by the guild's member list.
     """
     ids = [str(u) for u in dict.fromkeys(user_ids)]
+    key = (base_sql, positive_col, tuple(ids))
+    cached = _board_cache.get(key)
+    if cached is not None:
+        return list(cached)
     rows: list = []
     for start in range(0, len(ids), _IN_CHUNK):
         chunk = ids[start : start + _IN_CHUNK]
         sql = f"{base_sql} WHERE user_id IN ({','.join('?' * len(chunk))})"
         if positive_col:
             sql += f" AND {positive_col} > 0"
-        async with _conn().execute(sql, chunk) as cur:
+        async with _read_conn().execute(sql, chunk) as cur:
             rows.extend(await cur.fetchall())
-    return rows
+    _board_cache.put(key, rows)
+    return list(rows)
 
 
 async def _ensure_columns(table: str, columns: dict[str, str]) -> None:

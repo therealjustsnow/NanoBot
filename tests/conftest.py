@@ -19,7 +19,7 @@ from discord.ext.test import backend as dpy_backend
 
 import main
 import utils.db as db
-from utils.db import _cache
+from utils.db import _cache, _core
 
 
 @pytest.fixture(autouse=True)
@@ -32,8 +32,10 @@ def _clear_config_cache():
     query in the next.
     """
     _cache.clear()
+    _core._board_cache.clear()
     yield
     _cache.clear()
+    _core._board_cache.clear()
 
 
 @pytest_asyncio.fixture

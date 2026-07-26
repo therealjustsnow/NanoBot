@@ -7,7 +7,13 @@ db.init() creates them in the right order.
 """
 
 from . import _cache
-from ._core import _conn, _ensure_columns, fetch_one_returning, register_init
+from ._core import (
+    _conn,
+    _read_conn,
+    _ensure_columns,
+    fetch_one_returning,
+    register_init,
+)
 
 # ══════════════════════════════════════════════════════════════════════════════
 #  Leveling (per-guild XP + level rewards)
@@ -102,13 +108,13 @@ async def get_rank(guild_id: int, user_id: int) -> tuple[int, int] | None:
     """Return (rank, xp) for a member; rank is 1-based. None if no XP row."""
     xp = await get_xp(guild_id, user_id)
     if xp <= 0:
-        async with _conn().execute(
+        async with _read_conn().execute(
             "SELECT 1 FROM user_levels WHERE guild_id=? AND user_id=?",
             (str(guild_id), str(user_id)),
         ) as cur:
             if not await cur.fetchone():
                 return None
-    async with _conn().execute(
+    async with _read_conn().execute(
         "SELECT COUNT(*) FROM user_levels WHERE guild_id=? AND xp > ?",
         (str(guild_id), xp),
     ) as cur:
@@ -119,7 +125,7 @@ async def get_rank(guild_id: int, user_id: int) -> tuple[int, int] | None:
 async def get_leaderboard(
     guild_id: int, limit: int = 10, offset: int = 0
 ) -> list[dict]:
-    async with _conn().execute(
+    async with _read_conn().execute(
         "SELECT user_id, xp FROM user_levels WHERE guild_id=? AND xp > 0 "
         "ORDER BY xp DESC, user_id ASC LIMIT ? OFFSET ?",
         (str(guild_id), int(limit), int(offset)),
@@ -129,7 +135,7 @@ async def get_leaderboard(
 
 
 async def count_ranked(guild_id: int) -> int:
-    async with _conn().execute(
+    async with _read_conn().execute(
         "SELECT COUNT(*) FROM user_levels WHERE guild_id=? AND xp > 0",
         (str(guild_id),),
     ) as cur:

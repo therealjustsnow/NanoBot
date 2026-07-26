@@ -15,6 +15,7 @@ from utils import db_crypto
 from . import _cache
 from ._core import (
     _conn,
+    _read_conn,
     _ensure_columns,
     fetch_one_returning,
     register_init,
@@ -220,14 +221,14 @@ async def transfer_coins(from_id: int, to_id: int, amount: int) -> bool:
 
 async def get_econ_rank(user_id: int) -> tuple[int, int] | None:
     """Return (global rank, coins) for a user; None if they have no wallet row."""
-    async with _conn().execute(
+    async with _read_conn().execute(
         "SELECT coins FROM economy WHERE user_id=?", (str(user_id),)
     ) as cur:
         row = await cur.fetchone()
     if row is None:
         return None
     coins = row["coins"]
-    async with _conn().execute(
+    async with _read_conn().execute(
         "SELECT COUNT(*) FROM economy WHERE coins > ?", (coins,)
     ) as cur:
         ahead = (await cur.fetchone())[0]
@@ -236,7 +237,7 @@ async def get_econ_rank(user_id: int) -> tuple[int, int] | None:
 
 async def get_econ_leaderboard(limit: int = 10, offset: int = 0) -> list[dict]:
     """Richest users across every server."""
-    async with _conn().execute(
+    async with _read_conn().execute(
         "SELECT user_id, coins FROM economy WHERE coins > 0 "
         "ORDER BY coins DESC, user_id ASC LIMIT ? OFFSET ?",
         (int(limit), int(offset)),
@@ -246,7 +247,9 @@ async def get_econ_leaderboard(limit: int = 10, offset: int = 0) -> list[dict]:
 
 
 async def count_econ() -> int:
-    async with _conn().execute("SELECT COUNT(*) FROM economy WHERE coins > 0") as cur:
+    async with _read_conn().execute(
+        "SELECT COUNT(*) FROM economy WHERE coins > 0"
+    ) as cur:
         return (await cur.fetchone())[0]
 
 
@@ -402,7 +405,7 @@ async def get_contrib_rank(user_id: int) -> tuple[int, int] | None:
     points = await get_contribution(user_id)
     if points <= 0:
         return None
-    async with _conn().execute(
+    async with _read_conn().execute(
         "SELECT COUNT(*) FROM economy WHERE contribution > ?", (points,)
     ) as cur:
         ahead = (await cur.fetchone())[0]
@@ -410,7 +413,7 @@ async def get_contrib_rank(user_id: int) -> tuple[int, int] | None:
 
 
 async def get_contrib_leaderboard(limit: int = 10, offset: int = 0) -> list[dict]:
-    async with _conn().execute(
+    async with _read_conn().execute(
         "SELECT user_id, contribution FROM economy WHERE contribution > 0 "
         "ORDER BY contribution DESC, user_id ASC LIMIT ? OFFSET ?",
         (int(limit), int(offset)),
@@ -422,7 +425,7 @@ async def get_contrib_leaderboard(limit: int = 10, offset: int = 0) -> list[dict
 
 
 async def count_contrib() -> int:
-    async with _conn().execute(
+    async with _read_conn().execute(
         "SELECT COUNT(*) FROM economy WHERE contribution > 0"
     ) as cur:
         return (await cur.fetchone())[0]

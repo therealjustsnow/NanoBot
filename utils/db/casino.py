@@ -15,7 +15,7 @@ blackjack hands (restart-safe Hit/Stand), and daily-challenge progress.
 
 import json
 
-from ._core import _conn, _ensure_columns, register_init, rows_for_users
+from ._core import _conn, _read_conn, _ensure_columns, register_init, rows_for_users
 
 
 async def _ensure_casino_tables():
@@ -271,7 +271,7 @@ def _leaderboard_row(r) -> dict:
 
 async def get_casino_leaderboard(limit: int = 10, offset: int = 0) -> list[dict]:
     """Biggest net winners across every server."""
-    async with _conn().execute(
+    async with _read_conn().execute(
         "SELECT user_id, games, wagered, won, (won - wagered) AS net "
         "FROM casino_stats WHERE games > 0 "
         "ORDER BY net DESC, user_id ASC LIMIT ? OFFSET ?",
@@ -292,7 +292,7 @@ async def get_casino_leaderboard_for(user_ids) -> list[dict]:
 
 
 async def count_casino_players() -> int:
-    async with _conn().execute(
+    async with _read_conn().execute(
         "SELECT COUNT(*) FROM casino_stats WHERE games > 0"
     ) as cur:
         return (await cur.fetchone())[0]
@@ -304,7 +304,7 @@ async def get_casino_rank(user_id: int) -> tuple[int, int] | None:
     if stats["games"] <= 0:
         return None
     net = stats["won"] - stats["wagered"]
-    async with _conn().execute(
+    async with _read_conn().execute(
         "SELECT COUNT(*) FROM casino_stats WHERE games > 0 AND (won - wagered) > ?",
         (net,),
     ) as cur:
