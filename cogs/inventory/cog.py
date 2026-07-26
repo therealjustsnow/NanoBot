@@ -19,7 +19,10 @@ Commands
 ──────────────────────────────────────────────────────
   /inventory                    → your items and active effects (alias: inv)
   /inventory use <item> [qty]   → use a consumable (applies its effect)
-  /inventory sell <item> [qty]  → sell sellable items for coins
+  /inventory sell <item> [qty]  → sell sellable items for coins; `item` also
+                                  takes a bulk target — `all` for everything
+                                  sellable, or a category (`cat:material`) —
+                                  both offered as one-tap rows by the picker
   /inventory give <member> <item> [qty] → give items to another member
   /inventory info <item>        → what an item is and does
 """
@@ -36,7 +39,13 @@ from utils import db
 from utils import helpers as h
 from utils import items as item_catalog
 
-from .constants import EFFECT_MAX_DURATION, EFFECT_MAX_USES, MAX_BULK
+from .constants import (
+    CATEGORY_SELL_PREFIX,
+    EFFECT_MAX_DURATION,
+    EFFECT_MAX_USES,
+    MAX_BULK,
+    SELL_ALL_ALIASES,
+)
 from .helpers import chest_payout
 
 log = logging.getLogger("NanoBot.inventory")
@@ -131,11 +140,12 @@ class Inventory(commands.Cog):
             "desc": "Everything you own beyond coins lives here: bait, "
             "consumables, crafting materials, treasure, and keys earned from "
             "economy activities. Use consumables for temporary buffs, sell "
-            "spare materials for coins, or give items to friends.",
+            "spare materials for coins (one item, a whole category, or "
+            "everything at once), or give items to friends.",
             "args": [],
             "perms": "None",
             "example": "{prefix}inventory\n{prefix}inventory use lucky charm\n"
-            "{prefix}inventory sell iron ore 5",
+            "{prefix}inventory sell iron ore 5\n{prefix}inventory sell all",
         },
     )
     @commands.guild_only()
@@ -296,22 +306,42 @@ class Inventory(commands.Cog):
         )
 
     # ── /inventory sell ──────────────────────────────────────────────────────
+    @staticmethod
+    def _sell_category(item: str) -> Optional[str]:
+        """The catalogue category a bulk sell target names, or None.
+
+        Accepts the explicit `cat:material` form the picker hands back and a
+        bare category name. Only consulted after an item lookup misses, so an
+        item can never be shadowed by a category.
+        """
+        q = (item or "").strip().lower()
+        if q.startswith(CATEGORY_SELL_PREFIX):
+            q = q[len(CATEGORY_SELL_PREFIX) :].strip()
+        return q if q in item_catalog.CATEGORY_ORDER else None
+
     @inventory.command(
-        name="sell", description="Sell items from your inventory for coins."
+        name="sell",
+        description="Sell items for coins — one item, a whole category, or everything.",
     )
     @discord.app_commands.describe(
-        item="Pick a sellable item you own",
-        qty="How many to sell (default: all of them)",
+        item="Pick a sellable item, a whole category, or everything you own",
+        qty="How many to sell (default: all of them; with a bulk pick, per item)",
     )
     async def inventory_sell(
         self, ctx: commands.Context, item: str, qty: Optional[int] = None
     ):
+        if (item or "").strip().lower() in SELL_ALL_ALIASES:
+            return await self._sell_bulk(ctx, None, qty)
         d = item_catalog.find(item)
         if d is None:
+            category = self._sell_category(item)
+            if category is not None:
+                return await self._sell_bulk(ctx, category, qty)
             return await ctx.reply(
                 embed=h.err(
                     f"I don't know any item called **{item}**. Run `/inventory` to "
-                    "see what you own."
+                    "see what you own, or sell everything at once with "
+                    "`/inventory sell all`."
                 ),
                 ephemeral=True,
             )
@@ -341,9 +371,129 @@ class Inventory(commands.Cog):
             )
         )
 
+    async def _sell_bulk(
+        self, ctx: commands.Context, category: Optional[str], qty: Optional[int]
+    ):
+        """Sell every sellable stack in one go (optionally one category only).
+
+        Each stack is spent with the same atomic try_consume_item as a single
+        sell, so a stack drained by a concurrent command is skipped rather than
+        paid for, and the coins are credited once for the whole run.
+        """
+        per_stack = None if qty is None else max(1, min(int(qty), MAX_BULK))
+        sold: list[tuple[str, int, int]] = []
+        total = new_bal = 0
+        async with self._lock(ctx.author.id):
+            for stack in await db.get_inventory(ctx.author.id):
+                d = item_catalog.get(stack["item_key"])
+                if d is None or d.value <= 0:
+                    continue
+                if category is not None and d.category != category:
+                    continue
+                count = min(stack["qty"], MAX_BULK)
+                if per_stack is not None:
+                    count = min(count, per_stack)
+                if count <= 0 or not await db.try_consume_item(
+                    ctx.author.id, d.key, count
+                ):
+                    continue
+                total += d.value * count
+                sold.append((d.key, count, d.value * count))
+            if total:
+                new_bal = await db.add_coins(ctx.author.id, total)
+        if not sold:
+            where = (
+                item_catalog.CATEGORY_LABELS.get(category, category.title())
+                if category
+                else "your inventory"
+            )
+            return await ctx.reply(
+                embed=h.warn(
+                    f"Nothing in {where} can be sold right now. Materials and "
+                    "treasure from fishing, mining, and hunting are what sell.",
+                    "🎒 Nothing to Sell",
+                ),
+                ephemeral=True,
+            )
+        econ = await db.get_econ_config(ctx.guild.id)
+        lines = [
+            f"{item_catalog.display(key)} × **{count:,}** — {coins:,}"
+            for key, count, coins in sold
+        ]
+        # Embed fields cap at 1024 chars, and a full inventory can exceed that.
+        body, used = [], 0
+        for line in lines:
+            if used + len(line) + 1 > 950:
+                break
+            body.append(line)
+            used += len(line) + 1
+        if len(body) < len(lines):
+            body.append(f"…and **{len(lines) - len(body)}** more")
+        what = (
+            item_catalog.CATEGORY_LABELS.get(category, category.title())
+            if category
+            else "your inventory"
+        )
+        items_sold = sum(count for _, count, _ in sold)
+        embed = h.ok(
+            f"Sold **{items_sold:,}** items from {what} for "
+            f"{self._money(econ, total)}.\n"
+            f"Balance: {self._money(econ, new_bal)}",
+            "💰 Sold",
+        )
+        embed.add_field(name="What sold", value="\n".join(body), inline=False)
+        await ctx.reply(embed=embed)
+
     @inventory_sell.autocomplete("item")
     async def _sell_ac(self, interaction: discord.Interaction, current: str):
-        return await self._owned_choices(interaction, current, sellable_only=True)
+        """Sellable stacks, with one-tap bulk rows on top: everything sellable
+        first, then each category you actually have something in."""
+        q = (current or "").strip().lower()
+        stacks = (
+            await db.get_inventory(interaction.user.id) if interaction.guild_id else []
+        )
+        sellable = []
+        for stack in stacks:
+            d = item_catalog.get(stack["item_key"])
+            if d and d.value > 0:
+                sellable.append((d, stack["qty"]))
+        choices: list[discord.app_commands.Choice[str]] = []
+        if sellable:
+            if not q or q in "everything" or q in "all":
+                count = sum(n for _, n in sellable)
+                worth = sum(d.value * n for d, n in sellable)
+                choices.append(
+                    discord.app_commands.Choice(
+                        name=f"💰 Everything sellable — {count:,} items "
+                        f"for {worth:,} coins"[:100],
+                        value="all",
+                    )
+                )
+            by_cat: dict[str, list[int]] = {}
+            for d, n in sellable:
+                tally = by_cat.setdefault(d.category, [0, 0])
+                tally[0] += n
+                tally[1] += d.value * n
+            # One category is what "everything" already covers — don't repeat it.
+            if len(by_cat) > 1:
+                for cat in item_catalog.CATEGORY_ORDER:
+                    if cat not in by_cat:
+                        continue
+                    label = item_catalog.CATEGORY_LABELS.get(cat, cat.title())
+                    if q and q not in cat and q not in label.lower():
+                        continue
+                    count, worth = by_cat[cat]
+                    choices.append(
+                        discord.app_commands.Choice(
+                            name=f"📦 All {label} — {count:,} items "
+                            f"for {worth:,} coins"[:100],
+                            value=f"{CATEGORY_SELL_PREFIX}{cat}",
+                        )
+                    )
+        choices.extend(
+            await self._owned_choices(interaction, current, sellable_only=True)
+        )
+        return choices[:25]
 
     # ── /inventory give ──────────────────────────────────────────────────────
     @inventory.command(name="give", description="Give items to another member.")

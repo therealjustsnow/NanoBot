@@ -323,11 +323,20 @@ Everything you own that isn't coins or bagged fish lives in `/inventory`
 | `/inventory` | Your items grouped by category, plus active buffs |
 | `/inventory use <item> [qty]` | Use a consumable — this is how bait and charms are armed |
 | `/inventory sell <item> [qty]` | Sell items for coins |
+| `/inventory sell all` | Sell **everything** sellable in one go |
+| `/inventory sell cat:material` | Sell one whole category (materials, treasure, …) |
 | `/inventory give <member> <item> [qty]` | Give items to someone |
 | `/inventory info <item>` | What an item is and does |
 
 Every one of those now shows a **tap-to-pick list** of what you actually own —
 no more typing "lucky charm" exactly right.
+
+**Clearing out a full bag.** You don't have to run `/inventory sell` once per
+item. The sell picker's top row is **💰 Everything sellable** (with the coins
+it's worth), followed by one row per category — **📦 All ⛏️ Materials**, **📦
+All 💎 Treasure** — so a stuffed inventory empties in a single tap. Items that
+can't be sold (keys, consumables like 🍀 Lucky Charm) are never included, and
+adding a `qty` caps how many of *each* item goes, e.g. `/inventory sell all 5`.
 
 **Buffs.** Using a consumable stores an effect: either timed (a 🍀 Lucky Charm
 for a while) or charge-based (bait that spends one charge per cast). Active

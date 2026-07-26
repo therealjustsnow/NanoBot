@@ -94,6 +94,75 @@ async def test_sell_unsellable_item_refused(bot):
     assert await db.get_item_qty(author.id, "treasure_key") == 1
 
 
+@pytest.mark.cogs("cogs.inventory", "cogs.activities")
+async def test_sell_all_clears_every_sellable_stack(bot):
+    """One command instead of one per item: `sell all` empties the inventory
+    of anything sellable and pays for the lot in a single credit."""
+    author = config().members[0]
+    await db.add_item(author.id, "iron_ore", 4)  # material, 25 ea
+    await db.add_item(author.id, "golden_antler", 1)  # treasure, 300 ea
+    await db.add_item(author.id, "treasure_key", 2)  # value 0 — must survive
+
+    await dpytest.message("!inventory sell all", member=author)
+    sent = dpytest.get_message()
+    assert "Sold" in sent.embeds[0].title
+    assert await db.get_item_qty(author.id, "iron_ore") == 0
+    assert await db.get_item_qty(author.id, "golden_antler") == 0
+    assert await db.get_item_qty(author.id, "treasure_key") == 2
+    assert await db.get_balance(author.id) == 4 * 25 + 300
+
+
+@pytest.mark.cogs("cogs.inventory", "cogs.activities")
+async def test_sell_category_only_touches_that_category(bot):
+    author = config().members[0]
+    await db.add_item(author.id, "iron_ore", 2)  # material
+    await db.add_item(author.id, "golden_antler", 1)  # treasure
+
+    await dpytest.message("!inventory sell cat:material", member=author)
+    sent = dpytest.get_message()
+    assert "Sold" in sent.embeds[0].title
+    assert await db.get_item_qty(author.id, "iron_ore") == 0
+    assert await db.get_item_qty(author.id, "golden_antler") == 1
+    assert await db.get_balance(author.id) == 50
+
+
+@pytest.mark.cogs("cogs.inventory", "cogs.activities")
+async def test_sell_bare_category_name_works(bot):
+    """A bare category name is accepted too — no item is named after one."""
+    author = config().members[0]
+    await db.add_item(author.id, "golden_antler", 2)
+
+    await dpytest.message("!inventory sell treasure", member=author)
+    dpytest.get_message()
+    assert await db.get_item_qty(author.id, "golden_antler") == 0
+    assert await db.get_balance(author.id) == 600
+
+
+@pytest.mark.cogs("cogs.inventory", "cogs.activities")
+async def test_sell_all_with_qty_caps_each_stack(bot):
+    author = config().members[0]
+    await db.add_item(author.id, "iron_ore", 5)
+    await db.add_item(author.id, "coal", 5)  # material, 12 ea
+
+    await dpytest.message("!inventory sell all 2", member=author)
+    dpytest.get_message()
+    assert await db.get_item_qty(author.id, "iron_ore") == 3
+    assert await db.get_item_qty(author.id, "coal") == 3
+    assert await db.get_balance(author.id) == 2 * 25 + 2 * 12
+
+
+@pytest.mark.cogs("cogs.inventory")
+async def test_sell_all_with_nothing_sellable_pays_nothing(bot):
+    author = config().members[0]
+    await db.add_item(author.id, "treasure_key", 1)
+
+    await dpytest.message("!inventory sell all", member=author)
+    sent = dpytest.get_message()
+    assert "Nothing to Sell" in sent.embeds[0].title
+    assert await db.get_item_qty(author.id, "treasure_key") == 1
+    assert await db.get_balance(author.id) == 0
+
+
 @pytest.mark.cogs("cogs.inventory")
 async def test_chest_requires_key(bot):
     guild = config().guilds[0]
