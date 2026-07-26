@@ -639,7 +639,7 @@ class Economy(commands.Cog):
     @commands.has_permissions(manage_guild=True)
     async def coin_config(self, ctx: commands.Context):
         cfg = await self._cfg(ctx.guild.id)
-        accounts = await db.count_econ(ctx.guild.id)
+        accounts = await db.count_econ()
         embed = h.embed(f"{cfg['currency_emoji']} Economy Settings", color=h.BLUE)
         embed.add_field(
             name="Currency",
@@ -656,7 +656,9 @@ class Economy(commands.Cog):
             value=f"{cfg['streak_bonus']:,}/day",
             inline=True,
         )
-        embed.add_field(name="Accounts", value=str(accounts), inline=True)
+        # Wallets are global, so this is every funded account on the bot — the
+        # old call passed a guild id to a function that takes none and raised.
+        embed.add_field(name="Wallets (global)", value=str(accounts), inline=True)
         embed.add_field(
             name="Co-op reward",
             value=f"{cfg['coop_reward']:,}/person",

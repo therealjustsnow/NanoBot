@@ -24,7 +24,7 @@ items.
 import json
 import time
 
-from ._core import _conn, register_init
+from ._core import _conn, fetch_one_returning, register_init
 
 
 async def _ensure_items_tables():
@@ -61,6 +61,11 @@ async def _ensure_items_tables():
         "CREATE INDEX IF NOT EXISTS economy_events_guild "
         "ON economy_events (guild_id, ends_at)"
     )
+    # The guild index can't serve the expiry sweep (guild_id isn't in its
+    # predicate), so give prune_events its own leading-column index.
+    await _conn().execute(
+        "CREATE INDEX IF NOT EXISTS economy_events_ends ON economy_events (ends_at)"
+    )
     await _conn().commit()
 
 
@@ -87,12 +92,14 @@ async def get_item_qty(user_id: int, item_key: str) -> int:
 
 async def add_item(user_id: int, item_key: str, qty: int = 1) -> int:
     """Grant items (atomic upsert). Returns the new quantity."""
-    await _conn().execute(
+    row = await fetch_one_returning(
         "INSERT INTO user_items (user_id, item_key, qty) VALUES (?,?,MAX(0,?)) "
         "ON CONFLICT(user_id, item_key) DO UPDATE SET qty=MAX(0, qty + ?)",
         (str(user_id), item_key, int(qty), int(qty)),
+        returning="qty",
     )
-    await _conn().commit()
+    if row is not None:
+        return row["qty"]
     return await get_item_qty(user_id, item_key)
 
 
@@ -136,6 +143,8 @@ async def grant_effect(
     (effects don't stack — the freshest consumable wins)."""
     now = time.time() if now is None else now
     expires_at = now + duration if duration > 0 else 0
+    # Reclaim this member's dead rows here rather than on every read.
+    await prune_effects(user_id, now)
     await _conn().execute(
         "INSERT INTO user_effects "
         "(user_id, effect_key, magnitude, expires_at, uses_left) "
@@ -156,18 +165,19 @@ async def grant_effect(
 
 async def get_active_effects(user_id: int, now: float | None = None) -> dict[str, dict]:
     """Live effects for a member: {effect_key: {magnitude, expires_at,
-    uses_left}}. Expired timed effects are pruned on read."""
+    uses_left}}. Expired timed effects are filtered out, never returned.
+
+    This is a read: it does not write. Hiding an expired row in the WHERE
+    clause is what callers actually need, and the DELETE+commit this used to do
+    on every lookup cost a write transaction on the hottest read in the economy
+    (/fish cast alone calls it every cast). Rows are reclaimed instead by
+    `prune_effects`, which grant_effect runs on the way past.
+    """
     now = time.time() if now is None else now
-    await _conn().execute(
-        "DELETE FROM user_effects WHERE user_id=? "
-        "AND expires_at > 0 AND expires_at <= ?",
-        (str(user_id), float(now)),
-    )
-    await _conn().commit()
     async with _conn().execute(
         "SELECT effect_key, magnitude, expires_at, uses_left FROM user_effects "
-        "WHERE user_id=?",
-        (str(user_id),),
+        "WHERE user_id=? AND (expires_at = 0 OR expires_at > ?)",
+        (str(user_id), float(now)),
     ) as cur:
         rows = await cur.fetchall()
     return {
@@ -178,6 +188,23 @@ async def get_active_effects(user_id: int, now: float | None = None) -> dict[str
         }
         for r in rows
     }
+
+
+async def prune_effects(user_id: int, now: float | None = None) -> int:
+    """Delete a member's expired timed effects. Returns rows removed.
+
+    The reclaim half of the old prune-on-read: reads filter expired rows out,
+    and this runs on the (far rarer) write paths so the table still doesn't
+    accumulate dead rows.
+    """
+    now = time.time() if now is None else now
+    cur = await _conn().execute(
+        "DELETE FROM user_effects WHERE user_id=? "
+        "AND expires_at > 0 AND expires_at <= ?",
+        (str(user_id), float(now)),
+    )
+    await _conn().commit()
+    return cur.rowcount
 
 
 async def consume_effect_use(user_id: int, effect_key: str) -> bool:
@@ -226,6 +253,7 @@ async def start_event(
 ) -> int:
     """Start a limited-time event. guild_id None = global. Returns the row id."""
     now = time.time() if now is None else now
+    await prune_events(now)
     cur = await _conn().execute(
         "INSERT INTO economy_events "
         "(guild_id, event_key, magnitude, data, started_at, ends_at) "
@@ -245,12 +273,14 @@ async def start_event(
 
 async def get_active_events(guild_id: int, now: float | None = None) -> list[dict]:
     """Events live in this guild right now (guild-scoped + global), soonest-ending
-    first. Ended rows are pruned lazily on read."""
+    first. Ended rows are filtered out by the query, never returned.
+
+    Like get_active_effects this is a pure read. The prune it used to do here
+    was a full table scan (the `(guild_id, ends_at)` index can't serve a bare
+    `ends_at` predicate) plus a commit, on a path /fish cast hits twice per
+    cast; `prune_events` now does it from start_event instead.
+    """
     now = time.time() if now is None else now
-    await _conn().execute(
-        "DELETE FROM economy_events WHERE ends_at <= ?", (float(now),)
-    )
-    await _conn().commit()
     async with _conn().execute(
         "SELECT id, guild_id, event_key, magnitude, data, started_at, ends_at "
         "FROM economy_events WHERE guild_id IN (?, ?) AND ends_at > ? "
@@ -276,6 +306,20 @@ async def get_active_events(guild_id: int, now: float | None = None) -> list[dic
             }
         )
     return out
+
+
+async def prune_events(now: float | None = None) -> int:
+    """Delete every event that has ended. Returns rows removed.
+
+    Index-served by `economy_events_ends`, and called from start_event rather
+    than from the read path.
+    """
+    now = time.time() if now is None else now
+    cur = await _conn().execute(
+        "DELETE FROM economy_events WHERE ends_at <= ?", (float(now),)
+    )
+    await _conn().commit()
+    return cur.rowcount
 
 
 async def end_event(event_id: int) -> None:

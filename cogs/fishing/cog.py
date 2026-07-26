@@ -294,9 +294,8 @@ class Fishing(commands.Cog):
         if quest_note:
             desc += f"\n{quest_note}"
         embed = h.embed(f"{entry['emoji']} {entry['name']}!", desc, color)
-        bag = await db.get_bag(ctx.author.id)
         embed.set_footer(
-            text=f"Bag: {sum(row['qty'] for row in bag)} · Sell with /fish sell"
+            text=f"Bag: {await db.count_bag(ctx.author.id)} · Sell with /fish sell"
         )
         await ctx.reply(embed=embed)
         await self._maybe_start_event(ctx)
@@ -425,19 +424,20 @@ class Fishing(commands.Cog):
                     ephemeral=True,
                 )
         econ = await db.get_econ_config(ctx.guild.id)
+        # The lock covers the DB work only — replying inside it would hold this
+        # member's economy lock for a whole Discord round trip.
         async with self._lock(ctx.author.id):
             count, total = await db.sell_catches(ctx.author.id, key)
-            if count == 0:
-                what = f"any **{FISH[key]['name']}**" if key else "anything to sell"
-                return await ctx.reply(
-                    embed=h.warn(
-                        f"You don't have {what}. Try `/fish cast`!", "🎒 Empty"
-                    ),
-                    ephemeral=True,
-                )
-            new_bal = await db.add_coins(ctx.author.id, total)
-            await db.add_fishing_earned(ctx.author.id, total)
-            await globalxp.award(ctx.author.id, "fish_sell")
+            if count:
+                new_bal = await db.add_coins(ctx.author.id, total)
+                await db.add_fishing_earned(ctx.author.id, total)
+                await globalxp.award(ctx.author.id, "fish_sell")
+        if count == 0:
+            what = f"any **{FISH[key]['name']}**" if key else "anything to sell"
+            return await ctx.reply(
+                embed=h.warn(f"You don't have {what}. Try `/fish cast`!", "🎒 Empty"),
+                ephemeral=True,
+            )
 
         today = int(time.time() // 86400)
         qgen = generate_quest(ctx.author.id, today)
@@ -516,37 +516,47 @@ class Fishing(commands.Cog):
     @fish.command(name="upgrade", description="Buy the next rod tier with coins.")
     async def fish_upgrade(self, ctx: commands.Context):
         econ = await db.get_econ_config(ctx.guild.id)
+        balance = 0
+        # Decide and settle under the lock, reply after releasing it: a Discord
+        # round trip (or a 429) shouldn't block this member's other economy
+        # commands.
         async with self._lock(ctx.author.id):
             fisher = await db.get_fisher(ctx.author.id)
             nxt = next_rod(fisher["rod_level"])
+            outcome = "ok"
             if nxt is None:
-                return await ctx.reply(
-                    embed=h.info("You already own the best rod there is!", "🎣 Maxed"),
-                    ephemeral=True,
-                )
-            if not await db.try_debit_coins(ctx.author.id, nxt["price"]):
+                outcome = "maxed"
+            elif not await db.try_debit_coins(ctx.author.id, nxt["price"]):
+                outcome = "poor"
                 balance = await db.get_balance(ctx.author.id)
-                return await ctx.reply(
-                    embed=h.err(
-                        f"{nxt['emoji']} **{nxt['name']}** costs "
-                        f"{self._money(econ, nxt['price'])} — you have "
-                        f"{self._money(econ, balance)}."
-                    ),
-                    ephemeral=True,
-                )
-            upgraded = await db.set_rod_level(
+            elif not await db.set_rod_level(
                 ctx.author.id,
                 fisher["rod_level"] + 1,
                 expected=fisher["rod_level"],
-            )
-            if not upgraded:
+            ):
                 # Someone (a second racing invocation) already advanced the rod
                 # — hand the coins back.
                 await db.add_coins(ctx.author.id, nxt["price"])
-                return await ctx.reply(
-                    embed=h.warn("That upgrade already went through.", "🎣 Rod"),
-                    ephemeral=True,
-                )
+                outcome = "raced"
+        if outcome == "maxed":
+            return await ctx.reply(
+                embed=h.info("You already own the best rod there is!", "🎣 Maxed"),
+                ephemeral=True,
+            )
+        if outcome == "poor":
+            return await ctx.reply(
+                embed=h.err(
+                    f"{nxt['emoji']} **{nxt['name']}** costs "
+                    f"{self._money(econ, nxt['price'])} — you have "
+                    f"{self._money(econ, balance)}."
+                ),
+                ephemeral=True,
+            )
+        if outcome == "raced":
+            return await ctx.reply(
+                embed=h.warn("That upgrade already went through.", "🎣 Rod"),
+                ephemeral=True,
+            )
         await ctx.reply(
             embed=h.ok(
                 f"You bought the {nxt['emoji']} **{nxt['name']}** for "
@@ -761,18 +771,22 @@ class Fishing(commands.Cog):
         qty = max(1, min(qty, 100))
         total = d.price * qty
         econ = await db.get_econ_config(ctx.guild.id)
+        new_qty = balance = 0
         async with self._lock(ctx.author.id):
-            if not await db.try_debit_coins(ctx.author.id, total):
+            paid = await db.try_debit_coins(ctx.author.id, total)
+            if paid:
+                new_qty = await db.add_item(ctx.author.id, d.key, qty)
+            else:
                 balance = await db.get_balance(ctx.author.id)
-                return await ctx.reply(
-                    embed=h.err(
-                        f"{d.emoji} **{d.name}** ×{qty} costs "
-                        f"{self._money(econ, total)} — you have "
-                        f"{self._money(econ, balance)}."
-                    ),
-                    ephemeral=True,
-                )
-            new_qty = await db.add_item(ctx.author.id, d.key, qty)
+        if not paid:
+            return await ctx.reply(
+                embed=h.err(
+                    f"{d.emoji} **{d.name}** ×{qty} costs "
+                    f"{self._money(econ, total)} — you have "
+                    f"{self._money(econ, balance)}."
+                ),
+                ephemeral=True,
+            )
         await ctx.reply(
             embed=h.ok(
                 f"Bought **{qty}** {d.emoji} **{d.name}** for "

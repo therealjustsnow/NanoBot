@@ -15,12 +15,20 @@ import aiosqlite
 
 from utils import db_crypto, sqlite_timing
 
+from . import _cache
+
 log = logging.getLogger("NanoBot.db")
 
 _DB_PATH = os.path.join("data", "nanobot.db")
 
 # Module-level connection — opened once in init(), shared for the bot's lifetime.
 _db: aiosqlite.Connection | None = None
+
+# Whether the live SQLite build understands "… RETURNING <cols>" (3.35+). Probed
+# once in init() against the connection actually in use, since the SQLCipher
+# driver ships its own SQLite. False falls every accessor back to a plain
+# write-then-read.
+_RETURNING_OK: bool = False
 
 # Table-setup callables registered by the domain modules at import time. init()
 # awaits them in registration order (which __init__ fixes to the original
@@ -47,10 +55,15 @@ async def init(encryption_key: str | None = None) -> None:
     When `encryption_key` is set the file is opened through SQLCipher
     (encrypted at rest); see utils/db_crypto.py.
     """
-    global _db
+    global _db, _RETURNING_OK
     os.makedirs("data", exist_ok=True)
     _db = await db_crypto.connect(_DB_PATH, encryption_key)
     _db = sqlite_timing.wrap(_db, "nanobot")
+
+    async with _db.execute("SELECT sqlite_version()") as cur:
+        version = (await cur.fetchone())[0]
+    _RETURNING_OK = tuple(int(p) for p in str(version).split(".")[:2]) >= (3, 35)
+    _cache.clear()
 
     await _db.execute("PRAGMA journal_mode=WAL")
     await _db.execute("PRAGMA synchronous=NORMAL")
@@ -123,6 +136,25 @@ async def init(encryption_key: str | None = None) -> None:
         await _setup()
     await _run_migrations()
     log.info(f"Database ready: {_DB_PATH}")
+
+
+async def fetch_one_returning(sql: str, params, *, returning: str):
+    """Run a write with a RETURNING clause and hand back the resulting row.
+
+    The pattern this replaces is "upsert, commit, then SELECT the value back" —
+    a second round trip to the aiosqlite thread for a number the write already
+    knew. RETURNING needs SQLite 3.35+; on an older driver this returns None and
+    the caller falls back to its own read, so the accessors stay correct either
+    way (see `_RETURNING_OK`).
+    """
+    if not _RETURNING_OK:
+        await _conn().execute(sql, params)
+        await _conn().commit()
+        return None
+    async with _conn().execute(f"{sql} RETURNING {returning}", params) as cur:
+        row = await cur.fetchone()
+    await _conn().commit()
+    return row
 
 
 async def close() -> None:

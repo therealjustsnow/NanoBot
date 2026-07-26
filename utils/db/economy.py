@@ -12,7 +12,14 @@ import time
 
 from utils import db_crypto
 
-from ._core import _conn, _ensure_columns, register_init, rows_for_users
+from . import _cache
+from ._core import (
+    _conn,
+    _ensure_columns,
+    fetch_one_returning,
+    register_init,
+    rows_for_users,
+)
 
 # ══════════════════════════════════════════════════════════════════════════════
 #  Economy (GLOBAL per-user coin balances + daily claim)
@@ -170,12 +177,14 @@ async def add_coins(user_id: int, amount: int) -> int:
     coins under concurrent /gamble, /pay, level-ups, etc.).
     """
     amount = int(amount)
-    await _conn().execute(
+    row = await fetch_one_returning(
         "INSERT INTO economy (user_id, coins) VALUES (?,MAX(0,?)) "
         "ON CONFLICT(user_id) DO UPDATE SET coins=MAX(0, coins + ?)",
         (str(user_id), amount, amount),
+        returning="coins",
     )
-    await _conn().commit()
+    if row is not None:
+        return row["coins"]
     return await get_balance(user_id)
 
 
@@ -293,6 +302,9 @@ async def set_daily_state(user_id: int, last_daily: float, streak: int) -> None:
 
 # ── Config ─────────────────────────────────────────────────────────────────────
 async def get_econ_config(guild_id: int) -> dict:
+    cached = _cache.get("economy_config", guild_id)
+    if cached is not None:
+        return cached
     async with _conn().execute(
         "SELECT daily_amount, streak_bonus, currency_name, currency_emoji, "
         "coop_reward, raid_reward, raid_min, raid_max "
@@ -301,26 +313,34 @@ async def get_econ_config(guild_id: int) -> dict:
     ) as cur:
         row = await cur.fetchone()
     if row:
-        return {
-            "daily_amount": row["daily_amount"],
-            "streak_bonus": row["streak_bonus"],
-            "currency_name": row["currency_name"],
-            "currency_emoji": row["currency_emoji"],
-            "coop_reward": row["coop_reward"],
-            "raid_reward": row["raid_reward"],
-            "raid_min": row["raid_min"],
-            "raid_max": row["raid_max"],
-        }
-    return {
-        "daily_amount": 100,
-        "streak_bonus": 0,
-        "currency_name": "NanoCoin",
-        "currency_emoji": "🪙",
-        "coop_reward": 50,
-        "raid_reward": 100,
-        "raid_min": 3,
-        "raid_max": 20,
-    }
+        return _cache.put(
+            "economy_config",
+            guild_id,
+            {
+                "daily_amount": row["daily_amount"],
+                "streak_bonus": row["streak_bonus"],
+                "currency_name": row["currency_name"],
+                "currency_emoji": row["currency_emoji"],
+                "coop_reward": row["coop_reward"],
+                "raid_reward": row["raid_reward"],
+                "raid_min": row["raid_min"],
+                "raid_max": row["raid_max"],
+            },
+        )
+    return _cache.put(
+        "economy_config",
+        guild_id,
+        {
+            "daily_amount": 100,
+            "streak_bonus": 0,
+            "currency_name": "NanoCoin",
+            "currency_emoji": "🪙",
+            "coop_reward": 50,
+            "raid_reward": 100,
+            "raid_min": 3,
+            "raid_max": 20,
+        },
+    )
 
 
 async def set_econ_config(guild_id: int, **kwargs) -> None:
@@ -349,6 +369,7 @@ async def set_econ_config(guild_id: int, **kwargs) -> None:
         ),
     )
     await _conn().commit()
+    _cache.invalidate("economy_config", guild_id)
 
 
 # ── Contribution (lifetime co-op stat, global) ─────────────────────────────────

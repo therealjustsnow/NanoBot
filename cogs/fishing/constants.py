@@ -4,7 +4,7 @@
 # the cast claim is per user (global), so a per-server number was ambiguous the
 # moment a member fished in two servers, and it let one server set the pace of
 # everyone's economy. See the balance note on FISH below.
-CAST_COOLDOWN = 60
+CAST_COOLDOWN = 20
 
 # Base rarity odds at luck 0 (a bare Twig & String). Must sum to 1.0. Rod luck
 # shifts mass from junk/common up the table — see helpers.rarity_odds.
@@ -36,12 +36,17 @@ RARITIES: dict[str, tuple[str, int]] = {
 #
 # Balance note (mirrors cogs/activities/constants.py): EV per cast is ~28
 # coins at luck 0 and ~62 coins at the luck cap of 1.0 (Golden Rod + level cap
-# + Glowgrub bait reaches it). At the 60s CAST_COOLDOWN that is ~1,700–3,700
+# + Glowgrub bait reaches it). At the 20s CAST_COOLDOWN that is ~5,000–11,200
 # coins/hour of *active, per-command* play — by far the biggest faucet in the
 # economy (/work is ~100–145/h), and it takes a full hour of uninterrupted
 # casting to reach. Sinks (rod ladder, pickaxes, shop, prestige, casino house
 # edge) are what hold the line; if prices ever feel trivial, raise this number
 # rather than nerfing individual fish.
+#
+# On the database side 20s is comfortable: a cast costs ~1.9 ms of the single
+# shared connection, so 1,000 members casting flat out is ~50 casts/s ≈ 9.5% of
+# one connection-second (saturation needs ~10k such members). The limit here is
+# economy balance, not throughput.
 FISH: dict[str, dict] = {
     # ── junk ──
     "boot": {

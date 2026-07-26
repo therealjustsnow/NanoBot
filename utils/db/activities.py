@@ -13,6 +13,7 @@ what stops the same member farming /work once per server). How long that
 cooldown lasts, and whether an activity runs at all, stay per-guild settings.
 """
 
+from . import _cache
 from ._core import _conn, register_init
 
 # Whitelisted activity → (last-run column, lifetime-count column). Never build
@@ -83,6 +84,9 @@ _CONFIG_DEFAULTS = {
 
 
 async def get_activities_config(guild_id: int) -> dict:
+    cached = _cache.get("activities_config", guild_id)
+    if cached is not None:
+        return cached
     async with _conn().execute(
         "SELECT work_enabled, mine_enabled, hunt_enabled, explore_enabled, "
         "rob_enabled, work_cooldown, mine_cooldown, hunt_cooldown, "
@@ -91,19 +95,23 @@ async def get_activities_config(guild_id: int) -> dict:
     ) as cur:
         row = await cur.fetchone()
     if not row:
-        return dict(_CONFIG_DEFAULTS)
-    return {
-        "work_enabled": bool(row["work_enabled"]),
-        "mine_enabled": bool(row["mine_enabled"]),
-        "hunt_enabled": bool(row["hunt_enabled"]),
-        "explore_enabled": bool(row["explore_enabled"]),
-        "rob_enabled": bool(row["rob_enabled"]),
-        "work_cooldown": row["work_cooldown"],
-        "mine_cooldown": row["mine_cooldown"],
-        "hunt_cooldown": row["hunt_cooldown"],
-        "explore_cooldown": row["explore_cooldown"],
-        "rob_cooldown": row["rob_cooldown"],
-    }
+        return _cache.put("activities_config", guild_id, dict(_CONFIG_DEFAULTS))
+    return _cache.put(
+        "activities_config",
+        guild_id,
+        {
+            "work_enabled": bool(row["work_enabled"]),
+            "mine_enabled": bool(row["mine_enabled"]),
+            "hunt_enabled": bool(row["hunt_enabled"]),
+            "explore_enabled": bool(row["explore_enabled"]),
+            "rob_enabled": bool(row["rob_enabled"]),
+            "work_cooldown": row["work_cooldown"],
+            "mine_cooldown": row["mine_cooldown"],
+            "hunt_cooldown": row["hunt_cooldown"],
+            "explore_cooldown": row["explore_cooldown"],
+            "rob_cooldown": row["rob_cooldown"],
+        },
+    )
 
 
 async def set_activities_config(guild_id: int, **kwargs) -> None:
@@ -136,6 +144,7 @@ async def set_activities_config(guild_id: int, **kwargs) -> None:
         ),
     )
     await _conn().commit()
+    _cache.invalidate("activities_config", guild_id)
 
 
 # ── Stats ──────────────────────────────────────────────────────────────────────

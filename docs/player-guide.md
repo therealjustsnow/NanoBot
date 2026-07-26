@@ -48,7 +48,7 @@ was kept, and anything you'd already claimed stayed claimed.
 ## 🚀 Start here (your first five minutes)
 
 1. `/daily` — free coins, once every 24 hours. Come back daily for a streak bonus.
-2. `/fish` — cast a line. You can cast again every **60 seconds**.
+2. `/fish` — cast a line. You can cast again every **20 seconds**.
 3. `/fish sell` — turn your catch into coins (pick "Everything in your bag").
 4. `/work` — a safe paycheck, once an hour.
 5. `/profile` — see everything you've built so far.
@@ -189,7 +189,7 @@ prestige. Spending is what keeps prices meaningful.
 The biggest earner in the game, and the most hands-on.
 
 ```
-/fish              cast your line          (every 60 seconds)
+/fish              cast your line          (every 20 seconds)
 /fish bag          what you're carrying
 /fish sell [fish]  sell one species, or everything
 /fish rod          your rod + the next upgrade
@@ -205,7 +205,7 @@ The biggest earner in the game, and the most hands-on.
 
 ### What's new
 
-- **The cast cooldown is now a flat 60 seconds for everyone**, everywhere. It
+- **The cast cooldown is now a flat 20 seconds for everyone**, everywhere. It
   used to be a per-server setting; since your fishing progress is one account,
   one cooldown is the only thing that made sense — and it can't be dodged by
   hopping servers.
@@ -539,7 +539,7 @@ Yes: `/profile cosmetics` lists the banners, borders and nameplates you own,
 and `/profile equip <name>` puts one on.
 
 **Where did `/fish cooldown` go?**
-The cast cooldown is now a fixed 60 seconds for everyone, so there's nothing
+The cast cooldown is now a fixed 20 seconds for everyone, so there's nothing
 to configure.
 
 ---

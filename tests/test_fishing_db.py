@@ -99,6 +99,27 @@ async def test_best_only_improves_and_junk_never_counts():
     assert (await db.get_fisher(A))["best_key"] == "salmon"
 
 
+async def test_count_bag_matches_bag_total():
+    """The cast footer counts the bag without building the per-species view."""
+    assert await db.count_bag(A) == 0
+    await db.record_catch(A, "salmon", 5.0, 40)
+    await db.record_catch(A, "salmon", 7.5, 55)
+    await db.record_catch(A, "boot", 0.5, 1)
+    assert await db.count_bag(A) == sum(r["qty"] for r in await db.get_bag(A)) == 3
+    assert await db.count_bag(B) == 0
+
+
+async def test_every_global_stat_column_is_indexed():
+    """/fish global sorts on these; an unindexed one is a full scan + sort."""
+    async with db._conn().execute(
+        "SELECT name FROM sqlite_master WHERE type='index' AND tbl_name='fishing_stats'"
+    ) as cur:
+        indexed = {r["name"] for r in await cur.fetchall()}
+    for stat in db.GLOBAL_STATS:
+        column = db.GLOBAL_STATS[stat]["column"]
+        assert f"fishing_stats_{column}" in indexed, stat
+
+
 async def test_sell_one_species():
     await db.record_catch(A, "salmon", 5.0, 40)
     await db.record_catch(A, "salmon", 7.5, 55)
