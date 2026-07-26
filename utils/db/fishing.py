@@ -23,6 +23,7 @@ import time
 
 from . import _cache
 from ._core import (
+    count_ahead,
     _commit,
     _conn,
     _read_conn,
@@ -414,10 +415,9 @@ async def get_fishing_rank(user_id: int) -> tuple[int, int] | None:
     fisher = await get_fisher(user_id)
     if fisher["earned"] <= 0:
         return None
-    async with _read_conn().execute(
-        "SELECT COUNT(*) FROM fishing_stats WHERE earned > ?", (fisher["earned"],)
-    ) as cur:
-        ahead = (await cur.fetchone())[0]
+    ahead = await count_ahead(
+        "SELECT COUNT(*) FROM fishing_stats WHERE earned > ?", fisher["earned"]
+    )
     return ahead + 1, fisher["earned"]
 
 
@@ -546,10 +546,9 @@ async def get_global_rank(stat_key: str, user_id: int) -> tuple[int, float] | No
     val = row["val"] if row and row["val"] is not None else 0
     if val <= 0:
         return None
-    async with _read_conn().execute(
-        f"SELECT COUNT(*) FROM fishing_stats WHERE {stat['column']} > ?", (val,)
-    ) as cur:
-        ahead = (await cur.fetchone())[0]
+    ahead = await count_ahead(
+        f"SELECT COUNT(*) FROM fishing_stats WHERE {stat['column']} > ?", val
+    )
     return ahead + 1, val
 
 

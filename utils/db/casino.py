@@ -16,6 +16,7 @@ blackjack hands (restart-safe Hit/Stand), and daily-challenge progress.
 import json
 
 from ._core import (
+    count_ahead,
     _commit,
     _conn,
     _read_conn,
@@ -311,11 +312,10 @@ async def get_casino_rank(user_id: int) -> tuple[int, int] | None:
     if stats["games"] <= 0:
         return None
     net = stats["won"] - stats["wagered"]
-    async with _read_conn().execute(
+    ahead = await count_ahead(
         "SELECT COUNT(*) FROM casino_stats WHERE games > 0 AND (won - wagered) > ?",
-        (net,),
-    ) as cur:
-        ahead = (await cur.fetchone())[0]
+        net,
+    )
     return ahead + 1, net
 
 

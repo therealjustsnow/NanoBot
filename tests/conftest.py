@@ -33,9 +33,11 @@ def _clear_config_cache():
     """
     _cache.clear()
     _core._board_cache.clear()
+    _core._rank_cache.clear()
     yield
     _cache.clear()
     _core._board_cache.clear()
+    _core._rank_cache.clear()
 
 
 @pytest_asyncio.fixture

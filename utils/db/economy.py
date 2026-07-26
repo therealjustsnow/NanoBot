@@ -14,6 +14,7 @@ from utils import db_crypto
 
 from . import _cache
 from ._core import (
+    count_ahead,
     _commit,
     _conn,
     transaction,
@@ -234,10 +235,7 @@ async def get_econ_rank(user_id: int) -> tuple[int, int] | None:
     if row is None:
         return None
     coins = row["coins"]
-    async with _read_conn().execute(
-        "SELECT COUNT(*) FROM economy WHERE coins > ?", (coins,)
-    ) as cur:
-        ahead = (await cur.fetchone())[0]
+    ahead = await count_ahead("SELECT COUNT(*) FROM economy WHERE coins > ?", coins)
     return ahead + 1, coins
 
 
@@ -411,10 +409,9 @@ async def get_contrib_rank(user_id: int) -> tuple[int, int] | None:
     points = await get_contribution(user_id)
     if points <= 0:
         return None
-    async with _read_conn().execute(
-        "SELECT COUNT(*) FROM economy WHERE contribution > ?", (points,)
-    ) as cur:
-        ahead = (await cur.fetchone())[0]
+    ahead = await count_ahead(
+        "SELECT COUNT(*) FROM economy WHERE contribution > ?", points
+    )
     return ahead + 1, points
 
 

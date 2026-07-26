@@ -161,3 +161,29 @@ async def test_transaction_depth_resets_after_a_failure(file_db):
     assert _core._tx_depth == 0
     await db.add_coins(1, 5)  # the connection is usable again
     assert await db.get_balance(1) == 5
+
+
+# ── Rank memo ────────────────────────────────────────────────────────────────
+async def test_rank_memo_keys_on_the_value_so_the_figure_stays_exact(file_db):
+    """Ranking is a COUNT of everyone ahead — cheap at the top, linear at the
+    bottom (31ms across 1M wallets). Memoised by value, so a member whose
+    balance just moved gets a fresh count instead of a stale one."""
+    await db.add_coins(1, 500)
+    await db.add_coins(2, 100)
+
+    assert await db.get_econ_rank(2) == (2, 100)
+    before = _core._rank_cache.hits
+    assert await db.get_econ_rank(2) == (2, 100)  # same value → memo
+    assert _core._rank_cache.hits == before + 1
+
+    await db.add_coins(2, 900)  # now richer than user 1
+    assert await db.get_econ_rank(2) == (1, 1000)  # new value → fresh count
+
+
+async def test_rank_memo_expires(file_db, monkeypatch):
+    await db.add_coins(1, 100)
+    assert await db.get_econ_rank(1) == (1, 100)
+    monkeypatch.setattr(_core._rank_cache, "ttl", -1)
+    misses = _core._rank_cache.misses
+    assert await db.get_econ_rank(1) == (1, 100)
+    assert _core._rank_cache.misses > misses

@@ -5,7 +5,6 @@ dicts) is created in Moderation.__init__; restore is driven by the cog's
 on_restore_schedules listener.
 """
 
-import asyncio
 import logging
 from datetime import datetime, timezone
 
