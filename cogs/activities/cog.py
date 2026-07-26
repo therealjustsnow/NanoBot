@@ -53,7 +53,6 @@ Commands
   /adventure explore            → explore for a long-shot reward
   /rob <member>                 → try to steal a cut of a member's coins
   /adventure toggle <activity>  → enable/disable an activity   (Manage Server)
-  /adventure cooldown <a> <s>   → set an activity's cooldown    (Manage Server)
   /adventure config             → show settings                (Manage Server)
 """
 
@@ -664,86 +663,6 @@ class Activities(commands.Cog):
     async def _toggle_activity_ac(self, interaction: discord.Interaction, current: str):
         return await self._activity_choices(interaction, current)
 
-    @adventure.command(
-        name="cooldown",
-        description="Set an activity's cooldown, in seconds (Manage Server).",
-    )
-    @app_commands.describe(
-        activity="Pick an activity (the list shows its current cooldown)",
-        seconds="Pick a preset, or type any number of seconds in range",
-    )
-    @commands.has_permissions(manage_guild=True)
-    async def activities_cooldown(
-        self, ctx: commands.Context, activity: str, seconds: int
-    ):
-        activity = activity.lower().strip()
-        if activity not in ACTIVITY_NAMES:
-            return await ctx.reply(
-                embed=h.err(f"Unknown activity `{activity}`."), ephemeral=True
-            )
-        lo, hi = ACTIVITY_COOLDOWN_BOUNDS[activity]
-        if not lo <= seconds <= hi:
-            note = (
-                "\n\nThe minimum is a floor, not a suggestion: cooldowns are "
-                "shared across every server, so a faster setting here would "
-                "speed this activity up for your members everywhere."
-                if seconds < lo
-                else ""
-            )
-            return await ctx.reply(
-                embed=h.err(
-                    f"Cooldown for `/{activity}` must be between {lo:,} seconds "
-                    f"({h.fmt_duration(lo)}) and {hi:,} seconds "
-                    f"({h.fmt_duration(hi)}).{note}"
-                ),
-                ephemeral=True,
-            )
-        await db.set_activities_config(
-            ctx.guild.id, **{f"{activity}_cooldown": seconds}
-        )
-        await ctx.reply(
-            embed=h.ok(f"`/{activity}` cooldown set to **{h.fmt_duration(seconds)}**.")
-        )
-
-    @activities_cooldown.autocomplete("activity")
-    async def _cooldown_activity_ac(
-        self, interaction: discord.Interaction, current: str
-    ):
-        return await self._activity_choices(interaction, current)
-
-    @activities_cooldown.autocomplete("seconds")
-    async def _cooldown_seconds_ac(
-        self, interaction: discord.Interaction, current: str
-    ):
-        """Duration presets in plain English, clamped to the picked activity's
-        own bounds — "3 hours" beats counting zeros in 10800 on a phone."""
-        activity = str(getattr(interaction.namespace, "activity", "") or "").lower()
-        lo, hi = ACTIVITY_COOLDOWN_BOUNDS.get(activity, (60, 172_800))
-        default = ACTIVITY_DEFAULT_COOLDOWNS.get(activity)
-        q = (current or "").strip()
-        choices: list[app_commands.Choice[int]] = []
-        if q.isdigit() and lo <= int(q) <= hi:
-            choices.append(
-                app_commands.Choice(
-                    name=f"{int(q):,} seconds ({h.fmt_duration(int(q))})", value=int(q)
-                )
-            )
-        for preset in COOLDOWN_PRESETS:
-            if not lo <= preset <= hi or (q.isdigit() and preset == int(q)):
-                continue
-            if (
-                q
-                and not q.isdigit()
-                and q.lower() not in h.fmt_duration(preset).lower()
-            ):
-                continue
-            if q.isdigit() and not str(preset).startswith(q):
-                continue
-            label = f"{h.fmt_duration(preset)} ({preset:,} seconds)"
-            if preset == default:
-                label += " · default"
-            choices.append(app_commands.Choice(name=label[:100], value=preset))
-        return choices[:25]
 
     async def _activity_choices(
         self, interaction: discord.Interaction, current: str
