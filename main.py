@@ -320,6 +320,10 @@ class NanoBot(commands.Bot):
         self._music_activity: discord.BaseActivity | None = None
         # Guard so the startup config dump prints once, not on every reconnect.
         self._config_printed: bool = False
+        # Same for schedule restoration: on_ready re-fires on every gateway
+        # re-IDENTIFY, and re-arming already-armed timers is how one reminder
+        # became two. Cogs loaded later re-arm themselves from cog_load.
+        self._schedules_restored: bool = False
         # Shared HTTP server: the health probe and the vote webhook register
         # their routes here, sharing a port when only one is available.
         self.web: HttpServer = HttpServer()
@@ -673,7 +677,9 @@ class NanoBot(commands.Bot):
         await self.apply_presence()
         if not self._presence_loop.is_running():
             self._presence_loop.start()
-        self.dispatch("restore_schedules")
+        if not self._schedules_restored:
+            self._schedules_restored = True
+            self.dispatch("restore_schedules")
         self._install_error_hooks()
         # Dump the active config LAST so it isn't buried under cog-load and
         # gateway chatter. Once only — on_ready can re-fire on reconnect.

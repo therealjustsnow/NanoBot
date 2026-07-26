@@ -134,6 +134,15 @@ class Moderation(TimedActionsMixin, commands.Cog):
         # call, so one fetch is reused for a few seconds of typing.
         self._ban_cache: dict[int, tuple[float, list[tuple[int, str]]]] = {}
 
+    async def cog_load(self):
+        # restore_schedules is dispatched once, from the first on_ready — so a
+        # hot-reload after the bot is up would otherwise leave persisted rows
+        # un-armed. Re-run the restore here when the gateway is already ready
+        # (initial startup still waits for the dispatch). Safe to double up:
+        # spawn_tracked cancels whatever it replaces.
+        if self.bot.is_ready():
+            self.bot.loop.create_task(self.on_restore_schedules())
+
     def cog_unload(self):
         """Cancel all pending timed-action tasks so a reload/unload doesn't leak
         them (the new instance restores from DB via on_restore_schedules)."""

@@ -106,6 +106,15 @@ class Reminders(commands.Cog):
         self.bot = bot
         self._tasks: dict[str, asyncio.Task] = {}  # reminder_id → Task
 
+    async def cog_load(self):
+        # restore_schedules is dispatched once, from the first on_ready — so a
+        # hot-reload after the bot is up would otherwise leave persisted rows
+        # un-armed. Re-run the restore here when the gateway is already ready
+        # (initial startup still waits for the dispatch). Safe to double up:
+        # _spawn/spawn_tracked cancels whatever it replaces.
+        if self.bot.is_ready():
+            self.bot.loop.create_task(self.on_restore_schedules())
+
     def cog_unload(self):
         """Cancel all pending fire tasks so a cog reload doesn't leak them
         (and doesn't double-deliver when the new instance restores from DB)."""
@@ -129,26 +138,41 @@ class Reminders(commands.Cog):
         )
 
     def _spawn(self, info: dict) -> None:
-        """Create and track the fire task for a reminder, keyed by its id."""
-        self._tasks[info["id"]] = asyncio.create_task(self._fire(info))
+        """Create and track the fire task for a reminder, keyed by its id.
+
+        Cancels any task already armed for that id, so re-running the restore
+        listener (on_ready fires again after a reconnect) can't leave two
+        timers racing to deliver the same reminder.
+        """
+        h.spawn_tracked(self._tasks, info["id"], self._fire(info))
 
     # ── Background fire ────────────────────────────────────────────────────────
     async def _fire(self, info: dict):
-        """Sleep until due (in bounded chunks) then deliver. Always cleans up."""
+        """Sleep until due (in bounded chunks) then deliver, then clean up.
+
+        A *cancelled* timer deliberately leaves the row alone. Cancellation
+        means the timer is being replaced or the cog is unloading — the
+        reminder itself hasn't happened, and the next restore has to be able to
+        find it. (Deleting it here meant a cog reload silently wiped every
+        pending reminder; `/reminders cancel` removes the row itself.)
+        """
         rid = info["id"]
         try:
             await self._sleep_until(info["due"])
             await self._deliver(info)
         except asyncio.CancelledError:
+            # Only drop the dict entry if it's still ours — a replacement task
+            # may already have claimed the slot.
+            if self._tasks.get(rid) is asyncio.current_task():
+                self._tasks.pop(rid, None)
             raise
         except Exception:
             log.exception(f"Reminder {rid}: delivery failed")
-        finally:
-            self._tasks.pop(rid, None)
-            try:
-                await db.remove_reminder(rid)
-            except Exception:
-                log.exception(f"Reminder {rid}: failed to remove from DB")
+        self._tasks.pop(rid, None)
+        try:
+            await db.remove_reminder(rid)
+        except Exception:
+            log.exception(f"Reminder {rid}: failed to remove from DB")
 
     @staticmethod
     async def _sleep_until(due: float) -> None:

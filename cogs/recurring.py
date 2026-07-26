@@ -116,6 +116,15 @@ class Recurring(commands.Cog):
         self.bot = bot
         self._tasks: dict[str, asyncio.Task] = {}  # recurring_id → Task
 
+    async def cog_load(self):
+        # restore_schedules is dispatched once, from the first on_ready — so a
+        # hot-reload after the bot is up would otherwise leave persisted rows
+        # un-armed. Re-run the restore here when the gateway is already ready
+        # (initial startup still waits for the dispatch). Safe to double up:
+        # spawn_tracked cancels whatever it replaces.
+        if self.bot.is_ready():
+            self.bot.loop.create_task(self.on_restore_schedules())
+
     def cog_unload(self):
         """Cancel all in-flight tasks when the cog is unloaded or reloaded."""
         for task in self._tasks.values():
@@ -145,8 +154,11 @@ class Recurring(commands.Cog):
         log.info(f"Recurring: restored {restored} active, fired {overdue} overdue")
 
     def _spawn(self, info: dict) -> None:
-        """Create and track the fire task for a recurring reminder."""
-        self._tasks[info["id"]] = asyncio.create_task(self._fire(info))
+        """Create and track the fire task for a recurring reminder.
+
+        Cancels whatever was armed for that id first — see reminders._spawn.
+        """
+        h.spawn_tracked(self._tasks, info["id"], self._fire(info))
 
     @staticmethod
     async def _sleep_until(due: float) -> None:
