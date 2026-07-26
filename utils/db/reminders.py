@@ -9,7 +9,7 @@ db.init() creates them in the right order.
 import aiosqlite
 
 
-from ._core import _conn
+from ._core import _commit, _conn
 
 # ══════════════════════════════════════════════════════════════════════════════
 #  Reminders
@@ -40,12 +40,12 @@ async def set_reminder(info: dict) -> None:
             1 if info.get("dm", True) else 0,
         ),
     )
-    await _conn().commit()
+    await _commit()
 
 
 async def remove_reminder(rid: str) -> None:
     await _conn().execute("DELETE FROM reminders WHERE id=?", (rid,))
-    await _conn().commit()
+    await _commit()
 
 
 async def get_all_reminders() -> dict:

@@ -24,7 +24,7 @@ items.
 import json
 import time
 
-from ._core import _conn, fetch_one_returning, register_init
+from ._core import _commit, _conn, fetch_one_returning, register_init, transaction
 
 
 async def _ensure_items_tables():
@@ -66,7 +66,7 @@ async def _ensure_items_tables():
     await _conn().execute(
         "CREATE INDEX IF NOT EXISTS economy_events_ends ON economy_events (ends_at)"
     )
-    await _conn().commit()
+    await _commit()
 
 
 # ── Inventory ──────────────────────────────────────────────────────────────────
@@ -116,15 +116,20 @@ async def try_consume_item(user_id: int, item_key: str, qty: int = 1) -> bool:
         "WHERE user_id=? AND item_key=? AND qty >= ?",
         (int(qty), str(user_id), item_key, int(qty)),
     )
-    await _conn().commit()
+    await _commit()
     return cur.rowcount > 0
 
 
 async def transfer_item(from_id: int, to_id: int, item_key: str, qty: int = 1) -> bool:
-    """Move items between members. False if the sender is short (atomic debit)."""
-    if not await try_consume_item(from_id, item_key, qty):
-        return False
-    await add_item(to_id, item_key, qty)
+    """Move items between members. False if the sender is short.
+
+    One transaction, for the same reason as economy.transfer_coins: consuming
+    and granting in separate commits could vanish the items in between.
+    """
+    async with transaction():
+        if not await try_consume_item(from_id, item_key, qty):
+            return False
+        await add_item(to_id, item_key, qty)
     return True
 
 
@@ -160,7 +165,7 @@ async def grant_effect(
             int(uses),
         ),
     )
-    await _conn().commit()
+    await _commit()
 
 
 async def get_active_effects(user_id: int, now: float | None = None) -> dict[str, dict]:
@@ -203,7 +208,7 @@ async def prune_effects(user_id: int, now: float | None = None) -> int:
         "AND expires_at > 0 AND expires_at <= ?",
         (str(user_id), float(now)),
     )
-    await _conn().commit()
+    await _commit()
     return cur.rowcount
 
 
@@ -218,7 +223,7 @@ async def consume_effect_use(user_id: int, effect_key: str) -> bool:
         "WHERE user_id=? AND effect_key=? AND uses_left >= 1",
         (str(user_id), effect_key),
     )
-    await _conn().commit()
+    await _commit()
     if cur.rowcount == 0:
         return False
     await _conn().execute(
@@ -226,7 +231,7 @@ async def consume_effect_use(user_id: int, effect_key: str) -> bool:
         "WHERE user_id=? AND effect_key=? AND uses_left <= 0 AND expires_at = 0",
         (str(user_id), effect_key),
     )
-    await _conn().commit()
+    await _commit()
     return True
 
 
@@ -235,7 +240,7 @@ async def clear_effect(user_id: int, effect_key: str) -> None:
         "DELETE FROM user_effects WHERE user_id=? AND effect_key=?",
         (str(user_id), effect_key),
     )
-    await _conn().commit()
+    await _commit()
 
 
 # ── Economy events ─────────────────────────────────────────────────────────────
@@ -267,7 +272,7 @@ async def start_event(
             float(now + duration),
         ),
     )
-    await _conn().commit()
+    await _commit()
     return cur.lastrowid
 
 
@@ -318,13 +323,13 @@ async def prune_events(now: float | None = None) -> int:
     cur = await _conn().execute(
         "DELETE FROM economy_events WHERE ends_at <= ?", (float(now),)
     )
-    await _conn().commit()
+    await _commit()
     return cur.rowcount
 
 
 async def end_event(event_id: int) -> None:
     await _conn().execute("DELETE FROM economy_events WHERE id=?", (int(event_id),))
-    await _conn().commit()
+    await _commit()
 
 
 register_init(_ensure_items_tables)

@@ -23,6 +23,7 @@ import time
 
 from . import _cache
 from ._core import (
+    _commit,
     _conn,
     _read_conn,
     _ensure_columns,
@@ -58,7 +59,7 @@ async def _ensure_fishing_tables():
         "CREATE INDEX IF NOT EXISTS fishing_stats_earned "
         "ON fishing_stats (earned DESC)"
     )
-    await _conn().commit()
+    await _commit()
     # Fishing XP/levels and the once-a-day streak stamp — added after the
     # baseline table.
     await _ensure_columns(
@@ -79,7 +80,7 @@ async def _ensure_fishing_tables():
             f"CREATE INDEX IF NOT EXISTS fishing_stats_{_col} "
             f"ON fishing_stats ({_col} DESC)"
         )
-    await _conn().commit()
+    await _commit()
     # One row per unsold catch — the bag. Value is fixed at catch time (weight
     # roll included), so selling just sums and deletes.
     await _conn().execute("""
@@ -120,7 +121,7 @@ async def _ensure_fishing_tables():
             PRIMARY KEY (user_id, day)
         )
     """)
-    await _conn().commit()
+    await _commit()
 
 
 # ── Config ─────────────────────────────────────────────────────────────────────
@@ -145,7 +146,7 @@ async def set_fishing_config(guild_id: int, **kwargs) -> None:
         "ON CONFLICT(guild_id) DO UPDATE SET enabled=excluded.enabled",
         (str(guild_id), 1 if current["enabled"] else 0),
     )
-    await _conn().commit()
+    await _commit()
     _cache.invalidate("fishing_config", guild_id)
 
 
@@ -201,7 +202,7 @@ async def try_claim_cast(user_id: int, now: float, cooldown: int) -> int:
         "WHERE excluded.last_cast - fishing_stats.last_cast >= ?",
         (str(user_id), float(now), int(cooldown)),
     )
-    await _conn().commit()
+    await _commit()
     if cur.rowcount > 0:
         return 0
     fisher = await get_fisher(user_id)
@@ -243,7 +244,7 @@ async def record_catch(
             "WHERE user_id=? AND best_weight < ?",
             (fish_key, float(weight), uid, float(weight)),
         )
-    await _conn().commit()
+    await _commit()
 
 
 async def add_fishing_earned(user_id: int, amount: int) -> None:
@@ -253,7 +254,7 @@ async def add_fishing_earned(user_id: int, amount: int) -> None:
         "ON CONFLICT(user_id) DO UPDATE SET earned=MAX(0, earned + ?)",
         (str(user_id), int(amount), int(amount)),
     )
-    await _conn().commit()
+    await _commit()
 
 
 async def set_rod_level(user_id: int, new_level: int, *, expected: int) -> bool:
@@ -272,7 +273,7 @@ async def set_rod_level(user_id: int, new_level: int, *, expected: int) -> bool:
         "UPDATE fishing_stats SET rod_level=? WHERE user_id=? AND rod_level=?",
         (int(new_level), str(user_id), int(expected)),
     )
-    await _conn().commit()
+    await _commit()
     return cur.rowcount > 0
 
 
@@ -307,7 +308,7 @@ async def try_claim_daily_streak(user_id: int, day: int, streak: int) -> bool:
         "WHERE user_id=? AND last_day<?",
         (int(day), int(streak), str(user_id), int(day)),
     )
-    await _conn().commit()
+    await _commit()
     return cur.rowcount > 0
 
 
@@ -359,7 +360,7 @@ async def sell_catches(user_id: int, fish_key: str | None = None) -> tuple[int, 
             sql.replace("SELECT COUNT(*), COALESCE(SUM(value), 0) FROM", "DELETE FROM"),
             params,
         )
-        await _conn().commit()
+        await _commit()
     return count, total
 
 
@@ -432,7 +433,7 @@ async def get_or_create_quest(
         "(user_id, day, quest_key, target, progress, claimed) VALUES (?,?,?,?,0,0)",
         (uid, day, quest_key, int(target)),
     )
-    await _conn().commit()
+    await _commit()
     async with _conn().execute(
         "SELECT quest_key, target, progress, claimed FROM fishing_quests "
         "WHERE user_id=? AND day=?",
@@ -461,7 +462,7 @@ async def bump_quest_progress(user_id: int, day: int, amount: int) -> int:
             "WHERE user_id=? AND day=?",
             (int(amount), uid, day),
         )
-        await _conn().commit()
+        await _commit()
     async with _conn().execute(
         "SELECT progress FROM fishing_quests WHERE user_id=? AND day=?",
         (uid, day),
@@ -480,7 +481,7 @@ async def try_claim_quest_reward(user_id: int, day: int) -> bool:
         "WHERE user_id=? AND day=? AND claimed=0 AND progress>=target",
         (str(user_id), int(day)),
     )
-    await _conn().commit()
+    await _commit()
     return cur.rowcount > 0
 
 

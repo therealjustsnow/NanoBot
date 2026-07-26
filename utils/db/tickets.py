@@ -11,7 +11,7 @@ from typing import Any
 
 import aiosqlite
 
-from ._core import _conn, register_init
+from ._core import _commit, _conn, register_init
 
 # ══════════════════════════════════════════════════════════════════════════════
 #  Tickets
@@ -73,7 +73,7 @@ async def _ensure_ticket_tables() -> None:
             ON tickets (guild_id, status);
         CREATE INDEX IF NOT EXISTS tickets_thread ON tickets (thread_id);
     """)
-    await _conn().commit()
+    await _commit()
 
 
 def _ticket_config_row(row: aiosqlite.Row) -> dict:
@@ -114,7 +114,7 @@ async def set_ticket_config(guild_id: int, **kwargs: Any) -> None:
         f"ON CONFLICT(guild_id) DO UPDATE SET {updates}",
         values,
     )
-    await _conn().commit()
+    await _commit()
 
 
 async def create_ticket(guild_id: int, user_id: int, subject: str | None) -> dict:
@@ -131,7 +131,7 @@ async def create_ticket(guild_id: int, user_id: int, subject: str | None) -> dic
         "  ?, ?, 'open', ?)",
         (str(guild_id), str(guild_id), str(user_id), subject, time.time()),
     )
-    await _conn().commit()
+    await _commit()
     ticket = await get_ticket(cur.lastrowid)
     assert ticket is not None
     return ticket
@@ -158,13 +158,13 @@ async def set_ticket_thread(ticket_id: int, thread_id: int) -> None:
     await _conn().execute(
         "UPDATE tickets SET thread_id=? WHERE id=?", (str(thread_id), ticket_id)
     )
-    await _conn().commit()
+    await _commit()
 
 
 async def delete_ticket(ticket_id: int) -> None:
     """Drop a reserved row whose thread creation failed (rollback of create)."""
     await _conn().execute("DELETE FROM tickets WHERE id=?", (ticket_id,))
-    await _conn().commit()
+    await _commit()
 
 
 async def count_open_tickets(guild_id: int, user_id: int) -> int:
@@ -196,7 +196,7 @@ async def claim_ticket(ticket_id: int, staff_id: int) -> bool:
         "WHERE id=? AND status='open' AND claimed_by IS NULL",
         (str(staff_id), ticket_id),
     )
-    await _conn().commit()
+    await _commit()
     return cur.rowcount > 0
 
 
@@ -215,7 +215,7 @@ async def close_ticket(
             ticket_id,
         ),
     )
-    await _conn().commit()
+    await _commit()
     return cur.rowcount > 0
 
 
@@ -228,7 +228,7 @@ async def close_stale_tickets() -> int:
         "WHERE status='open' AND thread_id IS NULL",
         (time.time(),),
     )
-    await _conn().commit()
+    await _commit()
     return cur.rowcount
 
 

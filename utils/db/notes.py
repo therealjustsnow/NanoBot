@@ -6,7 +6,7 @@ module holds the moderator note accessors and registers its table setup with _co
 db.init() creates them in the right order.
 """
 
-from ._core import _conn
+from ._core import _commit, _conn
 
 # ══════════════════════════════════════════════════════════════════════════════
 #  Notes
@@ -27,7 +27,7 @@ async def add_note(
         "VALUES (?,?,?,?,?,?)",
         (str(guild_id), str(user_id), content, by_id, by_name, created_at),
     )
-    await _conn().commit()
+    await _commit()
     async with _conn().execute(
         "SELECT COUNT(*) FROM notes WHERE guild_id=? AND user_id=?",
         (str(guild_id), str(user_id)),
@@ -70,5 +70,5 @@ async def clear_notes(guild_id: int, user_id: int) -> int:
         "DELETE FROM notes WHERE guild_id=? AND user_id=?",
         (str(guild_id), str(user_id)),
     )
-    await _conn().commit()
+    await _commit()
     return cur.rowcount

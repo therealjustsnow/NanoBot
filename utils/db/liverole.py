@@ -6,7 +6,7 @@ module holds the live-role config accessors and registers its table setup with _
 db.init() creates them in the right order.
 """
 
-from ._core import _conn, register_init
+from ._core import _commit, _conn, register_init
 
 # ══════════════════════════════════════════════════════════════════════════════
 #  Live role (streaming presence)
@@ -26,7 +26,7 @@ async def _ensure_liverole_tables() -> None:
             message     TEXT
         )
     """)
-    await _conn().commit()
+    await _commit()
 
 
 async def get_liverole_config(guild_id: int) -> dict | None:
@@ -55,7 +55,7 @@ async def set_liverole_enabled(guild_id: int, enabled: bool) -> None:
            ON CONFLICT(guild_id) DO UPDATE SET enabled=excluded.enabled""",
         (str(guild_id), 1 if enabled else 0),
     )
-    await _conn().commit()
+    await _commit()
 
 
 async def set_liverole_role(guild_id: int, role_id: int | None) -> None:
@@ -65,7 +65,7 @@ async def set_liverole_role(guild_id: int, role_id: int | None) -> None:
            ON CONFLICT(guild_id) DO UPDATE SET role_id=excluded.role_id""",
         (str(guild_id), str(role_id) if role_id else None),
     )
-    await _conn().commit()
+    await _commit()
 
 
 async def set_liverole_channel(guild_id: int, channel_id: int | None) -> None:
@@ -75,7 +75,7 @@ async def set_liverole_channel(guild_id: int, channel_id: int | None) -> None:
            ON CONFLICT(guild_id) DO UPDATE SET channel_id=excluded.channel_id""",
         (str(guild_id), str(channel_id) if channel_id else None),
     )
-    await _conn().commit()
+    await _commit()
 
 
 async def set_liverole_announce(guild_id: int, announce: bool) -> None:
@@ -85,7 +85,7 @@ async def set_liverole_announce(guild_id: int, announce: bool) -> None:
            ON CONFLICT(guild_id) DO UPDATE SET announce=excluded.announce""",
         (str(guild_id), 1 if announce else 0),
     )
-    await _conn().commit()
+    await _commit()
 
 
 async def set_liverole_message(guild_id: int, message: str | None) -> None:
@@ -95,7 +95,7 @@ async def set_liverole_message(guild_id: int, message: str | None) -> None:
            ON CONFLICT(guild_id) DO UPDATE SET message=excluded.message""",
         (str(guild_id), message),
     )
-    await _conn().commit()
+    await _commit()
 
 
 register_init(_ensure_liverole_tables)

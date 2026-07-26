@@ -33,7 +33,7 @@ import time
 from datetime import datetime, timedelta, timezone
 from typing import NamedTuple
 
-from ._core import _conn
+from ._core import _commit, _conn
 
 log = logging.getLogger("NanoBot.db")
 
@@ -97,7 +97,7 @@ async def prune_history(now: float | None = None) -> dict[str, int]:
             f"DELETE FROM {policy.table} WHERE {policy.column} < ?",
             (_cutoff(policy, now),),
         )
-        await _conn().commit()
+        await _commit()
         if cur.rowcount > 0:
             removed[policy.table] = cur.rowcount
     return removed
@@ -135,7 +135,7 @@ async def vacuum() -> None:
     ones open (every accessor commits, but a caller mid-flight may not have
     yet), so commit first.
     """
-    await _conn().commit()
+    await _commit()
     await _conn().execute("VACUUM")
 
 

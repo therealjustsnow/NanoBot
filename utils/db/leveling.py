@@ -8,6 +8,7 @@ db.init() creates them in the right order.
 
 from . import _cache
 from ._core import (
+    _commit,
     _conn,
     _read_conn,
     _ensure_columns,
@@ -60,7 +61,7 @@ async def _ensure_leveling_tables():
             PRIMARY KEY (guild_id, channel_id)
         )
     """)
-    await _conn().commit()
+    await _commit()
     # Upgrade path for guilds whose level_config predates coin_reward.
     await _ensure_columns("level_config", {"coin_reward": "INTEGER NOT NULL DEFAULT 0"})
 
@@ -92,7 +93,7 @@ async def set_xp(guild_id: int, user_id: int, amount: int) -> None:
         "ON CONFLICT(guild_id, user_id) DO UPDATE SET xp=excluded.xp",
         (str(guild_id), str(user_id), max(0, int(amount))),
     )
-    await _conn().commit()
+    await _commit()
 
 
 async def get_xp(guild_id: int, user_id: int) -> int:
@@ -153,7 +154,7 @@ async def reset_levels(guild_id: int, user_id: int | None = None) -> int:
             "DELETE FROM user_levels WHERE guild_id=? AND user_id=?",
             (str(guild_id), str(user_id)),
         )
-    await _conn().commit()
+    await _commit()
     return cur.rowcount
 
 
@@ -223,7 +224,7 @@ async def set_level_config(guild_id: int, **kwargs) -> None:
             int(current["coin_reward"]),
         ),
     )
-    await _conn().commit()
+    await _commit()
     _cache.invalidate("level_config", guild_id)
 
 
@@ -234,7 +235,7 @@ async def add_level_reward(guild_id: int, level: int, role_id: int) -> None:
         "ON CONFLICT(guild_id, level) DO UPDATE SET role_id=excluded.role_id",
         (str(guild_id), int(level), str(role_id)),
     )
-    await _conn().commit()
+    await _commit()
 
 
 async def remove_level_reward(guild_id: int, level: int) -> bool:
@@ -242,7 +243,7 @@ async def remove_level_reward(guild_id: int, level: int) -> bool:
         "DELETE FROM level_rewards WHERE guild_id=? AND level=?",
         (str(guild_id), int(level)),
     )
-    await _conn().commit()
+    await _commit()
     return cur.rowcount > 0
 
 
@@ -263,7 +264,7 @@ async def add_level_ignored_channel(guild_id: int, channel_id: int) -> None:
         "VALUES (?,?)",
         (str(guild_id), str(channel_id)),
     )
-    await _conn().commit()
+    await _commit()
     _cache.invalidate("level_ignored_channels", guild_id)
 
 
@@ -272,7 +273,7 @@ async def remove_level_ignored_channel(guild_id: int, channel_id: int) -> bool:
         "DELETE FROM level_ignored_channels WHERE guild_id=? AND channel_id=?",
         (str(guild_id), str(channel_id)),
     )
-    await _conn().commit()
+    await _commit()
     _cache.invalidate("level_ignored_channels", guild_id)
     return cur.rowcount > 0
 

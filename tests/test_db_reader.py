@@ -121,3 +121,43 @@ async def test_board_memo_hands_back_a_private_list(file_db):
     rows = await db.get_econ_leaderboard_for([1])
     rows.clear()
     assert len(await db.get_econ_leaderboard_for([1])) == 1
+
+
+# ── Transactions ─────────────────────────────────────────────────────────────
+async def test_transaction_commits_everything_or_nothing(file_db):
+    await db.add_coins(1, 100)
+
+    class Boom(Exception):
+        pass
+
+    with pytest.raises(Boom):
+        async with _core.transaction():
+            await db.add_coins(1, 900)
+            await db.add_coins(2, 900)
+            raise Boom
+    assert (await db.get_balance(1), await db.get_balance(2)) == (100, 0)
+
+    async with _core.transaction():
+        await db.add_coins(1, 900)
+        await db.add_coins(2, 900)
+    assert (await db.get_balance(1), await db.get_balance(2)) == (1000, 900)
+
+
+async def test_inner_commits_are_deferred_to_the_outermost_block(file_db):
+    async with _core.transaction():
+        await db.add_coins(1, 50)  # its own _commit() is a no-op in here
+        assert _core._tx_depth == 1
+        async with _core.transaction():  # nesting joins, doesn't re-BEGIN
+            assert _core._tx_depth == 2
+            await db.add_coins(1, 50)
+    assert _core._tx_depth == 0
+    assert await db.get_balance(1) == 100
+
+
+async def test_transaction_depth_resets_after_a_failure(file_db):
+    with pytest.raises(ValueError):
+        async with _core.transaction():
+            raise ValueError
+    assert _core._tx_depth == 0
+    await db.add_coins(1, 5)  # the connection is usable again
+    assert await db.get_balance(1) == 5

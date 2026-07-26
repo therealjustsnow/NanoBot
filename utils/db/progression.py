@@ -35,7 +35,7 @@ lifetime stats wherever they play, and prestige/titles are account-wide.
 
 import time
 
-from ._core import _conn, register_init
+from ._core import _commit, _conn, register_init
 
 
 async def _ensure_progression_tables():
@@ -65,7 +65,7 @@ async def _ensure_progression_tables():
             selected_title TEXT NOT NULL DEFAULT ''
         )
     """)
-    await _conn().commit()
+    await _commit()
 
 
 # ── Achievements ───────────────────────────────────────────────────────────────
@@ -97,7 +97,7 @@ async def try_award_achievement(
             float(earned_at if earned_at is not None else time.time()),
         ),
     )
-    await _conn().commit()
+    await _commit()
     return cur.rowcount > 0
 
 
@@ -137,7 +137,7 @@ async def get_or_create_objective(
         "(user_id, week, obj_key, target, baseline, claimed) VALUES (?,?,?,?,?,0)",
         (uid, period, obj_key, float(target), float(baseline)),
     )
-    await _conn().commit()
+    await _commit()
     async with _conn().execute(
         "SELECT obj_key, target, baseline, claimed FROM weekly_objectives "
         "WHERE user_id=? AND week=? AND obj_key=?",
@@ -168,7 +168,7 @@ async def try_claim_objective(
         "AND (? - baseline) >= target",
         (str(user_id), period, obj_key, float(current_value)),
     )
-    await _conn().commit()
+    await _commit()
     return cur.rowcount > 0
 
 
@@ -201,7 +201,7 @@ async def try_advance_prestige(user_id: int, new_rank: int, *, expected: int) ->
         "UPDATE progression SET prestige=? WHERE user_id=? AND prestige=?",
         (int(new_rank), str(user_id), int(expected)),
     )
-    await _conn().commit()
+    await _commit()
     return cur.rowcount > 0
 
 
@@ -212,7 +212,7 @@ async def set_selected_title(user_id: int, title: str) -> None:
         "ON CONFLICT(user_id) DO UPDATE SET selected_title=excluded.selected_title",
         (str(user_id), title),
     )
-    await _conn().commit()
+    await _commit()
 
 
 register_init(_ensure_progression_tables)

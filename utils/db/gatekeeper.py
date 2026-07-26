@@ -12,7 +12,7 @@ from typing import Any
 import aiosqlite
 
 
-from ._core import _conn, _ensure_columns, register_init
+from ._core import _commit, _conn, _ensure_columns, register_init
 
 # ══════════════════════════════════════════════════════════════════════════════
 #  Gatekeeper (new-account mute + captcha verification)
@@ -109,7 +109,7 @@ async def _ensure_gatekeeper_tables() -> None:
         );
         CREATE INDEX IF NOT EXISTS gk_pending_guild ON gatekeeper_pending (guild_id);
     """)
-    await _conn().commit()
+    await _commit()
     # Added after the table's first cut — backfill for early-branch databases.
     await _ensure_columns(
         "gatekeeper_config",
@@ -158,7 +158,7 @@ async def set_gatekeeper_config(guild_id: int, **kwargs: Any) -> None:
         f"ON CONFLICT(guild_id) DO UPDATE SET {updates}",
         values,
     )
-    await _conn().commit()
+    await _commit()
 
 
 async def set_gatekeeper_pending(
@@ -186,7 +186,7 @@ async def set_gatekeeper_pending(
             time.time(),
         ),
     )
-    await _conn().commit()
+    await _commit()
 
 
 async def get_gatekeeper_pending(key: str) -> dict | None:
@@ -210,7 +210,7 @@ async def get_all_gatekeeper_pending() -> dict:
 
 async def remove_gatekeeper_pending(key: str) -> None:
     await _conn().execute("DELETE FROM gatekeeper_pending WHERE key=?", (key,))
-    await _conn().commit()
+    await _commit()
 
 
 register_init(_ensure_gatekeeper_tables)

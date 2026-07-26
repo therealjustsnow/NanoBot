@@ -9,7 +9,7 @@ db.init() creates them in the right order.
 import aiosqlite
 
 
-from ._core import _conn, register_init
+from ._core import _commit, _conn, register_init
 
 # ══════════════════════════════════════════════════════════════════════════════
 #  Recurring Reminders
@@ -37,7 +37,7 @@ async def _ensure_recurring_table():
         "CREATE INDEX IF NOT EXISTS recurring_target "
         "ON recurring_reminders (target_id)"
     )
-    await _conn().commit()
+    await _commit()
 
 
 async def recurring_id_exists(rid: str) -> bool:
@@ -69,7 +69,7 @@ async def set_recurring(info: dict) -> None:
             info.get("label"),
         ),
     )
-    await _conn().commit()
+    await _commit()
 
 
 async def update_recurring(info: dict) -> None:
@@ -85,7 +85,7 @@ async def update_recurring(info: dict) -> None:
             info["id"],
         ),
     )
-    await _conn().commit()
+    await _commit()
 
 
 async def set_recurring_paused(rid: str, paused: bool) -> None:
@@ -94,13 +94,13 @@ async def set_recurring_paused(rid: str, paused: bool) -> None:
         "UPDATE recurring_reminders SET paused=? WHERE id=?",
         (1 if paused else 0, rid),
     )
-    await _conn().commit()
+    await _commit()
 
 
 async def remove_recurring(rid: str) -> None:
     """Permanently delete a recurring reminder."""
     await _conn().execute("DELETE FROM recurring_reminders WHERE id=?", (rid,))
-    await _conn().commit()
+    await _commit()
 
 
 async def get_recurring(rid: str) -> dict | None:

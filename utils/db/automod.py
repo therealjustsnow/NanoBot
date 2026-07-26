@@ -14,7 +14,7 @@ import aiosqlite
 
 from utils import db_crypto
 
-from ._core import _conn, _ensure_columns, register_init
+from ._core import _commit, _conn, _ensure_columns, register_init
 
 # Serializes read-modify-write cycles on automod_config JSON columns.
 _automod_write_lock = asyncio.Lock()
@@ -62,7 +62,7 @@ async def _ensure_automod_tables() -> None:
         );
         CREATE INDEX IF NOT EXISTS aaw_guild ON automod_attachment_words (guild_id);
     """)
-    await _conn().commit()
+    await _commit()
     # Add columns for older schemas.
     await _ensure_columns(
         "automod_config", {"timeout_seconds": "INTEGER NOT NULL DEFAULT 600"}
@@ -87,7 +87,7 @@ async def _ensure_automod_guild(guild_id: int) -> None:
         "INSERT OR IGNORE INTO automod_config (guild_id) VALUES (?)",
         (str(guild_id),),
     )
-    await _conn().commit()
+    await _commit()
 
 
 async def get_automod_config(guild_id: int) -> dict | None:
@@ -109,7 +109,7 @@ async def set_automod_enabled(guild_id: int, enabled: bool) -> None:
            ON CONFLICT(guild_id) DO UPDATE SET enabled=excluded.enabled""",
         (str(guild_id), 1 if enabled else 0),
     )
-    await _conn().commit()
+    await _commit()
 
 
 async def set_automod_timeout_seconds(guild_id: int, seconds: int) -> None:
@@ -120,7 +120,7 @@ async def set_automod_timeout_seconds(guild_id: int, seconds: int) -> None:
            ON CONFLICT(guild_id) DO UPDATE SET timeout_seconds=excluded.timeout_seconds""",
         (str(guild_id), seconds),
     )
-    await _conn().commit()
+    await _commit()
 
 
 async def set_automod_log_channel(guild_id: int, channel_id: int | None) -> None:
@@ -130,7 +130,7 @@ async def set_automod_log_channel(guild_id: int, channel_id: int | None) -> None
         "UPDATE automod_config SET log_channel_id=? WHERE guild_id=?",
         (str(channel_id) if channel_id is not None else None, str(guild_id)),
     )
-    await _conn().commit()
+    await _commit()
 
 
 async def set_automod_rule(guild_id: int, rule: str, **kwargs: Any) -> None:
@@ -163,7 +163,7 @@ async def set_automod_rule(guild_id: int, rule: str, **kwargs: Any) -> None:
             "UPDATE automod_config SET rules=? WHERE guild_id=?",
             (json.dumps(rules), str(guild_id)),
         )
-        await _conn().commit()
+        await _commit()
 
 
 async def add_automod_badword(guild_id: int, word: str) -> bool:
@@ -173,7 +173,7 @@ async def add_automod_badword(guild_id: int, word: str) -> bool:
             "INSERT INTO automod_badwords (guild_id, word) VALUES (?, ?)",
             (str(guild_id), word.lower().strip()),
         )
-        await _conn().commit()
+        await _commit()
         return True
     except db_crypto.INTEGRITY_ERRORS:
         return False
@@ -185,7 +185,7 @@ async def remove_automod_badword(guild_id: int, word: str) -> bool:
         "DELETE FROM automod_badwords WHERE guild_id=? AND word=?",
         (str(guild_id), word.lower().strip()),
     )
-    await _conn().commit()
+    await _commit()
     return cur.rowcount > 0
 
 
@@ -230,7 +230,7 @@ async def toggle_automod_ignore(guild_id: int, kind: str, target_id: int) -> str
             f"UPDATE automod_config SET {col}=? WHERE guild_id=?",
             (json.dumps(ids), str(guild_id)),
         )
-        await _conn().commit()
+        await _commit()
     return result
 
 
@@ -248,7 +248,7 @@ async def add_automod_regex(
             "INSERT INTO automod_regex_patterns (guild_id, pattern, label) VALUES (?,?,?)",
             (str(guild_id), pattern, label),
         )
-        await _conn().commit()
+        await _commit()
         return True
     except db_crypto.INTEGRITY_ERRORS:
         return False
@@ -260,7 +260,7 @@ async def remove_automod_regex(guild_id: int, pattern: str) -> bool:
         "DELETE FROM automod_regex_patterns WHERE guild_id=? AND pattern=?",
         (str(guild_id), pattern),
     )
-    await _conn().commit()
+    await _commit()
     return cur.rowcount > 0
 
 
@@ -282,7 +282,7 @@ async def add_automod_attachment_word(guild_id: int, word: str) -> bool:
             "INSERT INTO automod_attachment_words (guild_id, word) VALUES (?, ?)",
             (str(guild_id), word),
         )
-        await _conn().commit()
+        await _commit()
         return True
     except db_crypto.INTEGRITY_ERRORS:
         return False
@@ -295,7 +295,7 @@ async def remove_automod_attachment_word(guild_id: int, word: str) -> bool:
         (str(guild_id), word),
     ) as cur:
         changed = cur.rowcount
-    await _conn().commit()
+    await _commit()
     return changed > 0
 
 

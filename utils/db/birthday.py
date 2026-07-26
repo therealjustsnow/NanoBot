@@ -12,7 +12,7 @@ from typing import Any
 import aiosqlite
 
 
-from ._core import _conn, register_init
+from ._core import _commit, _conn, register_init
 
 # ══════════════════════════════════════════════════════════════════════════════
 #  Birthdays
@@ -77,7 +77,7 @@ async def _ensure_birthday_tables() -> None:
             song          TEXT
         );
     """)
-    await _conn().commit()
+    await _commit()
 
 
 def _birthday_config_row(row: aiosqlite.Row) -> dict:
@@ -117,7 +117,7 @@ async def set_birthday_config(guild_id: int, **kwargs: Any) -> None:
         f"ON CONFLICT(guild_id) DO UPDATE SET {updates}",
         values,
     )
-    await _conn().commit()
+    await _commit()
 
 
 async def get_enabled_birthday_configs() -> dict:
@@ -144,7 +144,7 @@ async def set_birthday(
         "last_announced=NULL",
         (str(guild_id), str(user_id), int(month), int(day), year, time.time()),
     )
-    await _conn().commit()
+    await _commit()
 
 
 async def get_birthday(guild_id: int, user_id: int) -> dict | None:
@@ -163,7 +163,7 @@ async def remove_birthday(guild_id: int, user_id: int) -> bool:
         "DELETE FROM birthdays WHERE guild_id=? AND user_id=?",
         (str(guild_id), str(user_id)),
     )
-    await _conn().commit()
+    await _commit()
     return cur.rowcount > 0
 
 
@@ -184,7 +184,7 @@ async def set_birthday_announced(guild_id: int, user_id: int, date_str: str) -> 
         "UPDATE birthdays SET last_announced=? WHERE guild_id=? AND user_id=?",
         (date_str, str(guild_id), str(user_id)),
     )
-    await _conn().commit()
+    await _commit()
 
 
 register_init(_ensure_birthday_tables)

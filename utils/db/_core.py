@@ -7,8 +7,10 @@ register_init from here; init() runs every registered table-setup in the order
 the package __init__ imports the domains, then applies pending migrations.
 """
 
+import asyncio
 import logging
 import os
+from contextlib import asynccontextmanager
 from typing import Any, Awaitable, Callable  # noqa: F401 - re-exported for type hints
 
 import aiosqlite
@@ -177,12 +179,75 @@ async def fetch_one_returning(sql: str, params, *, returning: str):
     """
     if not _RETURNING_OK:
         await _conn().execute(sql, params)
-        await _conn().commit()
+        await _commit()
         return None
     async with _conn().execute(f"{sql} RETURNING {returning}", params) as cur:
         row = await cur.fetchone()
-    await _conn().commit()
+    await _commit()
     return row
+
+
+# ── Transactions ─────────────────────────────────────────────────────────────
+# The package shares ONE writer connection between every coroutine, so a naive
+# "BEGIN … COMMIT" around a multi-step flow is unsafe: another coroutine's
+# accessor can execute — and commit — inside the window, landing its work in
+# your transaction and losing it to your rollback. So a transaction takes a
+# process-wide write lock for its (short, HTTP-free) duration, and the inner
+# accessors' own commits become no-ops until the outermost one finishes.
+_tx_lock = asyncio.Lock()
+_tx_depth = 0
+
+
+async def _commit() -> None:
+    """Commit — unless a transaction() block owns the connection right now.
+
+    Every accessor in the package calls this instead of `_conn().commit()`, so
+    a multi-step flow can be made genuinely atomic by wrapping it, without
+    rewriting the accessors it calls.
+    """
+    if _tx_depth == 0:
+        await _conn().commit()
+
+
+@asynccontextmanager
+async def transaction():
+    """Run a block as one atomic unit: all of its writes land, or none do.
+
+    Use for the handful of flows where a partial result is a real problem — a
+    transfer that debits one wallet and credits another, a purchase that
+    reserves stock, charges coins and writes a ledger row. Keep the body short
+    and free of Discord calls: it holds the writer for its whole duration.
+
+    Nested use is allowed; only the outermost block commits.
+
+    Known limit: the lock only excludes other transaction() blocks. A plain
+    accessor that writes while one is open still lands inside it, and would be
+    undone by a rollback. That is why this is reserved for flows whose rollback
+    path is a *crash* rather than an expected outcome — `purchase_item`, whose
+    "out of stock" and "not enough coins" branches are ordinary, uses ordered
+    compensating writes instead.
+    """
+    global _tx_depth
+    if _tx_depth > 0:  # already inside one — join it
+        _tx_depth += 1
+        try:
+            yield
+        finally:
+            _tx_depth -= 1
+        return
+    async with _tx_lock:
+        await _conn().commit()  # flush anything an earlier accessor left open
+        await _conn().execute("BEGIN IMMEDIATE")
+        _tx_depth = 1
+        try:
+            yield
+        except BaseException:
+            _tx_depth = 0
+            await _conn().rollback()
+            raise
+        else:
+            _tx_depth = 0
+            await _conn().commit()
 
 
 async def _open_reader(encryption_key: str | None):

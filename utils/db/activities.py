@@ -14,7 +14,7 @@ cooldown lasts, and whether an activity runs at all, stay per-guild settings.
 """
 
 from . import _cache
-from ._core import _conn, register_init
+from ._core import _commit, _conn, register_init
 
 # Whitelisted activity → (last-run column, lifetime-count column). Never build
 # these from user input — activity names are always validated against this
@@ -65,7 +65,7 @@ async def _ensure_activities_tables():
             rob_count       INTEGER NOT NULL DEFAULT 0
         )
     """)
-    await _conn().commit()
+    await _commit()
 
 
 # ── Config ─────────────────────────────────────────────────────────────────────
@@ -143,7 +143,7 @@ async def set_activities_config(guild_id: int, **kwargs) -> None:
             int(current["rob_cooldown"]),
         ),
     )
-    await _conn().commit()
+    await _commit()
     _cache.invalidate("activities_config", guild_id)
 
 
@@ -220,7 +220,7 @@ async def try_claim_activity(
         f"OR excluded.{last_col} - activities_stats.{last_col} >= ?",
         (str(user_id), float(now), int(cooldown)),
     )
-    await _conn().commit()
+    await _commit()
     if cur.rowcount > 0:
         return 0
     stats = await get_activity_stats(user_id)
@@ -245,7 +245,7 @@ async def set_pickaxe_level(user_id: int, new_level: int, *, expected: int) -> b
         "WHERE user_id=? AND pickaxe_level=?",
         (int(new_level), str(user_id), int(expected)),
     )
-    await _conn().commit()
+    await _commit()
     return cur.rowcount > 0
 
 
