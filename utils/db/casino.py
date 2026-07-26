@@ -23,8 +23,8 @@ async def _ensure_casino_tables():
         CREATE TABLE IF NOT EXISTS casino_config (
             guild_id      TEXT PRIMARY KEY,
             enabled       INTEGER NOT NULL DEFAULT 1,
-            min_bet       INTEGER NOT NULL DEFAULT 10,
-            max_bet       INTEGER NOT NULL DEFAULT 1000,
+            min_bet       INTEGER NOT NULL DEFAULT 25,
+            max_bet       INTEGER NOT NULL DEFAULT 3000,
             jackpot_pool  INTEGER NOT NULL DEFAULT 0
         )
     """)
@@ -103,7 +103,7 @@ async def get_casino_config(guild_id: int) -> dict:
             "max_bet": row["max_bet"],
             "jackpot_pool": row["jackpot_pool"],
         }
-    return {"enabled": True, "min_bet": 10, "max_bet": 1000, "jackpot_pool": 0}
+    return {"enabled": True, "min_bet": 25, "max_bet": 3000, "jackpot_pool": 0}
 
 
 async def set_casino_config(guild_id: int, **kwargs) -> None:

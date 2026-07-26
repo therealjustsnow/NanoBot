@@ -97,8 +97,12 @@ def earned_titles(earned_keys, achievements: dict) -> list[tuple[str, int]]:
 
 # ── Prestige ─────────────────────────────────────────────────────────────────────
 def prestige_requirement(rank: int) -> tuple[int, int]:
-    """(points_required, coin_cost) to advance from `rank` to `rank + 1`."""
-    return PRESTIGE_POINTS_BASE * (rank + 1), PRESTIGE_COST_BASE * (rank + 1)
+    """(points_required, coin_cost) to advance from `rank` to `rank + 1`.
+
+    Points stay linear (they come from achievements, which the cast cooldown
+    doesn't accelerate); the coin cost is quadratic — see PRESTIGE_COST_BASE.
+    """
+    return PRESTIGE_POINTS_BASE * (rank + 1), PRESTIGE_COST_BASE * (rank + 1) ** 2
 
 
 def prestige_bonus_multiplier(rank: int) -> float:

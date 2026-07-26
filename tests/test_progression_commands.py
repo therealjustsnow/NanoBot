@@ -8,6 +8,7 @@ from discord.ext import test as dpytest
 
 import utils.db as db
 from cogs.progression.definitions import WeeklyObjectiveDef
+from cogs.progression.helpers import prestige_requirement
 from tests.conftest import config
 
 # A single fabricated weekly objective, easy to drive deterministically without
@@ -214,13 +215,14 @@ async def test_prestige_status_shows_requirements(bot):
 async def test_prestige_confirm_blocked_on_insufficient_points(bot):
     guild = config().guilds[0]
     author = config().members[0]
-    await db.add_coins(author.id, 25_000)
+    cost = prestige_requirement(0)[1]
+    await db.add_coins(author.id, cost)
 
     await dpytest.message("!progress prestige confirm", member=author)
     sent = dpytest.get_message()
     assert "Error" in sent.embeds[0].title
     assert (await db.get_progression(author.id))["prestige"] == 0
-    assert await db.get_balance(author.id) == 25_000
+    assert await db.get_balance(author.id) == cost
 
 
 @pytest.mark.cogs("cogs.progression")
@@ -243,7 +245,7 @@ async def test_prestige_confirm_success_advances_rank_and_charges_coins(bot):
     author = config().members[0]
     for key in ("balance_100k", "contrib_500", "casino_games_10"):
         await db.try_award_achievement(author.id, key)
-    await db.add_coins(author.id, 25_000)
+    await db.add_coins(author.id, prestige_requirement(0)[1])
 
     await dpytest.message("!progress prestige confirm", member=author)
     sent = dpytest.get_message()
@@ -251,7 +253,8 @@ async def test_prestige_confirm_success_advances_rank_and_charges_coins(bot):
     assert (await db.get_progression(author.id))["prestige"] == 1
     assert await db.get_balance(author.id) == 0
 
-    # Confirming again immediately fails — rank 1 needs 200 points / 50,000 coins.
+    # Confirming again immediately fails — rank 1 needs 200 points and a
+    # quadratically larger pile of coins, and the wallet is empty.
     await dpytest.message("!progress prestige confirm", member=author)
     sent = dpytest.get_message()
     assert "Error" in sent.embeds[0].title

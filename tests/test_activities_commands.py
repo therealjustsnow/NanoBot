@@ -120,13 +120,13 @@ async def test_mine_disabled(bot):
 async def test_mine_upgrade_charges_and_advances(bot):
     guild = config().guilds[0]
     author = config().members[0]
-    await db.add_coins(author.id, 600)
+    await db.add_coins(author.id, PICKAXES[1]["price"] + 100)
 
     await dpytest.message("!mine upgrade", member=author)
     sent = dpytest.get_message()
     assert "Upgraded" in sent.embeds[0].title
     assert (await db.get_activity_stats(author.id))["pickaxe_level"] == 1
-    assert await db.get_balance(author.id) == 600 - PICKAXES[1]["price"]
+    assert await db.get_balance(author.id) == 100
 
 
 @pytest.mark.cogs("cogs.activities")

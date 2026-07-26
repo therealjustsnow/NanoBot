@@ -35,10 +35,15 @@ RAID_TIMEOUT = 1800  # 30 min
 # role id, which we can't know ahead of time. Prices are scaled to the default
 # 100-coin daily reward (a few days' to a couple weeks' saving). Mods are meant
 # to edit prices, remove ones that don't fit, and add their own role rewards.
+# Starter shop, dropped in by /shop seed. Prices follow the same staged curve
+# as the rod ladder: the cheap social rewards are x2 (about twice as fast to
+# reach as in the 60s economy, so a new member buys something in their first
+# session) and the two aspirational ones x2.5. Only *new* seeds use these — an
+# existing shop keeps whatever prices its mods set.
 _DEFAULT_SHOP_ITEMS = [
     {
         "name": "Custom Color Role",
-        "price": 1500,
+        "price": 4000,
         "description": "Pick your own name color.",
         "reward": "Tell a mod the hex color you want and they'll set up your "
         "personal colored role.",
@@ -46,45 +51,45 @@ _DEFAULT_SHOP_ITEMS = [
     },
     {
         "name": "Custom Voice Channel",
-        "price": 800,
+        "price": 1600,
         "description": "Get a temporary personal voice channel.",
         "reward": "Tell a mod the name you want and they'll spin up a personal "
         "voice channel for you.",
     },
     {
         "name": "Server Shoutout",
-        "price": 500,
+        "price": 1000,
         "description": "Get a shoutout in the announcements channel.",
         "reward": "A mod will post a shoutout for you in the announcements channel.",
     },
     {
         "name": "Pin a Message",
-        "price": 400,
+        "price": 800,
         "description": "Pin one message of your choice for a week.",
         "reward": "Link the message you want pinned and a mod will pin it for a week.",
     },
     {
         "name": "VIP for a Day",
-        "price": 750,
+        "price": 1500,
         "description": "24 hours of VIP perks.",
         "reward": "A mod will grant you VIP perks for the next 24 hours.",
     },
     {
         "name": "Pick the Next Event",
-        "price": 1000,
+        "price": 2000,
         "description": "Choose the theme of the next server event.",
         "reward": "Share your event idea — the next server event will run with "
         "your theme.",
     },
     {
         "name": "Movie Night Pick",
-        "price": 600,
+        "price": 1200,
         "description": "Choose the next watch-party title.",
         "reward": "Tell a mod your pick and it becomes the next movie/watch-party.",
     },
     {
         "name": "Add a Server Emoji",
-        "price": 2000,
+        "price": 5000,
         "description": "Submit an emoji to be added to the server.",
         "reward": "Send a mod the image and name for an emoji to add to the server.",
         "limit": 1,

@@ -275,13 +275,29 @@ for _key, _fish in FISH.items():
 
 # Rod ladder, indexed by the stored rod_level. `luck` (0..1) feeds
 # helpers.rarity_odds; prices are a deliberate coin sink for the economy.
+# The rod ladder is the progression spine and the economy's biggest sink, so it
+# carries the shape of the whole curve rather than a flat multiplier. Income per
+# hour tripled when CAST_COOLDOWN went 60s -> 20s; each tier's price is scaled by
+# a *different* factor so the pace changes deliberately by stage:
+#
+#   tier            price x   time-to-afford vs the 60s economy
+#   Wooden           x1.5     ~2x faster    (a first upgrade inside ~10 min)
+#   Fiberglass       x2       ~1.5x faster  (early game still snappy)
+#   Carbon           x3       unchanged     (mid game keeps its old pacing)
+#   Golden           x4       ~1.3x slower
+#   Mythic Trident   x6       ~2x slower    (the endgame goal stays a goal)
+#
+# Full ladder: ~47h of active casting before, ~80h now — front-loaded so new
+# anglers feel progress immediately and the last tier is worth more, not less.
+# tests/test_economy_balance.py recomputes those ratios from FISH + RARITY_ODDS
+# and fails if a price edit quietly flattens the curve.
 RODS: list[dict] = [
     {"name": "Twig & String", "emoji": "🥢", "price": 0, "luck": 0.0},
-    {"name": "Wooden Rod", "emoji": "🎣", "price": 500, "luck": 0.15},
-    {"name": "Fiberglass Rod", "emoji": "🎣", "price": 2_500, "luck": 0.30},
-    {"name": "Carbon Rod", "emoji": "🎣", "price": 8_000, "luck": 0.45},
-    {"name": "Golden Rod", "emoji": "✨", "price": 25_000, "luck": 0.60},
-    {"name": "Mythic Trident", "emoji": "🔱", "price": 75_000, "luck": 0.75},
+    {"name": "Wooden Rod", "emoji": "🎣", "price": 750, "luck": 0.15},
+    {"name": "Fiberglass Rod", "emoji": "🎣", "price": 5_000, "luck": 0.30},
+    {"name": "Carbon Rod", "emoji": "🎣", "price": 24_000, "luck": 0.45},
+    {"name": "Golden Rod", "emoji": "✨", "price": 100_000, "luck": 0.60},
+    {"name": "Mythic Trident", "emoji": "🔱", "price": 450_000, "luck": 0.75},
 ]
 
 # ── Fishing XP & levels ────────────────────────────────────────────────────────

@@ -146,7 +146,7 @@ answer to "how do I get that one?".
 - **Prestige** — Royal Velvet at prestige 1, the Prestige Frame at 3, plus
   Prestige I/V/X badges.
 - **Playing** — Deep Current (250 fish), Fishing Master (1,000 fish), Casino
-  Champion (1,000 games), Tycoon (1,000,000 coins), Grinder (500 shifts).
+  Champion (1,000 games), Tycoon (3,000,000 coins), Grinder (500 shifts).
 - **Staff & events** — Developer, Contributor, Early Supporter, Beta Tester,
   Event Winner and seasonal drops are handed out, not earned by grinding.
 
@@ -230,11 +230,11 @@ coins immediately.
 | Tier | Rod | Price | Luck |
 |---|---|---|---|
 | 1 | 🥢 Twig & String | free | — |
-| 2 | 🎣 Wooden Rod | 500 | 15% |
-| 3 | 🎣 Fiberglass Rod | 2,500 | 30% |
-| 4 | 🎣 Carbon Rod | 8,000 | 45% |
-| 5 | ✨ Golden Rod | 25,000 | 60% |
-| 6 | 🔱 Mythic Trident | 75,000 | 75% |
+| 2 | 🎣 Wooden Rod | 750 | 15% |
+| 3 | 🎣 Fiberglass Rod | 5,000 | 30% |
+| 4 | 🎣 Carbon Rod | 24,000 | 45% |
+| 5 | ✨ Golden Rod | 100,000 | 60% |
+| 6 | 🔱 Mythic Trident | 450,000 | 75% |
 
 Luck pulls the odds away from junk and common and into the good tiers. Buy the
 next one with `/fish upgrade`.
@@ -298,10 +298,10 @@ pickaxes shift the odds toward the good stuff:
 | Tier | Pickaxe | Price |
 |---|---|---|
 | 1 | ✊ Bare Hands | free |
-| 2 | ⛏️ Stone Pickaxe | 500 |
-| 3 | ⛏️ Iron Pickaxe | 2,000 |
-| 4 | ⛏️ Steel Pickaxe | 8,000 |
-| 5 | ⛏️ Obsidian Pickaxe | 25,000 |
+| 2 | ⛏️ Stone Pickaxe | 750 |
+| 3 | ⛏️ Iron Pickaxe | 4,000 |
+| 4 | ⛏️ Steel Pickaxe | 24,000 |
+| 5 | ⛏️ Obsidian Pickaxe | 100,000 |
 
 `/mine stats` shows your tier, your dig count, and exactly what the next
 pickaxe costs. `/mine upgrade` buys it.
@@ -424,7 +424,8 @@ measured from the moment the week's objectives are created, and rewards
 auto-claim when you finish. They're the same three in every server.
 
 **Prestige.** The endgame sink: from rank *N*, advancing needs
-100×(N+1) achievement points **and** 25,000×(N+1) coins, up to rank 10.
+100×(N+1) achievement points **and** 20,000×(N+1)² coins, up to rank 10 —
+so rank 1 costs 20,000 and each rank after it climbs steeply.
 Nothing is reset or lost — you get a ⭐ badge, a Prestige title, and a +5% per
 rank bonus on weekly-objective payouts. `/progress prestige confirm` does it.
 

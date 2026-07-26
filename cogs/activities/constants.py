@@ -104,12 +104,17 @@ _MINE_HIGH_TIERS = ("iron_ore", "gold_ore", "diamond")
 
 # Pickaxe ladder, indexed by stored pickaxe_level. A deliberate coin sink;
 # `luck` (0..1) feeds helpers.mine_odds.
+#
+# Priced off the same staged curve as the rod ladder (see cogs/fishing/
+# constants.py RODS). Mining's own income didn't change, but coins are fungible
+# and fishing is what actually pays for these — leaving the old numbers would
+# have made the whole ladder 3x cheaper in real terms.
 PICKAXES: list[dict] = [
     {"name": "Bare Hands", "emoji": "✊", "price": 0, "luck": 0.0},
-    {"name": "Stone Pickaxe", "emoji": "⛏️", "price": 500, "luck": 0.15},
-    {"name": "Iron Pickaxe", "emoji": "⛏️", "price": 2_000, "luck": 0.30},
-    {"name": "Steel Pickaxe", "emoji": "⛏️", "price": 8_000, "luck": 0.45},
-    {"name": "Obsidian Pickaxe", "emoji": "⛏️", "price": 25_000, "luck": 0.60},
+    {"name": "Stone Pickaxe", "emoji": "⛏️", "price": 750, "luck": 0.15},
+    {"name": "Iron Pickaxe", "emoji": "⛏️", "price": 4_000, "luck": 0.30},
+    {"name": "Steel Pickaxe", "emoji": "⛏️", "price": 24_000, "luck": 0.45},
+    {"name": "Obsidian Pickaxe", "emoji": "⛏️", "price": 100_000, "luck": 0.60},
 ]
 
 # ══════════════════════════════════════════════════════════════════════════════

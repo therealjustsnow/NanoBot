@@ -135,6 +135,9 @@ async def init(encryption_key: str | None = None) -> None:
     for _setup in _TABLE_INITS:
         await _setup()
     await _run_migrations()
+    # Migrations can rewrite config rows (migration 3 does), so start the
+    # cache from whatever the schema settled on.
+    _cache.clear()
     log.info(f"Database ready: {_DB_PATH}")
 
 
