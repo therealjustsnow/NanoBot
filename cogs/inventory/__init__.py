@@ -7,4 +7,5 @@ Inventory` works, and provides the `setup()` entry point for
 
 from .constants import CHEST_COINS_MAX, CHEST_COINS_MIN  # noqa: F401
 from .helpers import chest_payout  # noqa: F401
+from .views import SellConfirmView  # noqa: F401
 from .cog import Inventory, setup  # noqa: F401

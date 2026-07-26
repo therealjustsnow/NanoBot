@@ -1,7 +1,13 @@
 """
 Command-level tests for cogs/inventory/ under dpytest (parse → check → DB →
 reply) — plus the effect-stacking cap regression from the release audit.
+
+Bulk sells finish on a button, which dpytest can't dispatch, so those tests
+drive the SellConfirmView's handlers directly with a duck-typed interaction
+(the BlackjackView pattern in tests/test_casino_commands.py).
 """
+
+import types
 
 import pytest
 from discord.ext import test as dpytest
@@ -9,6 +15,31 @@ from discord.ext import test as dpytest
 import utils.db as db
 from cogs.inventory.constants import EFFECT_MAX_DURATION, EFFECT_MAX_USES
 from tests.conftest import config
+
+
+class _FakeResponse:
+    def __init__(self):
+        self.edited = None
+        self.sent = None
+
+    async def edit_message(self, **kwargs):
+        self.edited = kwargs
+
+    async def send_message(self, **kwargs):
+        self.sent = kwargs
+
+
+class _FakeInteraction:
+    """Minimal duck-typed discord.Interaction for the confirm buttons."""
+
+    def __init__(self, user_id: int):
+        self.user = types.SimpleNamespace(id=user_id)
+        self.response = _FakeResponse()
+
+
+def _pending_sell(bot, user_id):
+    """The live confirmation the last bulk-sell command put up."""
+    return bot.get_cog("Inventory")._pending_sell[user_id]
 
 
 @pytest.mark.cogs("cogs.inventory")
@@ -92,6 +123,194 @@ async def test_sell_unsellable_item_refused(bot):
     sent = dpytest.get_message()
     assert "can't be sold" in sent.embeds[0].description
     assert await db.get_item_qty(author.id, "treasure_key") == 1
+
+
+@pytest.mark.cogs("cogs.inventory", "cogs.activities")
+async def test_sell_all_previews_without_selling_anything(bot):
+    """The command only shows what would go — the sale waits for the button."""
+    author = config().members[0]
+    await db.add_item(author.id, "iron_ore", 4)  # material, 25 ea
+    await db.add_item(author.id, "golden_antler", 1)  # treasure, 300 ea
+
+    await dpytest.message("!inventory sell all", member=author)
+    sent = dpytest.get_message()
+    assert "Sell these?" in sent.embeds[0].title
+    assert "400" in sent.embeds[0].description  # 4×25 + 300
+    assert await db.get_item_qty(author.id, "iron_ore") == 4
+    assert await db.get_item_qty(author.id, "golden_antler") == 1
+    assert await db.get_balance(author.id) == 0
+
+
+@pytest.mark.cogs("cogs.inventory", "cogs.activities")
+async def test_sell_all_confirmed_clears_every_sellable_stack(bot):
+    """One command instead of one per item: confirming `sell all` empties the
+    inventory of anything sellable and pays for the lot in a single credit."""
+    author = config().members[0]
+    await db.add_item(author.id, "iron_ore", 4)
+    await db.add_item(author.id, "golden_antler", 1)
+    await db.add_item(author.id, "treasure_key", 2)  # value 0 — must survive
+
+    await dpytest.message("!inventory sell all", member=author)
+    dpytest.get_message()
+    view = _pending_sell(bot, author.id)
+    interaction = _FakeInteraction(author.id)
+    await view._on_confirm(interaction)
+
+    assert "Sold" in interaction.response.edited["embed"].title
+    assert await db.get_item_qty(author.id, "iron_ore") == 0
+    assert await db.get_item_qty(author.id, "golden_antler") == 0
+    assert await db.get_item_qty(author.id, "treasure_key") == 2
+    assert await db.get_balance(author.id) == 4 * 25 + 300
+
+
+@pytest.mark.cogs("cogs.inventory", "cogs.activities")
+async def test_sell_all_cancelled_keeps_everything(bot):
+    author = config().members[0]
+    await db.add_item(author.id, "iron_ore", 4)
+
+    await dpytest.message("!inventory sell all", member=author)
+    dpytest.get_message()
+    view = _pending_sell(bot, author.id)
+    interaction = _FakeInteraction(author.id)
+    await view._on_cancel(interaction)
+
+    assert "Cancelled" in interaction.response.edited["embed"].title
+    assert await db.get_item_qty(author.id, "iron_ore") == 4
+    assert await db.get_balance(author.id) == 0
+
+
+@pytest.mark.cogs("cogs.inventory", "cogs.activities")
+async def test_sell_confirmation_is_single_use_and_owner_only(bot):
+    """A second press can't sell twice, and it isn't anyone else's button."""
+    author, other = config().members[0], config().members[1]
+    await db.add_item(author.id, "iron_ore", 4)
+
+    await dpytest.message("!inventory sell all", member=author)
+    dpytest.get_message()
+    view = _pending_sell(bot, author.id)
+
+    assert await view.interaction_check(_FakeInteraction(other.id)) is False
+    assert await view.interaction_check(_FakeInteraction(author.id)) is True
+
+    await view._on_confirm(_FakeInteraction(author.id))
+    second = _FakeInteraction(author.id)
+    await view._on_confirm(second)  # already settled -> ephemeral no-op
+    assert second.response.edited is None
+    assert await db.get_balance(author.id) == 100
+
+
+@pytest.mark.cogs("cogs.inventory", "cogs.activities")
+async def test_sell_confirmation_timeout_sells_nothing(bot):
+    author = config().members[0]
+    await db.add_item(author.id, "iron_ore", 4)
+
+    await dpytest.message("!inventory sell all", member=author)
+    dpytest.get_message()
+    view = _pending_sell(bot, author.id)
+    view.message = None  # no gateway edit in tests; the DB effect is the point
+    await view.on_timeout()
+
+    assert await db.get_item_qty(author.id, "iron_ore") == 4
+    assert await db.get_balance(author.id) == 0
+    assert author.id not in bot.get_cog("Inventory")._pending_sell
+
+
+@pytest.mark.cogs("cogs.inventory", "cogs.activities")
+async def test_second_bulk_sell_retires_the_stale_confirmation(bot):
+    """A stale preview can't be pressed later against a changed inventory."""
+    author = config().members[0]
+    await db.add_item(author.id, "iron_ore", 4)
+
+    await dpytest.message("!inventory sell all", member=author)
+    dpytest.get_message()
+    first = _pending_sell(bot, author.id)
+    first.message = None
+
+    await dpytest.message("!inventory sell all", member=author)
+    dpytest.get_message()
+    second = _pending_sell(bot, author.id)
+    assert second is not first
+
+    stale = _FakeInteraction(author.id)
+    await first._on_confirm(stale)  # retired -> ephemeral no-op
+    assert stale.response.edited is None
+    assert await db.get_item_qty(author.id, "iron_ore") == 4
+
+    await second._on_confirm(_FakeInteraction(author.id))
+    assert await db.get_item_qty(author.id, "iron_ore") == 0
+
+
+@pytest.mark.cogs("cogs.inventory", "cogs.activities")
+async def test_sell_category_only_touches_that_category(bot):
+    author = config().members[0]
+    await db.add_item(author.id, "iron_ore", 2)  # material
+    await db.add_item(author.id, "golden_antler", 1)  # treasure
+
+    await dpytest.message("!inventory sell cat:material", member=author)
+    dpytest.get_message()
+    await _pending_sell(bot, author.id)._on_confirm(_FakeInteraction(author.id))
+
+    assert await db.get_item_qty(author.id, "iron_ore") == 0
+    assert await db.get_item_qty(author.id, "golden_antler") == 1
+    assert await db.get_balance(author.id) == 50
+
+
+@pytest.mark.cogs("cogs.inventory", "cogs.activities")
+async def test_sell_bare_category_name_works(bot):
+    """A bare category name is accepted too — no item is named after one."""
+    author = config().members[0]
+    await db.add_item(author.id, "golden_antler", 2)
+
+    await dpytest.message("!inventory sell treasure", member=author)
+    dpytest.get_message()
+    await _pending_sell(bot, author.id)._on_confirm(_FakeInteraction(author.id))
+
+    assert await db.get_item_qty(author.id, "golden_antler") == 0
+    assert await db.get_balance(author.id) == 600
+
+
+@pytest.mark.cogs("cogs.inventory", "cogs.activities")
+async def test_sell_all_with_qty_caps_each_stack(bot):
+    author = config().members[0]
+    await db.add_item(author.id, "iron_ore", 5)
+    await db.add_item(author.id, "coal", 5)  # material, 12 ea
+
+    await dpytest.message("!inventory sell all 2", member=author)
+    dpytest.get_message()
+    await _pending_sell(bot, author.id)._on_confirm(_FakeInteraction(author.id))
+
+    assert await db.get_item_qty(author.id, "iron_ore") == 3
+    assert await db.get_item_qty(author.id, "coal") == 3
+    assert await db.get_balance(author.id) == 2 * 25 + 2 * 12
+
+
+@pytest.mark.cogs("cogs.inventory", "cogs.activities")
+async def test_sell_confirmed_after_items_spent_pays_only_what_is_left(bot):
+    """The preview is a snapshot — the sale re-reads before consuming."""
+    author = config().members[0]
+    await db.add_item(author.id, "iron_ore", 4)
+    await db.add_item(author.id, "coal", 5)
+
+    await dpytest.message("!inventory sell all", member=author)
+    dpytest.get_message()
+    view = _pending_sell(bot, author.id)
+    await db.try_consume_item(author.id, "iron_ore", 4)  # spent behind the preview
+
+    await view._on_confirm(_FakeInteraction(author.id))
+    assert await db.get_balance(author.id) == 5 * 12  # coal only, no phantom ore
+
+
+@pytest.mark.cogs("cogs.inventory")
+async def test_sell_all_with_nothing_sellable_pays_nothing(bot):
+    author = config().members[0]
+    await db.add_item(author.id, "treasure_key", 1)
+
+    await dpytest.message("!inventory sell all", member=author)
+    sent = dpytest.get_message()
+    assert "Nothing to Sell" in sent.embeds[0].title
+    assert author.id not in bot.get_cog("Inventory")._pending_sell
+    assert await db.get_item_qty(author.id, "treasure_key") == 1
+    assert await db.get_balance(author.id) == 0
 
 
 @pytest.mark.cogs("cogs.inventory")

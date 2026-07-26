@@ -197,6 +197,68 @@ async def test_inventory_autocompletes_scope_to_what_you_own(bot):
     assert "treasure_chest" in catalogue
 
 
+@pytest.mark.cogs("cogs.inventory", "cogs.activities")
+async def test_inventory_sell_autocomplete_offers_bulk_rows(bot):
+    """Clearing an inventory shouldn't be one command per stack: the sell
+    picker leads with everything-sellable, then a row per category."""
+    guild = bot.guilds[0]
+    user = guild.members[0]
+    cog = bot.get_cog("Inventory")
+    interaction = _stub_interaction(guild, user)
+
+    assert await cog._sell_ac(interaction, "") == []  # nothing owned, nothing offered
+
+    await db.add_item(user.id, "iron_ore", 4)  # material, 25 ea
+    await db.add_item(user.id, "golden_antler", 1)  # treasure, 300 ea
+    await db.add_item(user.id, "treasure_key", 2)  # unsellable — never listed
+
+    choices = await cog._sell_ac(interaction, "")
+    values = [c.value for c in choices]
+    assert values[0] == "all"
+    assert "400 coins" in choices[0].name  # 4×25 + 300, credited in one go
+    assert "cat:material" in values and "cat:treasure" in values
+    assert "treasure_key" not in values
+    assert values.index("cat:material") < values.index("iron_ore")
+
+
+@pytest.mark.cogs("cogs.inventory", "cogs.activities")
+async def test_inventory_sell_autocomplete_hides_category_rows_when_pointless(bot):
+    """One category is what 'everything' already covers — no duplicate row."""
+    guild = bot.guilds[0]
+    user = guild.members[0]
+    cog = bot.get_cog("Inventory")
+    interaction = _stub_interaction(guild, user)
+
+    await db.add_item(user.id, "iron_ore", 2)
+    values = [c.value for c in await cog._sell_ac(interaction, "")]
+    assert values == ["all", "iron_ore"]
+
+
+@pytest.mark.cogs("cogs.inventory", "cogs.activities")
+async def test_inventory_sell_accepts_the_bulk_values_it_suggests(bot):
+    """Every value the picker hands back must be a valid sell target — each
+    one reaching the confirmation step rather than an unknown-item error."""
+    from discord.ext import test as dpytest
+
+    from tests.test_inventory_commands import _FakeInteraction
+
+    cog = bot.get_cog("Inventory")
+    author = dpytest.get_config().members[0]
+    await db.add_item(author.id, "iron_ore", 2)
+    await db.add_item(author.id, "golden_antler", 1)
+
+    await dpytest.message("!inventory sell cat:treasure", member=author)
+    assert "Sell these?" in dpytest.get_message().embeds[0].title
+    await cog._pending_sell[author.id]._on_confirm(_FakeInteraction(author.id))
+    assert await db.get_item_qty(author.id, "golden_antler") == 0
+
+    await dpytest.message("!inventory sell all", member=author)
+    assert "Sell these?" in dpytest.get_message().embeds[0].title
+    await cog._pending_sell[author.id]._on_confirm(_FakeInteraction(author.id))
+    assert await db.get_item_qty(author.id, "iron_ore") == 0
+    assert await db.get_balance(author.id) == 350
+
+
 # ── /shop ─────────────────────────────────────────────────────────────────────
 @pytest.mark.cogs("cogs.economy")
 async def test_shop_autocomplete_shows_price_and_affordability(bot):
