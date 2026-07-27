@@ -77,6 +77,7 @@ XP_AWARDS: dict[str, int] = {
     "coop": 15,  # a confirmed /squad or finished /raid
     "quest": 25,  # a completed daily quest / casino challenge
     "achievement": 50,  # earning an achievement
+    "rep": 10,  # giving someone a rep (capped by its own 24h limit)
 }
 
 # Chat XP is the one source a member can fire at will, so it gets the same

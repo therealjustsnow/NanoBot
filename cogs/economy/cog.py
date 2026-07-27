@@ -26,8 +26,9 @@ both grant spendable coins and a lifetime contribution stat that drives a
 separate contributor leaderboard and rank titles. Coins are spent in a
 per-guild shop on Discord roles (granted instantly) or custom rewards (queued
 for a mod to fulfil), with optional stock counts, per-user limits, and
-cooldowns. Admins grant/take coins, view a rich list, and customise the
-currency name, emoji, and raid party size.
+cooldowns. Server admins view the rich list and customise the currency name,
+emoji, and raid party size; moving coins in or out of a wallet is the bot
+owner's, since the wallet is global.
 
 Slash command budget: five flat commands (/balance, /daily, /pay, /squad,
 /raid) plus two groups (/coin …, /shop …) whose subcommands cost no extra
@@ -45,9 +46,9 @@ Commands
   /coin contrib [page] [scope]   → top contributors (alias: contributions)
   /coin gamble <amount>          → bet coins to double them (alias: bet)
   /coin grant <amount> [member…] → add coins        (tag up to 5, or blank for
-                                                       a 25-member picker) (Manage Server)
+                                                       a 25-member picker) (bot owner)
   /coin take <amount> [member…]  → remove coins     (tag up to 5, or blank for
-                                                       a 25-member picker) (Manage Server)
+                                                       a 25-member picker) (bot owner)
   /coin reset [member]           → wipe a global wallet   (bot owner)
   /coin raidsize <min> <max>     → set party size   (Manage Server)
   /coin name <text>              → currency name    (Manage Server)
@@ -473,9 +474,13 @@ class Economy(commands.Cog):
         await ctx.reply(embed=embed)
 
     # ── /coin grant ─────────────────────────────────────────────────────────────
+    # Granting coins is the most direct faucet there is: it mints straight into
+    # a wallet that spends in every server. That makes it the bot owner's, for
+    # the same reason /coin reset already is — the difference between granting
+    # and resetting is only the sign. See docs/global-economy.md.
     @coin.command(
         name="grant",
-        description="Add coins to one or more members' (global) balances.",
+        description="Add coins to one or more members' (global) balances (bot owner).",
     )
     @app_commands.describe(
         amount="Coins to add to each member's global wallet",
@@ -485,7 +490,7 @@ class Economy(commands.Cog):
         member4="Another member (optional)",
         member5="Another member (optional)",
     )
-    @commands.has_permissions(manage_guild=True)
+    @commands.is_owner()
     async def coin_grant(
         self,
         ctx: commands.Context,
@@ -501,9 +506,11 @@ class Economy(commands.Cog):
         )
 
     # ── /coin take ─────────────────────────────────────────────────────────────
+    # And taking them destroys value earned in servers this one has never seen
+    # — the objection that made /coin reset owner-only, at a smaller scale.
     @coin.command(
         name="take",
-        description="Remove coins from one or more members' (global) balances.",
+        description="Remove coins from members' (global) balances (bot owner).",
     )
     @app_commands.describe(
         amount="Coins to remove from each member's global wallet",
@@ -513,7 +520,7 @@ class Economy(commands.Cog):
         member4="Another member (optional)",
         member5="Another member (optional)",
     )
-    @commands.has_permissions(manage_guild=True)
+    @commands.is_owner()
     async def coin_take(
         self,
         ctx: commands.Context,

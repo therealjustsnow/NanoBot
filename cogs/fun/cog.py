@@ -13,7 +13,7 @@ FML stories cached from fmylife.com (scraped daily).
 All image/GIF URLs cached in cache_db and served from cache.
 Falls back to live API if cache is empty for a given endpoint.
 
-Slash (1 top-level slot, 8 subcommands):
+Slash (1 top-level slot, 9 subcommands):
   /fun social <action> [user]   -- autocomplete picker, 26 social actions
   /fun react <action>           -- autocomplete picker, 33 solo reactions
   /fun ship <user1> <user2>
@@ -22,12 +22,20 @@ Slash (1 top-level slot, 8 subcommands):
   /fun thigh
   /fun wyr [duration]
   /fun rps [user]
+  /fun cookie [user]            -- give a cookie, or open your cookie jar card
 
 Prefix (flat):
-  !hug, !slap, !cry, !dance, !ship, !8ball, !fml, !thigh, !wyr, !rps, etc.
+  !hug, !slap, !cry, !dance, !ship, !8ball, !fml, !thigh, !wyr, !rps, !cookie, etc.
+
+Cookies are the one thing in here that persists. They are stored per *account*
+(utils/db/social.py), like everything else a member owns, and are worth no
+coins — so they are neither a faucet nor a sink, just a tally. Running
+`/fun cookie` with nobody tagged renders a dashboard card via
+utils/cookie_card.py, the second user of the profile-card renderer.
 """
 
 import asyncio
+import io
 import logging
 import random
 import time
@@ -39,6 +47,7 @@ from discord import app_commands
 from discord.ext import commands, tasks
 
 from utils import cache_db
+from utils import cookie_card, db
 from utils import helpers as h
 
 from .constants import (
@@ -100,6 +109,9 @@ class Fun(commands.Cog):
     def __init__(self, bot: commands.Bot):
         self.bot = bot
         self._session: aiohttp.ClientSession | None = None
+        # Cookie-card rendering is CPU work; cap it the same way the profile
+        # card does so a burst can't starve the event loop's thread pool.
+        self._cookie_render_lock = asyncio.Semaphore(2)
 
     async def cog_load(self):
         self._session = aiohttp.ClientSession()
@@ -579,6 +591,104 @@ class Fun(commands.Cog):
         view.message = await i.original_response()
 
     # ══════════════════════════════════════════════════════════════════════════
+    #  Cookies — the one Fun feature that keeps a tally
+    # ══════════════════════════════════════════════════════════════════════════
+    # Cookies are global, like the rest of the account: a cookie is a thing one
+    # *person* gave another, so it would be odd for it to exist in one server
+    # and not the next. They are worth no coins and buy nothing, so nothing
+    # here is a faucet and the only limit is the per-user command cooldown,
+    # which is there to stop spam rather than to protect anything.
+
+    async def _give_cookie(self, author, target, send):
+        """Shared body for the slash and prefix halves. `send(embed)` replies."""
+        if target.bot:
+            return await send(
+                h.err("Bots can't eat. Try someone with a mouth.", "\U0001f36a Cookie")
+            )
+        if target.id == author.id:
+            return await send(
+                h.warn(
+                    "Giving yourself a cookie is allowed in life, but it "
+                    "doesn't count here.",
+                    "\U0001f36a Cookie",
+                )
+            )
+        totals = await db.give_cookie(author.id, target.id)
+        await send(
+            h.ok(
+                f"{author.mention} gave {target.mention} a cookie. \U0001f36a\n"
+                f"They've received **{totals['received']:,}** now — "
+                f"you've handed out **{totals['sent']:,}**.",
+                "\U0001f36a Cookie",
+            )
+        )
+
+    async def _send_cookie_card(self, member, defer, send_file):
+        """Render and send the cookie dashboard for `member`.
+
+        A render is ~100ms of CPU plus an avatar fetch, so say we're working
+        first — best-effort, since a failed defer must never cost the card.
+        """
+        try:
+            await defer()
+        except Exception:
+            pass
+        social = await db.get_social(member.id)
+        rank = await db.get_cookie_rank(member.id)
+        given, got = social["cookies_sent"], social["cookies_received"]
+        if not given and not got:
+            line = "No cookies yet. Be the one who starts it."
+        elif given > got:
+            line = "More generous than popular. Respect."
+        elif got > given:
+            line = "Very popular. Consider sharing."
+        else:
+            line = "Perfectly balanced cookie karma."
+        data = {
+            "name": member.display_name,
+            "avatar": await self._avatar_bytes(member),
+            "sent": given,
+            "received": got,
+            "rank": rank[0] if rank else None,
+            "streak_line": line,
+            "footer": "one account, every server",
+        }
+        async with self._cookie_render_lock:
+            png = await asyncio.to_thread(cookie_card.render_cookie_card, data)
+        await send_file(
+            discord.File(fp=io.BytesIO(png), filename=f"cookies-{member.id}.png")
+        )
+
+    async def _avatar_bytes(self, member) -> Optional[bytes]:
+        """The member's avatar as PNG bytes, or None (the card draws an initial
+        tile instead). A CDN hiccup must never cost the whole command."""
+        asset = getattr(member, "display_avatar", None)
+        if asset is None:
+            return None
+        try:
+            return await asset.replace(size=256, format="png").read()
+        except Exception:
+            return None
+
+    @fun_group.command(
+        name="cookie",
+        description="Give someone a cookie, or open your cookie jar.",
+    )
+    @app_commands.describe(user="Who to give a cookie (leave empty for your jar)")
+    async def s_cookie(
+        self, i: discord.Interaction, user: Optional[discord.Member] = None
+    ):
+        if user is None:
+            return await self._send_cookie_card(
+                i.user,
+                i.response.defer,
+                lambda f: i.followup.send(file=f),
+            )
+        await self._give_cookie(
+            i.user, user, lambda e: i.response.send_message(embed=e)
+        )
+
+    # ══════════════════════════════════════════════════════════════════════════
     #  PREFIX: flat commands  (!hug, !cry, !ship, !8ball, etc.)
     # ══════════════════════════════════════════════════════════════════════════
 
@@ -786,6 +896,31 @@ class Fun(commands.Cog):
         view = WyrView(opt_a, opt_b, duration=secs)
         msg = await ctx.reply(embed=view._voting_embed(), view=view)
         view.message = msg
+
+    @commands.command(
+        name="cookie",
+        aliases=["cookies"],
+        extras={
+            "category": "\U0001f389 Fun",
+            "short": "Give someone a cookie",
+            "usage": "cookie [user]",
+            "desc": "Give someone a cookie, or run it bare to open your cookie "
+            "jar: an image showing how many you've given and received, and "
+            "where you rank. Cookies follow your account into every server.",
+            "args": [("user", "Who to give a cookie (optional)")],
+            "perms": "None",
+            "example": "{prefix}cookie @Snow",
+        },
+    )
+    @commands.cooldown(1, 5, commands.BucketType.user)
+    async def pfx_cookie(self, ctx, user: Optional[discord.Member] = None):
+        if user is None:
+            return await self._send_cookie_card(
+                ctx.author,
+                ctx.typing,
+                lambda f: ctx.reply(file=f),
+            )
+        await self._give_cookie(ctx.author, user, lambda e: ctx.reply(embed=e))
 
     @commands.command(
         name="rps",

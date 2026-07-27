@@ -74,6 +74,10 @@ CHIP_H = 62
 CHIP_GAP = 14
 CHIP_COLS = 3
 
+# The rep tally rides top-right rather than joining the chip grid: that grid is
+# a full 2x3 and a third row would collide with the badge showcase.
+REP_PILL_W = 132
+
 BADGE_SIZE = 56
 BADGE_GAP = 12
 BADGE_Y = H - PAD - BADGE_SIZE
@@ -351,7 +355,7 @@ def render_card(data: dict) -> bytes:
     """Render a profile card and return PNG bytes.
 
     `data` keys (all optional except `name`):
-      name, title, avatar (raw image bytes), prestige,
+      name, title, avatar (raw image bytes), prestige, rep,
       global_level / global_into / global_need,
       server_level / server_into / server_need / server_enabled,
       chips  — [(label, value), …] shown as stat tiles,
@@ -378,9 +382,27 @@ def render_card(data: dict) -> bytes:
 
     draw = ImageDraw.Draw(card)
 
+    # ── Rep pill (top-right) ──
+    # Drawn before the name so the name can be fitted to the space that is
+    # actually left: the chip grid is a full 2x3 with no room for a seventh
+    # tile, and a third row would land on the badge showcase.
+    rep = data.get("rep")
+    name_max_w = W - TEXT_X - PAD
+    if rep is not None:
+        _draw_chip(
+            card,
+            draw,
+            (W - PAD - REP_PILL_W, PAD),
+            (REP_PILL_W, CHIP_H),
+            "rep",
+            f"{int(rep):,}",
+            accent,
+        )
+        name_max_w -= REP_PILL_W + 20
+
     # ── Name + title ──
     name = str(data.get("name", "Unknown"))
-    name_font = _fit_text(draw, name, 44, W - TEXT_X - PAD)
+    name_font = _fit_text(draw, name, 44, name_max_w)
     if plate and plate.key != "plate_default":
         plate_w = int(draw.textlength(name, font=name_font)) + 36
         plate_img = _gradient((plate_w, 56), _palette(plate, 0), _palette(plate, 1))

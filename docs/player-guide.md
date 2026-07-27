@@ -452,6 +452,30 @@ and they drive `/coin contrib` and its rank titles.
 
 ---
 
+## 👍 Rep and 🍪 cookies
+
+Two ways to say something nice, neither worth a single coin.
+
+| Command | What it does |
+|---|---|
+| `/profile rep <member>` | Give someone a reputation point — once every 24 hours |
+| `/profile rep` | Your rep total, your global position, and when your next one is ready |
+| `/fun cookie <member>` | Give someone a cookie |
+| `/fun cookie` | Your **cookie jar** card: how many you've given and received |
+
+Rep shows in the top-right of your profile card. You can't rep yourself, you
+can't rep a bot, and you get exactly one to give per day — that's the whole
+point of it meaning anything. If a rep somehow fails to land, the day isn't
+spent.
+
+Cookies have no limit beyond a few seconds between them, because they're worth
+nothing and that's fine. The jar card shows both numbers, because being
+generous counts as much as being popular.
+
+Both follow your account into every server, like everything else you own.
+
+---
+
 ## 🛒 The shop
 
 `/shop list` shows what your server sells; `/shop buy <item>` redeems it (the
@@ -526,9 +550,10 @@ daily quest and casino challenges.
 Each server picks its own name and emoji. It's still one balance.
 
 **Can a server admin take my coins?**
-Server staff can grant and take coins with `/coin grant` / `/coin take`, and
-that affects your global wallet — so it's worth knowing who you're playing
-with. Wiping wallets entirely is restricted to the bot owner.
+No. Your wallet is the same in every server, so adding to it or taking from it
+is the bot owner's call, not a server's — `/coin grant`, `/coin take` and
+`/coin reset` are all bot-owner-only. What a server *can* do is set its own
+shop prices, which only decides what its own rewards cost.
 
 **I bought bait and nothing changed.**
 Use it: `/inventory use <bait>`. Check `/fish bait` to confirm it's armed.
@@ -562,15 +587,16 @@ to configure.
 | Area | Commands (Manage Server) |
 |---|---|
 | Currency & raids | `/coin name`, `/coin emoji`, `/coin raidsize`, `/coin config` |
-| Balances | `/coin grant`, `/coin take` (these move a member's **global** wallet) |
 | Shop | `/shop seed`, `/shop add`, `/shop edit`, `/shop remove`, `/shop pending`, `/shop fulfill` |
 | Fishing | `/fish toggle`, `/fish event`, `/fish config` |
 | Casino | `/casino limit`, `/casino toggle`, `/casino config` |
 | Activities | `/adventure toggle`, `/adventure config` |
 | Leveling | `/level …` (per-server chat XP — deliberately **not** global) |
 
-Note that `/coin reset` is bot-owner-only: with global wallets, resetting
-would delete coins members earned in other servers.
+Note that `/coin grant`, `/coin take` and `/coin reset` are all bot-owner-only.
+With one global wallet, granting mints coins that spend in every server and
+taking deletes coins members earned in servers this one has never seen —
+neither is a single server's call.
 
 Reward amounts and activity cooldowns aren't in that table because they aren't
 per server — they set the pace of an economy every server shares, so the bot's

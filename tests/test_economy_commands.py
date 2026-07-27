@@ -65,17 +65,28 @@ async def test_pay_insufficient_funds(bot):
 
 
 @pytest.mark.cogs("cogs.economy")
-async def test_grant_denied_without_manage_guild(bot):
+async def test_grant_and_take_are_owner_only(bot):
+    """Granting mints straight into a global wallet and taking destroys coins
+    earned in servers this one has never seen — the same objection that already
+    made /coin reset owner-only, at a smaller scale."""
     author, target = config().members[0], config().members[1]
-    with pytest.raises(commands.MissingPermissions):
-        await dpytest.message(f"!coin grant 500 {target.mention}", member=author)
+    await grant_perms(author, manage_guild=True)  # not enough any more
+    bot.owner_id = author.id + 1
+
+    for command in (
+        f"!coin grant 500 {target.mention}",
+        f"!coin take 5 {target.mention}",
+    ):
+        with pytest.raises(commands.NotOwner):
+            await dpytest.message(command, member=author)
+    assert await db.get_balance(target.id) == 0
 
 
 @pytest.mark.cogs("cogs.economy")
 async def test_grant_credits_with_perms(bot):
     guild = config().guilds[0]
     author, target = config().members[0], config().members[1]
-    await grant_perms(author, manage_guild=True)
+    bot.owner_id = author.id
 
     await dpytest.message(f"!coin grant 500 {target.mention}", member=author)
     sent = dpytest.get_message()
@@ -88,7 +99,7 @@ async def test_grant_credits_multiple_tagged_members(bot):
     guild = config().guilds[0]
     author = config().members[0]
     t1, t2 = config().members[1], config().members[2]
-    await grant_perms(author, manage_guild=True)
+    bot.owner_id = author.id
 
     await dpytest.message(f"!coin grant 500 {t1.mention} {t2.mention}", member=author)
     sent = dpytest.get_message()
@@ -102,7 +113,7 @@ async def test_take_debits_multiple_tagged_members(bot):
     guild = config().guilds[0]
     author = config().members[0]
     t1, t2 = config().members[1], config().members[2]
-    await grant_perms(author, manage_guild=True)
+    bot.owner_id = author.id
     await db.add_coins(t1.id, 500)
     await db.add_coins(t2.id, 500)
 

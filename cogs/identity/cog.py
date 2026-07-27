@@ -42,6 +42,7 @@ Commands
   /profile equip <cosmetic>     → wear a banner/border/nameplate/badge
   /profile unequip <cosmetic>   → take one off (or clear a slot)
   /profile badges [member]      → the badge gallery
+  /profile rep [member]         → give someone rep (once a day), or see yours
   /profile grant <member> <cosmetic>  → award a cosmetic   (bot owner)
   /profile grantall <cosmetic> [guild] → award it to a whole server (bot owner)
   /profile revoke <member> <cosmetic> → take one back      (bot owner)
@@ -75,6 +76,7 @@ from discord.ext import commands
 from utils import cosmetics, db, globalxp
 from utils import helpers as h
 from utils import profile_card
+from utils.db.social import REP_COOLDOWN
 
 # Pure data/helpers borrowed from the feature packages for display only — the
 # cogs/images.py → cogs/fun/sources.py precedent. No cog state is touched.
@@ -271,6 +273,7 @@ class Identity(commands.Cog):
 
         progression = await db.get_progression(uid)
         earned = await db.get_earned_achievements(uid)
+        social = await db.get_social(uid)
         fisher = raw["fisher"]
         casino = raw["casino"]
         activity = raw["activity"]
@@ -345,6 +348,7 @@ class Identity(commands.Cog):
             "server_into": s_into,
             "server_need": s_need,
             "server_enabled": bool(level_cfg["enabled"]),
+            "rep": social["rep"],
             "chips": chips,
             "badges": [
                 cosmetics.get(k) for k in loadout.get("badge", []) if cosmetics.get(k)
@@ -622,6 +626,85 @@ class Identity(commands.Cog):
                 name="Still locked", value="\n".join(locked)[:1024], inline=False
             )
         await ctx.reply(embed=embed)
+
+    # ── /profile rep ─────────────────────────────────────────────────────────
+    @profile.command(
+        name="rep",
+        description="Give someone a reputation point — once every 24 hours.",
+    )
+    @app_commands.describe(member="Who to rep (leave blank to see your own)")
+    @commands.cooldown(1, 5, commands.BucketType.user)
+    async def profile_rep(
+        self, ctx: commands.Context, member: Optional[discord.Member] = None
+    ):
+        """ "This person is cool", one a day, and it shows on their card.
+
+        Rep is global, like everything else on the account: it is a thing said
+        about a *person*, so it would be odd for it to follow them into one
+        server and not another. It buys nothing — no coins, no items — which is
+        why the daily limit is only there to keep it meaningful.
+        """
+        target = member
+        if target is None:
+            return await self._show_own_rep(ctx)
+        if target.bot:
+            return await ctx.reply(
+                embed=h.err("Bots are above this sort of thing."), ephemeral=True
+            )
+        if target.id == ctx.author.id:
+            return await ctx.reply(
+                embed=h.err("Repping yourself doesn't count. Nice try."),
+                ephemeral=True,
+            )
+
+        # Claim the day first: the conditional UPDATE is what stops a
+        # double-tap spending one day's rep twice.
+        retry = await db.try_claim_rep(ctx.author.id, time.time())
+        if retry:
+            return await ctx.reply(
+                embed=h.warn(
+                    f"You've already given your rep today. Next one in "
+                    f"**{h.fmt_duration(retry)}**.",
+                    "⏳ Once a day",
+                ),
+                ephemeral=True,
+            )
+        try:
+            total = await db.add_rep(target.id)
+        except Exception:
+            # The day was claimed but nothing was awarded — give it back rather
+            # than charging someone for a failure.
+            await db.refund_rep(ctx.author.id)
+            raise
+
+        await globalxp.award(ctx.author.id, "rep")
+        await ctx.reply(
+            embed=h.ok(
+                f"{ctx.author.mention} repped {target.mention}.\n"
+                f"**{target.display_name}** now has **{total:,}** rep.",
+                "👍 Reputation",
+            )
+        )
+
+    async def _show_own_rep(self, ctx: commands.Context):
+        social = await db.get_social(ctx.author.id)
+        rank = await db.get_rep_rank(ctx.author.id)
+        left = max(0, int(REP_COOLDOWN - (time.time() - social["last_rep"])))
+        lines = [f"You have **{social['rep']:,}** rep."]
+        if rank:
+            lines.append(f"That's **#{rank[0]:,}** across every server.")
+        lines.append(
+            "You can give rep **now**."
+            if not left
+            else f"Your next rep is ready in **{h.fmt_duration(left)}**."
+        )
+        await ctx.reply(
+            embed=h.embed(
+                "👍 Reputation",
+                "\n".join(lines) + "\n\nGive one with `/profile rep @user`.",
+                ACCENT,
+            )
+        )
 
     # ── owner-only grants (events, staff awards) ─────────────────────────────
     @profile.command(
