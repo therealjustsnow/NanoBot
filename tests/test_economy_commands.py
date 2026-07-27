@@ -8,6 +8,7 @@ from discord.ext import test as dpytest
 
 import utils.db as db
 from cogs.economy import _DEFAULT_SHOP_ITEMS
+from cogs.economy.helpers import seconds_to_afford
 from tests.conftest import config, grant_perms
 
 
@@ -230,3 +231,58 @@ async def test_coin_reset_is_owner_only(bot):
     with pytest.raises(commands.NotOwner):
         await dpytest.message("!coin reset", member=author)
     assert await db.get_balance(author.id) == 400
+
+
+# ── Shop pricing stays the guild's, and now comes with a yardstick ────────────
+@pytest.mark.cogs("cogs.economy")
+async def test_a_server_still_sets_its_own_shop_prices(bot):
+    """The faucets went bot-wide; the shop deliberately did not. A purchase is a
+    sink — it destroys coins for this guild's own reward — so its price can't
+    affect anyone outside the server, and its mods keep it."""
+    guild = config().guilds[0]
+    author = config().members[0]
+    await grant_perms(author, manage_guild=True)
+
+    cog = bot.get_cog("Economy")
+    for kept in ("add", "edit", "remove", "seed"):
+        assert cog.shop.get_command(kept) is not None
+
+    # A mod's price is stored as given and nothing rewrites it — /shop seed's
+    # scaling only ever applies to items it creates itself.
+    await db.add_shop_item(guild.id, "VIP", 7500, "custom", payload="a perk")
+    await dpytest.message("!shop seed", member=author)
+    dpytest.get_message()
+    priced = {i["name"]: i["price"] for i in await db.list_shop_items(guild.id)}
+    assert priced["VIP"] == 7500
+
+
+@pytest.mark.cogs("cogs.economy")
+async def test_shop_quotes_each_price_as_a_time_to_earn(bot):
+    """The number a mod was missing: what a price costs in play time."""
+    guild = config().guilds[0]
+    author = config().members[0]
+    await grant_perms(author, manage_guild=True)
+
+    await db.add_shop_item(guild.id, "VIP", 5000, "custom", payload="a perk")
+    await dpytest.message("!shop list", member=author)
+    embed = dpytest.get_message().embeds[0]
+
+    from utils import helpers as h
+
+    expected = h.fmt_duration(seconds_to_afford(5000))
+    assert any(expected in field.value for field in embed.fields), embed.fields
+    # And the footer is honest that the figure is a floor.
+    assert "non-stop" in embed.footer.text
+
+
+@pytest.mark.cogs("cogs.economy")
+async def test_a_server_cannot_set_a_reward_amount(bot):
+    """Every faucet subcommand is gone from /coin; the sinks and cosmetics stay."""
+    author = config().members[0]
+    await grant_perms(author, manage_guild=True)
+    cog = bot.get_cog("Economy")
+
+    for gone in ("daily", "streakbonus", "coop", "raid"):
+        assert cog.coin.get_command(gone) is None
+    for kept in ("name", "emoji", "raidsize", "config"):
+        assert cog.coin.get_command(kept) is not None

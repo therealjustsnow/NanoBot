@@ -1,5 +1,8 @@
 """Pure economy helpers (no Discord deps) — covered by tests/test_economy_helpers.py."""
 
+from cogs.fishing.constants import CAST_COOLDOWN, FISH, FISH_BY_RARITY
+from cogs.fishing.helpers import rarity_odds
+
 from .constants import (
     COIN_MAX,
     DAILY_COOLDOWN,
@@ -12,18 +15,70 @@ from .constants import (
 
 
 def _scaled_price(base: int, daily_amount: int) -> int:
-    """Scale a starter price to a guild's daily reward.
+    """Scale a starter price to the bot-wide daily reward.
 
     The _DEFAULT_SHOP_ITEMS prices are tuned to the default 100-coin daily, so a
-    server running a much bigger/smaller daily would find them trivially cheap or
+    bot running a much bigger/smaller daily would find them trivially cheap or
     impossibly dear. Scale by daily/100 to keep the same "days of saving" feel,
     rounded to a clean multiple of 10 and clamped to [10, COIN_MAX]. A daily of 0
     (disabled) falls back to the base price.
+
+    Only /shop seed uses this; once an item exists its price is the guild's, and
+    nothing rewrites it.
     """
     if daily_amount <= 0:
         return base
     scaled = round(base * daily_amount / 100 / 10) * 10
     return max(10, min(COIN_MAX, scaled))
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+#  The pricing yardstick
+# ══════════════════════════════════════════════════════════════════════════════
+# A mod setting a shop price is choosing how long they want members to work for
+# a reward — but "8,000 coins" says nothing about that on its own, so the number
+# was always picked blind. These turn a price into a time, so /shop can show it.
+#
+# The yardstick is fishing, for one reason: it dwarfs everything else. At the
+# 20s cast cooldown an active angler earns ~5,000 coins/hour, where /work pays
+# 100/hour and /daily amortises to ~4/hour. Any estimate built on the other
+# faucets would be wrong by more than an order of magnitude, so the honest
+# figure is "how long would you have to fish for this". It is a floor on the
+# real answer — nobody fishes continuously — and the /shop footer says so.
+#
+# Borrowing pure catalogue data + pure helpers from cogs/fishing follows the
+# same precedent as cogs/progression reading the fishing/activities ladders.
+# tests/test_economy_balance.py recomputes this independently and asserts the
+# two agree, so the yardstick can't drift away from the balance model.
+def coins_per_cast(luck: float = 0.0) -> float:
+    """Expected coins from one cast at `luck`, straight off the drop tables.
+
+    Weight scaling averages out (0.6x-1.4x around the base value) and treasure
+    pays its value in coins, so the base value is the right expectation.
+    """
+    return sum(
+        chance
+        * (
+            sum(FISH[key]["value"] for key in FISH_BY_RARITY[rarity])
+            / len(FISH_BY_RARITY[rarity])
+        )
+        for rarity, chance in rarity_odds(luck)
+    )
+
+
+def coins_per_hour(luck: float = 0.0) -> float:
+    """Expected coins from an hour of uninterrupted casting at `luck`."""
+    return coins_per_cast(luck) * (3600 / CAST_COOLDOWN)
+
+
+def seconds_to_afford(price: int, luck: float = 0.0) -> int:
+    """Roughly how long earning `price` takes, in seconds. 0 for a free item."""
+    if price <= 0:
+        return 0
+    rate = coins_per_hour(luck)
+    if rate <= 0:  # can't happen with a non-empty catalogue; never divide by it
+        return 0
+    return max(1, round(price / rate * 3600))
 
 
 from utils import helpers as _h

@@ -1,11 +1,13 @@
 """
-Command-level tests for the owner-only `!cooldown` in cogs/admin/ under dpytest.
+Command-level tests for the owner-only `!cooldown` and `!econ` in cogs/admin/.
 
-Activity cooldown *claims* are keyed by user, not by (guild, user), so their
-length was never a server's to set: whichever of a member's servers picked the
-shortest one silently set the pace everywhere, and the coins it minted spend
-everywhere. The setting therefore moved off `/adventure` (Manage Server) and
-onto this owner-only prefix command.
+Both settings govern something that crosses server boundaries, so neither could
+ever have been a server's to set. A cooldown *claim* is keyed by user, so
+whichever of a member's servers picked the shortest length silently set the
+pace everywhere. A reward *amount* pays into one global wallet, so a server
+raising its daily was minting coins that spend in every other server. They
+moved off `/adventure` and `/coin` (Manage Server) onto these owner-only prefix
+commands. What each server keeps is its shop, which is a sink.
 """
 
 import pytest
@@ -13,6 +15,7 @@ from discord.ext import test as dpytest
 
 import utils.db as db
 from cogs.activities import ACTIVITY_DEFAULT_COOLDOWNS
+from cogs.economy.constants import REWARD_DEFAULTS
 from tests.conftest import config
 
 
@@ -87,3 +90,60 @@ async def test_out_of_range_and_unknown_activity_are_refused(bot):
     await dpytest.message("!cooldown work 30s", member=author)
     assert await db.get_activity_cooldowns() == {"work": 30}
     assert 30 < ACTIVITY_DEFAULT_COOLDOWNS["work"] // 2
+
+
+# ── !econ (bot-wide coin faucets) ─────────────────────────────────────────────
+@pytest.mark.cogs("cogs.admin")
+async def test_a_non_owner_cannot_touch_reward_amounts(bot):
+    author = config().members[0]
+    bot.owner_id = author.id + 1
+
+    with pytest.raises(Exception):
+        await dpytest.message("!econ daily 100000", member=author)
+    assert await db.get_reward_amounts() == {}
+
+
+@pytest.mark.cogs("cogs.admin")
+async def test_owner_sets_lists_and_clears_a_reward(bot):
+    author = config().members[0]
+    bot.owner_id = author.id
+
+    await dpytest.message("!econ daily 150", member=author)
+    assert "150" in _reply().description
+    assert await db.get_reward_amounts() == {"daily": 150}
+
+    await dpytest.message("!econ", member=author)
+    listed = _reply().description
+    assert "150" in listed and "streak_bonus" in listed and "default" in listed
+
+    await dpytest.message("!econ daily", member=author)
+    assert "150" in _reply().description
+
+    await dpytest.message("!econ daily default", member=author)
+    assert str(REWARD_DEFAULTS["daily"]) in _reply().description
+    assert await db.get_reward_amounts() == {}
+
+
+@pytest.mark.cogs("cogs.admin")
+async def test_zero_survives_because_it_is_how_a_faucet_is_turned_off(bot):
+    """Unlike a cooldown, 0 is a real amount here — it disables /squad."""
+    author = config().members[0]
+    bot.owner_id = author.id
+
+    await dpytest.message("!econ coop 0", member=author)
+    assert "/squad" in _reply().description
+    assert await db.get_reward_amounts() == {"coop": 0}
+
+
+@pytest.mark.cogs("cogs.admin")
+async def test_unknown_reward_and_unparseable_amount_are_refused(bot):
+    author = config().members[0]
+    bot.owner_id = author.id
+
+    await dpytest.message("!econ pocketmoney 50", member=author)
+    assert "Unknown reward" in _reply().description
+    await dpytest.message("!econ daily heaps", member=author)
+    assert "Error" in _reply().title
+    await dpytest.message("!econ daily 999999999999", member=author)
+    assert "Error" in _reply().title
+    assert await db.get_reward_amounts() == {}

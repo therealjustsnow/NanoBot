@@ -60,6 +60,58 @@ def hours_to_afford(price: int, luck: float, cooldown: int) -> float:
     return price / (coins_per_cast(luck) * (3600 / cooldown))
 
 
+# ── The shop's pricing yardstick agrees with this model ──────────────────────
+def test_the_shop_yardstick_matches_the_balance_model():
+    """`/shop` quotes each price as a time to earn, so a mod can price a reward
+    by the effort it should cost instead of guessing at a number.
+
+    That estimate is computed in production by cogs/economy/helpers, and this
+    file recomputes the same quantity from the raw drop tables. Asserting they
+    agree is what stops the two drifting: a change to the catalogue that moved
+    income without moving the shop's estimate would show up here.
+    """
+    from cogs.economy.helpers import (
+        coins_per_cast as prod_per_cast,
+        coins_per_hour as prod_per_hour,
+        seconds_to_afford,
+    )
+
+    for luck in (0.0, 0.3, 0.75):
+        assert prod_per_cast(luck) == pytest.approx(coins_per_cast(luck))
+        assert prod_per_hour(luck) == pytest.approx(
+            coins_per_cast(luck) * 3600 / CAST_COOLDOWN
+        )
+
+    for price in (100, 5_000, 250_000):
+        expected = hours_to_afford(price, 0.0, CAST_COOLDOWN) * 3600
+        # The production helper rounds to whole seconds; nothing else may differ.
+        assert seconds_to_afford(price) == pytest.approx(expected, abs=1)
+
+    # Degenerate prices answer with a time rather than dividing by anything.
+    assert seconds_to_afford(0) == 0
+    assert seconds_to_afford(-5) == 0
+    assert seconds_to_afford(1) >= 1  # never rounds a real price down to "free"
+
+
+def test_fishing_is_the_right_denominator_for_the_yardstick():
+    """The yardstick quotes fishing time, and only fishing, because every other
+    faucet is an order of magnitude smaller — mixing them in would move the
+    estimate by less than the rounding while making it much harder to explain."""
+    from cogs.activities.constants import (
+        ACTIVITY_DEFAULT_COOLDOWNS,
+        WORK_PAY_MAX,
+        WORK_PAY_MIN,
+    )
+    from cogs.economy.constants import REWARD_DEFAULTS
+    from cogs.economy.helpers import coins_per_hour
+
+    work_hourly = (
+        (WORK_PAY_MIN + WORK_PAY_MAX) / 2 * (3600 / ACTIVITY_DEFAULT_COOLDOWNS["work"])
+    )
+    daily_hourly = REWARD_DEFAULTS["daily"] / 24
+    assert coins_per_hour(0.0) > 20 * (work_hourly + daily_hourly)
+
+
 # ── The faucet itself ────────────────────────────────────────────────────────
 def test_cast_cooldown_is_the_rebalanced_value():
     """Every price below was chosen against this number; they move together."""

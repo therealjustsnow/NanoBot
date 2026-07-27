@@ -35,9 +35,17 @@ earned. Nothing resets, nothing is left behind.
   casino, `/rob`, and so on).
 - Its own currency **name and emoji** — the same coins might be "NanoCoins"
   here and "Doubloons" there. It's still one balance.
-- Its daily/co-op/raid reward amounts, and which activities are switched on.
+- Which activities are switched on, and its raid party size.
 - Its **shop** (server roles and custom rewards) and its **casino jackpot**.
 - Its leaderboard view — see [Leaderboards](#-leaderboards).
+
+**What no single server controls: how many coins exist.** Reward *amounts* —
+`/daily`, its streak bonus, `/squad`, `/raid`, level-up coins — are set once for
+the whole bot by its owner. They have to be: they pay into a wallet you spend in
+every server, so one server raising its daily would be handing its members coins
+usable everywhere else. Prices are the opposite — a shop purchase *removes*
+coins in exchange for that server's own role or perk, so what it costs can only
+ever affect that server, and its mods set it.
 
 **Did I lose anything in the switch?** No. If you had balances in several
 servers, they were added together into one wallet, your best rod/pickaxe/rank
@@ -454,7 +462,11 @@ rewards, queued for a moderator to hand over. Some items have limited stock,
 a per-person limit, or a cooldown.
 
 The shop belongs to the server — but you pay with your global wallet, so coins
-earned anywhere buy rewards here.
+earned anywhere buy rewards here. Each price also shows roughly **how long it
+takes to earn** ("~25m to earn"), measured in solid fishing time. It's a floor,
+not a promise: nobody fishes non-stop, so the real wait is longer. Mods see the
+same figure when they add an item, which is how they pick a price that matches
+the effort they had in mind.
 
 ---
 
@@ -549,7 +561,7 @@ to configure.
 
 | Area | Commands (Manage Server) |
 |---|---|
-| Currency & rewards | `/coin name`, `/coin emoji`, `/coin daily`, `/coin streakbonus`, `/coin coop`, `/coin raid`, `/coin raidsize`, `/coin config` |
+| Currency & raids | `/coin name`, `/coin emoji`, `/coin raidsize`, `/coin config` |
 | Balances | `/coin grant`, `/coin take` (these move a member's **global** wallet) |
 | Shop | `/shop seed`, `/shop add`, `/shop edit`, `/shop remove`, `/shop pending`, `/shop fulfill` |
 | Fishing | `/fish toggle`, `/fish event`, `/fish config` |
@@ -559,6 +571,13 @@ to configure.
 
 Note that `/coin reset` is bot-owner-only: with global wallets, resetting
 would delete coins members earned in other servers.
+
+Reward amounts and activity cooldowns aren't in that table because they aren't
+per server — they set the pace of an economy every server shares, so the bot's
+owner sets them once (`!econ`, `!cooldown`). `/coin config` and
+`/adventure config` show the live values, marked bot-wide. What is yours to tune
+is the **shop**: its prices are a sink, so nothing you charge can leak into
+another server.
 
 Deeper reading: [`docs/global-economy.md`](global-economy.md) (what's global
 and why, plus the migration) and [`docs/economy-design.md`](economy-design.md)

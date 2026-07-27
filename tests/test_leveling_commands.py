@@ -50,29 +50,30 @@ async def test_level_toggle_updates_config(bot):
 
 
 @pytest.mark.cogs("cogs.leveling")
-async def test_coinreward_sets_config(bot):
-    guild = config().guilds[0]
+async def test_a_server_cannot_set_the_level_up_coin_rate(bot):
+    """The payout lands in a global wallet, so the rate is the owner's (!econ
+    level_coin). /level keeps every knob that stays inside the server."""
     author = config().members[0]
     await grant_perms(author, manage_guild=True)
+    cog = bot.get_cog("Leveling")
 
-    await dpytest.message("!level coinreward 10", member=author)
-    dpytest.get_message()
-    assert (await db.get_level_config(guild.id))["coin_reward"] == 10
+    assert cog.level.get_command("coinreward") is None
+    assert cog.level.get_command("rate") is not None
 
 
 @pytest.mark.cogs("cogs.leveling")
 async def test_level_up_awards_coins(bot):
-    """A message that crosses a level boundary grants coin_reward × new level."""
+    """A message crossing a level boundary grants the bot-wide rate × new level."""
     guild = config().guilds[0]
     author = config().members[0]
     # Deterministic gain, no cooldown, coins on; start just below level 1.
+    await db.set_reward_amount("level_coin", 10)
     await db.set_level_config(
         guild.id,
         enabled=True,
         xp_min=200,
         xp_max=200,
         cooldown=0,
-        coin_reward=10,
     )
     await db.set_xp(guild.id, author.id, 90)
 

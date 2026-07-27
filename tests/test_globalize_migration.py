@@ -386,6 +386,72 @@ async def test_activity_cooldown_settings_are_dropped(legacy):
     assert (await db.get_activities_config(G1))["rob_enabled"] is False
 
 
+# ── Migration 5: the per-guild coin faucets are gone ──────────────────────────
+async def test_coin_faucet_settings_are_dropped(legacy):
+    """The reward amounts mint into a global wallet, so migration 5 drops them
+    while keeping everything a guild owns — including, deliberately, its shop."""
+    await legacy.execute(
+        "CREATE TABLE economy_config (guild_id TEXT PRIMARY KEY, "
+        "daily_amount INTEGER NOT NULL DEFAULT 100, streak_bonus INTEGER NOT NULL DEFAULT 0, "
+        "currency_name TEXT NOT NULL DEFAULT 'NanoCoin', currency_emoji TEXT NOT NULL DEFAULT '🪙', "
+        "coop_reward INTEGER NOT NULL DEFAULT 50, raid_reward INTEGER NOT NULL DEFAULT 100, "
+        "raid_min INTEGER NOT NULL DEFAULT 3, raid_max INTEGER NOT NULL DEFAULT 20)"
+    )
+    await legacy.execute(
+        "CREATE TABLE level_config (guild_id TEXT PRIMARY KEY, "
+        "enabled INTEGER NOT NULL DEFAULT 0, xp_min INTEGER NOT NULL DEFAULT 15, "
+        "xp_max INTEGER NOT NULL DEFAULT 25, cooldown INTEGER NOT NULL DEFAULT 60, "
+        "announce_channel TEXT, announce INTEGER NOT NULL DEFAULT 1, "
+        "coin_reward INTEGER NOT NULL DEFAULT 0)"
+    )
+    await legacy.executemany(
+        "INSERT INTO economy_config (guild_id, daily_amount, currency_name, raid_max) "
+        "VALUES (?,?,?,?)",
+        [(str(G1), 50_000, "Gold", 40), (str(G2), 100, "NanoCoin", 20)],
+    )
+    await legacy.execute(
+        "INSERT INTO level_config (guild_id, enabled, xp_min, coin_reward) "
+        "VALUES (?,?,?,?)",
+        (str(G1), 1, 30, 500),
+    )
+    await legacy.commit()
+    await db._run_migrations([(5, globalize.drop_per_guild_coin_faucets)])
+
+    # Cosmetics and party size survive; the faucet amounts are gone from the row.
+    econ = await db.get_econ_config(G1)
+    assert econ["currency_name"] == "Gold" and econ["raid_max"] == 40
+    assert "daily_amount" not in econ and "coop_reward" not in econ
+    assert (await db.get_econ_config(G2))["currency_name"] == "NanoCoin"
+
+    level = await db.get_level_config(G1)
+    assert level["enabled"] is True and level["xp_min"] == 30
+    assert "coin_reward" not in level
+
+    # Safe to re-run once the columns are already gone.
+    await db._run_migrations([(5, globalize.drop_per_guild_coin_faucets)])
+    assert (await db.get_econ_config(G1))["currency_name"] == "Gold"
+
+
+async def test_the_shop_is_untouched_by_the_faucet_migration(legacy):
+    """A shop price is a *sink* — it destroys coins for that guild's own reward,
+    so nobody outside the server is affected by it and it stays the guild's."""
+    await legacy.execute(
+        "CREATE TABLE economy_config (guild_id TEXT PRIMARY KEY, "
+        "daily_amount INTEGER NOT NULL DEFAULT 100, streak_bonus INTEGER NOT NULL DEFAULT 0, "
+        "currency_name TEXT NOT NULL DEFAULT 'NanoCoin', currency_emoji TEXT NOT NULL DEFAULT '🪙', "
+        "coop_reward INTEGER NOT NULL DEFAULT 50, raid_reward INTEGER NOT NULL DEFAULT 100, "
+        "raid_min INTEGER NOT NULL DEFAULT 3, raid_max INTEGER NOT NULL DEFAULT 20)"
+    )
+    await legacy.commit()
+    await db._ensure_economy_tables()
+    item_id = await db.add_shop_item(G1, "VIP", 12_345, "custom", payload="a perk")
+
+    await db._run_migrations([(5, globalize.drop_per_guild_coin_faucets)])
+
+    item = await db.get_shop_item(G1, item_id)
+    assert item["price"] == 12_345 and item["name"] == "VIP"
+
+
 # ── Migration 3: rebalanced casino bet limits ─────────────────────────────────
 async def test_default_casino_limits_are_rescaled(legacy):
     """The 20s cast cooldown tripled income, so the stock 10/1,000 bet band was
