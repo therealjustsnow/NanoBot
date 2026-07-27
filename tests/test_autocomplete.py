@@ -54,8 +54,6 @@ _PICKER_OPTIONS = [
     ("casino roulette", "space"),
     ("casino flip", "side"),
     ("adventure toggle", "activity"),
-    ("adventure cooldown", "activity"),
-    ("adventure cooldown", "seconds"),
     ("profile cosmetics", "slot"),
     ("profile equip", "cosmetic"),
     ("profile unequip", "cosmetic"),

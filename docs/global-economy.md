@@ -58,25 +58,89 @@ Code-side conversions that go with them:
 
 | Data | Why |
 |---|---|
-| `economy_config` (currency name/emoji, daily amount, streak bonus, co-op + raid rewards, party size) | A server's own flavour and tuning. |
-| `fishing_config`, `casino_config` (limits, on/off), `activities_config` (per-activity on/off + cooldown length) | Server rules. The *claim* is global; how long the cooldown lasts and whether the feature runs at all is the guild's call — **bounded below**, see the note under the table. |
+| `economy_config` (currency name/emoji, raid party size) | A server's own flavour, and how many of its members one raid board holds. The reward *amounts* left this table in migration 5 — see the faucets/sinks note below. |
+| `shop_items` prices | The one economy number a guild sets that moves real value — and safely, because it is a **sink**. See below. |
+| `fishing_config`, `casino_config` (limits, on/off), `activities_config` (per-activity on/off) | Server rules — whether a feature runs *here*. Cooldown **lengths** are not among them; see the note under the table. |
 | `casino_config.jackpot_pool` | A progressive pot fed by that server's losses. Global pooling would let a big server's losses fund a small server's win. |
 | `shop_items`, `shop_purchases` | The shop hands out **that guild's roles** and mod-fulfilled rewards; per-item limits/cooldowns are properties of the guild's item. Purchases spend the global wallet. |
 | `economy_events` | Server events (already supports a global row via the `guild_id='0'` sentinel). |
 | `economy_raids`, `economy_squads`, `casino_blackjack` | Live message/board state — a channel in a guild, not progression. |
 | Leveling (`user_levels`, `level_config`, `level_rewards`, `level_ignored_channels`) | Chat XP measures participation *in that community*, and its rewards are that guild's roles. Deliberately not global; only the optional coin reward crosses over. |
 
-**Why a per-guild cooldown *length* still needs a floor.** A global claim closes
-the obvious hole — you can't run `/work` once per server. It leaves a subtler
-one: since the claim is shared, the **shortest** length among a member's servers
-is the one that actually governs them, and the coins it pays spend everywhere.
-One server setting `/work` to 60s would have been a coin printer for its members
-in every other server. So each activity's configurable minimum is a real floor
-(half the default — a server may go slower without limit, or up to 2× faster,
-and no faster). `cogs/activities/helpers.effective_cooldown` re-applies it on
-every read, so a row written before the floor existed can't undercut it either.
-`/fish` sidesteps the question entirely: its cast cooldown is a fixed 20s
-constant with no per-guild setting at all.
+**Why a cooldown *length* can't be a server setting at all.** A global claim
+closes the obvious hole — you can't run `/work` once per server. It leaves a
+subtler one: since the claim is shared, the **shortest** length among a member's
+servers is the one that actually governs them, and the coins it pays spend
+everywhere. One server setting `/work` to 60s would have been a coin printer for
+its members in every other server, and a floor only bounds how bad that gets —
+it never makes the setting *mean* anything, because the number a member actually
+runs on still depends on which servers they happen to be in.
+
+So lengths are bot-wide and owner-only: they live in `bot_settings`
+(`utils/db/settings.py`), are set with `!cooldown` in the owner-only admin cog,
+and `cogs/activities/helpers.effective_cooldown` turns a stored value (or its
+absence) into a length, falling back to the activity's default rather than to
+"no cooldown". Migration 4 dropped the old `activities_config.*_cooldown`
+columns. `/fish` reached the same place from the other direction: its cast
+cooldown is a fixed 20s constant (migration 2 dropped its column). A guild still
+owns whether an activity runs there, which affects only its own members.
+
+### Every faucet needs a rate limit, not just a price
+
+Two holes stayed open after the amounts moved, and both were the same mistake:
+a faucet whose *amount* was governed but whose *rate* was not.
+
+`/squad` and `/raid` paid every participant with no per-user claim at all —
+only the invoker carried a few seconds of command cooldown, so two members
+could confirm a squad every half-minute, forever, with no risk. They now take
+the same atomic `try_claim_activity` claim an activity does (defaults 30m and
+1h, bot-wide via `!cooldown coop|raid`, chosen against the same "≤~150
+coins/hour" guardrail). A member on cooldown is skipped and named rather than
+blocking the board, so one person's timing can't cost the party.
+
+`/fish event` let a Manage-Server mod start a x2-catch-value frenzy for three
+hours, back to back, indefinitely — an income *multiplier* on a global wallet,
+which is a faucet knob however it is framed. It is bot-owner-only now. The
+random ~0.4%-per-cast events are untouched and still fire for everyone; mods
+keep `/fish toggle`.
+
+The rule that falls out: when adding a coin faucet, decide **who sets the
+amount** and **what bounds the rate**. A reward with no claim behind it is
+unbounded no matter how small the number is.
+
+### Faucets are bot-wide; sinks stay with the guild
+
+The same argument settles every remaining economy setting, and the dividing line
+is simply **which direction coins move**.
+
+A **faucet** creates coins. `/daily` and its streak bonus, `/squad`, `/raid`,
+and the level-up payout all mint into the one global wallet, so a per-guild
+amount had the identical defect as a per-guild cooldown: the most generous
+server set the rate for its members *everywhere*, and there is no floor or
+ceiling that makes such a number mean anything. Migration 5 moved all five into
+`bot_settings`, behind the owner-only `!econ`.
+
+A **sink** destroys coins. A shop purchase takes coins out of circulation and
+hands back that guild's own Discord role or a mod-fulfilled perk — something
+that exists only inside that server. Pricing it badly is self-correcting and
+strictly local: too cheap and its own rewards are easy, too dear and its own
+members don't buy. Nothing leaks outward, so **shop prices stay per-guild** and
+always will. The casino is the same shape (a house edge plus a jackpot pool fed
+by that guild's own losses), which is why its limits stay per-guild too.
+
+The practical objection to this split is that a mod pricing a shop item has to
+balance it against income they no longer set. That is backwards: before the
+move there was no single income rate to balance against, because a member's real
+earning rate depended on which servers they happened to be in. Now there is one,
+so the bot can state it. `cogs/economy/helpers.seconds_to_afford` converts a
+price into a time to earn and `/shop list|add` shows it ("~25m to earn"), which
+is the number a mod was actually reaching for. The denominator is fishing: at
+the 20s cast cooldown it pays ~5,000 coins/hour against `/work`'s 100 and
+`/daily`'s ~4, so any figure that blended the faucets would be wrong by an order
+of magnitude. It is a floor — nobody fishes continuously — and the UI says so.
+`tests/test_economy_balance.py` recomputes the same quantity from the raw drop
+tables and asserts the two agree, so the shop's estimate cannot drift away from
+the balance model.
 
 ## 3. Migration (`utils/db/globalize.py`, migration 1)
 

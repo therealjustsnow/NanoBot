@@ -15,7 +15,7 @@ from typing import Any, Awaitable, Callable  # noqa: F401 - re-exported for type
 
 import aiosqlite
 
-from utils import db_crypto, sqlite_timing
+from utils import db_crypto, sqlite_conn
 
 from . import _cache, _ttl
 
@@ -83,7 +83,7 @@ async def init(encryption_key: str | None = None) -> None:
     global _db, _reader, _RETURNING_OK
     os.makedirs("data", exist_ok=True)
     _db = await db_crypto.connect(_DB_PATH, encryption_key)
-    _db = sqlite_timing.wrap(_db, "nanobot")
+    _db = sqlite_conn.wrap(_db, "nanobot")
 
     async with _db.execute("SELECT sqlite_version()") as cur:
         version = (await cur.fetchone())[0]
@@ -182,6 +182,13 @@ async def fetch_one_returning(sql: str, params, *, returning: str):
         await _conn().execute(sql, params)
         await _commit()
         return None
+    # The connection proxy (utils/sqlite_conn.py) fetches and closes this
+    # statement in the same worker-thread hop as the write. That matters here
+    # more than anywhere else: a DML statement with RETURNING is a *writer*
+    # that returns rows, and SQLite refuses to commit while one is still
+    # active — so leaving it open across an await used to abort whatever other
+    # coroutine committed next ("cannot commit transaction - SQL statements in
+    # progress").
     async with _conn().execute(f"{sql} RETURNING {returning}", params) as cur:
         row = await cur.fetchone()
     await _commit()
@@ -238,17 +245,21 @@ async def transaction():
         return
     async with _tx_lock:
         await _conn().commit()  # flush anything an earlier accessor left open
-        await _conn().execute("BEGIN IMMEDIATE")
+        # Claim the depth *before* the BEGIN and hold it *past* the COMMIT.
+        # Both are awaits, so another coroutine's accessor can run inside them;
+        # with the depth already claimed its _commit() is a no-op instead of
+        # committing this block's transaction out from under it.
         _tx_depth = 1
         try:
+            await _conn().execute("BEGIN IMMEDIATE")
             yield
         except BaseException:
-            _tx_depth = 0
             await _conn().rollback()
+            _tx_depth = 0
             raise
         else:
-            _tx_depth = 0
             await _conn().commit()
+            _tx_depth = 0
 
 
 async def _open_reader(encryption_key: str | None):
@@ -261,7 +272,7 @@ async def _open_reader(encryption_key: str | None):
         return None
     try:
         reader = await db_crypto.connect(_DB_PATH, encryption_key)
-        reader = sqlite_timing.wrap(reader, "nanobot-ro")
+        reader = sqlite_conn.wrap(reader, "nanobot-ro")
         for pragma in (
             "PRAGMA busy_timeout=5000",
             "PRAGMA temp_store=MEMORY",

@@ -4,10 +4,18 @@ NanoCoin economy — GLOBAL wallets, per-guild settings.
 
 A member's wallet, daily streak, and lifetime contribution belong to the
 *user*: coins earned in one server spend in every other one, and /daily is a
-single claim per day across the whole bot (not one per server). What each
-server still owns is its own settings — currency name/emoji, daily amount,
-streak bonus, co-op/raid rewards — and its own shop, /squad and /raid boards.
-See docs/global-economy.md for the full scope split.
+single claim per day across the whole bot (not one per server).
+
+That splits the settings cleanly into faucets and sinks. The reward *amounts*
+(/daily, its streak bonus, /squad, /raid) MINT into that one global wallet, so
+they are bot-wide and owner-only — `!econ` in cogs/admin — because a server
+raising its daily would be paying its members coins that spend in every other
+server too. What a guild owns is what only touches its own members: currency
+name/emoji, raid party size, its /squad and /raid boards, and above all its
+**shop**, which is a pure sink — a purchase destroys coins in exchange for that
+guild's own role or mod-fulfilled perk, so no price it sets can affect anyone
+outside it. To make those prices pickable rather than guesswork, /shop shows
+each one as a time to earn. See docs/global-economy.md for the full scope split.
 
 Members hold a coin balance, claim a daily reward (with a consecutive-day
 streak bonus), and pay each other. They also reward co-op activity: /squad
@@ -18,9 +26,9 @@ both grant spendable coins and a lifetime contribution stat that drives a
 separate contributor leaderboard and rank titles. Coins are spent in a
 per-guild shop on Discord roles (granted instantly) or custom rewards (queued
 for a mod to fulfil), with optional stock counts, per-user limits, and
-cooldowns. Admins grant/take coins, view a rich list, and customise the
-currency name, emoji, daily amount, streak bonus, co-op reward, and raid
-reward/party size.
+cooldowns. Server admins view the rich list and customise the currency name,
+emoji, and raid party size; moving coins in or out of a wallet is the bot
+owner's, since the wallet is global.
 
 Slash command budget: five flat commands (/balance, /daily, /pay, /squad,
 /raid) plus two groups (/coin …, /shop …) whose subcommands cost no extra
@@ -38,14 +46,10 @@ Commands
   /coin contrib [page] [scope]   → top contributors (alias: contributions)
   /coin gamble <amount>          → bet coins to double them (alias: bet)
   /coin grant <amount> [member…] → add coins        (tag up to 5, or blank for
-                                                       a 25-member picker) (Manage Server)
+                                                       a 25-member picker) (bot owner)
   /coin take <amount> [member…]  → remove coins     (tag up to 5, or blank for
-                                                       a 25-member picker) (Manage Server)
+                                                       a 25-member picker) (bot owner)
   /coin reset [member]           → wipe a global wallet   (bot owner)
-  /coin daily <amount>           → set daily reward (Manage Server)
-  /coin streakbonus <amount>     → per-day bonus    (Manage Server)
-  /coin coop <amount>            → set co-op reward (Manage Server)
-  /coin raid <amount>            → set raid reward  (Manage Server)
   /coin raidsize <min> <max>     → set party size   (Manage Server)
   /coin name <text>              → currency name    (Manage Server)
   /coin emoji <emoji>            → currency emoji   (Manage Server)
@@ -58,6 +62,9 @@ Commands
   /shop remove <id|name>         → delete an item   (Manage Server)
   /shop pending                  → custom-reward queue (Manage Server)
   /shop fulfill <id>             → mark reward delivered (Manage Server)
+
+The reward amounts are not here: they mint into global wallets, so `!econ`
+lives in the owner-only admin cog.
 """
 
 import asyncio
@@ -75,11 +82,20 @@ from utils import globalxp
 from utils import helpers as h
 from utils.helpers import SCOPE_CHOICES
 
-from .constants import COIN_MAX, COOP_CONFIRM_TIMEOUT, RAID_TIMEOUT, _DEFAULT_SHOP_ITEMS
+from .constants import (
+    COIN_MAX,
+    COOP_CONFIRM_TIMEOUT,
+    RAID_TIMEOUT,
+    REWARD_DEFAULTS,
+    _DEFAULT_SHOP_ITEMS,
+)
+from cogs.activities.helpers import effective_cooldown
+
 from .helpers import (
     compute_daily,
     fmt_coins,
     resolve_gamble,
+    seconds_to_afford,
     _rank_title,
     _scaled_price,
 )
@@ -128,11 +144,104 @@ class Economy(commands.Cog):
         # entry when the last interested task releases.
         return self._daily_locks.hold(user_id)
 
+    # Merged cfg key ← bot-wide reward key. The cfg key names are unchanged from
+    # when these were guild columns, so every call site reads the same dict it
+    # always did.
+    _REWARD_KEYS = {
+        "daily_amount": "daily",
+        "streak_bonus": "streak_bonus",
+        "coop_reward": "coop",
+        "raid_reward": "raid",
+    }
+
     async def _cfg(self, guild_id: int) -> dict:
-        return await db.get_econ_config(guild_id)
+        """This server's economy settings, with the bot-wide faucets folded in.
+
+        The guild row holds only what affects its own members — currency
+        name/emoji and raid party size. The reward *amounts* mint into a global
+        wallet (one /daily per account, one wallet everywhere), so they are
+        bot-wide and owner-set (`!econ`); see REWARD_DEFAULTS in constants.py.
+        Shop prices are untouched by all of this and stay the guild's: a
+        purchase is a sink, so what it costs affects nobody outside the server.
+        """
+        cfg = dict(await db.get_econ_config(guild_id))
+        overrides = await db.get_reward_amounts()
+        for cfg_key, reward_key in self._REWARD_KEYS.items():
+            cfg[cfg_key] = overrides.get(reward_key, REWARD_DEFAULTS[reward_key])
+        return cfg
 
     def _money(self, cfg: dict, amount: int) -> str:
         return fmt_coins(amount, cfg["currency_name"], cfg["currency_emoji"])
+
+    # ── co-op payouts ────────────────────────────────────────────────────────
+    async def _coop_cooldown(self, key: str) -> int:
+        """The bot-wide claim cooldown for `key` ("coop" or "raid")."""
+        overrides = await db.get_activity_cooldowns()
+        return effective_cooldown(key, overrides.get(key))
+
+    async def _check_coop_ready(self, ctx, key: str, label: str) -> bool:
+        """Refuse to open a board the host can't be paid for.
+
+        The real guard is the per-member claim in _pay_party; this is only so a
+        host finds out now rather than after five people have pressed Confirm.
+        Read-only — it never claims.
+        """
+        stats = await db.get_activity_stats(ctx.author.id)
+        last = stats.get(f"last_{key}", 0) or 0
+        if not last:
+            return True
+        left = int(await self._coop_cooldown(key) - (time.time() - last))
+        if left <= 0:
+            return True
+        await ctx.reply(
+            embed=h.warn(
+                f"You've already been paid for a {label} recently. "
+                f"Your next one is ready in **{h.fmt_duration(left)}**.",
+                "⏳ On cooldown",
+            ),
+            ephemeral=True,
+        )
+        return False
+
+    async def _pay_party(self, party: list[int], key: str, reward: int):
+        """Pay everyone in `party` who is off cooldown. Returns (paid, skipped).
+
+        The reward is a faucet — coins minted into a global wallet — and until
+        this existed it had no rate limit at all: only the *invoker* carried a
+        few seconds of command cooldown, so two members could confirm a squad
+        every half-minute, forever, risk-free. Each member now takes the same
+        atomic per-user claim an activity does, so the payout is bounded per
+        person however many boards they are tagged in.
+
+        Someone on cooldown is skipped rather than blocking the board, so one
+        member's timing can't cost the rest of the party their reward.
+        """
+        now = time.time()
+        cooldown = await self._coop_cooldown(key)
+        paid: list[int] = []
+        skipped: list[int] = []
+        for uid in party:
+            if await db.try_claim_activity(uid, key, now, cooldown):
+                skipped.append(uid)
+                continue
+            await db.add_coins(uid, reward)
+            await db.add_contribution(uid, reward)
+            await globalxp.award(uid, "coop")
+            paid.append(uid)
+        return paid, skipped
+
+    def _effort(self, price: int) -> str:
+        """ "~25m to earn" — what a shop price costs in play time.
+
+        A price on its own tells a mod nothing about how hard they've just made
+        a reward to get, which is why shop pricing was guesswork. This converts
+        it against the bot-wide income rate (see helpers.seconds_to_afford):
+        fishing, because at ~5,000 coins/hour it dwarfs every other faucet by an
+        order of magnitude, so it is the only honest denominator. It's a floor —
+        nobody fishes non-stop — and the footers say as much.
+        """
+        seconds = seconds_to_afford(price)
+        return "free" if seconds <= 0 else f"~{h.fmt_duration(seconds)} to earn"
 
     # ══════════════════════════════════════════════════════════════════════════
     #  /balance  — flat
@@ -424,9 +533,13 @@ class Economy(commands.Cog):
         await ctx.reply(embed=embed)
 
     # ── /coin grant ─────────────────────────────────────────────────────────────
+    # Granting coins is the most direct faucet there is: it mints straight into
+    # a wallet that spends in every server. That makes it the bot owner's, for
+    # the same reason /coin reset already is — the difference between granting
+    # and resetting is only the sign. See docs/global-economy.md.
     @coin.command(
         name="grant",
-        description="Add coins to one or more members' (global) balances.",
+        description="Add coins to one or more members' (global) balances (bot owner).",
     )
     @app_commands.describe(
         amount="Coins to add to each member's global wallet",
@@ -436,7 +549,7 @@ class Economy(commands.Cog):
         member4="Another member (optional)",
         member5="Another member (optional)",
     )
-    @commands.has_permissions(manage_guild=True)
+    @commands.is_owner()
     async def coin_grant(
         self,
         ctx: commands.Context,
@@ -452,9 +565,11 @@ class Economy(commands.Cog):
         )
 
     # ── /coin take ─────────────────────────────────────────────────────────────
+    # And taking them destroys value earned in servers this one has never seen
+    # — the objection that made /coin reset owner-only, at a smaller scale.
     @coin.command(
         name="take",
-        description="Remove coins from one or more members' (global) balances.",
+        description="Remove coins from members' (global) balances (bot owner).",
     )
     @app_commands.describe(
         amount="Coins to remove from each member's global wallet",
@@ -464,7 +579,7 @@ class Economy(commands.Cog):
         member4="Another member (optional)",
         member5="Another member (optional)",
     )
-    @commands.has_permissions(manage_guild=True)
+    @commands.is_owner()
     async def coin_take(
         self,
         ctx: commands.Context,
@@ -569,45 +684,6 @@ class Economy(commands.Cog):
             )
         )
 
-    # ── /coin daily ─────────────────────────────────────────────────────────────
-    @coin.command(name="daily", description="Set the daily reward amount.")
-    @app_commands.describe(amount="Coins given per daily claim")
-    @commands.has_permissions(manage_guild=True)
-    async def coin_daily(self, ctx: commands.Context, amount: int):
-        if amount < 0:
-            return await ctx.reply(
-                embed=h.err("Amount can't be negative."), ephemeral=True
-            )
-        if amount > COIN_MAX:
-            return await ctx.reply(
-                embed=h.err(f"Amount can't exceed {COIN_MAX:,}."), ephemeral=True
-            )
-        await db.set_econ_config(ctx.guild.id, daily_amount=amount)
-        cfg = await self._cfg(ctx.guild.id)
-        await ctx.reply(embed=h.ok(f"Daily reward set to {self._money(cfg, amount)}."))
-
-    # ── /coin streakbonus ─────────────────────────────────────────────────────────
-    @coin.command(
-        name="streakbonus",
-        description="Set the bonus coins added per consecutive daily streak day.",
-    )
-    @app_commands.describe(amount="Bonus coins per extra streak day")
-    @commands.has_permissions(manage_guild=True)
-    async def coin_streakbonus(self, ctx: commands.Context, amount: int):
-        if amount < 0:
-            return await ctx.reply(
-                embed=h.err("Bonus can't be negative."), ephemeral=True
-            )
-        if amount > COIN_MAX:
-            return await ctx.reply(
-                embed=h.err(f"Bonus can't exceed {COIN_MAX:,}."), ephemeral=True
-            )
-        await db.set_econ_config(ctx.guild.id, streak_bonus=amount)
-        cfg = await self._cfg(ctx.guild.id)
-        await ctx.reply(
-            embed=h.ok(f"Streak bonus set to {self._money(cfg, amount)} per extra day.")
-        )
-
     # ── /coin name ─────────────────────────────────────────────────────────────
     @coin.command(name="name", description="Set the currency name (e.g. NanoCoin).")
     @app_commands.describe(name="Currency name (max 32 chars)")
@@ -648,12 +724,12 @@ class Economy(commands.Cog):
         )
         embed.add_field(
             name="Daily reward",
-            value=f"{cfg['daily_amount']:,}",
+            value=f"{cfg['daily_amount']:,} (bot-wide)",
             inline=True,
         )
         embed.add_field(
             name="Streak bonus",
-            value=f"{cfg['streak_bonus']:,}/day",
+            value=f"{cfg['streak_bonus']:,}/day (bot-wide)",
             inline=True,
         )
         # Wallets are global, so this is every funded account on the bot — the
@@ -661,18 +737,23 @@ class Economy(commands.Cog):
         embed.add_field(name="Wallets (global)", value=str(accounts), inline=True)
         embed.add_field(
             name="Co-op reward",
-            value=f"{cfg['coop_reward']:,}/person",
+            value=f"{cfg['coop_reward']:,}/person (bot-wide)",
             inline=True,
         )
         embed.add_field(
             name="Raid reward",
-            value=f"{cfg['raid_reward']:,}/person",
+            value=f"{cfg['raid_reward']:,}/person (bot-wide)",
             inline=True,
         )
         embed.add_field(
             name="Raid party",
             value=f"{cfg['raid_min']}–{cfg['raid_max']} members",
             inline=True,
+        )
+        embed.set_footer(
+            text="Reward amounts are bot-wide — they pay into wallets that spend "
+            "in every server, so only the bot owner can change them. Your shop "
+            "prices are yours."
         )
         await ctx.reply(embed=embed)
 
@@ -728,56 +809,6 @@ class Economy(commands.Cog):
         embed = h.embed(title, "\n".join(lines), h.BLUE)
         embed.set_footer(text=f"Page {page}/{pages} · {total} contributors")
         await ctx.reply(embed=embed)
-
-    # ── /coin coop (set co-op reward) ─────────────────────────────────────────────
-    @coin.command(
-        name="coop",
-        description="Set the coins each member earns per confirmed /squad.",
-    )
-    @app_commands.describe(amount="Coins awarded to EACH partner per confirmed co-op")
-    @commands.has_permissions(manage_guild=True)
-    async def coin_coop(self, ctx: commands.Context, amount: int):
-        if amount < 0:
-            return await ctx.reply(
-                embed=h.err("Amount can't be negative."), ephemeral=True
-            )
-        if amount > COIN_MAX:
-            return await ctx.reply(
-                embed=h.err(f"Amount can't exceed {COIN_MAX:,}."), ephemeral=True
-            )
-        await db.set_econ_config(ctx.guild.id, coop_reward=amount)
-        cfg = await self._cfg(ctx.guild.id)
-        await ctx.reply(
-            embed=h.ok(
-                f"Co-op reward set to {self._money(cfg, amount)} per person.\n"
-                f"Set to **0** to disable `/squad`."
-            )
-        )
-
-    # ── /coin raid (set raid reward) ──────────────────────────────────────────────
-    @coin.command(
-        name="raid",
-        description="Set the coins each member earns per finished /raid.",
-    )
-    @app_commands.describe(amount="Coins awarded to EACH participant per finished raid")
-    @commands.has_permissions(manage_guild=True)
-    async def coin_raid(self, ctx: commands.Context, amount: int):
-        if amount < 0:
-            return await ctx.reply(
-                embed=h.err("Amount can't be negative."), ephemeral=True
-            )
-        if amount > COIN_MAX:
-            return await ctx.reply(
-                embed=h.err(f"Amount can't exceed {COIN_MAX:,}."), ephemeral=True
-            )
-        await db.set_econ_config(ctx.guild.id, raid_reward=amount)
-        cfg = await self._cfg(ctx.guild.id)
-        await ctx.reply(
-            embed=h.ok(
-                f"Raid reward set to {self._money(cfg, amount)} per person.\n"
-                f"Set to **0** to disable `/raid`."
-            )
-        )
 
     # ── /coin raidsize (set party bounds) ─────────────────────────────────────────
     @coin.command(
@@ -856,12 +887,13 @@ class Economy(commands.Cog):
         if cfg["coop_reward"] <= 0:
             return await ctx.reply(
                 embed=h.warn(
-                    "Co-op rewards are disabled. An admin can enable them with "
-                    "`/coin coop <amount>`.",
+                    "Co-op rewards are switched off on this bot.",
                     "Disabled",
                 ),
                 ephemeral=True,
             )
+        if not await self._check_coop_ready(ctx, "coop", "squad"):
+            return
         # Collect any directly-tagged teammates, dropping bots/self/duplicates.
         partner_ids: list[int] = []
         for m in (member, member2, member3, member4, member5):
@@ -966,12 +998,13 @@ class Economy(commands.Cog):
         if cfg["raid_reward"] <= 0:
             return await ctx.reply(
                 embed=h.warn(
-                    "Raid rewards are disabled. An admin can enable them with "
-                    "`/coin raid <amount>`.",
+                    "Raid rewards are switched off on this bot.",
                     "Disabled",
                 ),
                 ephemeral=True,
             )
+        if not await self._check_coop_ready(ctx, "raid", "raid"):
+            return
         activity = (activity or "").strip()[:200]
         created_at = time.time()
         raid_id = await db.create_raid(
@@ -1122,13 +1155,17 @@ class Economy(commands.Cog):
                 meta.append(f"{item['stock']} left")
             if item["per_user_limit"] > 0:
                 meta.append(f"limit {item['per_user_limit']}/user")
+            meta.append(self._effort(item["price"]))
             desc = item["description"] or "—"
             embed.add_field(
                 name=f"`#{item['id']}` {item['name']} — {self._money(cfg, item['price'])}",
                 value=f"{desc}\n*{' · '.join(meta)}*",
                 inline=False,
             )
-        embed.set_footer(text=f"Page {page}/{pages} · buy with /shop buy <id or name>")
+        embed.set_footer(
+            text=f"Page {page}/{pages} · buy with /shop buy <id or name> · "
+            "times assume non-stop fishing, so real ones run longer"
+        )
         await ctx.reply(embed=embed)
 
     # ── /shop buy ─────────────────────────────────────────────────────────────────
@@ -1286,7 +1323,9 @@ class Economy(commands.Cog):
         cfg = await self._cfg(ctx.guild.id)
         await ctx.reply(
             embed=h.ok(
-                f"Added **{name}** (`#{item_id}`) for {self._money(cfg, price)}.",
+                f"Added **{name}** (`#{item_id}`) for {self._money(cfg, price)} "
+                f"— about **{self._effort(price)}** at full tilt.\n"
+                "Adjust with `/shop edit` if that's not the effort you wanted.",
                 "🛒 Item Added",
             )
         )

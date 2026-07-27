@@ -140,34 +140,38 @@ async def test_daily_state_round_trip():
 
 async def test_config_defaults_and_partial_update():
     cfg = await db.get_econ_config(G)
-    assert cfg["daily_amount"] == 100
     assert cfg["currency_name"] == "NanoCoin"
     assert cfg["currency_emoji"] == "🪙"
-    assert cfg["streak_bonus"] == 0
-
-    await db.set_econ_config(G, currency_name="Gold", streak_bonus=25)
-    cfg = await db.get_econ_config(G)
-    assert cfg["currency_name"] == "Gold"
-    assert cfg["streak_bonus"] == 25
-    assert cfg["daily_amount"] == 100  # untouched
-
-
-async def test_coop_and_raid_config_defaults_and_update():
-    cfg = await db.get_econ_config(G)
-    assert cfg["coop_reward"] == 50
-    assert cfg["raid_reward"] == 100
     assert cfg["raid_min"] == 3
     assert cfg["raid_max"] == 20
 
-    await db.set_econ_config(
-        G, coop_reward=75, raid_reward=500, raid_min=5, raid_max=40
-    )
+    await db.set_econ_config(G, currency_name="Gold", raid_max=40)
     cfg = await db.get_econ_config(G)
-    assert cfg["coop_reward"] == 75
-    assert cfg["raid_reward"] == 500
-    assert cfg["raid_min"] == 5
+    assert cfg["currency_name"] == "Gold"
     assert cfg["raid_max"] == 40
-    assert cfg["daily_amount"] == 100  # untouched
+    assert cfg["raid_min"] == 3  # untouched
+
+
+async def test_the_guild_config_holds_no_coin_faucet(database):
+    """Reward amounts mint into a global wallet, so a guild can't carry one —
+    they live in bot_settings, keyed by nothing but the reward's name."""
+    await db._ensure_settings_tables()
+    cfg = await db.get_econ_config(G)
+    for key in ("daily_amount", "streak_bonus", "coop_reward", "raid_reward"):
+        assert key not in cfg
+
+    assert await db.get_reward_amounts() == {}
+    await db.set_reward_amount("daily", 150)
+    await db.set_reward_amount("coop", 0)  # zero is a real value: it disables
+    assert await db.get_reward_amounts() == {"daily": 150, "coop": 0}
+
+    # Junk is dropped rather than handed back as an amount.
+    await db.set_bot_setting("reward:raid", "lots")
+    assert await db.get_reward_amounts() == {"daily": 150, "coop": 0}
+
+    assert await db.clear_reward_amount("daily") is True
+    assert await db.clear_reward_amount("daily") is False
+    assert await db.get_reward_amounts() == {"coop": 0}
 
 
 # ── Contribution (lifetime co-op stat) ───────────────────────────────────────────

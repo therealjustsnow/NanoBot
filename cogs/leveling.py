@@ -46,6 +46,10 @@ from utils import globalxp
 from utils import helpers as h
 from utils.converters import SafeTextChannel
 
+# Pure constant only — the level-up coin rate is a bot-wide faucet, so its
+# default lives with the other faucet defaults rather than here.
+from cogs.economy.constants import REWARD_DEFAULTS
+
 log = logging.getLogger("NanoBot.leveling")
 
 # Two- and three-value options are static choices rather than an autocomplete:
@@ -60,10 +64,6 @@ _ADD_REMOVE_LIST = [
     app_commands.Choice(name="Remove", value="remove"),
     app_commands.Choice(name="List", value="list"),
 ]
-
-# Per-level coin-reward ceiling. The reward is multiplied by the level reached,
-# so this keeps even high-level payouts reasonable and clear of integer limits.
-_COIN_REWARD_MAX = 1_000_000
 
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -159,7 +159,14 @@ class Leveling(commands.Cog):
         rewards = await db.get_level_rewards(message.guild.id)
         granted = await self._apply_rewards(member, new_level, rewards)
 
-        coins = cfg["coin_reward"] * new_level if cfg["coin_reward"] else 0
+        # The per-level rate is bot-wide (`!econ level_coin`): the coins land in
+        # a global wallet, so a server setting its own rate would be minting
+        # currency that spends everywhere else. The XP that earned the level is
+        # still this server's — see docs/global-economy.md.
+        rate = (await db.get_reward_amounts()).get(
+            "level_coin", REWARD_DEFAULTS["level_coin"]
+        )
+        coins = rate * new_level if rate else 0
         econ = None
         if coins:
             await db.add_coins(member.id, coins)
@@ -452,35 +459,6 @@ class Leveling(commands.Cog):
             )
         )
 
-    # ── /level coinreward ─────────────────────────────────────────────────────────
-    @level.command(
-        name="coinreward",
-        description="Coins awarded per level on level-up (amount × new level). 0 = off.",
-    )
-    @app_commands.describe(amount="Coins per level (multiplied by the new level)")
-    @commands.has_permissions(manage_guild=True)
-    async def level_coinreward(self, ctx: commands.Context, amount: int):
-        if amount < 0:
-            return await ctx.reply(
-                embed=h.err("Amount can't be negative."), ephemeral=True
-            )
-        # Reward is multiplied by the new level, so cap the per-level rate to keep
-        # high-level payouts sane and well clear of integer limits.
-        if amount > _COIN_REWARD_MAX:
-            return await ctx.reply(
-                embed=h.err(f"Amount can't exceed {_COIN_REWARD_MAX:,} per level."),
-                ephemeral=True,
-            )
-        await db.set_level_config(ctx.guild.id, coin_reward=amount)
-        if amount == 0:
-            return await ctx.reply(embed=h.ok("Level-up coin rewards turned off."))
-        await ctx.reply(
-            embed=h.ok(
-                f"Level-ups now award **{amount:,}** coins × the new level "
-                f"(e.g. level 5 → {amount * 5:,} coins)."
-            )
-        )
-
     # ── /level announce ───────────────────────────────────────────────────────────
     @level.command(
         name="announce",
@@ -661,7 +639,10 @@ class Leveling(commands.Cog):
         embed.add_field(name="Announce", value=announce, inline=True)
         embed.add_field(name="Role rewards", value=str(len(rewards)), inline=True)
         embed.add_field(name="Ignored channels", value=str(len(ignored)), inline=True)
-        coin = f"{cfg['coin_reward']:,}/level" if cfg["coin_reward"] else "off"
+        rate = (await db.get_reward_amounts()).get(
+            "level_coin", REWARD_DEFAULTS["level_coin"]
+        )
+        coin = f"{rate:,}/level (bot-wide)" if rate else "off"
         embed.add_field(name="Coin reward", value=coin, inline=True)
         await ctx.reply(embed=embed)
 

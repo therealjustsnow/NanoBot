@@ -327,7 +327,18 @@ async def globalize_economy(conn):
             last_explore    REAL NOT NULL DEFAULT 0,
             explore_count   INTEGER NOT NULL DEFAULT 0,
             last_rob        REAL NOT NULL DEFAULT 0,
-            rob_count       INTEGER NOT NULL DEFAULT 0
+            rob_count       INTEGER NOT NULL DEFAULT 0,
+            -- Added later than this migration (the /squad + /raid claim), and
+            -- listed here rather than only in _ensure_columns because this
+            -- rebuild REPLACES the table: without them a database migrating
+            -- for the first time would come out of migration 1 missing the
+            -- columns _ensure_columns had already added. They are not in the
+            -- INSERT below — the source table predates them, so every row
+            -- starts at the defaults, i.e. nobody's first co-op is blocked.
+            last_coop       REAL NOT NULL DEFAULT 0,
+            coop_count      INTEGER NOT NULL DEFAULT 0,
+            last_raid       REAL NOT NULL DEFAULT 0,
+            raid_count      INTEGER NOT NULL DEFAULT 0
         )
         """,
         """
@@ -458,3 +469,135 @@ async def rescale_default_casino_limits(conn):
     )
     if cur.rowcount:
         log.info("Rescaled default casino bet limits for %d guild(s)", cur.rowcount)
+
+
+@migration(4)
+async def drop_per_guild_activity_cooldowns(conn):
+    """Retire the per-guild activity cooldown lengths — they're bot-wide now.
+
+    Same reasoning as migration 2 did for fishing: the claim is keyed by user
+    id alone, so whichever of a member's servers set the shortest length was
+    quietly setting the pace for all of them, and the coins it minted spend
+    everywhere. The lengths moved to `bot_settings` (utils/db/settings.py),
+    where only the bot owner can write them; the guild keeps its on/off
+    switches.
+
+    Per-guild values can't be folded into one bot-wide number, so they are
+    dropped and every activity returns to its default — the count is logged so
+    the owner knows to re-set anything they cared about with `!cooldown`.
+    Idempotent: skipped once the columns are gone.
+    """
+    async with conn.execute("PRAGMA table_info(activities_config)") as cur:
+        cols = {row["name"] for row in await cur.fetchall()}
+    if "work_cooldown" not in cols:
+        return
+    async with conn.execute(
+        "SELECT COUNT(*) FROM activities_config WHERE "
+        "work_cooldown<>3600 OR mine_cooldown<>1800 OR hunt_cooldown<>2700 OR "
+        "explore_cooldown<>10800 OR rob_cooldown<>14400"
+    ) as cur:
+        customised = (await cur.fetchone())[0]
+    log.info("Dropping the per-guild activity cooldown settings …")
+    await conn.execute("DROP TABLE IF EXISTS activities_config_new")
+    await conn.execute(
+        "CREATE TABLE activities_config_new ("
+        "guild_id TEXT PRIMARY KEY, "
+        "work_enabled INTEGER NOT NULL DEFAULT 1, "
+        "mine_enabled INTEGER NOT NULL DEFAULT 1, "
+        "hunt_enabled INTEGER NOT NULL DEFAULT 1, "
+        "explore_enabled INTEGER NOT NULL DEFAULT 1, "
+        "rob_enabled INTEGER NOT NULL DEFAULT 1)"
+    )
+    await conn.execute(
+        "INSERT INTO activities_config_new (guild_id, work_enabled, mine_enabled, "
+        "hunt_enabled, explore_enabled, rob_enabled) "
+        "SELECT guild_id, work_enabled, mine_enabled, hunt_enabled, "
+        "explore_enabled, rob_enabled FROM activities_config"
+    )
+    await conn.execute("DROP TABLE activities_config")
+    await conn.execute("ALTER TABLE activities_config_new RENAME TO activities_config")
+    if customised:
+        log.warning(
+            "%d guild(s) had custom activity cooldowns; every activity is back "
+            "on its default — set bot-wide lengths with !cooldown",
+            customised,
+        )
+
+
+@migration(5)
+async def drop_per_guild_coin_faucets(conn):
+    """Retire the per-guild coin *faucet* amounts — they're bot-wide now.
+
+    The last per-guild knobs that minted into a global wallet: the /daily
+    amount and its streak bonus, the /squad and /raid per-person rewards, and
+    the level-up coin payout. Each claim they pay out is global (one /daily per
+    account, one wallet everywhere), so a server raising any of them was paying
+    its members coins that spend in every other server. They moved to
+    `bot_settings` (utils/db/settings.py), behind the owner-only `!econ`.
+
+    Everything a guild keeps here is either cosmetic or a pure *sink*: its
+    currency name and emoji, its raid party size, and — untouched by this and
+    deliberately so — its shop prices, which destroy coins in exchange for that
+    guild's own roles and perks and so can't affect anyone outside it.
+
+    Per-guild amounts can't be folded into one bot-wide number, so they are
+    dropped back to the defaults and the count is logged. Idempotent: skipped
+    once the columns are gone.
+    """
+    async with conn.execute("PRAGMA table_info(economy_config)") as cur:
+        econ_cols = {row["name"] for row in await cur.fetchall()}
+    if "daily_amount" in econ_cols:
+        async with conn.execute(
+            "SELECT COUNT(*) FROM economy_config WHERE daily_amount<>100 OR "
+            "streak_bonus<>0 OR coop_reward<>50 OR raid_reward<>100"
+        ) as cur:
+            customised = (await cur.fetchone())[0]
+        log.info("Dropping the per-guild coin faucet amounts …")
+        await conn.execute("DROP TABLE IF EXISTS economy_config_new")
+        await conn.execute(
+            "CREATE TABLE economy_config_new ("
+            "guild_id TEXT PRIMARY KEY, "
+            "currency_name TEXT NOT NULL DEFAULT 'NanoCoin', "
+            "currency_emoji TEXT NOT NULL DEFAULT '🪙', "
+            "raid_min INTEGER NOT NULL DEFAULT 3, "
+            "raid_max INTEGER NOT NULL DEFAULT 20)"
+        )
+        await conn.execute(
+            "INSERT INTO economy_config_new "
+            "(guild_id, currency_name, currency_emoji, raid_min, raid_max) "
+            "SELECT guild_id, currency_name, currency_emoji, raid_min, raid_max "
+            "FROM economy_config"
+        )
+        await conn.execute("DROP TABLE economy_config")
+        await conn.execute("ALTER TABLE economy_config_new RENAME TO economy_config")
+        if customised:
+            log.warning(
+                "%d guild(s) had custom daily/co-op/raid rewards; all are back "
+                "on their defaults — set bot-wide amounts with !econ",
+                customised,
+            )
+
+    async with conn.execute("PRAGMA table_info(level_config)") as cur:
+        level_cols = {row["name"] for row in await cur.fetchall()}
+    if "coin_reward" not in level_cols:
+        return
+    log.info("Dropping the per-guild level-up coin reward …")
+    await conn.execute("DROP TABLE IF EXISTS level_config_new")
+    await conn.execute(
+        "CREATE TABLE level_config_new ("
+        "guild_id TEXT PRIMARY KEY, "
+        "enabled INTEGER NOT NULL DEFAULT 0, "
+        "xp_min INTEGER NOT NULL DEFAULT 15, "
+        "xp_max INTEGER NOT NULL DEFAULT 25, "
+        "cooldown INTEGER NOT NULL DEFAULT 60, "
+        "announce_channel TEXT, "
+        "announce INTEGER NOT NULL DEFAULT 1)"
+    )
+    await conn.execute(
+        "INSERT INTO level_config_new (guild_id, enabled, xp_min, xp_max, cooldown, "
+        "announce_channel, announce) "
+        "SELECT guild_id, enabled, xp_min, xp_max, cooldown, announce_channel, "
+        "announce FROM level_config"
+    )
+    await conn.execute("DROP TABLE level_config")
+    await conn.execute("ALTER TABLE level_config_new RENAME TO level_config")

@@ -8,6 +8,7 @@ from discord.ext import test as dpytest
 
 import utils.db as db
 from cogs.economy import _DEFAULT_SHOP_ITEMS
+from cogs.economy.helpers import seconds_to_afford
 from tests.conftest import config, grant_perms
 
 
@@ -64,17 +65,28 @@ async def test_pay_insufficient_funds(bot):
 
 
 @pytest.mark.cogs("cogs.economy")
-async def test_grant_denied_without_manage_guild(bot):
+async def test_grant_and_take_are_owner_only(bot):
+    """Granting mints straight into a global wallet and taking destroys coins
+    earned in servers this one has never seen — the same objection that already
+    made /coin reset owner-only, at a smaller scale."""
     author, target = config().members[0], config().members[1]
-    with pytest.raises(commands.MissingPermissions):
-        await dpytest.message(f"!coin grant 500 {target.mention}", member=author)
+    await grant_perms(author, manage_guild=True)  # not enough any more
+    bot.owner_id = author.id + 1
+
+    for command in (
+        f"!coin grant 500 {target.mention}",
+        f"!coin take 5 {target.mention}",
+    ):
+        with pytest.raises(commands.NotOwner):
+            await dpytest.message(command, member=author)
+    assert await db.get_balance(target.id) == 0
 
 
 @pytest.mark.cogs("cogs.economy")
 async def test_grant_credits_with_perms(bot):
     guild = config().guilds[0]
     author, target = config().members[0], config().members[1]
-    await grant_perms(author, manage_guild=True)
+    bot.owner_id = author.id
 
     await dpytest.message(f"!coin grant 500 {target.mention}", member=author)
     sent = dpytest.get_message()
@@ -87,7 +99,7 @@ async def test_grant_credits_multiple_tagged_members(bot):
     guild = config().guilds[0]
     author = config().members[0]
     t1, t2 = config().members[1], config().members[2]
-    await grant_perms(author, manage_guild=True)
+    bot.owner_id = author.id
 
     await dpytest.message(f"!coin grant 500 {t1.mention} {t2.mention}", member=author)
     sent = dpytest.get_message()
@@ -101,7 +113,7 @@ async def test_take_debits_multiple_tagged_members(bot):
     guild = config().guilds[0]
     author = config().members[0]
     t1, t2 = config().members[1], config().members[2]
-    await grant_perms(author, manage_guild=True)
+    bot.owner_id = author.id
     await db.add_coins(t1.id, 500)
     await db.add_coins(t2.id, 500)
 
@@ -230,3 +242,130 @@ async def test_coin_reset_is_owner_only(bot):
     with pytest.raises(commands.NotOwner):
         await dpytest.message("!coin reset", member=author)
     assert await db.get_balance(author.id) == 400
+
+
+# ── Shop pricing stays the guild's, and now comes with a yardstick ────────────
+@pytest.mark.cogs("cogs.economy")
+async def test_a_server_still_sets_its_own_shop_prices(bot):
+    """The faucets went bot-wide; the shop deliberately did not. A purchase is a
+    sink — it destroys coins for this guild's own reward — so its price can't
+    affect anyone outside the server, and its mods keep it."""
+    guild = config().guilds[0]
+    author = config().members[0]
+    await grant_perms(author, manage_guild=True)
+
+    cog = bot.get_cog("Economy")
+    for kept in ("add", "edit", "remove", "seed"):
+        assert cog.shop.get_command(kept) is not None
+
+    # A mod's price is stored as given and nothing rewrites it — /shop seed's
+    # scaling only ever applies to items it creates itself.
+    await db.add_shop_item(guild.id, "VIP", 7500, "custom", payload="a perk")
+    await dpytest.message("!shop seed", member=author)
+    dpytest.get_message()
+    priced = {i["name"]: i["price"] for i in await db.list_shop_items(guild.id)}
+    assert priced["VIP"] == 7500
+
+
+@pytest.mark.cogs("cogs.economy")
+async def test_shop_quotes_each_price_as_a_time_to_earn(bot):
+    """The number a mod was missing: what a price costs in play time."""
+    guild = config().guilds[0]
+    author = config().members[0]
+    await grant_perms(author, manage_guild=True)
+
+    await db.add_shop_item(guild.id, "VIP", 5000, "custom", payload="a perk")
+    await dpytest.message("!shop list", member=author)
+    embed = dpytest.get_message().embeds[0]
+
+    from utils import helpers as h
+
+    expected = h.fmt_duration(seconds_to_afford(5000))
+    assert any(expected in field.value for field in embed.fields), embed.fields
+    # And the footer is honest that the figure is a floor.
+    assert "non-stop" in embed.footer.text
+
+
+@pytest.mark.cogs("cogs.economy")
+async def test_a_server_cannot_set_a_reward_amount(bot):
+    """Every faucet subcommand is gone from /coin; the sinks and cosmetics stay."""
+    author = config().members[0]
+    await grant_perms(author, manage_guild=True)
+    cog = bot.get_cog("Economy")
+
+    for gone in ("daily", "streakbonus", "coop", "raid"):
+        assert cog.coin.get_command(gone) is None
+    for kept in ("name", "emoji", "raidsize", "config"):
+        assert cog.coin.get_command(kept) is not None
+
+
+# ── Co-op payouts are rate-limited per member ─────────────────────────────────
+# dpytest can't press a button, so these drive the payout path the views call
+# (Economy._pay_party) directly — the SellConfirmView precedent.
+@pytest.mark.cogs("cogs.economy")
+async def test_a_coop_payout_can_only_be_claimed_once_per_cooldown(bot):
+    """The gap this closes: the reward is a faucet and had no rate limit at all
+    — only the invoker's few-second command cooldown — so two members could
+    confirm a squad every half-minute forever."""
+    cog = bot.get_cog("Economy")
+    a, b = config().members[0].id, config().members[1].id
+
+    paid, skipped = await cog._pay_party([a, b], "coop", 50)
+    assert paid == [a, b] and skipped == []
+    assert await db.get_balance(a) == 50
+
+    # Straight back for another go: both are on cooldown, nobody is paid twice.
+    paid, skipped = await cog._pay_party([a, b], "coop", 50)
+    assert paid == [] and skipped == [a, b]
+    assert await db.get_balance(a) == 50
+
+
+@pytest.mark.cogs("cogs.economy")
+async def test_one_member_on_cooldown_does_not_cost_the_party(bot):
+    cog = bot.get_cog("Economy")
+    a, b = config().members[0].id, config().members[1].id
+
+    await cog._pay_party([a], "coop", 50)  # `a` alone claims first
+    paid, skipped = await cog._pay_party([a, b], "coop", 50)
+    assert paid == [b] and skipped == [a]
+    assert await db.get_balance(a) == 50 and await db.get_balance(b) == 50
+
+
+@pytest.mark.cogs("cogs.economy")
+async def test_squad_and_raid_claims_are_independent(bot):
+    cog = bot.get_cog("Economy")
+    a = config().members[0].id
+
+    assert (await cog._pay_party([a], "coop", 50))[0] == [a]
+    # A spent /squad must not block /raid — they're separate faucets.
+    assert (await cog._pay_party([a], "raid", 100))[0] == [a]
+    assert await db.get_balance(a) == 150
+    assert (await cog._pay_party([a], "raid", 100))[0] == []
+
+
+@pytest.mark.cogs("cogs.economy")
+async def test_the_coop_cooldown_is_bot_wide_and_owner_set(bot):
+    """Same rule as every other cooldown: the claim is per user, so the length
+    can't be a server's — it comes from bot_settings via !cooldown."""
+    cog = bot.get_cog("Economy")
+    from cogs.activities.constants import COOP_COOLDOWN_DEFAULT
+
+    assert await cog._coop_cooldown("coop") == COOP_COOLDOWN_DEFAULT
+    await db.set_activity_cooldown("coop", 60)
+    assert await cog._coop_cooldown("coop") == 60
+    # Junk in the row falls back to the default rather than to no cooldown.
+    await db.set_bot_setting("cooldown:coop", "soon")
+    assert await cog._coop_cooldown("coop") == COOP_COOLDOWN_DEFAULT
+
+
+@pytest.mark.cogs("cogs.economy")
+async def test_squad_refuses_to_open_while_the_host_is_on_cooldown(bot):
+    """The real guard is the per-member claim; this just tells the host now
+    rather than after five people have pressed Confirm."""
+    author, mate = config().members[0], config().members[1]
+    cog = bot.get_cog("Economy")
+    await cog._pay_party([author.id], "coop", 50)
+
+    await dpytest.message(f"!squad {mate.mention}", member=author)
+    sent = dpytest.get_message()
+    assert "cooldown" in sent.embeds[0].title.lower()

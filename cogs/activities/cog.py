@@ -29,12 +29,11 @@ anywhere coins/items do (/shop, /pay, /coin gamble, /inventory sell).
 Stats, tools, and cooldowns are GLOBAL — keyed by user, not (guild, user). A
 pickaxe bought in one server digs in all of them, and a cooldown claimed
 anywhere applies everywhere (which is what stops /work being farmed once per
-server). Each server still owns whether an activity is enabled and how long
-its cooldown lasts — with one limit: because the claim is shared, the shortest
-cooldown among a member's servers is the one that governs them, so a per-guild
-length can go up freely but only down to the activity's floor (half the
-default). Every read of a length goes through `Activities._cooldown`, which
-applies that floor. See "Cross-server farming" in constants.py.
+server). A server still owns whether an activity is enabled there, but NOT how
+long its cooldown lasts: because the claim is shared, a per-guild length only
+ever meant "the most permissive server sets everyone's pace". Lengths are
+bot-wide and owner-only (`!cooldown`, cogs/admin), read through
+`Activities._cfg`/`_cooldown`. See "Cross-server farming" in constants.py.
 
 Slash command budget: two flat commands (/work, /rob) plus two groups
 (/mine …, /adventure …) whose subcommands cost no extra top-level slots —
@@ -54,6 +53,9 @@ Commands
   /rob <member>                 → try to steal a cut of a member's coins
   /adventure toggle <activity>  → enable/disable an activity   (Manage Server)
   /adventure config             → show settings                (Manage Server)
+
+Cooldown lengths are not here: they are bot-wide, so `!cooldown` lives in the
+owner-only admin cog.
 """
 
 import logging
@@ -71,11 +73,8 @@ from utils import items as item_catalogue
 
 from . import items as _register_items  # noqa: F401 - side-effect: registers item defs
 from .constants import (
-    ACTIVITY_COOLDOWN_BOUNDS,
-    ACTIVITY_DEFAULT_COOLDOWNS,
     ACTIVITY_INFO,
     ACTIVITY_NAMES,
-    COOLDOWN_PRESETS,
     EXPLORE_COINS_BIG,
     EXPLORE_COINS_SMALL,
     EXPLORE_FLAVOR,
@@ -131,16 +130,27 @@ class Activities(commands.Cog):
         return h.fmt_coins(amount, econ["currency_name"], econ["currency_emoji"])
 
     # ── shared status helpers ────────────────────────────────────────────────
-    def _cooldown(self, cfg: dict, activity: str) -> int:
-        """This server's cooldown for an activity, floored.
+    async def _cfg(self, guild_id: int) -> dict:
+        """This server's activity settings, with the bot-wide cooldowns folded in.
 
-        The single place the length is read. Claims are global (one row per
-        user, not per guild+user), so the shortest length among a member's
-        servers is the one that governs them — the floor is what stops a
-        permissive server from becoming everyone's farm. See the "Cross-server
-        farming" note in constants.py.
+        The guild row only holds the on/off switches now. Cooldown *claims* are
+        global (one stats row per user, not per guild+user), so the lengths are
+        global too: they live in `bot_settings`, are set by the bot owner alone
+        (`!cooldown`), and are merged in here so every call site keeps reading
+        one dict. See the "Cross-server farming" note in constants.py.
         """
-        return effective_cooldown(activity, cfg[f"{activity}_cooldown"])
+        cfg = dict(await db.get_activities_config(guild_id))
+        for activity, seconds in (await db.get_activity_cooldowns()).items():
+            cfg[f"{activity}_cooldown"] = seconds
+        return cfg
+
+    def _cooldown(self, cfg: dict, activity: str) -> int:
+        """An activity's cooldown length — the single place it is read.
+
+        Missing from `cfg` means the owner set no override, and
+        `effective_cooldown` answers with the activity's default.
+        """
+        return effective_cooldown(activity, cfg.get(f"{activity}_cooldown"))
 
     def _remaining(self, cfg: dict, stats: dict, activity: str) -> int:
         """Seconds left on an activity's cooldown (0 = ready). Read-only — the
@@ -183,7 +193,7 @@ class Activities(commands.Cog):
     )
     @commands.guild_only()
     async def work(self, ctx: commands.Context):
-        cfg = await db.get_activities_config(ctx.guild.id)
+        cfg = await self._cfg(ctx.guild.id)
         if not cfg["work_enabled"]:
             return await ctx.reply(
                 embed=h.err("Working is disabled on this server."), ephemeral=True
@@ -251,7 +261,7 @@ class Activities(commands.Cog):
         await self._do_dig(ctx)
 
     async def _do_dig(self, ctx: commands.Context):
-        cfg = await db.get_activities_config(ctx.guild.id)
+        cfg = await self._cfg(ctx.guild.id)
         if not cfg["mine_enabled"]:
             return await ctx.reply(
                 embed=h.err("Mining is disabled on this server."), ephemeral=True
@@ -341,7 +351,7 @@ class Activities(commands.Cog):
     @mine.command(name="stats", description="Your pickaxe and dig stats.")
     @commands.cooldown(1, 5, commands.BucketType.user)
     async def mine_stats(self, ctx: commands.Context):
-        cfg = await db.get_activities_config(ctx.guild.id)
+        cfg = await self._cfg(ctx.guild.id)
         econ = await db.get_econ_config(ctx.guild.id)
         stats = await db.get_activity_stats(ctx.author.id)
         pickaxe = pickaxe_info(stats["pickaxe_level"])
@@ -381,13 +391,12 @@ class Activities(commands.Cog):
         extras={
             "category": "🪙 Economy",
             "sub": "⛏️ Activities",
-            "short": "Hunt, explore, and tune activities",
+            "short": "Hunt, explore, and manage activities",
             "usage": "adventure [subcommand]",
             "desc": "Run it bare to see every activity, what it pays, and whether "
             "you're off cooldown. Hunt for pelts, meat, and rare trophies (medium "
-            "risk) or explore for a long-shot reward. Admins can enable/disable "
-            "and tune the cooldown for every activity: work, mine, hunt, explore, "
-            "rob.",
+            "risk) or explore for a long-shot reward. Admins can enable or disable "
+            "any of the five activities here: work, mine, hunt, explore, rob.",
             "args": [],
             "perms": "Admin subcommands require Manage Server",
             "example": "{prefix}adventure hunt\n{prefix}adventure explore",
@@ -401,7 +410,7 @@ class Activities(commands.Cog):
         """The member-facing landing card: every activity, what it's for, and
         whether you can do it right now. (Mods get the settings dump from
         /adventure config.)"""
-        cfg = await db.get_activities_config(ctx.guild.id)
+        cfg = await self._cfg(ctx.guild.id)
         stats = await db.get_activity_stats(ctx.author.id)
         embed = h.embed(
             "🧭 Things To Do",
@@ -426,7 +435,7 @@ class Activities(commands.Cog):
         description="Hunt for pelts, meat, and rare trophies — a bit riskier.",
     )
     async def hunt(self, ctx: commands.Context):
-        cfg = await db.get_activities_config(ctx.guild.id)
+        cfg = await self._cfg(ctx.guild.id)
         if not cfg["hunt_enabled"]:
             return await ctx.reply(
                 embed=h.err("Hunting is disabled on this server."), ephemeral=True
@@ -474,7 +483,7 @@ class Activities(commands.Cog):
         description="Explore for a long-shot reward — mostly nothing, occasionally huge.",
     )
     async def explore(self, ctx: commands.Context):
-        cfg = await db.get_activities_config(ctx.guild.id)
+        cfg = await self._cfg(ctx.guild.id)
         if not cfg["explore_enabled"]:
             return await ctx.reply(
                 embed=h.err("Exploring is disabled on this server."), ephemeral=True
@@ -542,7 +551,7 @@ class Activities(commands.Cog):
     @commands.guild_only()
     @app_commands.describe(member="Who to rob")
     async def rob(self, ctx: commands.Context, member: discord.Member):
-        cfg = await db.get_activities_config(ctx.guild.id)
+        cfg = await self._cfg(ctx.guild.id)
         econ = await db.get_econ_config(ctx.guild.id)
         if not cfg["rob_enabled"]:
             return await ctx.reply(
@@ -652,7 +661,7 @@ class Activities(commands.Cog):
             return await ctx.reply(
                 embed=h.err(f"Unknown activity `{activity}`."), ephemeral=True
             )
-        cfg = await db.get_activities_config(ctx.guild.id)
+        cfg = await self._cfg(ctx.guild.id)
         key = f"{activity}_enabled"
         enabled = not cfg[key]
         await db.set_activities_config(ctx.guild.id, **{key: enabled})
@@ -663,18 +672,13 @@ class Activities(commands.Cog):
     async def _toggle_activity_ac(self, interaction: discord.Interaction, current: str):
         return await self._activity_choices(interaction, current)
 
-
     async def _activity_choices(
         self, interaction: discord.Interaction, current: str
     ) -> list[app_commands.Choice[str]]:
         """The five activities with their live state, so a mod can see what
         they're about to change before they change it."""
         q = (current or "").strip().lower()
-        cfg = (
-            await db.get_activities_config(interaction.guild_id)
-            if interaction.guild_id
-            else None
-        )
+        cfg = await self._cfg(interaction.guild_id) if interaction.guild_id else None
         choices: list[app_commands.Choice[str]] = []
         for activity in ACTIVITY_NAMES:
             if q and q not in activity:
@@ -698,7 +702,7 @@ class Activities(commands.Cog):
         await self._show_activities_config(ctx)
 
     async def _show_activities_config(self, ctx: commands.Context):
-        cfg = await db.get_activities_config(ctx.guild.id)
+        cfg = await self._cfg(ctx.guild.id)
         embed = h.embed("🪙 Activities Settings", color=h.BLUE)
         for activity in ACTIVITY_NAMES:
             enabled = cfg[f"{activity}_enabled"]
@@ -710,8 +714,8 @@ class Activities(commands.Cog):
                 inline=True,
             )
         embed.set_footer(
-            text="Change with /adventure toggle or /adventure cooldown "
-            "(both list every activity)"
+            text="Enable or disable an activity with /adventure toggle. "
+            "Cooldowns are bot-wide and only the bot owner can change them."
         )
         await ctx.reply(embed=embed)
 

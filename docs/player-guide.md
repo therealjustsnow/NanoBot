@@ -35,9 +35,17 @@ earned. Nothing resets, nothing is left behind.
   casino, `/rob`, and so on).
 - Its own currency **name and emoji** — the same coins might be "NanoCoins"
   here and "Doubloons" there. It's still one balance.
-- Its daily/co-op/raid reward amounts and activity cooldown lengths.
+- Which activities are switched on, and its raid party size.
 - Its **shop** (server roles and custom rewards) and its **casino jackpot**.
 - Its leaderboard view — see [Leaderboards](#-leaderboards).
+
+**What no single server controls: how many coins exist.** Reward *amounts* —
+`/daily`, its streak bonus, `/squad`, `/raid`, level-up coins — are set once for
+the whole bot by its owner. They have to be: they pay into a wallet you spend in
+every server, so one server raising its daily would be handing its members coins
+usable everywhere else. Prices are the opposite — a shop purchase *removes*
+coins in exchange for that server's own role or perk, so what it costs can only
+ever affect that server, and its mods set it.
 
 **Did I lose anything in the switch?** No. If you had balances in several
 servers, they were added together into one wallet, your best rod/pickaxe/rank
@@ -279,15 +287,15 @@ cooldown, and whether you're ready right now.
 | `/adventure explore` | 3 hours | wasted trip | Nothing → coins → keys/chests/charms → a big find |
 | `/rob <member>` | 4 hours | 200 coin fine | 10–20% of their wallet (capped 1,000) |
 
-*(Cooldown lengths are per server — these are the defaults.)*
+*(These lengths are the same in every server.)*
 
 **One cooldown, everywhere.** These aren't per server. Doing `/work` in one
 server puts it on cooldown in every server you share with the bot, so there's
 no hopping between servers to farm — your coins are one wallet, so your
 cooldowns are one set too. A server admin can switch any activity off for their
-server, and can make a cooldown longer, or up to twice as fast — but no faster
-than that, since a shorter setting anywhere would speed the activity up for
-their members *everywhere*.
+own server, but nobody except the bot's owner can change how *long* a cooldown
+lasts: since the cooldown follows you between servers, one server shortening it
+would speed the activity up for its members everywhere.
 
 **`/work`** is the safe floor. Shifts add up to promotions (🍵 Intern all the
 way to 🏆 Legend of the Office), and each promotion pays a bit more.
@@ -439,8 +447,38 @@ rank bonus on weekly-objective payouts. `/progress prestige confirm` does it.
 - **`/raid [activity]`** — opens a join board anyone can press **Join** on. The
   host (or a mod) presses **Finish** and everyone who joined gets paid.
 
+**Each of these pays you once per cooldown** — 30 minutes for a squad, an hour
+for a raid, the same in every server. You can join as many boards as you like;
+you just won't be paid twice inside the window. If you're on cooldown when a
+board settles, everyone else is still paid in full and you're named on the
+result, so your timing never costs the party.
+
 Contribution points are a lifetime stat — spending coins never lowers them —
 and they drive `/coin contrib` and its rank titles.
+
+---
+
+## 👍 Rep and 🍪 cookies
+
+Two ways to say something nice, neither worth a single coin.
+
+| Command | What it does |
+|---|---|
+| `/profile rep <member>` | Give someone a reputation point — once every 24 hours |
+| `/profile rep` | Your rep total, your global position, and when your next one is ready |
+| `/fun cookie <member>` | Give someone a cookie |
+| `/fun cookie` | Your **cookie jar** card: how many you've given and received |
+
+Rep shows in the top-right of your profile card. You can't rep yourself, you
+can't rep a bot, and you get exactly one to give per day — that's the whole
+point of it meaning anything. If a rep somehow fails to land, the day isn't
+spent.
+
+Cookies have no limit beyond a few seconds between them, because they're worth
+nothing and that's fine. The jar card shows both numbers, because being
+generous counts as much as being popular.
+
+Both follow your account into every server, like everything else you own.
 
 ---
 
@@ -454,7 +492,11 @@ rewards, queued for a moderator to hand over. Some items have limited stock,
 a per-person limit, or a cooldown.
 
 The shop belongs to the server — but you pay with your global wallet, so coins
-earned anywhere buy rewards here.
+earned anywhere buy rewards here. Each price also shows roughly **how long it
+takes to earn** ("~25m to earn"), measured in solid fishing time. It's a floor,
+not a promise: nobody fishes non-stop, so the real wait is longer. Mods see the
+same figure when they add an item, which is how they pick a price that matches
+the effort they had in mind.
 
 ---
 
@@ -514,9 +556,10 @@ daily quest and casino challenges.
 Each server picks its own name and emoji. It's still one balance.
 
 **Can a server admin take my coins?**
-Server staff can grant and take coins with `/coin grant` / `/coin take`, and
-that affects your global wallet — so it's worth knowing who you're playing
-with. Wiping wallets entirely is restricted to the bot owner.
+No. Your wallet is the same in every server, so adding to it or taking from it
+is the bot owner's call, not a server's — `/coin grant`, `/coin take` and
+`/coin reset` are all bot-owner-only. What a server *can* do is set its own
+shop prices, which only decides what its own rewards cost.
 
 **I bought bait and nothing changed.**
 Use it: `/inventory use <bait>`. Check `/fish bait` to confirm it's armed.
@@ -549,16 +592,24 @@ to configure.
 
 | Area | Commands (Manage Server) |
 |---|---|
-| Currency & rewards | `/coin name`, `/coin emoji`, `/coin daily`, `/coin streakbonus`, `/coin coop`, `/coin raid`, `/coin raidsize`, `/coin config` |
-| Balances | `/coin grant`, `/coin take` (these move a member's **global** wallet) |
+| Currency & raids | `/coin name`, `/coin emoji`, `/coin raidsize`, `/coin config` |
 | Shop | `/shop seed`, `/shop add`, `/shop edit`, `/shop remove`, `/shop pending`, `/shop fulfill` |
-| Fishing | `/fish toggle`, `/fish event`, `/fish config` |
+| Fishing | `/fish toggle`, `/fish config` |
 | Casino | `/casino limit`, `/casino toggle`, `/casino config` |
-| Activities | `/adventure toggle`, `/adventure cooldown`, `/adventure config` |
+| Activities | `/adventure toggle`, `/adventure config` |
 | Leveling | `/level …` (per-server chat XP — deliberately **not** global) |
 
-Note that `/coin reset` is bot-owner-only: with global wallets, resetting
-would delete coins members earned in other servers.
+Note that `/coin grant`, `/coin take` and `/coin reset` are all bot-owner-only.
+With one global wallet, granting mints coins that spend in every server and
+taking deletes coins members earned in servers this one has never seen —
+neither is a single server's call.
+
+Reward amounts and activity cooldowns aren't in that table because they aren't
+per server — they set the pace of an economy every server shares, so the bot's
+owner sets them once (`!econ`, `!cooldown`). `/coin config` and
+`/adventure config` show the live values, marked bot-wide. What is yours to tune
+is the **shop**: its prices are a sink, so nothing you charge can leak into
+another server.
 
 Deeper reading: [`docs/global-economy.md`](global-economy.md) (what's global
 and why, plus the migration) and [`docs/economy-design.md`](economy-design.md)

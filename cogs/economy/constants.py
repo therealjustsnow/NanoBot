@@ -20,6 +20,37 @@ GAMBLE_MULTIPLIER = 2.0
 # values toward integer limits. A billion is far above any real use.
 COIN_MAX = 1_000_000_000
 
+# ══════════════════════════════════════════════════════════════════════════════
+#  Coin faucets — bot-wide, owner-only
+# ══════════════════════════════════════════════════════════════════════════════
+# Every amount here MINTS into a global wallet, so none of them can be a
+# server's setting: one /daily claim per account, one wallet in every server, so
+# a guild raising its daily would be paying its members coins that spend
+# everywhere else too. They live in `bot_settings` (utils/db/settings.py) and
+# are set with the owner-only `!econ`; these are the defaults used until the
+# owner overrides one. Migration 5 dropped the old per-guild columns.
+#
+# What a guild still owns is everything that affects only its own members: its
+# currency name/emoji, its raid party size, and its **shop prices** — a shop
+# purchase is a pure *sink*, destroying coins in exchange for that guild's own
+# role or mod-fulfilled perk, so pricing it badly can't hurt anyone outside it.
+REWARD_DEFAULTS: dict[str, int] = {
+    "daily": 100,  # /daily base payout
+    "streak_bonus": 0,  # extra coins per consecutive day, off by default
+    "coop": 50,  # /squad, per confirmed member (0 disables /squad)
+    "raid": 100,  # /raid, per participant     (0 disables /raid)
+    "level_coin": 0,  # level-up payout x new level, off by default
+}
+
+# One-line explanations for `!econ`'s listing, in display order.
+REWARD_LABELS: dict[str, str] = {
+    "daily": "/daily base payout",
+    "streak_bonus": "extra coins per consecutive /daily day",
+    "coop": "/squad reward, per confirmed member (0 disables it)",
+    "raid": "/raid reward, per participant (0 disables it)",
+    "level_coin": "level-up payout, multiplied by the new level (0 = off)",
+}
+
 # How long a /squad co-op reward (and its picker menu, and the /coin grant|take
 # mass picker) waits before expiring. Generous — a big squad can be 25 people
 # who all have to press Confirm — but not unlimited, so an abandoned board

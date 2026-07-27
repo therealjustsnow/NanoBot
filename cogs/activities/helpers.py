@@ -9,9 +9,9 @@ throughout the economy/fishing cogs).
 from utils.helpers import weighted_pick
 
 from .constants import (
-    ACTIVITY_COOLDOWN_BOUNDS,
     ACTIVITY_DEFAULT_COOLDOWNS,
     CAREER_LADDER,
+    COOLDOWN_MIN,
     EXPLORE_OUTCOMES,
     HUNT_INJURY_CHANCE,
     HUNT_INJURY_FINE_MAX,
@@ -38,25 +38,26 @@ from .constants import (
 #  Cooldowns
 # ══════════════════════════════════════════════════════════════════════════════
 def effective_cooldown(activity: str, configured) -> int:
-    """The cooldown actually enforced for an activity in a server.
+    """The cooldown actually enforced for an activity.
 
-    Cooldown claims are global, so the shortest length among a member's servers
-    is the one that governs them — see the "Cross-server farming" note in
-    constants.py. /adventure cooldown already refuses a value under the floor,
-    but it's re-applied here so a row written before the floor existed, or
-    edited straight in the database, can't undercut it either.
+    `configured` is the bot owner's override for this activity (see
+    utils/db/settings.py) or None when there isn't one. Cooldown claims are
+    global, so this length is bot-wide too — no server gets to shorten it. See
+    "Cross-server farming" in constants.py.
 
-    An unknown activity falls back to its own default rather than to zero: a
+    An unset, unknown, or nonsense value falls back to the activity's default
+    rather than to zero, and anything below COOLDOWN_MIN is lifted to it: a
     cooldown that silently becomes "no cooldown" is the one failure mode this
     must never have.
     """
     default = ACTIVITY_DEFAULT_COOLDOWNS.get(activity, 3600)
-    floor, _ceiling = ACTIVITY_COOLDOWN_BOUNDS.get(activity, (default, default))
+    if configured is None:
+        return default
     try:
         value = int(configured)
     except (TypeError, ValueError):
         return default
-    return max(value, floor)
+    return max(value, COOLDOWN_MIN)
 
 
 # ══════════════════════════════════════════════════════════════════════════════

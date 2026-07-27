@@ -3,18 +3,20 @@
 
 Part of the utils/db package. Coins/items themselves live in the economy and
 items tables (utils/db/economy.py, utils/db/items.py) — this module only
-tracks per-guild config (enable flags + cooldown overrides) and GLOBAL
-per-user cooldown/lifetime stats (last-run timestamps, per-activity counts, the
-/work career shift tally, and the /mine pickaxe tier).
+tracks per-guild config (the enable flags) and GLOBAL per-user
+cooldown/lifetime stats (last-run timestamps, per-activity counts, the /work
+career shift tally, and the /mine pickaxe tier).
 
 The stats row is keyed by user_id alone: a pickaxe bought in one server digs in
 every server, and a cooldown claimed anywhere applies everywhere (which is also
-what stops the same member farming /work once per server). How long that
-cooldown lasts, and whether an activity runs at all, stay per-guild settings.
+what stops the same member farming /work once per server). Whether an activity
+runs at all is a per-guild setting; how LONG its cooldown lasts is not — that
+claim is global, so the length is a bot-wide, owner-only setting kept in
+utils/db/settings.py. Migration 4 dropped the old per-guild columns.
 """
 
 from . import _cache
-from ._core import _commit, _conn, register_init
+from ._core import _commit, _conn, _ensure_columns, register_init
 
 # Whitelisted activity → (last-run column, lifetime-count column). Never build
 # these from user input — activity names are always validated against this
@@ -26,6 +28,13 @@ _ACTIVITY_COLUMNS: dict[str, tuple[str, str]] = {
     "hunt": ("last_hunt", "hunt_count"),
     "explore": ("last_explore", "explore_count"),
     "rob": ("last_rob", "rob_count"),
+    # /squad and /raid aren't /adventure activities, but their payouts are the
+    # same shape — a per-user claim on a global wallet — and this is the one
+    # atomic claim in the codebase, so they use it rather than growing a
+    # second. They deliberately stay out of cogs.activities.ACTIVITY_NAMES, so
+    # /adventure never lists or toggles them.
+    "coop": ("last_coop", "coop_count"),
+    "raid": ("last_raid", "raid_count"),
 }
 
 
@@ -37,12 +46,7 @@ async def _ensure_activities_tables():
             mine_enabled      INTEGER NOT NULL DEFAULT 1,
             hunt_enabled      INTEGER NOT NULL DEFAULT 1,
             explore_enabled   INTEGER NOT NULL DEFAULT 1,
-            rob_enabled       INTEGER NOT NULL DEFAULT 1,
-            work_cooldown     INTEGER NOT NULL DEFAULT 3600,
-            mine_cooldown     INTEGER NOT NULL DEFAULT 1800,
-            hunt_cooldown     INTEGER NOT NULL DEFAULT 2700,
-            explore_cooldown  INTEGER NOT NULL DEFAULT 10800,
-            rob_cooldown      INTEGER NOT NULL DEFAULT 14400
+            rob_enabled       INTEGER NOT NULL DEFAULT 1
         )
     """)
     # Per-user cooldown claims + lifetime stats. `work_shifts` doubles as the
@@ -65,7 +69,17 @@ async def _ensure_activities_tables():
             rob_count       INTEGER NOT NULL DEFAULT 0
         )
     """)
-    await _commit()
+    # Co-op claim columns — added after the baseline table (see the note on
+    # _ACTIVITY_COLUMNS).
+    await _ensure_columns(
+        "activities_stats",
+        {
+            "last_coop": "REAL NOT NULL DEFAULT 0",
+            "coop_count": "INTEGER NOT NULL DEFAULT 0",
+            "last_raid": "REAL NOT NULL DEFAULT 0",
+            "raid_count": "INTEGER NOT NULL DEFAULT 0",
+        },
+    )
 
 
 # ── Config ─────────────────────────────────────────────────────────────────────
@@ -75,11 +89,6 @@ _CONFIG_DEFAULTS = {
     "hunt_enabled": True,
     "explore_enabled": True,
     "rob_enabled": True,
-    "work_cooldown": 3600,
-    "mine_cooldown": 1800,
-    "hunt_cooldown": 2700,
-    "explore_cooldown": 10800,
-    "rob_cooldown": 14400,
 }
 
 
@@ -89,8 +98,7 @@ async def get_activities_config(guild_id: int) -> dict:
         return cached
     async with _conn().execute(
         "SELECT work_enabled, mine_enabled, hunt_enabled, explore_enabled, "
-        "rob_enabled, work_cooldown, mine_cooldown, hunt_cooldown, "
-        "explore_cooldown, rob_cooldown FROM activities_config WHERE guild_id=?",
+        "rob_enabled FROM activities_config WHERE guild_id=?",
         (str(guild_id),),
     ) as cur:
         row = await cur.fetchone()
@@ -105,11 +113,6 @@ async def get_activities_config(guild_id: int) -> dict:
             "hunt_enabled": bool(row["hunt_enabled"]),
             "explore_enabled": bool(row["explore_enabled"]),
             "rob_enabled": bool(row["rob_enabled"]),
-            "work_cooldown": row["work_cooldown"],
-            "mine_cooldown": row["mine_cooldown"],
-            "hunt_cooldown": row["hunt_cooldown"],
-            "explore_cooldown": row["explore_cooldown"],
-            "rob_cooldown": row["rob_cooldown"],
         },
     )
 
@@ -120,15 +123,12 @@ async def set_activities_config(guild_id: int, **kwargs) -> None:
     current.update(kwargs)
     await _conn().execute(
         "INSERT INTO activities_config (guild_id, work_enabled, mine_enabled, "
-        "hunt_enabled, explore_enabled, rob_enabled, work_cooldown, "
-        "mine_cooldown, hunt_cooldown, explore_cooldown, rob_cooldown) "
-        "VALUES (?,?,?,?,?,?,?,?,?,?,?) "
+        "hunt_enabled, explore_enabled, rob_enabled) "
+        "VALUES (?,?,?,?,?,?) "
         "ON CONFLICT(guild_id) DO UPDATE SET "
         "work_enabled=excluded.work_enabled, mine_enabled=excluded.mine_enabled, "
         "hunt_enabled=excluded.hunt_enabled, explore_enabled=excluded.explore_enabled, "
-        "rob_enabled=excluded.rob_enabled, work_cooldown=excluded.work_cooldown, "
-        "mine_cooldown=excluded.mine_cooldown, hunt_cooldown=excluded.hunt_cooldown, "
-        "explore_cooldown=excluded.explore_cooldown, rob_cooldown=excluded.rob_cooldown",
+        "rob_enabled=excluded.rob_enabled",
         (
             str(guild_id),
             1 if current["work_enabled"] else 0,
@@ -136,11 +136,6 @@ async def set_activities_config(guild_id: int, **kwargs) -> None:
             1 if current["hunt_enabled"] else 0,
             1 if current["explore_enabled"] else 0,
             1 if current["rob_enabled"] else 0,
-            int(current["work_cooldown"]),
-            int(current["mine_cooldown"]),
-            int(current["hunt_cooldown"]),
-            int(current["explore_cooldown"]),
-            int(current["rob_cooldown"]),
         ),
     )
     await _commit()
@@ -161,6 +156,10 @@ def _stats_row(row) -> dict:
         "explore_count": row["explore_count"],
         "last_rob": row["last_rob"],
         "rob_count": row["rob_count"],
+        "last_coop": row["last_coop"],
+        "coop_count": row["coop_count"],
+        "last_raid": row["last_raid"],
+        "raid_count": row["raid_count"],
     }
 
 
@@ -176,13 +175,18 @@ _STATS_DEFAULTS = {
     "explore_count": 0,
     "last_rob": 0.0,
     "rob_count": 0,
+    "last_coop": 0.0,
+    "coop_count": 0,
+    "last_raid": 0.0,
+    "raid_count": 0,
 }
 
 
 async def get_activity_stats(user_id: int) -> dict:
     async with _conn().execute(
         "SELECT last_work, work_shifts, last_mine, mine_count, pickaxe_level, "
-        "last_hunt, hunt_count, last_explore, explore_count, last_rob, rob_count "
+        "last_hunt, hunt_count, last_explore, explore_count, last_rob, rob_count, "
+        "last_coop, coop_count, last_raid, raid_count "
         "FROM activities_stats WHERE user_id=?",
         (str(user_id),),
     ) as cur:

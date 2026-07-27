@@ -15,6 +15,8 @@ Commands:
   restart            — graceful shutdown then re-exec the process
   setloglevel <lvl>  — change log level live and persist to config.ini
   status [text|clear]— set the idle presence text (or clear to auto-rotate)
+  cooldown [a] [len] — show/set the bot-wide activity cooldowns
+  econ [reward] [n]  — show/set the bot-wide coin reward amounts
   logs [lines]       — tail the log file right in Discord
   scrape             — manually trigger the daily content cache scrape
   cachestats         — show cache DB statistics (FML, WYR, images)
@@ -37,7 +39,21 @@ import discord
 from discord.ext import commands
 
 from utils import config as cfg_mod
+from utils import db
 from utils import helpers as h
+
+# Pure data/helpers only — no cog import, same precedent as cogs/images.py
+# reading cogs/fun/sources.py. Activity cooldowns and coin reward amounts are
+# bot-wide settings (one cooldown claim per member, one wallet per member, both
+# shared across servers), so the commands that change them belong to the owner,
+# here, rather than to /adventure and /coin.
+from cogs.activities.constants import (
+    ACTIVITY_COOLDOWN_BOUNDS,
+    ACTIVITY_DEFAULT_COOLDOWNS,
+    COOLDOWN_KEYS,
+)
+from cogs.activities.helpers import effective_cooldown
+from cogs.economy.constants import COIN_MAX, REWARD_DEFAULTS, REWARD_LABELS
 
 from .constants import _REPO_ROOT, _ALL_COGS, _VALID_LEVELS
 from .helpers import _git_pull
@@ -725,6 +741,220 @@ class Admin(ConfigMixin, commands.Cog):
                 f"Log level set to **{level}** — {level_descriptions[level]}.\n"
                 f"Saved to `config.ini`. Takes effect immediately.",
                 "📋 Log Level Updated",
+            )
+        )
+
+    # ══════════════════════════════════════════════════════════════════════════
+    #  econ — bot-wide coin faucet amounts
+    # ══════════════════════════════════════════════════════════════════════════
+    @commands.command(
+        name="econ",
+        aliases=["rewards", "faucet"],
+        help=(
+            "Show or set the bot-wide coin reward amounts (owner only).\n\n"
+            "Usage:\n"
+            "  !econ                  → list every reward and what it pays\n"
+            "  !econ daily 150        → set the /daily payout to 150\n"
+            "  !econ coop 0           → turn /squad rewards off\n"
+            "  !econ daily default    → back to the built-in default\n\n"
+            "These mint into wallets that spend in EVERY server, so they can't "
+            "be a per-server setting — a server raising its daily would be "
+            "paying its members coins usable everywhere else. Shop prices are "
+            "the opposite (they destroy coins for that server's own rewards) "
+            "and stay with each server's mods."
+        ),
+    )
+    async def econ(
+        self,
+        ctx: commands.Context,
+        reward: Optional[str] = None,
+        *,
+        amount: Optional[str] = None,
+    ):
+        """!econ [reward] [coins|default] — bot-wide coin faucet amounts."""
+        overrides = await db.get_reward_amounts()
+
+        def _current(key: str) -> int:
+            return overrides.get(key, REWARD_DEFAULTS[key])
+
+        if not reward:
+            lines = [
+                f"{'•' if key in overrides else '·'} `{key}` — "
+                f"**{_current(key):,}**"
+                f"{'' if key in overrides else ' (default)'} · {label}"
+                for key, label in REWARD_LABELS.items()
+            ]
+            return await ctx.reply(
+                embed=h.info(
+                    "\n".join(lines) + "\n\nSet one with `!econ <reward> <coins>`, or "
+                    "`!econ <reward> default` to clear an override.",
+                    "🪙 Coin Rewards (bot-wide)",
+                )
+            )
+
+        key = reward.lower().strip()
+        if key not in REWARD_DEFAULTS:
+            return await ctx.reply(
+                embed=h.err(
+                    f"Unknown reward `{key}`. "
+                    f"Pick one of: {', '.join(f'`{k}`' for k in REWARD_DEFAULTS)}."
+                )
+            )
+
+        if not amount:
+            return await ctx.reply(
+                embed=h.info(
+                    f"`{key}` pays **{_current(key):,}** coins"
+                    f"{'' if key in overrides else ' (the default)'} — "
+                    f"{REWARD_LABELS[key]}.",
+                    "🪙 Coin Reward",
+                )
+            )
+
+        wanted = amount.strip().lower().replace(",", "").replace("_", "")
+        if wanted in ("default", "reset", "clear"):
+            await db.clear_reward_amount(key)
+            log.info("Reward %s reset to default by %s", key, ctx.author.id)
+            return await ctx.reply(
+                embed=h.ok(
+                    f"`{key}` is back on its default of "
+                    f"**{REWARD_DEFAULTS[key]:,}** coins."
+                )
+            )
+
+        if not wanted.isdigit():
+            return await ctx.reply(
+                embed=h.err(
+                    f"Couldn't read `{amount}` as a coin amount. Give a whole "
+                    "number of coins, or `default`."
+                )
+            )
+        coins = int(wanted)
+        if coins > COIN_MAX:
+            return await ctx.reply(
+                embed=h.err(f"Amount can't exceed {COIN_MAX:,} coins.")
+            )
+
+        await db.set_reward_amount(key, coins)
+        log.info("Reward %s set to %s by %s", key, coins, ctx.author.id)
+        note = ""
+        if coins == 0 and key in ("coop", "raid"):
+            note = f"\nThat turns `/{key if key == 'raid' else 'squad'}` off."
+        await ctx.reply(
+            embed=h.ok(
+                f"`{key}` now pays **{coins:,}** coins, in every server." f"{note}",
+                "🪙 Reward Updated",
+            )
+        )
+
+    # ══════════════════════════════════════════════════════════════════════════
+    #  cooldown — bot-wide activity cooldowns
+    # ══════════════════════════════════════════════════════════════════════════
+    @commands.command(
+        name="cooldown",
+        aliases=["cooldowns", "cd"],
+        help=(
+            "Show or set the bot-wide activity cooldowns (owner only).\n\n"
+            "Usage:\n"
+            "  !cooldown                  → list every activity's cooldown\n"
+            "  !cooldown mine 45m         → set /mine to 45 minutes\n"
+            "  !cooldown mine default     → back to the built-in default\n\n"
+            "These are deliberately NOT a per-server setting. A cooldown claim "
+            "is stored against the member, not the server, so one server "
+            "shortening an activity would speed it up for those members "
+            "everywhere — and the coins spend everywhere too."
+        ),
+    )
+    async def cooldown(
+        self,
+        ctx: commands.Context,
+        activity: Optional[str] = None,
+        *,
+        length: Optional[str] = None,
+    ):
+        """!cooldown [activity] [duration|default] — bot-wide activity cooldowns."""
+        overrides = await db.get_activity_cooldowns()
+
+        def _current(name: str) -> int:
+            return effective_cooldown(name, overrides.get(name))
+
+        if not activity:
+            lines = []
+            for name in COOLDOWN_KEYS:
+                mark = "•" if name in overrides else "·"
+                default = ACTIVITY_DEFAULT_COOLDOWNS[name]
+                suffix = (
+                    "" if name in overrides else f" (default {h.fmt_duration(default)})"
+                )
+                lines.append(
+                    f"{mark} `/{name}` — **{h.fmt_duration(_current(name))}**{suffix}"
+                )
+            return await ctx.reply(
+                embed=h.info(
+                    "\n".join(lines)
+                    + "\n\nSet one with `!cooldown <activity> <duration>`, or "
+                    "`!cooldown <activity> default` to clear an override.",
+                    "⏱️ Activity Cooldowns",
+                )
+            )
+
+        name = activity.lower().strip()
+        if name not in COOLDOWN_KEYS:
+            return await ctx.reply(
+                embed=h.err(
+                    f"Unknown activity `{name}`. "
+                    f"Pick one of: {', '.join(f'`{a}`' for a in COOLDOWN_KEYS)}."
+                )
+            )
+
+        if not length:
+            return await ctx.reply(
+                embed=h.info(
+                    f"`/{name}` runs every **{h.fmt_duration(_current(name))}**"
+                    f"{'' if name in overrides else ' (the default)'}.",
+                    "⏱️ Activity Cooldown",
+                )
+            )
+
+        wanted = length.strip().lower()
+        if wanted in ("default", "reset", "clear"):
+            await db.clear_activity_cooldown(name)
+            restored = ACTIVITY_DEFAULT_COOLDOWNS[name]
+            log.info("Cooldown for %s reset to default by %s", name, ctx.author.id)
+            return await ctx.reply(
+                embed=h.ok(
+                    f"`/{name}` is back on its default of "
+                    f"**{h.fmt_duration(restored)}**."
+                )
+            )
+
+        seconds = h.parse_duration(wanted)
+        if seconds is None and wanted.isdigit():
+            seconds = int(wanted)  # a bare number means seconds
+        if not seconds:
+            return await ctx.reply(
+                embed=h.err(
+                    f"Couldn't read `{length}` as a length. Try `45m`, `2h`, "
+                    "`1d`, or a plain number of seconds."
+                )
+            )
+
+        low, high = ACTIVITY_COOLDOWN_BOUNDS[name]
+        if not low <= seconds <= high:
+            return await ctx.reply(
+                embed=h.err(
+                    f"`/{name}`'s cooldown must be between "
+                    f"{h.fmt_duration(low)} and {h.fmt_duration(high)}."
+                )
+            )
+
+        await db.set_activity_cooldown(name, int(seconds))
+        log.info("Cooldown for %s set to %ss by %s", name, int(seconds), ctx.author.id)
+        await ctx.reply(
+            embed=h.ok(
+                f"`/{name}` now runs every **{h.fmt_duration(int(seconds))}**, "
+                "in every server.",
+                "⏱️ Cooldown Updated",
             )
         )
 

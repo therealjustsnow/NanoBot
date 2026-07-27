@@ -236,17 +236,23 @@ async def test_events_empty_state(bot):
 
 
 @pytest.mark.cogs("cogs.fishing")
-async def test_event_force_start_requires_manage_guild(bot):
+async def test_event_force_start_is_owner_only(bot):
+    """A frenzy doubles catch *value*, so starting one turns up the coin faucet
+    — and those coins spend in every server, not just this one. Manage Server
+    isn't enough; mods keep /fish toggle."""
     author = config().members[0]
-    with pytest.raises(commands.MissingPermissions):
+    await grant_perms(author, manage_guild=True)
+    bot.owner_id = author.id + 1
+    with pytest.raises(commands.NotOwner):
         await dpytest.message("!fish event frenzy", member=author)
+    assert await db.get_active_events(config().guilds[0].id) == []
 
 
 @pytest.mark.cogs("cogs.fishing")
 async def test_event_force_start_and_list(bot):
     guild = config().guilds[0]
     author = config().members[0]
-    await grant_perms(author, manage_guild=True)
+    bot.owner_id = author.id
 
     await dpytest.message("!fish event frenzy 5", member=author)
     sent = dpytest.get_message()
@@ -264,7 +270,7 @@ async def test_event_force_start_and_list(bot):
 @pytest.mark.cogs("cogs.fishing")
 async def test_event_force_start_unknown_key(bot):
     author = config().members[0]
-    await grant_perms(author, manage_guild=True)
+    bot.owner_id = author.id
     await dpytest.message("!fish event nonsense", member=author)
     sent = dpytest.get_message()
     assert "Error" in sent.embeds[0].title

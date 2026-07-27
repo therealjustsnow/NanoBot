@@ -25,7 +25,7 @@ import time
 
 import aiosqlite
 
-from utils import db_crypto, sqlite_timing
+from utils import db_crypto, sqlite_conn
 
 log = logging.getLogger("NanoBot.cache_db")
 
@@ -45,7 +45,7 @@ async def init(encryption_key: str | None = None) -> None:
     os.makedirs("data", exist_ok=True)
     _db = await db_crypto.connect(_DB_PATH, encryption_key)
     # Time queries when slow-query logging is on (zero overhead while disabled).
-    _db = sqlite_timing.wrap(_db, "cache")
+    _db = sqlite_conn.wrap(_db, "cache")
 
     # Same connection tuning as nanobot.db (see utils/db.py for rationale): WAL +
     # relaxed sync + a lock-wait timeout widen throughput on the single shared

@@ -9,6 +9,7 @@ import pytest
 from cogs.activities import (
     ACTIVITY_COOLDOWN_BOUNDS,
     ACTIVITY_DEFAULT_COOLDOWNS,
+    COOLDOWN_MIN,
     CAREER_LADDER,
     EXPLORE_OUTCOMES,
     HUNT_ODDS,
@@ -236,32 +237,27 @@ def test_rob_steal_amount_never_negative():
     assert rob_steal_amount(1.0, 0) == 0
 
 
-# ── cooldown floor (anti cross-server farming) ────────────────────────────────
-def test_effective_cooldown_floors_a_sub_minimum_setting():
-    """Claims are global, so the shortest configured length among a member's
-    servers is the one that governs them. The floor is what keeps one
-    permissive server from farming coins that spend everywhere."""
-    for activity, (floor, ceiling) in ACTIVITY_COOLDOWN_BOUNDS.items():
-        assert effective_cooldown(activity, 1) == floor
-        assert effective_cooldown(activity, 0) == floor
-        assert effective_cooldown(activity, -99) == floor
-        # A server may always go slower.
-        assert effective_cooldown(activity, ceiling) == ceiling
-        assert effective_cooldown(activity, floor + 1) == floor + 1
+# ── cooldown resolution (lengths are bot-wide, owner-set) ─────────────────────
+def test_effective_cooldown_honours_the_owners_override():
+    """Only the bot owner writes these, and claims are global, so whatever they
+    set is what every server runs — there is no per-server floor to apply."""
+    for activity, (low, high) in ACTIVITY_COOLDOWN_BOUNDS.items():
+        assert effective_cooldown(activity, low) == low
+        assert effective_cooldown(activity, high) == high
+        assert effective_cooldown(activity, 600) == 600
 
 
-def test_cooldown_floor_is_half_the_default():
-    """Servers keep real freedom (up to 2x faster) without minting: the old
-    60s minimum let /work run 60x its intended rate."""
+def test_no_override_means_the_activitys_default():
     for activity, default in ACTIVITY_DEFAULT_COOLDOWNS.items():
-        floor = ACTIVITY_COOLDOWN_BOUNDS[activity][0]
-        assert floor == default // 2
-        assert floor <= default <= ACTIVITY_COOLDOWN_BOUNDS[activity][1]
+        assert effective_cooldown(activity, None) == default
+        assert ACTIVITY_COOLDOWN_BOUNDS[activity][0] <= default
+        assert default <= ACTIVITY_COOLDOWN_BOUNDS[activity][1]
 
 
 def test_effective_cooldown_never_degrades_to_no_cooldown():
-    """The one failure mode this must not have. Unknown activity or junk
-    input falls back to a real duration, not zero."""
-    assert effective_cooldown("work", None) == ACTIVITY_DEFAULT_COOLDOWNS["work"]
+    """The one failure mode this must not have. A junk value, an unknown
+    activity, or a zero/negative row falls back to a real duration."""
     assert effective_cooldown("work", "nonsense") == ACTIVITY_DEFAULT_COOLDOWNS["work"]
-    assert effective_cooldown("not_an_activity", 0) > 0
+    assert effective_cooldown("not_an_activity", None) > 0
+    assert effective_cooldown("work", 0) == COOLDOWN_MIN
+    assert effective_cooldown("work", -99) == COOLDOWN_MIN
