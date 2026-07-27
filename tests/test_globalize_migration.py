@@ -432,6 +432,42 @@ async def test_coin_faucet_settings_are_dropped(legacy):
     assert (await db.get_econ_config(G1))["currency_name"] == "Gold"
 
 
+async def test_the_faucet_migration_keeps_columns_added_after_it(legacy):
+    """Migration 5 REBUILDS level_config, so it has to carry later columns.
+
+    The global level-up channel is added by _ensure_columns during init() —
+    which runs *before* the migrations on the same start. Rebuilding the table
+    from a column list that predates it would drop it again and leave every
+    read of level_config failing for that whole run.
+    """
+    await legacy.execute(
+        "CREATE TABLE level_config (guild_id TEXT PRIMARY KEY, "
+        "enabled INTEGER NOT NULL DEFAULT 0, xp_min INTEGER NOT NULL DEFAULT 15, "
+        "xp_max INTEGER NOT NULL DEFAULT 25, cooldown INTEGER NOT NULL DEFAULT 60, "
+        "announce_channel TEXT, announce INTEGER NOT NULL DEFAULT 1, "
+        "coin_reward INTEGER NOT NULL DEFAULT 0)"
+    )
+    await legacy.execute(
+        "INSERT INTO level_config (guild_id, announce_channel) VALUES (?,?)",
+        (str(G1), "4242"),
+    )
+    await legacy.commit()
+    # What init() does on a start that also has migration 5 pending.
+    await db._ensure_columns(
+        "level_config",
+        {
+            "global_announce": "INTEGER NOT NULL DEFAULT 1",
+            "global_announce_channel": "TEXT",
+        },
+    )
+    await db._run_migrations([(5, globalize.drop_per_guild_coin_faucets)])
+
+    cfg = await db.get_level_config(G1)
+    assert cfg["global_announce"] is True  # default, nothing switched off
+    assert cfg["global_announce_channel"] is None
+    assert cfg["announce_channel"] == 4242  # the guild's own setting survived
+
+
 async def test_the_shop_is_untouched_by_the_faucet_migration(legacy):
     """A shop price is a *sink* — it destroys coins for that guild's own reward,
     so nobody outside the server is affected by it and it stays the guild's."""

@@ -468,6 +468,7 @@ _MOD_PICKER_OPTIONS = [
     ("slow", "delay"),
     ("slow", "length"),
     ("level toggle", "state"),
+    ("level globalannounce", "state"),
     ("level reward", "action"),
     ("level ignore", "action"),
     ("birthday gifs", "state"),

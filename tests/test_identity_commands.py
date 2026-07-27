@@ -209,6 +209,93 @@ async def test_levelup_falls_back_to_dm_then_stays_pending(bot, monkeypatch):
     assert await db.get_pending_levelup(author.id) == 0
 
 
+@pytest.mark.cogs("cogs.identity")
+async def test_levelup_uses_the_channel_the_server_nominated(bot):
+    """`/level globalannounce #channel` moves it out of wherever they typed."""
+    guild, author = config().guilds[0], config().members[0]
+    here, there = config().channels[0], config().channels[1]
+    await db.set_level_config(guild.id, global_announce_channel=there.id)
+    cog = bot.get_cog("Identity")
+
+    await db.set_pending_levelup(author.id, 3)
+    assert await cog.deliver_levelup(author, here) is True
+    sent = dpytest.get_message()
+    assert sent.channel.id == there.id
+    assert "level 3" in sent.embeds[0].description
+
+
+@pytest.mark.cogs("cogs.identity")
+async def test_levelup_follows_the_server_level_channel_when_unset(bot):
+    guild, author = config().guilds[0], config().members[0]
+    here, there = config().channels[0], config().channels[1]
+    await db.set_level_config(guild.id, announce_channel=there.id)
+    cog = bot.get_cog("Identity")
+
+    await db.set_pending_levelup(author.id, 5)
+    assert await cog.deliver_levelup(author, here) is True
+    assert dpytest.get_message().channel.id == there.id
+
+
+@pytest.mark.cogs("cogs.identity")
+async def test_levelup_skips_a_channel_that_earns_no_xp(bot, monkeypatch):
+    """The venting-channel report: no post there, DM instead."""
+    guild, author = config().guilds[0], config().members[0]
+    here = config().channels[0]
+    await db.add_level_ignored_channel(guild.id, here.id)
+    cog = bot.get_cog("Identity")
+
+    dmed = []
+
+    async def fake_dm(*a, **kw):
+        dmed.append(kw.get("embed"))
+
+    monkeypatch.setattr(type(author), "send", fake_dm, raising=False)
+    await db.set_pending_levelup(author.id, 6)
+    assert await cog.deliver_levelup(author, here) is True
+    assert dpytest.verify().message().nothing()
+    assert dmed and "level 6" in dmed[0].description
+
+
+@pytest.mark.cogs("cogs.identity")
+async def test_levelup_off_for_a_server_still_reaches_the_member(bot, monkeypatch):
+    guild, author = config().guilds[0], config().members[0]
+    here = config().channels[0]
+    await db.set_level_config(guild.id, global_announce=False)
+    cog = bot.get_cog("Identity")
+
+    dmed = []
+
+    async def fake_dm(*a, **kw):
+        dmed.append(kw.get("embed"))
+
+    monkeypatch.setattr(type(author), "send", fake_dm, raising=False)
+    await db.set_pending_levelup(author.id, 9)
+    assert await cog.deliver_levelup(author, here) is True
+    assert dpytest.verify().message().nothing()
+    assert dmed and "level 9" in dmed[0].description
+    assert await db.get_pending_levelup(author.id) == 0
+
+
+@pytest.mark.cogs("cogs.identity")
+async def test_a_deleted_announce_channel_never_falls_back_in_place(bot, monkeypatch):
+    """ "Not in here" has to survive the channel being deleted."""
+    guild, author = config().guilds[0], config().members[0]
+    here = config().channels[0]
+    await db.set_level_config(guild.id, global_announce_channel=123456789)
+    cog = bot.get_cog("Identity")
+
+    dmed = []
+
+    async def fake_dm(*a, **kw):
+        dmed.append(kw.get("embed"))
+
+    monkeypatch.setattr(type(author), "send", fake_dm, raising=False)
+    await db.set_pending_levelup(author.id, 2)
+    assert await cog.deliver_levelup(author, here) is True
+    assert dpytest.verify().message().nothing()
+    assert dmed
+
+
 class _Resp:
     status = 403
     reason = "Forbidden"

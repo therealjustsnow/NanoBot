@@ -21,6 +21,9 @@ Commands
   /level toggle <on|off>         → enable/disable leveling  (Manage Server)
   /level rate <min> <max> [cd]   → XP per message + cooldown(Manage Server)
   /level announce [channel]      → level-up message channel (Manage Server)
+  /level globalannounce [channel] [on|off]
+                                 → where *global* level-ups land in this server
+                                   (Manage Server)
   /level reward <add|remove|list> [level] [role]            (Manage Server)
   /level ignore <add|remove|list> [channel]                 (Manage Server)
   /level config                  → show current settings    (Manage Server)
@@ -30,6 +33,14 @@ cooldown, role rewards and announcements. It is not the account-wide level —
 that one is hard-coded and lives in utils/globalxp.py, shown next to this one
 on /rank and on /profile. Neither feeds the other: a 5x-XP server grants no
 extra global XP, and switching this system off doesn't stop global progress.
+
+The one thing the two systems share is *where the message goes*. A global
+level can be earned anywhere, but it still has to be announced in some
+server's channel, and that choice is the server's — so `/level globalannounce`
+lives here beside `/level announce` rather than under /profile, and both are
+stored in level_config. cogs/identity delivers global level-ups by reading
+that config (see cogs/identity/helpers.announce_channel_id); guild XP settings
+— the rate, the cooldown, the enabled flag — never touch it.
 """
 
 import logging
@@ -485,6 +496,75 @@ class Leveling(commands.Cog):
             embed=h.ok("Level-ups will be announced in the channel where they happen.")
         )
 
+    # ── /level globalannounce ─────────────────────────────────────────────────────
+    @level.command(
+        name="globalannounce",
+        description="Where account-wide (global) level-ups are announced here.",
+    )
+    @app_commands.describe(
+        channel="Channel for global level-up messages (omit to follow the server one)",
+        state="on or off — off keeps global level-ups out of this server entirely",
+    )
+    @app_commands.choices(state=_ON_OFF)
+    @commands.has_permissions(manage_guild=True)
+    async def level_globalannounce(
+        self,
+        ctx: commands.Context,
+        channel: Optional[SafeTextChannel] = None,
+        state: Optional[str] = None,
+    ):
+        """Route the *account-wide* level-up message in this server.
+
+        Global levels aren't this server's XP — they come from playing anywhere
+        — but the message still has to land in one of this server's channels,
+        so the server picks which. Off is a real answer: members still get the
+        level-up in their DMs.
+
+        The `channel` parameter is Optional, so on prefix a word that isn't a
+        channel (`globalannounce off`) falls through to `state` instead of
+        erroring.
+        """
+        act = (state or "").strip().lower()
+        if act in ("off", "disable", "false", "no"):
+            await db.set_level_config(ctx.guild.id, global_announce=False)
+            return await ctx.reply(
+                embed=h.ok(
+                    "Global level-ups won't be announced in this server. "
+                    "Members will still get them in their DMs."
+                )
+            )
+
+        if channel:
+            await db.set_level_config(
+                ctx.guild.id, global_announce=True, global_announce_channel=channel.id
+            )
+            return await ctx.reply(
+                embed=h.ok(f"Global level-ups will be announced in {channel.mention}.")
+            )
+
+        cfg = await db.get_level_config(ctx.guild.id)
+        if act in ("on", "enable", "true", "yes"):
+            # Turning it back on keeps whatever channel was already chosen.
+            await db.set_level_config(ctx.guild.id, global_announce=True)
+        else:
+            # Bare command: clear the override and follow the server setting.
+            await db.set_level_config(
+                ctx.guild.id, global_announce=True, global_announce_channel=None
+            )
+            cfg = await db.get_level_config(ctx.guild.id)
+
+        where = "the channel the member is talking in"
+        target = cfg["global_announce_channel"] or cfg["announce_channel"]
+        if target:
+            ch = ctx.guild.get_channel(target)
+            where = ch.mention if ch else f"`{target}`"
+        await ctx.reply(
+            embed=h.ok(
+                f"Global level-ups will be announced in {where}.\n"
+                "Channels excluded with `ignore` are always skipped."
+            )
+        )
+
     # ── /level reward ───────────────────────────────────────────────────────────
     @level.command(
         name="reward",
@@ -624,6 +704,23 @@ class Leveling(commands.Cog):
         if not cfg["announce"]:
             announce = "off"
 
+        # Global level-ups are announced by cogs/identity, but the channel is
+        # this server's setting, so it belongs on this dump.
+        if not cfg["global_announce"]:
+            global_announce = "off"
+        elif cfg["global_announce_channel"]:
+            ch = ctx.guild.get_channel(cfg["global_announce_channel"])
+            global_announce = (
+                ch.mention if ch else f"`{cfg['global_announce_channel']}`"
+            )
+        elif cfg["announce_channel"]:
+            # Only the channel is inherited, never the server's on/off switch.
+            ch = ctx.guild.get_channel(cfg["announce_channel"])
+            inherited = ch.mention if ch else f"`{cfg['announce_channel']}`"
+            global_announce = f"{inherited} (server channel)"
+        else:
+            global_announce = "in place"
+
         embed = h.embed("📈 Leveling Settings", color=h.BLUE)
         embed.add_field(
             name="Status",
@@ -637,6 +734,7 @@ class Leveling(commands.Cog):
         )
         embed.add_field(name="Cooldown", value=f"{cfg['cooldown']}s", inline=True)
         embed.add_field(name="Announce", value=announce, inline=True)
+        embed.add_field(name="Global level-ups", value=global_announce, inline=True)
         embed.add_field(name="Role rewards", value=str(len(rewards)), inline=True)
         embed.add_field(name="Ignored channels", value=str(len(ignored)), inline=True)
         rate = (await db.get_reward_amounts()).get(

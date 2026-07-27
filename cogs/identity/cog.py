@@ -59,13 +59,24 @@ else's /raid payout — so `utils/globalxp` only *records* the level-up
 (`global_levels.pending_level`) and this cog delivers it the next time it sees
 the member, trying in order:
 
-  1. the channel they just talked or ran a command in,
+  1. the channel the *server* nominated (see below),
   2. their DMs,
   3. nowhere — it stays pending and is retried the next time they turn up in
      any server.
 
 The claim is atomic and handed back on a failed send, so a level is announced
 exactly once and never silently dropped.
+
+The level is account-wide but a *channel* belongs to one server, so where the
+message lands is the server's decision, held in `level_config` next to the
+server-level announcement settings and resolved by `helpers.announce_channel_id`:
+`/level globalannounce #channel` pins it, `/level globalannounce off` stops
+global level-ups appearing in that server at all (the member still gets a DM),
+and with neither set it follows `/level announce` if that's configured, else
+the channel they were talking in — never a channel excluded from XP with
+`/level ignore`, since a server that muted a channel for levels didn't mean
+"except this one kind". No new top-level slash command: it's a subcommand of
+the existing /level group, which costs no slot against the 100 cap.
 """
 
 import asyncio
@@ -94,7 +105,13 @@ from cogs.progression.definitions import ACHIEVEMENTS, ACHIEVEMENTS_BY_KEY
 from cogs.progression.helpers import earned_titles, prestige_title, total_points
 from cogs.progression.stats import compute_stats_with_sources
 
-from .helpers import equip_result, newly_unlocked, rarity_marker, unlock_context
+from .helpers import (
+    announce_channel_id,
+    equip_result,
+    newly_unlocked,
+    rarity_marker,
+    unlock_context,
+)
 
 log = logging.getLogger("NanoBot.identity")
 
@@ -146,21 +163,49 @@ class Identity(commands.Cog):
         except Exception:  # pragma: no cover - never break command handling
             log.exception("level-up delivery failed for %s", ctx.author.id)
 
+    async def _announce_channel(self, channel):
+        """Resolve where this guild wants global level-ups posted (or None).
+
+        `channel` is where the member just turned up; the guild's level config
+        decides whether that's an acceptable place for a level-up to go off.
+        """
+        guild = getattr(channel, "guild", None)
+        if guild is None:  # a DM, or a stub in tests — nothing to configure
+            return channel
+        cfg = await db.get_level_config(guild.id)
+        ignored = await db.get_level_ignored_channels(guild.id)
+        target_id = announce_channel_id(cfg, ignored, getattr(channel, "id", None))
+        if target_id is None:
+            return None
+        if target_id == getattr(channel, "id", None):
+            return channel
+        return guild.get_channel(target_id)
+
     async def deliver_levelup(self, user: discord.abc.User, channel) -> bool:
         """Announce a pending global level-up. Returns True if one went out.
 
         Channel → DM → keep it pending. The claim is taken first so two
         deliveries can't both fire, and handed straight back if neither send
         lands, which is what makes "tell them next time" work.
+
+        Which channel is the guild's call (see `_announce_channel`): a server
+        can point global level-ups at one channel or switch them off entirely,
+        and a channel it excluded from XP is never announced in.
         """
         level = await db.claim_pending_levelup(user.id)
         if not level:
             return False
         embed = self._levelup_embed(user, level)
-        for send in (
-            lambda: channel.send(content=user.mention, embed=embed),
-            lambda: user.send(embed=embed),
-        ):
+        try:
+            target = await self._announce_channel(channel)
+        except Exception:  # pragma: no cover - config read must never eat a level
+            log.exception("global level-up channel lookup failed")
+            target = channel
+        sends = []
+        if target is not None:
+            sends.append(lambda: target.send(content=user.mention, embed=embed))
+        sends.append(lambda: user.send(embed=embed))
+        for send in sends:
             try:
                 await send()
                 return True
