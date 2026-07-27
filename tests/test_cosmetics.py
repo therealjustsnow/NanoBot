@@ -18,7 +18,12 @@ import pytest
 from PIL import Image, ImageFont
 
 import utils.db as db
-from cogs.identity.helpers import equip_result, newly_unlocked, unlock_context
+from cogs.identity.helpers import (
+    announce_channel_id,
+    equip_result,
+    newly_unlocked,
+    unlock_context,
+)
 from utils import cosmetics, profile_card
 
 USER = 9001
@@ -150,6 +155,57 @@ def test_single_slots_swap_and_multi_slots_fill_then_report_full():
     full = [f"badge_{i}" for i in range(cosmetics.SLOTS["badge"].max_equipped)]
     keys, outcome = equip_result("badge", full, "badge_angler")
     assert outcome == "full" and keys == full
+
+
+# ── Global level-up routing (pure) ────────────────────────────────────────────
+def _cfg(**kw):
+    base = {
+        "announce": True,
+        "announce_channel": None,
+        "global_announce": True,
+        "global_announce_channel": None,
+    }
+    base.update(kw)
+    return base
+
+
+def test_global_levelup_goes_where_they_are_talking_by_default():
+    assert announce_channel_id(_cfg(), set(), 42) == 42
+
+
+def test_global_levelup_channel_overrides_everything_else():
+    cfg = _cfg(global_announce_channel=99, announce_channel=77)
+    assert announce_channel_id(cfg, {99}, 42) == 99  # even an XP-ignored one
+
+
+def test_global_levelup_inherits_the_server_announce_channel():
+    """A server that already routed level-ups shouldn't have to say it twice."""
+    assert announce_channel_id(_cfg(announce_channel=77), set(), 42) == 77
+
+
+def test_server_announce_off_does_not_silence_global_levelups():
+    """Only the *channel* is inherited — the two systems keep their own switch."""
+    cfg = _cfg(announce=False, announce_channel=77)
+    assert announce_channel_id(cfg, set(), 42) == 77
+
+
+def test_global_levelup_skips_a_channel_that_earns_no_xp():
+    """The venting-channel case: excluded from XP means excluded from this."""
+    assert announce_channel_id(_cfg(), {42}, 42) is None
+
+
+def test_global_levelup_can_be_switched_off_for_a_server():
+    cfg = _cfg(global_announce=False, global_announce_channel=99)
+    assert announce_channel_id(cfg, set(), 42) is None
+
+
+def test_global_levelup_with_nowhere_to_post_falls_through():
+    assert announce_channel_id(_cfg(), set(), None) is None
+
+
+def test_global_levelup_defaults_hold_for_a_config_without_the_keys():
+    """An old cached/config dict must not turn announcements off."""
+    assert announce_channel_id({}, set(), 42) == 42
 
 
 # ── JSON extension ────────────────────────────────────────────────────────────

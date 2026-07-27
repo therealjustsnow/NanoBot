@@ -10,6 +10,7 @@ from . import _cache
 from ._core import (
     _commit,
     _conn,
+    _ensure_columns,
     _read_conn,
     fetch_one_returning,
     register_init,
@@ -44,6 +45,16 @@ async def _ensure_leveling_tables():
             announce          INTEGER NOT NULL DEFAULT 1
         )
     """)
+    # Where *global* (account-wide) level-ups are announced in this guild. The
+    # level itself is global, but a channel isn't — the server owns which of
+    # its own channels a stray "level up!" is allowed to land in.
+    await _ensure_columns(
+        "level_config",
+        {
+            "global_announce": "INTEGER NOT NULL DEFAULT 1",
+            "global_announce_channel": "TEXT",
+        },
+    )
     await _conn().execute("""
         CREATE TABLE IF NOT EXISTS level_rewards (
             guild_id  TEXT NOT NULL,
@@ -160,7 +171,8 @@ async def get_level_config(guild_id: int) -> dict:
     if cached is not None:
         return cached
     async with _conn().execute(
-        "SELECT enabled, xp_min, xp_max, cooldown, announce_channel, announce "
+        "SELECT enabled, xp_min, xp_max, cooldown, announce_channel, announce, "
+        "global_announce, global_announce_channel "
         "FROM level_config WHERE guild_id=?",
         (str(guild_id),),
     ) as cur:
@@ -178,6 +190,12 @@ async def get_level_config(guild_id: int) -> dict:
                     int(row["announce_channel"]) if row["announce_channel"] else None
                 ),
                 "announce": bool(row["announce"]),
+                "global_announce": bool(row["global_announce"]),
+                "global_announce_channel": (
+                    int(row["global_announce_channel"])
+                    if row["global_announce_channel"]
+                    else None
+                ),
             },
         )
     return _cache.put(
@@ -190,6 +208,8 @@ async def get_level_config(guild_id: int) -> dict:
             "cooldown": 60,
             "announce_channel": None,
             "announce": True,
+            "global_announce": True,
+            "global_announce_channel": None,
         },
     )
 
@@ -200,11 +220,14 @@ async def set_level_config(guild_id: int, **kwargs) -> None:
     current.update(kwargs)
     await _conn().execute(
         "INSERT INTO level_config "
-        "(guild_id, enabled, xp_min, xp_max, cooldown, announce_channel, announce) "
-        "VALUES (?,?,?,?,?,?,?) "
+        "(guild_id, enabled, xp_min, xp_max, cooldown, announce_channel, announce, "
+        "global_announce, global_announce_channel) "
+        "VALUES (?,?,?,?,?,?,?,?,?) "
         "ON CONFLICT(guild_id) DO UPDATE SET enabled=excluded.enabled, "
         "xp_min=excluded.xp_min, xp_max=excluded.xp_max, cooldown=excluded.cooldown, "
-        "announce_channel=excluded.announce_channel, announce=excluded.announce",
+        "announce_channel=excluded.announce_channel, announce=excluded.announce, "
+        "global_announce=excluded.global_announce, "
+        "global_announce_channel=excluded.global_announce_channel",
         (
             str(guild_id),
             1 if current["enabled"] else 0,
@@ -213,6 +236,12 @@ async def set_level_config(guild_id: int, **kwargs) -> None:
             int(current["cooldown"]),
             str(current["announce_channel"]) if current["announce_channel"] else None,
             1 if current["announce"] else 0,
+            1 if current["global_announce"] else 0,
+            (
+                str(current["global_announce_channel"])
+                if current["global_announce_channel"]
+                else None
+            ),
         ),
     )
     await _commit()

@@ -50,6 +50,61 @@ async def test_level_toggle_updates_config(bot):
 
 
 @pytest.mark.cogs("cogs.leveling")
+async def test_globalannounce_needs_manage_guild(bot):
+    author = config().members[0]
+    with pytest.raises(commands.MissingPermissions):
+        await dpytest.message("!level globalannounce off", member=author)
+
+
+@pytest.mark.cogs("cogs.leveling")
+async def test_globalannounce_sets_clears_and_switches_off(bot):
+    """The three states a server can be in, all through one command."""
+    guild = config().guilds[0]
+    channel = config().channels[0]
+    author = config().members[0]
+    await grant_perms(author, manage_guild=True)
+
+    await dpytest.message(f"!level globalannounce {channel.mention}", member=author)
+    dpytest.get_message()
+    cfg = await db.get_level_config(guild.id)
+    assert cfg["global_announce_channel"] == channel.id
+    assert cfg["global_announce"] is True
+
+    # "off" isn't a channel — the Optional converter has to fall through to it.
+    await dpytest.message("!level globalannounce off", member=author)
+    dpytest.get_message()
+    assert (await db.get_level_config(guild.id))["global_announce"] is False
+
+    # Back on: the channel that was chosen before is still the one used.
+    await dpytest.message("!level globalannounce on", member=author)
+    dpytest.get_message()
+    cfg = await db.get_level_config(guild.id)
+    assert cfg["global_announce"] is True
+    assert cfg["global_announce_channel"] == channel.id
+
+    # Bare: clear the override and follow the server's own announce setting.
+    await dpytest.message("!level globalannounce", member=author)
+    dpytest.get_message()
+    cfg = await db.get_level_config(guild.id)
+    assert cfg["global_announce_channel"] is None
+    assert cfg["global_announce"] is True
+
+
+@pytest.mark.cogs("cogs.leveling")
+async def test_level_config_reports_the_global_announce_setting(bot):
+    guild = config().guilds[0]
+    channel = config().channels[0]
+    author = config().members[0]
+    await grant_perms(author, manage_guild=True)
+    await db.set_level_config(guild.id, global_announce_channel=channel.id)
+
+    await dpytest.message("!level config", member=author)
+    embed = dpytest.get_message().embeds[0]
+    field = next(f for f in embed.fields if f.name == "Global level-ups")
+    assert channel.mention in field.value
+
+
+@pytest.mark.cogs("cogs.leveling")
 async def test_a_server_cannot_set_the_level_up_coin_rate(bot):
     """The payout lands in a global wallet, so the rate is the owner's (!econ
     level_coin). /level keeps every knob that stays inside the server."""

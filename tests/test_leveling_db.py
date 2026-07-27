@@ -123,6 +123,34 @@ async def test_announce_channel_round_trip():
     assert (await db.get_level_config(G))["announce_channel"] is None
 
 
+async def test_global_announce_defaults_on_and_round_trips():
+    """The global level-up channel is a *guild* setting living on this row.
+
+    Default on with no channel means "follow the server's own announce
+    setting", which is what makes the feature need no action from servers that
+    already routed their level-ups.
+    """
+    cfg = await db.get_level_config(G)
+    assert cfg["global_announce"] is True
+    assert cfg["global_announce_channel"] is None
+
+    await db.set_level_config(G, global_announce_channel=777)
+    cfg = await db.get_level_config(G)
+    assert cfg["global_announce_channel"] == 777
+    assert cfg["announce_channel"] is None  # the two are independent
+
+    # Switching it off keeps the chosen channel for when it comes back on.
+    await db.set_level_config(G, global_announce=False)
+    cfg = await db.get_level_config(G)
+    assert cfg["global_announce"] is False
+    assert cfg["global_announce_channel"] == 777
+
+    await db.set_level_config(G, global_announce=True, global_announce_channel=None)
+    cfg = await db.get_level_config(G)
+    assert cfg["global_announce"] is True
+    assert cfg["global_announce_channel"] is None
+
+
 async def test_rewards_add_list_remove():
     await db.add_level_reward(G, 5, 900)
     await db.add_level_reward(G, 10, 901)

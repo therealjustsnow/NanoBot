@@ -63,15 +63,47 @@ level in `global_levels.pending_level` (MAX-merged, so levelling twice before
 delivery names the level they're actually on) and the identity cog delivers it
 the next time it sees the member:
 
-1. **The channel they just used** — `on_message` (they talked) or
-   `on_command_completion` (they ran a command), whichever comes first.
-2. **Their DMs**, if that channel send fails (no permission, deleted channel).
+1. **The channel the server nominated** (see below), starting from the channel
+   they just used — `on_message` (they talked) or `on_command_completion`
+   (they ran a command), whichever comes first.
+2. **Their DMs**, if that channel send fails (no permission, deleted channel)
+   or the server doesn't want level-ups posted there.
 3. **Nowhere yet** — the level goes back into `pending_level` and is retried
    the next time they turn up, in any server.
 
 The claim is a conditional UPDATE taken *before* sending and handed back if
 both sends fail, so an announcement can't double-post and can't be silently
 lost. The common path costs one primary-key SELECT per command.
+
+### Which channel — the one setting a server owns
+
+The level is account-wide, but a *channel* belongs to one server, so where the
+message lands is the server's decision, not the account's. It's the exception
+to "nobody tunes the global level", and it isn't really a tuning knob: it
+changes nothing about what a global level is or how fast it's earned, only
+which of a server's own channels a stray "level up!" is allowed to appear in.
+(The case that prompted it: a level-up going off in a venting channel right
+after someone vented.)
+
+It lives in `level_config`, next to the server-level announcement settings —
+`/level globalannounce`, a subcommand of the existing group, so it costs no
+top-level slash slot — and `cogs/identity/helpers.announce_channel_id()`
+resolves it, in order:
+
+| Setting | Result |
+|---|---|
+| `/level globalannounce off` | nothing posted in that server; the member still gets a DM |
+| `/level globalannounce #channel` | always that channel |
+| neither, but `/level announce #channel` is set | that channel — a server that already routed level-ups doesn't say it twice |
+| neither | wherever they were talking… |
+| …unless that channel is in `/level ignore` | skipped → DM |
+
+Only the *channel* is inherited from `/level announce`, never its on/off
+switch: a server that stopped announcing its own levels hasn't said anything
+about the global one, and `global_announce` defaults on so nothing changes for
+a server that never touches it. A configured channel that's since been deleted
+falls through to the DM rather than back to the member's current channel —
+"not in here" has to survive the channel going away.
 
 The message names any cosmetic that unlocks at exactly that level, which is
 what makes the milestones feel like rewards rather than a number going up.

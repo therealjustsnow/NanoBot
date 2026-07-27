@@ -591,7 +591,15 @@ async def drop_per_guild_coin_faucets(conn):
         "xp_max INTEGER NOT NULL DEFAULT 25, "
         "cooldown INTEGER NOT NULL DEFAULT 60, "
         "announce_channel TEXT, "
-        "announce INTEGER NOT NULL DEFAULT 1)"
+        "announce INTEGER NOT NULL DEFAULT 1, "
+        # Added after this migration (the global level-up channel), and listed
+        # here for the same reason as activities_stats' co-op columns: this
+        # rebuild REPLACES the table, so without them a database migrating for
+        # the first time comes out missing what _ensure_columns just added.
+        # Not in the INSERT below — the source table predates them, so every
+        # guild starts on the default (announce, following /level announce).
+        "global_announce INTEGER NOT NULL DEFAULT 1, "
+        "global_announce_channel TEXT)"
     )
     await conn.execute(
         "INSERT INTO level_config_new (guild_id, enabled, xp_min, xp_max, cooldown, "

@@ -666,8 +666,8 @@ Per-server message XP and levels (Mee6-style curve). **Off by default** -- enabl
 | `/level reset [user]` | Reset XP for one member, or the whole server |
 | `/level rate <xp> <cooldown>` | XP earned per message and the cooldown (seconds) |
 | `/level announce <...>` | Configure level-up announcements |
+| `/level globalannounce [channel] [on/off]` | Where **global** (account-wide) level-ups are announced in this server — a channel, `off` (members still get a DM), or nothing to follow `/level announce` |
 | `/level reward <level> <role>` | Grant a role automatically at a level |
-| `/level coinreward <amount>` | Pay `amount × new level` NanoCoins on level-up (0 = off) |
 | `/level ignore <channel>` | Toggle a channel as XP-ignored |
 | `/level config` | Show the current leveling settings |
 
