@@ -35,11 +35,6 @@ async def test_config_defaults():
         "hunt_enabled": True,
         "explore_enabled": True,
         "rob_enabled": True,
-        "work_cooldown": 3600,
-        "mine_cooldown": 1800,
-        "hunt_cooldown": 2700,
-        "explore_cooldown": 10800,
-        "rob_cooldown": 14400,
     }
 
 
@@ -49,10 +44,33 @@ async def test_config_roundtrip_partial_update():
     assert cfg["rob_enabled"] is False
     assert cfg["work_enabled"] is True  # untouched key keeps its default
 
-    await db.set_activities_config(G, work_cooldown=120)
+    await db.set_activities_config(G, work_enabled=False)
     cfg = await db.get_activities_config(G)
-    assert cfg["work_cooldown"] == 120
+    assert cfg["work_enabled"] is False
     assert cfg["rob_enabled"] is False  # earlier partial update stuck
+
+
+async def test_cooldown_lengths_are_bot_wide_not_per_guild(database):
+    """A cooldown claim is keyed by user, so its length can't be a server's to
+    set — it lives in bot_settings, with no guild id anywhere near it."""
+    await db._ensure_settings_tables()
+
+    assert await db.get_activity_cooldowns() == {}  # nothing set: all defaults
+    await db.set_activity_cooldown("mine", 900)
+    assert await db.get_activity_cooldowns() == {"mine": 900}
+
+    # A guild config row can't carry one.
+    assert "mine_cooldown" not in await db.get_activities_config(G)
+    assert "mine_cooldown" not in await db.get_activities_config(G + 1)
+
+    # Junk and non-positive rows are ignored rather than handed back as a length.
+    await db.set_bot_setting("cooldown:work", "soon")
+    await db.set_bot_setting("cooldown:hunt", "0")
+    assert await db.get_activity_cooldowns() == {"mine": 900}
+
+    assert await db.clear_activity_cooldown("mine") is True
+    assert await db.clear_activity_cooldown("mine") is False
+    assert await db.get_activity_cooldowns() == {}
 
 
 # ── Stats defaults ───────────────────────────────────────────────────────────────

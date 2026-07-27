@@ -31,8 +31,18 @@ jobs:
       - name: Install Black
         run: pip install black
 
+      # The default branch is protected ("changes must be made through a pull
+      # request"), so the auto-commit step below can never land there — it used
+      # to try anyway and fail the whole workflow with GH006. On the default
+      # branch this is a check, not a fixer: anything unformatted that reached
+      # it should have been caught on the PR, and the fix belongs in a new PR.
+      - name: Check formatting (default branch)
+        if: github.ref_name == github.event.repository.default_branch
+        run: black --check --diff .
+
       - name: Run Black
         id: black_run
+        if: github.ref_name != github.event.repository.default_branch
         run: |
           if black --check .; then
             echo "changed=false" >> "$GITHUB_OUTPUT"
@@ -48,4 +58,10 @@ jobs:
           git config user.email "github-actions[bot]@users.noreply.github.com"
           git add -A
           git commit -m "style: auto-format with Black"
-          git push
+          # A protected feature branch rejects this too; surface the reason
+          # instead of leaving the branch silently unformatted.
+          git push || {
+            echo "::error::Could not push the Black fixup (branch protected?)." \
+                 " Run 'black .' locally and commit."
+            exit 1
+          }

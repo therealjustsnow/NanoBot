@@ -11,7 +11,6 @@ from discord.ext import test as dpytest
 
 import utils.db as db
 from cogs.activities import (
-    ACTIVITY_COOLDOWN_BOUNDS,
     EXPLORE_COINS_SMALL,
     EXPLORE_OUTCOMES,
     PICKAXES,
@@ -441,67 +440,52 @@ async def test_activities_toggle_flips_with_perms(bot):
 
 
 @pytest.mark.cogs("cogs.activities")
-async def test_activities_cooldown_out_of_bounds(bot):
-    guild = config().guilds[0]
+async def test_a_server_cannot_set_a_cooldown_at_all(bot):
+    """The setting is bot-wide now, so /adventure has no cooldown subcommand —
+    a server admin can only enable or disable an activity."""
     author = config().members[0]
     await grant_perms(author, manage_guild=True)
+    cog = bot.get_cog("Activities")
 
-    await dpytest.message("!adventure cooldown work 1", member=author)
-    sent = dpytest.get_message()
-    assert "Error" in sent.embeds[0].title
-    assert (await db.get_activities_config(guild.id))["work_cooldown"] == 3600
+    assert cog.adventure.get_command("cooldown") is None
+    assert cog.adventure.get_command("toggle") is not None
 
 
 @pytest.mark.cogs("cogs.activities")
-async def test_activities_cooldown_sets_value(bot):
+async def test_the_bot_wide_cooldown_governs_every_guild(bot):
+    """One override, every server — including a guild that has its own
+    activities_config row for the on/off switches."""
     guild = config().guilds[0]
-    author = config().members[0]
-    await grant_perms(author, manage_guild=True)
+    cog = bot.get_cog("Activities")
 
-    await dpytest.message("!adventure cooldown work 2400", member=author)
-    sent = dpytest.get_message()
-    assert "Done" in sent.embeds[0].title or "set" in sent.embeds[0].description
-    assert (await db.get_activities_config(guild.id))["work_cooldown"] == 2400
+    cfg = await cog._cfg(guild.id)
+    assert cog._cooldown(cfg, "work") == WORK_COOLDOWN_DEFAULT
+
+    await db.set_activity_cooldown("work", 2400)
+    await db.set_activities_config(guild.id, mine_enabled=False)
+    cfg = await cog._cfg(guild.id)
+    assert cog._cooldown(cfg, "work") == 2400
+    assert cfg["mine_enabled"] is False
+    # A second, unrelated guild reads the same length.
+    assert cog._cooldown(await cog._cfg(guild.id + 1), "work") == 2400
+
+    await db.clear_activity_cooldown("work")
+    assert cog._cooldown(await cog._cfg(guild.id), "work") == WORK_COOLDOWN_DEFAULT
 
 
 @pytest.mark.cogs("cogs.activities")
-async def test_activities_cooldown_refuses_below_the_anti_farm_floor(bot):
-    """Cooldown claims are global, so the shortest length among a member's
-    servers governs them — one permissive server would be everyone's farm."""
-    guild = config().guilds[0]
-    author = config().members[0]
-    await grant_perms(author, manage_guild=True)
-    floor = ACTIVITY_COOLDOWN_BOUNDS["work"][0]
-
-    await dpytest.message(f"!adventure cooldown work {floor - 1}", member=author)
-    sent = dpytest.get_message()
-    assert "shared across every server" in sent.embeds[0].description
-    cfg = await db.get_activities_config(guild.id)
-    assert cfg["work_cooldown"] == WORK_COOLDOWN_DEFAULT  # unchanged
-
-    # Slower is always allowed.
-    await dpytest.message("!adventure cooldown work 86400", member=author)
-    dpytest.get_message()
-    assert (await db.get_activities_config(guild.id))["work_cooldown"] == 86400
-
-
-@pytest.mark.cogs("cogs.activities")
-async def test_a_sub_floor_config_row_is_still_floored_at_claim_time(bot):
-    """Defence in depth: the command refuses a low value, but a row written
-    before the floor existed (or edited straight in the DB) must not undercut
-    it either."""
+async def test_a_junk_cooldown_row_falls_back_to_the_default(bot):
+    """Defence in depth: a hand-edited setting must not become "no cooldown"."""
     guild = config().guilds[0]
     author = config().members[0]
     cog = bot.get_cog("Activities")
 
-    await db.set_activities_config(guild.id, work_cooldown=60)
-    cfg = await db.get_activities_config(guild.id)
-    assert cfg["work_cooldown"] == 60  # the stored value is untouched
-    assert cog._cooldown(cfg, "work") == ACTIVITY_COOLDOWN_BOUNDS["work"][0]
+    await db.set_bot_setting("cooldown:work", "nonsense")
+    cfg = await cog._cfg(guild.id)
+    assert cog._cooldown(cfg, "work") == WORK_COOLDOWN_DEFAULT
 
     await dpytest.message("!work", member=author)
     dpytest.get_message()
-    # A minute later the floor, not the stored 60s, is what's enforced.
     stats = await db.get_activity_stats(author.id)
     stats["last_work"] = time.time() - 120
     assert cog._remaining(cfg, stats, "work") > 0
@@ -538,41 +522,15 @@ async def test_activity_picker_shows_live_state(bot):
     assert [c.value for c in choices] == ["work", "mine", "hunt", "explore", "rob"]
     assert all("✅ enabled" in c.name for c in choices)
 
-    await db.set_activities_config(guild.id, mine_enabled=False, mine_cooldown=1200)
-    by_value = {
-        c.value: c.name for c in await cog._cooldown_activity_ac(interaction, "")
-    }
+    await db.set_activities_config(guild.id, mine_enabled=False)
+    await db.set_activity_cooldown("mine", 1200)
+    by_value = {c.value: c.name for c in await cog._toggle_activity_ac(interaction, "")}
     assert "❌ disabled" in by_value["mine"] and "20m" in by_value["mine"]
 
     # Typing narrows the list.
     assert [c.value for c in await cog._toggle_activity_ac(interaction, "ro")] == [
         "rob"
     ]
-
-
-@pytest.mark.cogs("cogs.activities")
-async def test_cooldown_preset_picker_respects_activity_bounds(bot):
-    guild = config().guilds[0]
-    author = config().members[0]
-    cog = bot.get_cog("Activities")
-
-    def interaction(activity):
-        return types.SimpleNamespace(
-            guild_id=guild.id,
-            guild=guild,
-            user=author,
-            namespace=types.SimpleNamespace(activity=activity),
-        )
-
-    presets = await cog._cooldown_seconds_ac(interaction("explore"), "")
-    lo, hi = ACTIVITY_COOLDOWN_BOUNDS["explore"]
-    assert presets and all(lo <= c.value <= hi for c in presets)
-    assert any("default" in c.name for c in presets)  # the 3h default is flagged
-
-    # A typed number in range is offered back first, out-of-range presets aren't.
-    typed = await cog._cooldown_seconds_ac(interaction("work"), "2400")
-    assert typed[0].value == 2400
-    assert all(c.value >= ACTIVITY_COOLDOWN_BOUNDS["work"][0] for c in typed)
 
 
 @pytest.mark.cogs("cogs.activities")

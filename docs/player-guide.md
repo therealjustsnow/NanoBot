@@ -35,7 +35,7 @@ earned. Nothing resets, nothing is left behind.
   casino, `/rob`, and so on).
 - Its own currency **name and emoji** — the same coins might be "NanoCoins"
   here and "Doubloons" there. It's still one balance.
-- Its daily/co-op/raid reward amounts and activity cooldown lengths.
+- Its daily/co-op/raid reward amounts, and which activities are switched on.
 - Its **shop** (server roles and custom rewards) and its **casino jackpot**.
 - Its leaderboard view — see [Leaderboards](#-leaderboards).
 
@@ -279,15 +279,15 @@ cooldown, and whether you're ready right now.
 | `/adventure explore` | 3 hours | wasted trip | Nothing → coins → keys/chests/charms → a big find |
 | `/rob <member>` | 4 hours | 200 coin fine | 10–20% of their wallet (capped 1,000) |
 
-*(Cooldown lengths are per server — these are the defaults.)*
+*(These lengths are the same in every server.)*
 
 **One cooldown, everywhere.** These aren't per server. Doing `/work` in one
 server puts it on cooldown in every server you share with the bot, so there's
 no hopping between servers to farm — your coins are one wallet, so your
 cooldowns are one set too. A server admin can switch any activity off for their
-server, and can make a cooldown longer, or up to twice as fast — but no faster
-than that, since a shorter setting anywhere would speed the activity up for
-their members *everywhere*.
+own server, but nobody except the bot's owner can change how *long* a cooldown
+lasts: since the cooldown follows you between servers, one server shortening it
+would speed the activity up for its members everywhere.
 
 **`/work`** is the safe floor. Shifts add up to promotions (🍵 Intern all the
 way to 🏆 Legend of the Office), and each promotion pays a bit more.
@@ -554,7 +554,7 @@ to configure.
 | Shop | `/shop seed`, `/shop add`, `/shop edit`, `/shop remove`, `/shop pending`, `/shop fulfill` |
 | Fishing | `/fish toggle`, `/fish event`, `/fish config` |
 | Casino | `/casino limit`, `/casino toggle`, `/casino config` |
-| Activities | `/adventure toggle`, `/adventure cooldown`, `/adventure config` |
+| Activities | `/adventure toggle`, `/adventure config` |
 | Leveling | `/level …` (per-server chat XP — deliberately **not** global) |
 
 Note that `/coin reset` is bot-owner-only: with global wallets, resetting

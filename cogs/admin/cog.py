@@ -15,6 +15,7 @@ Commands:
   restart            — graceful shutdown then re-exec the process
   setloglevel <lvl>  — change log level live and persist to config.ini
   status [text|clear]— set the idle presence text (or clear to auto-rotate)
+  cooldown [a] [len] — show/set the bot-wide activity cooldowns
   logs [lines]       — tail the log file right in Discord
   scrape             — manually trigger the daily content cache scrape
   cachestats         — show cache DB statistics (FML, WYR, images)
@@ -37,7 +38,19 @@ import discord
 from discord.ext import commands
 
 from utils import config as cfg_mod
+from utils import db
 from utils import helpers as h
+
+# Pure data/helpers only — no cog import, same precedent as cogs/images.py
+# reading cogs/fun/sources.py. The activity cooldowns are a bot-wide setting
+# (one claim per member, shared across servers), so the command that changes
+# them belongs to the owner, here, rather than to /adventure.
+from cogs.activities.constants import (
+    ACTIVITY_COOLDOWN_BOUNDS,
+    ACTIVITY_DEFAULT_COOLDOWNS,
+    ACTIVITY_NAMES,
+)
+from cogs.activities.helpers import effective_cooldown
 
 from .constants import _REPO_ROOT, _ALL_COGS, _VALID_LEVELS
 from .helpers import _git_pull
@@ -725,6 +738,117 @@ class Admin(ConfigMixin, commands.Cog):
                 f"Log level set to **{level}** — {level_descriptions[level]}.\n"
                 f"Saved to `config.ini`. Takes effect immediately.",
                 "📋 Log Level Updated",
+            )
+        )
+
+    # ══════════════════════════════════════════════════════════════════════════
+    #  cooldown — bot-wide activity cooldowns
+    # ══════════════════════════════════════════════════════════════════════════
+    @commands.command(
+        name="cooldown",
+        aliases=["cooldowns", "cd"],
+        help=(
+            "Show or set the bot-wide activity cooldowns (owner only).\n\n"
+            "Usage:\n"
+            "  !cooldown                  → list every activity's cooldown\n"
+            "  !cooldown mine 45m         → set /mine to 45 minutes\n"
+            "  !cooldown mine default     → back to the built-in default\n\n"
+            "These are deliberately NOT a per-server setting. A cooldown claim "
+            "is stored against the member, not the server, so one server "
+            "shortening an activity would speed it up for those members "
+            "everywhere — and the coins spend everywhere too."
+        ),
+    )
+    async def cooldown(
+        self,
+        ctx: commands.Context,
+        activity: Optional[str] = None,
+        *,
+        length: Optional[str] = None,
+    ):
+        """!cooldown [activity] [duration|default] — bot-wide activity cooldowns."""
+        overrides = await db.get_activity_cooldowns()
+
+        def _current(name: str) -> int:
+            return effective_cooldown(name, overrides.get(name))
+
+        if not activity:
+            lines = []
+            for name in ACTIVITY_NAMES:
+                mark = "•" if name in overrides else "·"
+                default = ACTIVITY_DEFAULT_COOLDOWNS[name]
+                suffix = (
+                    "" if name in overrides else f" (default {h.fmt_duration(default)})"
+                )
+                lines.append(
+                    f"{mark} `/{name}` — **{h.fmt_duration(_current(name))}**{suffix}"
+                )
+            return await ctx.reply(
+                embed=h.info(
+                    "\n".join(lines)
+                    + "\n\nSet one with `!cooldown <activity> <duration>`, or "
+                    "`!cooldown <activity> default` to clear an override.",
+                    "⏱️ Activity Cooldowns",
+                )
+            )
+
+        name = activity.lower().strip()
+        if name not in ACTIVITY_NAMES:
+            return await ctx.reply(
+                embed=h.err(
+                    f"Unknown activity `{name}`. "
+                    f"Pick one of: {', '.join(f'`{a}`' for a in ACTIVITY_NAMES)}."
+                )
+            )
+
+        if not length:
+            return await ctx.reply(
+                embed=h.info(
+                    f"`/{name}` runs every **{h.fmt_duration(_current(name))}**"
+                    f"{'' if name in overrides else ' (the default)'}.",
+                    "⏱️ Activity Cooldown",
+                )
+            )
+
+        wanted = length.strip().lower()
+        if wanted in ("default", "reset", "clear"):
+            await db.clear_activity_cooldown(name)
+            restored = ACTIVITY_DEFAULT_COOLDOWNS[name]
+            log.info("Cooldown for %s reset to default by %s", name, ctx.author.id)
+            return await ctx.reply(
+                embed=h.ok(
+                    f"`/{name}` is back on its default of "
+                    f"**{h.fmt_duration(restored)}**."
+                )
+            )
+
+        seconds = h.parse_duration(wanted)
+        if seconds is None and wanted.isdigit():
+            seconds = int(wanted)  # a bare number means seconds
+        if not seconds:
+            return await ctx.reply(
+                embed=h.err(
+                    f"Couldn't read `{length}` as a length. Try `45m`, `2h`, "
+                    "`1d`, or a plain number of seconds."
+                )
+            )
+
+        low, high = ACTIVITY_COOLDOWN_BOUNDS[name]
+        if not low <= seconds <= high:
+            return await ctx.reply(
+                embed=h.err(
+                    f"`/{name}`'s cooldown must be between "
+                    f"{h.fmt_duration(low)} and {h.fmt_duration(high)}."
+                )
+            )
+
+        await db.set_activity_cooldown(name, int(seconds))
+        log.info("Cooldown for %s set to %ss by %s", name, int(seconds), ctx.author.id)
+        await ctx.reply(
+            embed=h.ok(
+                f"`/{name}` now runs every **{h.fmt_duration(int(seconds))}**, "
+                "in every server.",
+                "⏱️ Cooldown Updated",
             )
         )
 

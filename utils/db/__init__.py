@@ -47,6 +47,9 @@ _DOMAIN_ORDER = (
     "liverole",
     "tickets",
     "identity",
+    # Bot-wide, owner-owned knobs (the activity cooldowns) — no guild id, no
+    # user id, so it stands apart from every domain above.
+    "settings",
     # No tables of its own — the retention/WAL/VACUUM janitor for every other
     # domain's tables, driven by main.py's daily maintenance loop.
     "maintenance",

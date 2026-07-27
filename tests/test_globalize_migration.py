@@ -355,6 +355,37 @@ async def test_fishing_cooldown_setting_is_dropped(legacy):
     assert await db.get_fishing_config(G2) == {"enabled": True}
 
 
+# ── Migration 4: the per-guild activity cooldowns are gone ────────────────────
+async def test_activity_cooldown_settings_are_dropped(legacy):
+    """Activity cooldown claims are keyed by user, so the length was never a
+    server's to set — migration 4 drops the columns while keeping every guild's
+    on/off switches."""
+    await legacy.execute(
+        "CREATE TABLE activities_config (guild_id TEXT PRIMARY KEY, "
+        "work_enabled INTEGER NOT NULL DEFAULT 1, mine_enabled INTEGER NOT NULL DEFAULT 1, "
+        "hunt_enabled INTEGER NOT NULL DEFAULT 1, explore_enabled INTEGER NOT NULL DEFAULT 1, "
+        "rob_enabled INTEGER NOT NULL DEFAULT 1, work_cooldown INTEGER NOT NULL DEFAULT 3600, "
+        "mine_cooldown INTEGER NOT NULL DEFAULT 1800, hunt_cooldown INTEGER NOT NULL DEFAULT 2700, "
+        "explore_cooldown INTEGER NOT NULL DEFAULT 10800, rob_cooldown INTEGER NOT NULL DEFAULT 14400)"
+    )
+    await legacy.executemany(
+        "INSERT INTO activities_config (guild_id, rob_enabled, work_cooldown) "
+        "VALUES (?,?,?)",
+        [(str(G1), 0, 1800), (str(G2), 1, 3600)],
+    )
+    await legacy.commit()
+    await db._run_migrations([(4, globalize.drop_per_guild_activity_cooldowns)])
+
+    # The switches survive; the lengths are gone from the row entirely.
+    assert (await db.get_activities_config(G1))["rob_enabled"] is False
+    assert (await db.get_activities_config(G2))["rob_enabled"] is True
+    assert "work_cooldown" not in await db.get_activities_config(G1)
+
+    # Safe to re-run once the columns are already gone.
+    await db._run_migrations([(4, globalize.drop_per_guild_activity_cooldowns)])
+    assert (await db.get_activities_config(G1))["rob_enabled"] is False
+
+
 # ── Migration 3: rebalanced casino bet limits ─────────────────────────────────
 async def test_default_casino_limits_are_rescaled(legacy):
     """The 20s cast cooldown tripled income, so the stock 10/1,000 bet band was

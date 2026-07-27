@@ -458,3 +458,56 @@ async def rescale_default_casino_limits(conn):
     )
     if cur.rowcount:
         log.info("Rescaled default casino bet limits for %d guild(s)", cur.rowcount)
+
+
+@migration(4)
+async def drop_per_guild_activity_cooldowns(conn):
+    """Retire the per-guild activity cooldown lengths — they're bot-wide now.
+
+    Same reasoning as migration 2 did for fishing: the claim is keyed by user
+    id alone, so whichever of a member's servers set the shortest length was
+    quietly setting the pace for all of them, and the coins it minted spend
+    everywhere. The lengths moved to `bot_settings` (utils/db/settings.py),
+    where only the bot owner can write them; the guild keeps its on/off
+    switches.
+
+    Per-guild values can't be folded into one bot-wide number, so they are
+    dropped and every activity returns to its default — the count is logged so
+    the owner knows to re-set anything they cared about with `!cooldown`.
+    Idempotent: skipped once the columns are gone.
+    """
+    async with conn.execute("PRAGMA table_info(activities_config)") as cur:
+        cols = {row["name"] for row in await cur.fetchall()}
+    if "work_cooldown" not in cols:
+        return
+    async with conn.execute(
+        "SELECT COUNT(*) FROM activities_config WHERE "
+        "work_cooldown<>3600 OR mine_cooldown<>1800 OR hunt_cooldown<>2700 OR "
+        "explore_cooldown<>10800 OR rob_cooldown<>14400"
+    ) as cur:
+        customised = (await cur.fetchone())[0]
+    log.info("Dropping the per-guild activity cooldown settings …")
+    await conn.execute("DROP TABLE IF EXISTS activities_config_new")
+    await conn.execute(
+        "CREATE TABLE activities_config_new ("
+        "guild_id TEXT PRIMARY KEY, "
+        "work_enabled INTEGER NOT NULL DEFAULT 1, "
+        "mine_enabled INTEGER NOT NULL DEFAULT 1, "
+        "hunt_enabled INTEGER NOT NULL DEFAULT 1, "
+        "explore_enabled INTEGER NOT NULL DEFAULT 1, "
+        "rob_enabled INTEGER NOT NULL DEFAULT 1)"
+    )
+    await conn.execute(
+        "INSERT INTO activities_config_new (guild_id, work_enabled, mine_enabled, "
+        "hunt_enabled, explore_enabled, rob_enabled) "
+        "SELECT guild_id, work_enabled, mine_enabled, hunt_enabled, "
+        "explore_enabled, rob_enabled FROM activities_config"
+    )
+    await conn.execute("DROP TABLE activities_config")
+    await conn.execute("ALTER TABLE activities_config_new RENAME TO activities_config")
+    if customised:
+        log.warning(
+            "%d guild(s) had custom activity cooldowns; every activity is back "
+            "on its default — set bot-wide lengths with !cooldown",
+            customised,
+        )

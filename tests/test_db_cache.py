@@ -53,7 +53,7 @@ async def test_defaults_are_cached_too():
         ("get_level_config", "set_level_config", "xp_max", 99),
         ("get_econ_config", "set_econ_config", "daily_amount", 777),
         ("get_fishing_config", "set_fishing_config", "enabled", False),
-        ("get_activities_config", "set_activities_config", "work_cooldown", 1800),
+        ("get_activities_config", "set_activities_config", "work_enabled", False),
     ],
 )
 async def test_setter_invalidates(getter, setter, key, value):

@@ -1,5 +1,5 @@
 """Activities cog constants: career ladder, catalogues, odds tables, tool
-ladders, and per-guild cooldown bounds.
+ladders, and the cooldown defaults/bounds.
 
 Balance note (checked against the "≤~150 coins/hour of cooldown" guardrail):
   /work    1h  cooldown, pay 60-140 (+career bonus up to 45)   → EV ~100-145/h
@@ -15,17 +15,18 @@ Cross-server farming
 ────────────────────
 Cooldown *claims* are global (utils/db/activities.py keys the stats row by
 user_id alone), so running /work in one server blocks it in every other one.
-That closes the obvious hole. The lengths above stay per-guild, which leaves a
-subtler one: with coins and items global too, the SHORTEST cooldown among a
-member's servers is the one that actually governs them, and a single permissive
-server would mint coins spendable everywhere.
+That closes the obvious hole — but it also means a per-guild cooldown *length*
+never described anything real: with coins and items global too, the SHORTEST
+length among a member's servers was the one that actually governed them, and a
+single permissive server minted coins spendable everywhere.
 
-So each `*_COOLDOWN_MIN` below is a real floor, not a token one — a server may
-make an activity slower without limit, or up to twice as fast, and no faster.
-Halving the default at worst doubles the guardrail rate above; the old 60s
-minimum allowed 60x on /work. `helpers.effective_cooldown` re-applies the floor
-at claim time so a config row written before this (or edited straight in the
-database) can't outlive it.
+So the lengths are not a server setting at all. They are bot-wide and
+owner-only (`!cooldown` in cogs/admin, stored in utils/db/settings.py); a guild
+still decides whether an activity runs there, which is genuinely its own call
+and affects only its own members. The defaults below are what an activity uses
+until the owner overrides it, and `helpers.effective_cooldown` is the one place
+a stored value is turned into a length — it falls back to the default rather
+than to "no cooldown" if the value is missing or nonsense.
 """
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -36,7 +37,6 @@ WORK_PAY_MIN = 60
 WORK_PAY_MAX = 140
 
 WORK_COOLDOWN_DEFAULT = 3600  # 1 hour
-WORK_COOLDOWN_MIN = WORK_COOLDOWN_DEFAULT // 2  # anti-farm floor, see module docstring
 WORK_COOLDOWN_MAX = 86_400
 
 # Lifetime shift count → (title, flat pay bonus). The highest threshold a
@@ -72,7 +72,6 @@ WORK_SCENES: list[str] = [
 # ══════════════════════════════════════════════════════════════════════════════
 
 MINE_COOLDOWN_DEFAULT = 1800  # 30 minutes
-MINE_COOLDOWN_MIN = MINE_COOLDOWN_DEFAULT // 2
 MINE_COOLDOWN_MAX = 86_400
 
 # 8% of digs yield nothing at all (a cave-in), independent of ore rarity.
@@ -122,7 +121,6 @@ PICKAXES: list[dict] = [
 # ══════════════════════════════════════════════════════════════════════════════
 
 HUNT_COOLDOWN_DEFAULT = 2700  # 45 minutes
-HUNT_COOLDOWN_MIN = HUNT_COOLDOWN_DEFAULT // 2
 HUNT_COOLDOWN_MAX = 86_400
 
 HUNT_CATCHES: dict[str, dict] = {
@@ -147,7 +145,6 @@ HUNT_PADLOCK_CHANCE = 0.06  # independent chance of finding a defensive padlock
 # ══════════════════════════════════════════════════════════════════════════════
 
 EXPLORE_COOLDOWN_DEFAULT = 10_800  # 3 hours
-EXPLORE_COOLDOWN_MIN = EXPLORE_COOLDOWN_DEFAULT // 2
 EXPLORE_COOLDOWN_MAX = 172_800
 
 EXPLORE_COINS_SMALL = (100, 400)
@@ -177,7 +174,6 @@ EXPLORE_FLAVOR: dict[str, str] = {
 # ══════════════════════════════════════════════════════════════════════════════
 
 ROB_COOLDOWN_DEFAULT = 14_400  # 4 hours
-ROB_COOLDOWN_MIN = ROB_COOLDOWN_DEFAULT // 2
 ROB_COOLDOWN_MAX = 172_800
 
 ROB_MIN_ROBBER_BALANCE = 250
@@ -230,8 +226,8 @@ ACTIVITY_INFO: dict[str, dict] = {
     },
 }
 
-# Cooldown values offered by the /adventure cooldown picker, filtered to each
-# activity's own bounds. Typing an exact number still works.
+# Cooldown values suggested by the owner-only !cooldown command, filtered to
+# each activity's own bounds. Any exact number in range still works.
 COOLDOWN_PRESETS: tuple[int, ...] = (
     60,
     300,
@@ -255,10 +251,15 @@ ACTIVITY_DEFAULT_COOLDOWNS: dict[str, int] = {
     "rob": ROB_COOLDOWN_DEFAULT,
 }
 
+# The smallest length the owner can set. Not a balance guardrail — the owner
+# runs the bot and can make an activity as fast as they like — just a floor
+# that keeps a typo from turning an activity into a no-cooldown coin printer.
+COOLDOWN_MIN = 10
+
 ACTIVITY_COOLDOWN_BOUNDS: dict[str, tuple[int, int]] = {
-    "work": (WORK_COOLDOWN_MIN, WORK_COOLDOWN_MAX),
-    "mine": (MINE_COOLDOWN_MIN, MINE_COOLDOWN_MAX),
-    "hunt": (HUNT_COOLDOWN_MIN, HUNT_COOLDOWN_MAX),
-    "explore": (EXPLORE_COOLDOWN_MIN, EXPLORE_COOLDOWN_MAX),
-    "rob": (ROB_COOLDOWN_MIN, ROB_COOLDOWN_MAX),
+    "work": (COOLDOWN_MIN, WORK_COOLDOWN_MAX),
+    "mine": (COOLDOWN_MIN, MINE_COOLDOWN_MAX),
+    "hunt": (COOLDOWN_MIN, HUNT_COOLDOWN_MAX),
+    "explore": (COOLDOWN_MIN, EXPLORE_COOLDOWN_MAX),
+    "rob": (COOLDOWN_MIN, ROB_COOLDOWN_MAX),
 }
