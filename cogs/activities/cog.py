@@ -47,7 +47,12 @@ Commands
   /mine dig                     → dig for ore
   /mine upgrade                 → buy the next pickaxe tier with coins
   /mine stats                   → your pickaxe + dig stats
-  /adventure                    → what you can do right now + each cooldown
+  /adventure                    → the dashboard: your career + pickaxe tier,
+                                  every activity's live status and cooldown,
+                                  and how many times you've run each
+  /adventure dashboard          → same card (the slash-reachable `fallback`;
+                                  a group's own callback can't be invoked over
+                                  slash, so without it the card was prefix-only)
   /adventure hunt               → hunt for pelts/meat/trophies (medium risk)
   /adventure explore            → explore for a long-shot reward
   /rob <member>                 → try to steal a cut of a member's coins
@@ -388,6 +393,12 @@ class Activities(commands.Cog):
         name="adventure",
         description="Hunt and explore for loot, and configure economy activities.",
         invoke_without_command=True,
+        # `fallback` is what makes the bare landing card reachable as a slash
+        # command (/adventure dashboard) — without it the overview below is
+        # prefix-only, since Discord has no way to invoke a group itself.
+        # /mine and /fish don't need one: their bare form is a dig/cast, which
+        # already has its own `dig`/`cast` subcommand.
+        fallback="dashboard",
         extras={
             "category": "🪙 Economy",
             "sub": "⛏️ Activities",
@@ -399,7 +410,8 @@ class Activities(commands.Cog):
             "any of the five activities here: work, mine, hunt, explore, rob.",
             "args": [],
             "perms": "Admin subcommands require Manage Server",
-            "example": "{prefix}adventure hunt\n{prefix}adventure explore",
+            "example": "{prefix}adventure\n{prefix}adventure hunt\n"
+            "{prefix}adventure explore",
         },
     )
     @commands.guild_only()
@@ -407,26 +419,91 @@ class Activities(commands.Cog):
         await self._show_adventure_overview(ctx)
 
     async def _show_adventure_overview(self, ctx: commands.Context):
-        """The member-facing landing card: every activity, what it's for, and
-        whether you can do it right now. (Mods get the settings dump from
-        /adventure config.)"""
+        """The member-facing landing card: your two progression tracks, every
+        activity's live status, and what you've done so far.
+
+        Read-only and cheap — two queries (the guild's switches, your stats
+        row); the career tier and pickaxe tier are derived from that same row,
+        so the progression block costs nothing extra. The settings dump stays
+        on /adventure config, and prestige/achievements stay on /progress —
+        this card deliberately doesn't restate them.
+        """
         cfg = await self._cfg(ctx.guild.id)
         stats = await db.get_activity_stats(ctx.author.id)
+
+        ready = [
+            a
+            for a in ACTIVITY_NAMES
+            if cfg[f"{a}_enabled"] and not self._remaining(cfg, stats, a)
+        ]
+        if ready:
+            headline = f"**{len(ready)}** ready right now: " + ", ".join(
+                f"`/{a}`" for a in ready
+            )
+        else:
+            soonest = min(
+                (
+                    self._remaining(cfg, stats, a)
+                    for a in ACTIVITY_NAMES
+                    if cfg[f"{a}_enabled"]
+                ),
+                default=0,
+            )
+            headline = (
+                f"Nothing ready yet — next one in **{h.fmt_duration(soonest)}**."
+                if soonest
+                else "Every activity is switched off in this server."
+            )
         embed = h.embed(
-            "🧭 Things To Do",
-            "Every way to earn beyond `/daily` and `/fish` — each on its own "
-            "cooldown.",
+            "🧭 Adventure",
+            f"{headline}\nEvery way to earn beyond `/daily` and `/fish` — each on "
+            "its own cooldown.",
             h.BLUE,
         )
+
+        # ── The two progression tracks these activities feed ──────────────────
+        career = career_info(stats["work_shifts"])
+        nxt_career = next_career(stats["work_shifts"])
+        career_line = f"💼 **{career['title']}**"
+        if career["bonus"]:
+            career_line += f" · +{career['bonus']} per shift"
+        if nxt_career:
+            togo = nxt_career["shifts"] - stats["work_shifts"]
+            career_line += f"\n└ **{togo:,}** more shift(s) → {nxt_career['title']}"
+        else:
+            career_line += "\n└ Top of the career ladder. 🎉"
+
+        pickaxe = pickaxe_info(stats["pickaxe_level"])
+        nxt_pick = next_pickaxe(stats["pickaxe_level"])
+        pick_line = (
+            f"{pickaxe['emoji']} **{pickaxe['name']}** "
+            f"(tier {stats['pickaxe_level'] + 1}/{len(PICKAXES)}) · "
+            f"{pickaxe['luck']:.0%} luck"
+        )
+        pick_line += (
+            f"\n└ Next: **{nxt_pick['name']}** — see `/mine upgrade`"
+            if nxt_pick
+            else "\n└ Best pickaxe there is. 🎉"
+        )
+        embed.add_field(
+            name="Progression", value=f"{career_line}\n{pick_line}", inline=False
+        )
+
         for activity in ACTIVITY_NAMES:
             info = ACTIVITY_INFO[activity]
+            count = stats.get(f"{activity}_count") or (
+                stats["work_shifts"] if activity == "work" else 0
+            )
             embed.add_field(
                 name=f"{info['emoji']} {info['command']}",
                 value=f"{info['blurb']}\n{self._status_line(cfg, stats, activity)} · "
-                f"every {h.fmt_duration(self._cooldown(cfg, activity))}",
+                f"every {h.fmt_duration(self._cooldown(cfg, activity))}\n"
+                f"Done **{count:,}×**",
                 inline=True,
             )
-        embed.set_footer(text="Sell what you find with /inventory sell")
+        embed.set_footer(
+            text="Sell what you find with /inventory · badges on /progress"
+        )
         await ctx.reply(embed=embed)
 
     # ── /adventure hunt — medium risk ────────────────────────────────────────

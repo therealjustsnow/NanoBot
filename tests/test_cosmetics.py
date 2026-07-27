@@ -229,7 +229,6 @@ def _card(**overrides):
         "banner": cosmetics.get("banner_aurora"),
         "border": cosmetics.get("border_gold"),
         "nameplate": cosmetics.get("plate_neon"),
-        "footer": "one account, every server",
     }
     data.update(overrides)
     return data

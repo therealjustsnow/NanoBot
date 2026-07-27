@@ -17,7 +17,12 @@ Slash command budget: one group (/inventory …, alias /inv).
 ──────────────────────────────────────────────────────
 Commands
 ──────────────────────────────────────────────────────
-  /inventory                    → your items and active effects (alias: inv)
+  /inventory [category]         → your items and active effects, grouped by
+                                  category with totals (alias: inv)
+  /inventory view [category]    → same view (the slash-reachable `fallback`;
+                                  a group's own callback can't be invoked over
+                                  slash, so without it there was no way to
+                                  simply *look* at your items over slash)
   /inventory use <item> [qty]   → use a consumable (applies its effect)
   /inventory sell <item> [qty]  → sell sellable items for coins; `item` also
                                   takes a bulk target — `all` for everything
@@ -140,55 +145,149 @@ class Inventory(commands.Cog):
         aliases=["inv"],
         description="Your items: bait, consumables, materials, and treasure.",
         invoke_without_command=True,
+        # Without `fallback` the bare item view is prefix-only — Discord can't
+        # invoke a group itself, so /inventory offered use/sell/give/info and
+        # no way to simply *look* at what you own.
+        fallback="view",
         extras={
             "category": "🪙 Economy",
             "sub": "🎒 Items & Crafting",
             "short": "View, use, sell, and gift your items",
-            "usage": "inventory [subcommand]",
+            "usage": "inventory [category]",
             "desc": "Everything you own beyond coins lives here: bait, "
             "consumables, crafting materials, treasure, and keys earned from "
             "economy activities. Use consumables for temporary buffs, sell "
             "spare materials for coins (one item, a whole category, or "
             "everything at once), or give items to friends.",
-            "args": [],
+            "args": ["category — show one category only (optional)"],
             "perms": "None",
-            "example": "{prefix}inventory\n{prefix}inventory use lucky charm\n"
+            "example": "{prefix}inventory\n{prefix}inventory bait\n"
+            "{prefix}inventory use lucky charm\n"
             "{prefix}inventory sell iron ore 5\n{prefix}inventory sell all",
         },
     )
     @commands.guild_only()
-    async def inventory(self, ctx: commands.Context):
+    @discord.app_commands.describe(category="Show one category only (optional)")
+    async def inventory(self, ctx: commands.Context, category: Optional[str] = None):
         if ctx.invoked_subcommand is None:
-            await self._show(ctx)
+            await self._show(ctx, category)
 
-    async def _show(self, ctx: commands.Context):
+    @inventory.autocomplete("category")
+    async def _category_ac(self, interaction: discord.Interaction, current: str):
+        """Only the categories this member actually owns something in, each with
+        its stack count — an empty inventory still lists them so the picker is
+        never blank."""
+        owned: dict[str, int] = {}
+        for stack in await db.get_inventory(interaction.user.id):
+            d = item_catalog.get(stack["item_key"])
+            owned[d.category if d else "misc"] = (
+                owned.get(d.category if d else "misc", 0) + 1
+            )
+        cur = (current or "").lower()
+        out = []
+        for cat in item_catalog.CATEGORY_ORDER:
+            label = item_catalog.CATEGORY_LABELS.get(cat, cat.title())
+            if cur and cur not in cat.lower() and cur not in label.lower():
+                continue
+            count = owned.get(cat, 0)
+            name = f"{label} — {count} item(s)" if count else f"{label} — none yet"
+            out.append(discord.app_commands.Choice(name=name[:100], value=cat))
+        return out[:25]
+
+    async def _show(self, ctx: commands.Context, category: Optional[str] = None):
+        """The inventory overview. `category` narrows it to one catalogue
+        category; anything unrecognised is reported rather than silently
+        showing everything."""
+        wanted = None
+        if category:
+            key = category.strip().lower().removeprefix("cat:")
+            wanted = next(
+                (
+                    c
+                    for c in item_catalog.CATEGORY_ORDER
+                    if c == key or item_catalog.CATEGORY_LABELS.get(c, c).lower() == key
+                ),
+                None,
+            )
+            if wanted is None:
+                names = ", ".join(f"`{c}`" for c in item_catalog.CATEGORY_ORDER)
+                return await ctx.reply(
+                    embed=h.err(
+                        f"There's no **{category}** category. Try one of: {names}."
+                    ),
+                    ephemeral=True,
+                )
+
         stacks = await db.get_inventory(ctx.author.id)
         effects = await db.get_active_effects(ctx.author.id)
         if not stacks and not effects:
             return await ctx.reply(
                 embed=h.info(
                     "Your inventory is empty. Items come from fishing, "
-                    "activities like /mine and /hunt, and economy events.",
+                    "activities like `/mine` and `/adventure hunt`, and economy "
+                    "events. Anything you find shows up here.",
                     "🎒 Inventory",
                 ),
                 ephemeral=True,
             )
+
         by_cat: dict[str, list[str]] = {}
+        total_items = 0
+        total_value = 0
         for stack in stacks:
             d = item_catalog.get(stack["item_key"])
             cat = d.category if d else "misc"
+            total_items += stack["qty"]
+            if d and d.value > 0:
+                total_value += d.value * stack["qty"]
+            if wanted and cat != wanted:
+                continue
             line = f"{item_catalog.display(stack['item_key'])} × **{stack['qty']:,}**"
             if d and d.value > 0:
                 line += f" · sells {d.value:,} ea"
             by_cat.setdefault(cat, []).append(line)
-        embed = h.embed(f"🎒 {ctx.author.display_name}'s Inventory", "", ACCENT)
+
+        summary = f"**{total_items:,}** item(s) across **{len(stacks)}** stack(s)"
+        if total_value:
+            summary += f" · worth **{total_value:,}** if you sold the lot"
+        if wanted:
+            label = item_catalog.CATEGORY_LABELS.get(wanted, wanted.title())
+            summary += f"\nShowing **{label}** only — run `/inventory` for everything."
+        embed = h.embed(f"🎒 {ctx.author.display_name}'s Inventory", summary, ACCENT)
+
         for cat in item_catalog.CATEGORY_ORDER:
-            if cat in by_cat:
+            if cat not in by_cat:
+                continue
+            # Discord caps a field at 1024 chars; spill into continuation
+            # fields rather than truncating stacks out of sight.
+            label = item_catalog.CATEGORY_LABELS.get(cat, cat.title())
+            chunk: list[str] = []
+            size = 0
+            part = 0
+            for line in by_cat[cat]:
+                if size + len(line) + 1 > 1024 and chunk:
+                    part += 1
+                    embed.add_field(
+                        name=label if part == 1 else f"{label} (cont.)",
+                        value="\n".join(chunk),
+                        inline=False,
+                    )
+                    chunk, size = [], 0
+                chunk.append(line)
+                size += len(line) + 1
+            if chunk:
+                part += 1
                 embed.add_field(
-                    name=item_catalog.CATEGORY_LABELS.get(cat, cat.title()),
-                    value="\n".join(by_cat[cat])[:1024],
+                    name=label if part == 1 else f"{label} (cont.)",
+                    value="\n".join(chunk),
                     inline=False,
                 )
+        if wanted and not by_cat:
+            embed.add_field(
+                name=item_catalog.CATEGORY_LABELS.get(wanted, wanted.title()),
+                value="Nothing here yet.",
+                inline=False,
+            )
         if effects:
             now = time.time()
             lines = []
@@ -204,6 +303,9 @@ class Inventory(commands.Cog):
             embed.add_field(
                 name="Active Effects", value="\n".join(lines)[:1024], inline=False
             )
+        embed.set_footer(
+            text="/inventory use · sell · give · info — or /inventory sell all"
+        )
         await ctx.reply(embed=embed)
 
     # ── /inventory use ───────────────────────────────────────────────────────

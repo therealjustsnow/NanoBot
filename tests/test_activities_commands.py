@@ -396,23 +396,57 @@ async def test_adventure_bare_shows_member_overview(bot):
     await dpytest.message("!adventure", member=author)
     sent = dpytest.get_message()
     embed = sent.embeds[0]
-    assert "Things To Do" in embed.title
-    assert {f.name for f in embed.fields} == {
+    assert "Adventure" in embed.title
+    activity_fields = {
         "💼 /work",
         "⛏️ /mine",
         "🏹 /adventure hunt",
         "🧭 /adventure explore",
         "🥷 /rob",
     }
-    assert all("Ready now" in f.value for f in embed.fields)
+    names = {f.name for f in embed.fields}
+    assert activity_fields <= names
+    # The dashboard leads with the two progression tracks these activities feed
+    # (career + pickaxe), derived from the same stats row — no extra queries.
+    assert "Progression" in names
+    progression = next(f.value for f in embed.fields if f.name == "Progression")
+    assert "💼" in progression and "tier 1/" in progression
+    # Nothing claimed yet, so everything is ready and the headline says so.
+    assert all(
+        "Ready now" in f.value for f in embed.fields if f.name in activity_fields
+    )
+    assert "5" in embed.description and "ready right now" in embed.description
+    # Lifetime counts are on the card so progress is visible without /mine stats.
+    assert all(
+        "Done **0×**" in f.value for f in embed.fields if f.name in activity_fields
+    )
 
     # A used activity reports its remaining cooldown; a disabled one says so.
     await db.try_claim_activity(author.id, "work", time.time(), 3600)
     await db.set_activities_config(guild.id, rob_enabled=False)
     await dpytest.message("!adventure", member=author)
-    fields = {f.name: f.value for f in dpytest.get_message().embeds[0].fields}
+    embed = dpytest.get_message().embeds[0]
+    fields = {f.name: f.value for f in embed.fields}
     assert "Ready in" in fields["💼 /work"]
     assert "Disabled" in fields["🥷 /rob"]
+    # The headline drops the two that are no longer available.
+    assert "3" in embed.description and "ready right now" in embed.description
+
+
+@pytest.mark.cogs("cogs.activities")
+@pytest.mark.asyncio
+async def test_adventure_dashboard_is_reachable_as_a_slash_subcommand(bot):
+    """The reported gap: /adventure's landing card was prefix-only, because a
+    hybrid group's own callback isn't invocable over slash without `fallback`.
+    Guard the app-command child by name, and that it runs."""
+    group = bot.get_command("adventure")
+    assert isinstance(group, commands.HybridGroup)
+    assert group.fallback == "dashboard"
+    assert "dashboard" in {c.name for c in group.app_command.commands}
+
+    # The fallback name is also a prefix alias for the same card.
+    await dpytest.message("!adventure dashboard", member=config().members[0])
+    assert "Adventure" in dpytest.get_message().embeds[0].title
 
 
 @pytest.mark.cogs("cogs.activities")

@@ -356,7 +356,6 @@ class Identity(commands.Cog):
             "banner": cosmetics.get((loadout.get("banner") or [""])[0]),
             "border": cosmetics.get((loadout.get("border") or [""])[0]),
             "nameplate": cosmetics.get((loadout.get("nameplate") or [""])[0]),
-            "footer": f"{ctx.guild.name} · one account, every server",
         }
         return data, notes
 

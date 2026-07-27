@@ -10,6 +10,7 @@ drive the SellConfirmView's handlers directly with a duck-typed interaction
 import types
 
 import pytest
+from discord.ext import commands
 from discord.ext import test as dpytest
 
 import utils.db as db
@@ -48,6 +49,59 @@ async def test_bare_inventory_empty_message(bot):
     await dpytest.message("!inventory", member=author)
     sent = dpytest.get_message()
     assert "empty" in sent.embeds[0].description.lower()
+
+
+@pytest.mark.cogs("cogs.inventory")
+async def test_inventory_view_is_reachable_as_a_slash_subcommand(bot):
+    """The gap this closes: /inventory offered use/sell/give/info and no way to
+    simply look at what you own, because a hybrid group's own callback isn't
+    invocable over slash without `fallback`."""
+    group = bot.get_command("inventory")
+    assert isinstance(group, commands.HybridGroup)
+    assert group.fallback == "view"
+    assert "view" in {c.name for c in group.app_command.commands}
+
+
+@pytest.mark.cogs("cogs.inventory", "cogs.activities", "cogs.fishing")
+async def test_inventory_overview_summarises_and_filters_by_category(bot):
+    author = config().members[0]
+    await db.add_item(author.id, "iron_ore", 5)
+    await db.add_item(author.id, "bait_worm", 3)
+
+    await dpytest.message("!inventory", member=author)
+    embed = dpytest.get_message().embeds[0]
+    # The overview leads with totals rather than dumping a raw list.
+    assert "8" in embed.description  # 5 + 3 items
+    assert "2" in embed.description  # across two stacks
+    names = {f.name for f in embed.fields}
+    assert len(names) >= 2
+
+    # A category narrows it to one section and says so.
+    await dpytest.message("!inventory bait", member=author)
+    embed = dpytest.get_message().embeds[0]
+    assert "only" in embed.description
+    body = "\n".join(f.value for f in embed.fields)
+    assert "worm" in body.lower() and "iron" not in body.lower()
+
+    # An unknown category is reported, not silently ignored.
+    await dpytest.message("!inventory nonsense", member=author)
+    assert "no **nonsense** category" in dpytest.get_message().embeds[0].description
+
+
+@pytest.mark.cogs("cogs.inventory", "cogs.activities", "cogs.fishing")
+async def test_inventory_category_autocomplete_marks_what_you_own(bot):
+    author = config().members[0]
+    await db.add_item(author.id, "bait_worm", 3)
+    cog = bot.get_cog("Inventory")
+    interaction = types.SimpleNamespace(user=types.SimpleNamespace(id=author.id))
+    choices = await cog._category_ac(interaction, "")
+    by_value = {c.value: c.name for c in choices}
+    assert "bait" in by_value and "item(s)" in by_value["bait"]
+    # Categories you own nothing in still list, so the picker is never blank.
+    assert "none yet" in by_value["treasure"]
+    # Typing filters the list.
+    filtered = await cog._category_ac(interaction, "bait")
+    assert {c.value for c in filtered} == {"bait"}
 
 
 @pytest.mark.cogs("cogs.inventory")

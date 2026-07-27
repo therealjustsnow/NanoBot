@@ -42,6 +42,7 @@ _PICKER_OPTIONS = [
     ("craft info", "recipe"),
     ("fish sell", "fish"),
     ("fish buy", "item"),
+    ("inventory view", "category"),
     ("inventory use", "item"),
     ("inventory sell", "item"),
     ("inventory give", "item"),
