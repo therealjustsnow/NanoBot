@@ -8,17 +8,22 @@ Max 25 active reminders per user. Min 1 minute, max 1 year.
 ──────────────────────────────────────────────────────
 Commands
 ──────────────────────────────────────────────────────
-  /remindme  <text> <time> [dm]
-  /remind    @user  <text> <time> [dm]
-  /reminders                           → list your active reminders
-  /reminders cancel <number>           → cancel by list number
+  /remindme                  <text> <time> [dm]  → remind yourself
+  /reminders user     @user  <text> <time> [dm]  → remind someone else
+  /reminders list                                → list your active reminders
+  /reminders cancel   <number>                   → cancel by list number
 
-Prefix shorthands:
+Prefix shorthands (unchanged — `remind` is still flat here):
   !remindme do this 8h
   !remindme do this in 8 hours
   !remind @user do that 1h
   !reminders
   !reminders cancel 2
+
+Why /remind is prefix-only: /remind, /remindme and /reminders sat next to each
+other in the slash picker with near-identical names, and the shortest of the
+three was the only one that reminded somebody *else*. Slash now has two
+unambiguous entries; the prefix keeps all three names.
 
 ──────────────────────────────────────────────────────
 Storage  (SQLite via utils/db.py)
@@ -417,16 +422,27 @@ class Reminders(commands.Cog):
         )
 
     # ══════════════════════════════════════════════════════════════════════════
-    #  /remind @user
+    #  n!remind @user  — prefix shorthand for /reminders user
     # ══════════════════════════════════════════════════════════════════════════
-    @commands.hybrid_command(
+    #  The slash tree used to carry /remind, /remindme and /reminders side by
+    #  side: three adjacent entries with near-identical names, where the
+    #  shortest one was the only one that reminds *somebody else*. Picking the
+    #  wrong one pinged the wrong person. Slash now offers /remindme (yourself)
+    #  and /reminders user (someone else), which say which is which.
+    #
+    #  The prefix name is untouched — `n!remind @user check that PR 2h` still
+    #  works, following the same "prefix stays flat, slash gets grouped" split
+    #  as /bot and /music.
+    @commands.command(
         name="remind",
-        description="Set a reminder for another user.",
         extras={
             "category": "⏰ Reminders",
             "short": "Set a reminder for another user",
             "usage": "remind <@user> <message with duration>",
-            "desc": "Remind someone else. Posts a channel ping by default.",
+            "desc": (
+                "Remind someone else. Posts a channel ping by default. "
+                "On slash this is `/reminders user`."
+            ),
             "args": [
                 ("user", "Who to remind"),
                 ("message", "What to remind them about — duration at the end"),
@@ -435,47 +451,14 @@ class Reminders(commands.Cog):
             "example": "{prefix}remind @user check that PR 2h",
         },
     )
-    @app_commands.describe(
-        user="Who to remind",
-        message="What to remind them about — include the time at the end",
-        time="Duration if not in the message (e.g. 1h, 30m)",
-        dm="DM them the reminder (default: no — posts a channel ping instead)",
-    )
-    @app_commands.autocomplete(time=_REMIND_IN_CHOICES)
     @commands.cooldown(1, 5, commands.BucketType.user)
-    async def remind(
-        self,
-        ctx: commands.Context,
-        user: discord.Member,
-        *,
-        message: str,
-        time: Optional[str] = None,
-        dm: Optional[bool] = False,
+    async def pfx_remind(
+        self, ctx: commands.Context, user: discord.Member, *, message: str
     ):
-        if user.bot:
-            return await ctx.reply(
-                embed=h.err("You can't set reminders for bots."), ephemeral=True
-            )
-
-        cleaned, secs = h.parse_duration_from_end(message)
-        if secs is None and time:
-            secs = h.parse_duration(time)
-            cleaned = message
-        if secs is None:
-            return await ctx.reply(
-                embed=h.err(
-                    "Couldn't find a duration. Include it in your message or use the `time` argument.\n"
-                    "Examples: `!remind @user call me back 30m` · `!remind @user check this in 2 hours`"
-                ),
-                ephemeral=True,
-            )
-
-        await self._create(
-            ctx, user, cleaned or message, secs, dm if dm is not None else False
-        )
+        await self._remind_other(ctx, user, message, None, False)
 
     # ══════════════════════════════════════════════════════════════════════════
-    #  /reminders  (list + cancel)
+    #  /reminders  (list + cancel + user)
     # ══════════════════════════════════════════════════════════════════════════
     @commands.hybrid_group(
         name="reminders",
@@ -509,6 +492,57 @@ class Reminders(commands.Cog):
     @app_commands.describe(number="The number shown next to the reminder in your list")
     async def reminders_cancel(self, ctx: commands.Context, number: int):
         await self._cancel(ctx, number)
+
+    @reminders.command(name="user", description="Set a reminder for someone else.")
+    @app_commands.describe(
+        user="Who to remind",
+        message="What to remind them about — include the time at the end",
+        time="Duration if not in the message (e.g. 1h, 30m)",
+        dm="DM them the reminder (default: no — posts a channel ping instead)",
+    )
+    @app_commands.autocomplete(time=_REMIND_IN_CHOICES)
+    @commands.cooldown(1, 5, commands.BucketType.user)
+    async def reminders_user(
+        self,
+        ctx: commands.Context,
+        user: discord.Member,
+        *,
+        message: str,
+        time: Optional[str] = None,
+        dm: Optional[bool] = False,
+    ):
+        await self._remind_other(ctx, user, message, time, dm)
+
+    # ── Remind-someone-else helper (shared by /reminders user and n!remind) ────
+    async def _remind_other(
+        self,
+        ctx: commands.Context,
+        user: discord.Member,
+        message: str,
+        time: Optional[str],
+        dm: Optional[bool],
+    ):
+        if user.bot:
+            return await ctx.reply(
+                embed=h.err("You can't set reminders for bots."), ephemeral=True
+            )
+
+        cleaned, secs = h.parse_duration_from_end(message)
+        if secs is None and time:
+            secs = h.parse_duration(time)
+            cleaned = message
+        if secs is None:
+            return await ctx.reply(
+                embed=h.err(
+                    "Couldn't find a duration. Include it in your message or use the `time` argument.\n"
+                    "Examples: `!remind @user call me back 30m` · `!remind @user check this in 2 hours`"
+                ),
+                ephemeral=True,
+            )
+
+        await self._create(
+            ctx, user, cleaned or message, secs, dm if dm is not None else False
+        )
 
     # ── List helper ────────────────────────────────────────────────────────────
     async def _list(self, ctx: commands.Context):

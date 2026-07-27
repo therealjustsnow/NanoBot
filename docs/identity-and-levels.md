@@ -113,7 +113,8 @@ rendering.
 dict built per profile view, so checking the whole catalogue costs no extra
 queries. Earnable cosmetics unlock **lazily** when a member opens their own
 card (the achievement pattern); `manual` ones only ever arrive through
-`/profile grant`, which is what makes event drops feel like awards.
+`n!profile grant` (bot-owner, prefix-only), which is what makes event drops
+feel like awards.
 
 **Adding cosmetics without touching code.** `data/cosmetics.json` is merged at
 cog load:
@@ -166,7 +167,7 @@ art.
 | A new cosmetic *slot* | One `SlotDef` in `SLOTS` (+ draw it in the card if it's visual) |
 | A new unlock condition | One branch in `is_unlocked` + one in `describe_unlock` |
 | A new global-XP source | One `XP_AWARDS` entry + one `await globalxp.award(...)` |
-| A one-off event drop to a whole server | `/profile grantall <cosmetic> [guild_id]` (bot owner) |
+| A one-off event drop to a whole server | `n!profile grantall <cosmetic> [guild_id]` (bot owner, prefix-only) |
 | Real artwork | Drop PNGs into `assets/profile/<slot>/` |
 | Animated cosmetics | Store a GIF asset and branch in `cosmetic_image` — the def/slot layer doesn't change |
 | A profile theme | A `theme` slot whose palette overrides the card's ink colours |

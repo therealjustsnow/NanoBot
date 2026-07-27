@@ -80,6 +80,8 @@ NanoBot fixes that.
 - Search picker, `playnext`, `playnow`, `stream`, and `shuffleplay` for fast queue control
 - `follow` -- the bot tracks you between voice channels; `pldump` exports the queue
 - Per-server queue with playlist support, shuffle, move, jump, remove, and clear
+  (playback is flat -- `/play`, `/skip`, `/queue`, `/volume`; queue editing and the
+  server library live under `/music`, and every prefix name stays flat)
 - Democratic vote-skip (requester / Manage Server force-skip) with a configurable ratio
 - Loop modes (off / track / queue), volume 0-200%, playback speed, and seek
 - Audio effects: bassboost, nightcore, vaporwave, treble, 8D, muffle
@@ -340,9 +342,9 @@ Restricted to the bot owner. These are **prefix-only by design** -- slash comman
 | `/hide [channel]` | Hide a channel from @everyone (`view_channel = false`). |
 | `/unhide [channel]` | Restore @everyone visibility on a hidden channel. |
 | `/slow [delay] [length]` | Set slowmode (`30s`-`5m`) with optional timed auto-disable. No args = toggle. |
-| `/purge <amount>` | Bulk delete 1-100 messages. Filters: `bots`, `user`, `contains`, `starts_with`, `ends_with`. |
-| `/snailpurge <amount>` | Slow one-by-one delete (1-500). No 14-day limit. Requires confirmation code. |
-| `/clean [amount]` | Delete NanoBot's own recent messages from the channel. |
+| `/purge <amount>` | Delete messages. Filters: `only` (anyone/humans/bots/nanobot), `user`, `contains`, `starts_with`, `ends_with`, and `mode`. |
+| `/purge <amount> mode:slow` | One-by-one delete (1-500). No 14-day limit. Asks for a confirmation code. Prefix shorthand: `!snailpurge` |
+| `/purge <amount> only:nanobot` | Delete NanoBot's own recent messages. Prefix shorthand: `!clean` |
 | `/echo [channel] <message>` | Send a message as NanoBot. Prefix mode auto-deletes your trigger. |
 | `/nuke [reason]` | Clone channel + delete original -- wipes all history. Button confirmation required. **Irreversible.** |
 | `/moveall <to> [from]` | Move all members from one voice channel to another. Defaults to your current VC. |
@@ -553,9 +555,15 @@ n!tag - rules               → deletes it
 | `/server` | Full server info -- members, channels, boost level, features, creation date |
 | `/user [user]` | User card -- status, roles, badges, join date, boost, timeout status |
 | `/avatar [user]` | Avatar at 1024px with PNG/JPG/WEBP/GIF download links |
-| `/banner [user]` | Profile banner with download links |
-| `/roleinfo <role>` | Role color, position, member count, permissions, creation date |
-| `/channelinfo [channel]` | Channel type, ID, category, creation date, NSFW status, slowmode, topic |
+| `/info banner [user]` | Profile banner with download links |
+| `/info role <role>` | Role color, position, member count, permissions, creation date |
+| `/info channel [channel]` | Channel type, ID, category, creation date, NSFW status, slowmode, topic |
+| `/info id [target]` | ID of a user, role, or channel, in a copyable code block |
+| `/info members` | Quick member count for this server |
+| `/info firstmsg [channel]` | Jump link to the oldest message in a channel |
+
+The `/info` lookups all keep their flat prefix names: `!banner`, `!roleinfo`,
+`!channelinfo`, `!id`, `!mc` and `!firstmsg` are unchanged.
 
 ---
 
@@ -566,7 +574,7 @@ n!tag - rules               → deletes it
 | Command | Description |
 |---------|-------------|
 | `/remindme <message with duration>` | Set a reminder for yourself. Duration goes at the end. |
-| `/remind <@user> <message with duration>` | Set a reminder for someone else |
+| `/reminders user <@user> <message with duration>` | Set a reminder for someone else (prefix: `!remind`) |
 | `/reminders list` | List your active reminders |
 | `/reminders cancel <number>` | Cancel a reminder by its list number |
 
@@ -579,8 +587,8 @@ n!tag - rules               → deletes it
 
 | Command | Description |
 |---------|-------------|
-| `/every <interval> <message> [label] [dm]` | Create a recurring reminder that fires repeatedly |
-| `/recurring` or `/recurring list` | List your recurring reminders with interval, next fire time, and status |
+| `/recurring every <interval> <message> [label] [dm]` | Create a recurring reminder that fires repeatedly (prefix: `!every`) |
+| `/recurring list` | List your recurring reminders with interval, next fire time, and status |
 | `/recurring pause <id>` | Pause a recurring reminder |
 | `/recurring resume <id>` | Resume a paused recurring reminder |
 | `/recurring cancel <id>` | Permanently delete a recurring reminder |
@@ -687,14 +695,22 @@ Per-server message XP and levels (Mee6-style curve). **Off by default** -- enabl
 
 | Command | Description |
 |---------|-------------|
-| `/coin grant <user> <amount>` | Add coins to a member's (global) balance |
-| `/coin take <user> <amount>` | Remove coins from a member's (global) balance |
-| `/coin reset [user]` | Wipe a global wallet, or every wallet — **bot owner only** |
-| `/coin daily <amount>` | Set the daily reward amount |
-| `/coin streakbonus <amount>` | Set the per-day streak bonus |
 | `/coin name <name>` | Set the currency name (e.g. NanoCoin) |
 | `/coin emoji <emoji>` | Set the currency emoji |
 | `/coin config` | Show the current economy settings |
+
+**Bot-owner tools** — prefix only, deliberately kept off the slash tree so
+commands nobody else can run don't sit in every member's picker:
+
+| Command | Description |
+|---------|-------------|
+| `!coin grant <amount> [@user…]` | Add coins to members' (global) balances |
+| `!coin take <amount> [@user…]` | Remove coins from members' (global) balances |
+| `!coin reset [@user]` | Wipe a global wallet, or every wallet |
+| `!fish event <key> [minutes]` | Force-start a fishing event |
+| `!profile grant <@user> <cosmetic>` | Award a cosmetic |
+| `!profile grantall <cosmetic> [guild_id]` | Award a cosmetic to a whole server |
+| `!profile revoke <@user> <cosmetic>` | Take a cosmetic back |
 
 ---
 
@@ -829,7 +845,7 @@ NanoBot/
 │   ├── tags.py            ← Tag system (personal + global, images, shortcuts,
 │   │                         import/export)
 │   ├── reminders.py       ← remindme / remind / reminders list+cancel
-│   ├── recurring.py       ← /every + /recurring list/pause/resume/cancel
+│   ├── recurring.py       ← /recurring every/list/pause/resume/cancel (prefix: !every)
 │   ├── utility.py         ← help / prefix / ping / about / invite / support / server
 │   │                         user / avatar / banner / roleinfo / uptime / stats
 │   ├── fun.py             ← 26 social + 33 reaction commands, ship, 8-ball (nekos.best)

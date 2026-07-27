@@ -43,9 +43,14 @@ Commands
   /profile unequip <cosmetic>   → take one off (or clear a slot)
   /profile badges [member]      → the badge gallery
   /profile rep [member]         → give someone rep (once a day), or see yours
-  /profile grant <member> <cosmetic>  → award a cosmetic   (bot owner)
-  /profile grantall <cosmetic> [guild] → award it to a whole server (bot owner)
-  /profile revoke <member> <cosmetic> → take one back      (bot owner)
+
+Owner tools — prefix only, deliberately kept out of the slash picker so a
+command nobody but the owner can run does not sit in every member's /profile
+list (`with_app_command=False`):
+
+  n!profile grant <member> <cosmetic>   → award a cosmetic
+  n!profile grantall <cosmetic> [guild] → award it to a whole server
+  n!profile revoke <member> <cosmetic>  → take one back
 
 Global level-up announcements
 ─────────────────────────────
@@ -705,10 +710,16 @@ class Identity(commands.Cog):
         )
 
     # ── owner-only grants (events, staff awards) ─────────────────────────────
+    # These three are prefix-only (`with_app_command=False`). They exist for the
+    # bot owner running an event drop, not for the members whose slash picker
+    # they would otherwise sit in — every server on the bot would see three
+    # entries under /profile that none of them can run. Owner tooling lives on
+    # the prefix, the same place !econ, !cooldown and !reload already do.
     @profile.command(
-        name="grant", description="Award a cosmetic to a member (bot owner)."
+        name="grant",
+        description="Award a cosmetic to a member (bot owner).",
+        with_app_command=False,
     )
-    @app_commands.describe(member="Who to award", cosmetic="Which cosmetic")
     @commands.is_owner()
     async def profile_grant(
         self, ctx: commands.Context, member: discord.Member, *, cosmetic: str
@@ -730,10 +741,7 @@ class Identity(commands.Cog):
     @profile.command(
         name="grantall",
         description="Award a cosmetic to everyone in a server (bot owner).",
-    )
-    @app_commands.describe(
-        cosmetic="Which cosmetic",
-        guild="Which server to award in (defaults to this one)",
+        with_app_command=False,
     )
     @commands.is_owner()
     async def profile_grantall(
@@ -744,9 +752,8 @@ class Identity(commands.Cog):
         since, because each grant is an INSERT OR IGNORE.
 
         `cosmetic` is a plain positional (a `guild` argument follows it), so a
-        multi-word *name* needs quotes in prefix form — `"Beta Tester"` — or
-        just use the key, `badge_beta_tester`. Slash users pick from the list
-        and never hit this.
+        multi-word *name* needs quotes — `"Beta Tester"` — or just use the key,
+        `badge_beta_tester`.
         """
         d = cosmetics.find(cosmetic)
         if d is None:
@@ -811,40 +818,11 @@ class Identity(commands.Cog):
             )
         )
 
-    @profile_grantall.autocomplete("cosmetic")
-    async def _grantall_ac(self, interaction: discord.Interaction, current: str):
-        return await self._catalogue_ac(interaction, current)
-
-    @profile_grantall.autocomplete("guild")
-    async def _grantall_guild_ac(self, interaction: discord.Interaction, current: str):
-        """Server picker, so a bulk grant never needs a hand-typed snowflake.
-
-        Owner-gated: unlike the cosmetic catalogue (which /profile cosmetics
-        already shows everyone), the guild list is not public, and an
-        autocomplete callback fires before the command's is_owner check.
-        """
-        if not await self.bot.is_owner(interaction.user):
-            return []
-        q = (current or "").strip().lower()
-        choices: list[app_commands.Choice[str]] = []
-        for g in sorted(
-            self.bot.guilds, key=lambda g: (-(g.member_count or 0), g.name)
-        ):
-            if q and q not in g.name.lower() and q not in str(g.id):
-                continue
-            here = " · this server" if g.id == interaction.guild_id else ""
-            choices.append(
-                app_commands.Choice(
-                    name=f"{g.name} — {g.member_count or 0:,} members{here}"[:100],
-                    value=str(g.id),
-                )
-            )
-        return choices[:25]
-
     @profile.command(
-        name="revoke", description="Remove a cosmetic from a member (bot owner)."
+        name="revoke",
+        description="Remove a cosmetic from a member (bot owner).",
+        with_app_command=False,
     )
-    @app_commands.describe(member="Who to take it from", cosmetic="Which cosmetic")
     @commands.is_owner()
     async def profile_revoke(
         self, ctx: commands.Context, member: discord.Member, *, cosmetic: str
@@ -862,19 +840,6 @@ class Identity(commands.Cog):
                 f"({member.mention})."
             )
         )
-
-    @profile_grant.autocomplete("cosmetic")
-    @profile_revoke.autocomplete("cosmetic")
-    async def _catalogue_ac(self, interaction: discord.Interaction, current: str):
-        """The whole catalogue — a grant is meant to hand out locked things."""
-        q = (current or "").strip().lower()
-        return [
-            self._cosmetic_choice(d, "🎁", cosmetics.describe_unlock(d))
-            for d in sorted(
-                cosmetics.COSMETICS.values(), key=lambda c: (c.slot, c.sort, c.name)
-            )
-            if self._matches(d, q)
-        ][:25]
 
 
 async def setup(bot: commands.Bot):

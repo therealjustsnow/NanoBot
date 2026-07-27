@@ -564,8 +564,8 @@ Each server picks its own name and emoji. It's still one balance.
 
 **Can a server admin take my coins?**
 No. Your wallet is the same in every server, so adding to it or taking from it
-is the bot owner's call, not a server's — `/coin grant`, `/coin take` and
-`/coin reset` are all bot-owner-only. What a server *can* do is set its own
+is the bot owner's call, not a server's — `coin grant`, `coin take` and
+`coin reset` are all bot-owner-only. What a server *can* do is set its own
 shop prices, which only decides what its own rewards cost.
 
 **I bought bait and nothing changed.**
@@ -606,7 +606,8 @@ to configure.
 | Activities | `/adventure toggle`, `/adventure config` |
 | Leveling | `/level …` (per-server chat XP — deliberately **not** global) |
 
-Note that `/coin grant`, `/coin take` and `/coin reset` are all bot-owner-only.
+Note that `coin grant`, `coin take` and `coin reset` are all bot-owner-only
+(and prefix-only — they aren't in the slash list at all).
 With one global wallet, granting mints coins that spend in every server and
 taking deletes coins members earned in servers this one has never seen —
 neither is a single server's call.
