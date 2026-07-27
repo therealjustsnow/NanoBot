@@ -293,7 +293,7 @@ class Economy(commands.Cog):
             value=f"**#{rank_pos}**" if rank_pos else "Unranked",
             inline=True,
         )
-        embed.set_footer(text="One wallet — the same balance in every server.")
+        
         if contrib:
             embed.add_field(
                 name="🤝 Contribution",
