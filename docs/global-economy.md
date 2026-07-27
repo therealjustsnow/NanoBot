@@ -100,7 +100,8 @@ blocking the board, so one person's timing can't cost the party.
 
 `/fish event` let a Manage-Server mod start a x2-catch-value frenzy for three
 hours, back to back, indefinitely — an income *multiplier* on a global wallet,
-which is a faucet knob however it is framed. It is bot-owner-only now. The
+which is a faucet knob however it is framed. It is bot-owner-only now, and
+prefix-only with it (`n!fish event`) — see the slash-surface note below. The
 random ~0.4%-per-cast events are untouched and still fire for everyone; mods
 keep `/fish toggle`.
 
@@ -220,9 +221,16 @@ Making wallets global changes who can affect what:
 
 - **`/coin reset` is now bot-owner only.** A guild admin wiping "their" economy
   would be deleting coins the member earned everywhere else, irreversibly.
-- **`/coin grant` / `/coin take` stay Manage Server** but now move coins in a
-  member's global wallet; the reply says so. Only add the bot to servers whose
-  staff you'd trust with that. A future refinement could cap per-guild minting.
+- **`coin grant` / `coin take` are bot-owner only too**, for the same reason at
+  a smaller scale: granting mints into a wallet that spends everywhere, and
+  taking destroys value earned in servers this one has never seen. The reply
+  says the wallet is global.
+- **The owner coin tools are prefix-only** (`n!coin grant`, `n!coin take`,
+  `n!coin reset`, `n!fish event`, `n!profile grant|grantall|revoke`). A command
+  gated on `is_owner` still appears in the slash picker of every member of
+  every server, where it is pure noise — `with_app_command=False` keeps them
+  off the tree. `tests/test_slash_surface.py` enforces this bot-wide, so a new
+  owner-only command can't quietly reappear there.
 - **Daily/reward arbitrage.** The claim is global but the *amount* comes from
   the server it's claimed in, so a member can claim wherever the reward is
   richest. Same for co-op/raid rewards. That's the accepted price of keeping

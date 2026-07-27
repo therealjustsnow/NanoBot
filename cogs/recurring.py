@@ -10,13 +10,13 @@ cleanly — the next fire is always in the future.
 ──────────────────────────────────────────────────────
 Commands
 ──────────────────────────────────────────────────────
-  /every  <interval> <message> [label] [dm]   → create a recurring reminder
-  /recurring                                  → list your recurring reminders
+  /recurring every <interval> <message> [label] [dm] → create a recurring reminder
+  /recurring list                             → list your recurring reminders
   /recurring pause  <id>                      → stop firing until resumed
   /recurring resume <id>                      → re-enable, schedules for now + interval
   /recurring cancel <id>                      → permanently delete
 
-Prefix shorthands:
+Prefix shorthands (`every` is still flat here — only the slash entry moved):
   !every 2w Payday!
   !every daily Stand up meeting
   !recurring
@@ -284,17 +284,19 @@ class Recurring(commands.Cog):
         self._spawn(info)
 
     # ══════════════════════════════════════════════════════════════════════════
-    #  /every  — create a recurring reminder
+    #  n!every  — create a recurring reminder (prefix shorthand)
     # ══════════════════════════════════════════════════════════════════════════
-
-    @commands.hybrid_command(
+    #  Prefix-only. On slash this is `/recurring every`, next to the list/pause/
+    #  resume/cancel it belongs with — "every" on its own is a preposition, not
+    #  a feature, and nobody browsing the slash picker for a repeating reminder
+    #  was going to find it filed under E.
+    @commands.command(
         name="every",
-        description="Set a recurring reminder — like a repeating calendar event.",
         extras={
             "category": "⏰ Reminders",
             "short": "Set a recurring reminder — fires repeatedly on a schedule",
             "usage": "every <interval> <message> [label] [dm]",
-            "desc": "Like a repeating calendar event. Set it once and NanoBot will remind you on that interval forever. Survives bot restarts. If the bot was offline when a fire was due, it fires once on restore — no catch-up spam.\nInterval presets (autocomplete): hourly, daily, weekly, biweekly, monthly\nCustom intervals: 2w, 3d, 6h, every 2 weeks\nLabel tip: Add a short label (e.g. Payday) so your /recurring list stays readable on mobile.",
+            "desc": "Like a repeating calendar event. Set it once and NanoBot will remind you on that interval forever. Survives bot restarts. If the bot was offline when a fire was due, it fires once on restore — no catch-up spam.\nInterval presets (autocomplete): hourly, daily, weekly, biweekly, monthly\nCustom intervals: 2w, 3d, 6h, every 2 weeks\nLabel tip: Add a short label (e.g. Payday) so your /recurring list stays readable on mobile.\nOn slash this is `/recurring every`, which also takes the optional label and dm options.",
             "args": [
                 (
                     "interval",
@@ -314,28 +316,24 @@ class Recurring(commands.Cog):
             "example": "{prefix}every 2w Payday!\n{prefix}every daily Stand up meeting",
         },
     )
-    @app_commands.describe(
-        interval=(
-            "How often to remind you. Pick a preset or type your own: "
-            "daily, weekly, 2w, 3d, 1h, monthly …"
-        ),
-        message="What to remind you about (up to 500 characters)",
-        label=(
-            "Short name shown in your list, e.g. 'Payday' (optional, max 50 chars). "
-            "Helps on mobile where long messages get truncated."
-        ),
-        dm="DM you the reminder (default: yes, falls back to channel ping if DMs closed)",
-    )
-    @app_commands.autocomplete(interval=_interval_autocomplete)
     @commands.cooldown(1, 5, commands.BucketType.user)
-    async def every(
+    async def pfx_every(
         self,
         ctx: commands.Context,
         interval: str,
         *,
         message: str,
-        label: Optional[str] = None,
-        dm: Optional[bool] = True,
+    ):
+        await self._create_recurring(ctx, interval, message, None, True)
+
+    # ── Shared body for n!every and /recurring every ──────────────────────────
+    async def _create_recurring(
+        self,
+        ctx: commands.Context,
+        interval: str,
+        message: str,
+        label: Optional[str],
+        dm: Optional[bool],
     ):
         # ── Validate interval ──────────────────────────────────────────────────
         secs = h.parse_interval(interval)
@@ -463,6 +461,35 @@ class Recurring(commands.Cog):
     async def recurring(self, ctx: commands.Context):
         """Default subcommand: list your recurring reminders."""
         await self._list(ctx)
+
+    @recurring.command(
+        name="every",
+        description="Set a recurring reminder — like a repeating calendar event.",
+    )
+    @app_commands.describe(
+        interval=(
+            "How often to remind you. Pick a preset or type your own: "
+            "daily, weekly, 2w, 3d, 1h, monthly …"
+        ),
+        message="What to remind you about (up to 500 characters)",
+        label=(
+            "Short name shown in your list, e.g. 'Payday' (optional, max 50 chars). "
+            "Helps on mobile where long messages get truncated."
+        ),
+        dm="DM you the reminder (default: yes, falls back to channel ping if DMs closed)",
+    )
+    @app_commands.autocomplete(interval=_interval_autocomplete)
+    @commands.cooldown(1, 5, commands.BucketType.user)
+    async def recurring_every(
+        self,
+        ctx: commands.Context,
+        interval: str,
+        *,
+        message: str,
+        label: Optional[str] = None,
+        dm: Optional[bool] = True,
+    ):
+        await self._create_recurring(ctx, interval, message, label, dm)
 
     @recurring.command(name="list", description="List all your recurring reminders.")
     async def recurring_list(self, ctx: commands.Context):

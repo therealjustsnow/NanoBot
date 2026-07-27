@@ -16,10 +16,16 @@ Commands:
   avatar   — show a user's avatar
   banner   — show a user's profile banner
   roleinfo — info card for a server role
+  channelinfo — info card for a channel
   uptime   — how long NanoBot has been running
   stats    — bot statistics
   source   — show source code for a command or symbol
   firstmsg — link to the first message in a channel
+
+Slash layout: /help, /prefix, /server, /user and /avatar stay flat — the ones
+people reach for. Bot meta lives under /bot, and the occasional lookups live
+under /info (id, members, role, channel, banner, firstmsg). Every prefix name
+above is unchanged; only the slash entry points were grouped.
 """
 
 import asyncio
@@ -333,6 +339,91 @@ class Utility(commands.Cog):
         await self.pfx_source(ctx, command=command)
 
     # ══════════════════════════════════════════════════════════════════════════
+    #  /info group — the occasional lookups (1 top-level slot instead of 6).
+    #
+    #  /user, /server and /avatar stay flat: those are the ones people actually
+    #  reach for. The rest — an ID, a member count, a role card, a banner, a
+    #  channel card, a jump link to a channel's first message — were six more
+    #  rows in everybody's slash picker for things looked up once a month.
+    #  Grouped, they're easier to find, not harder: /info lists all six at once
+    #  instead of needing you to already know that the member-count command is
+    #  called "mc".
+    #
+    #  Same split as /bot above: prefix stays flat (!id, !mc, !roleinfo,
+    #  !banner, !channelinfo, !firstmsg all unchanged), the slash twins build a
+    #  Context from the interaction and reuse the prefix callbacks.
+    # ══════════════════════════════════════════════════════════════════════════
+    info_slash = app_commands.Group(
+        name="info",
+        description="Look something up: an ID, a role, a channel, a banner, a member count.",
+    )
+
+    @info_slash.command(
+        name="id", description="Get the ID of a user, role, or channel."
+    )
+    @app_commands.describe(target="User, role, or channel (blank = yourself)")
+    async def slash_info_id(
+        self, interaction: discord.Interaction, target: Optional[str] = None
+    ):
+        ctx = await commands.Context.from_interaction(interaction)
+        await self.id_cmd(ctx, target=target)
+
+    @info_slash.command(
+        name="members", description="Quick member count for this server."
+    )
+    @app_commands.guild_only()
+    async def slash_info_members(self, interaction: discord.Interaction):
+        ctx = await commands.Context.from_interaction(interaction)
+        await self.mc(ctx)
+
+    @info_slash.command(name="role", description="Info card for a server role.")
+    @app_commands.describe(role="The role to inspect")
+    @app_commands.guild_only()
+    async def slash_info_role(
+        self, interaction: discord.Interaction, role: discord.Role
+    ):
+        ctx = await commands.Context.from_interaction(interaction)
+        await self.roleinfo(ctx, role=role)
+
+    @info_slash.command(name="banner", description="Show a user's profile banner.")
+    @app_commands.describe(user="User whose banner to show (leave blank for yourself)")
+    async def slash_info_banner(
+        self, interaction: discord.Interaction, user: Optional[discord.Member] = None
+    ):
+        ctx = await commands.Context.from_interaction(interaction)
+        await self.banner(ctx, user)
+
+    @info_slash.command(name="channel", description="Info card for a channel.")
+    @app_commands.describe(channel="Channel to inspect (default: current channel)")
+    @app_commands.guild_only()
+    async def slash_info_channel(
+        self,
+        interaction: discord.Interaction,
+        channel: Optional[
+            app_commands.Transform[discord.TextChannel, SafeTextChannel]
+        ] = None,
+    ):
+        ctx = await commands.Context.from_interaction(interaction)
+        await self.channelinfo(ctx, channel)
+
+    @info_slash.command(
+        name="firstmsg",
+        description="Get a link to the first (oldest) message in a channel.",
+    )
+    @app_commands.describe(
+        channel="Channel to look up (leave blank for current channel)"
+    )
+    async def slash_info_firstmsg(
+        self,
+        interaction: discord.Interaction,
+        channel: Optional[
+            app_commands.Transform[discord.TextChannel, SafeTextChannel]
+        ] = None,
+    ):
+        ctx = await commands.Context.from_interaction(interaction)
+        await self.firstmsg(ctx, channel)
+
+    # ══════════════════════════════════════════════════════════════════════════
     #  ping
     # ══════════════════════════════════════════════════════════════════════════
     @commands.command(
@@ -368,7 +459,7 @@ class Utility(commands.Cog):
     # ══════════════════════════════════════════════════════════════════════════
     #  mc — quick member count
     # ══════════════════════════════════════════════════════════════════════════
-    @commands.hybrid_command(
+    @commands.command(
         name="mc",
         aliases=["membercount"],
         description="Quick member count for this server.",
@@ -376,7 +467,7 @@ class Utility(commands.Cog):
             "category": "🔍 Server & User Info",
             "short": "Quick member count",
             "usage": "mc",
-            "desc": "One-tap member count. Faster than {prefix}server for when you just need the number.",
+            "desc": "One-tap member count. Faster than {prefix}server for when you just need the number. On slash this is `/info members`.",
             "args": [],
             "perms": "None",
             "example": "{prefix}mc",
@@ -393,7 +484,7 @@ class Utility(commands.Cog):
     # ══════════════════════════════════════════════════════════════════════════
     #  id — quick ID lookup (mobile lifesaver)
     # ══════════════════════════════════════════════════════════════════════════
-    @commands.hybrid_command(
+    @commands.command(
         name="id",
         description="Get the ID of a user, role, or channel — copyable code block.",
         extras={
@@ -402,7 +493,8 @@ class Utility(commands.Cog):
             "usage": "id [user|role|channel]",
             "desc": (
                 "Shows the Discord ID in a code block for easy copying on mobile. "
-                "Accepts @mentions and #channel. No arg = your own ID."
+                "Accepts @mentions and #channel. No arg = your own ID. "
+                "On slash this is `/info id`."
             ),
             "args": [
                 ("target", "User, role, or channel to look up (blank = yourself)")
@@ -411,7 +503,6 @@ class Utility(commands.Cog):
             "example": "{prefix}id\n{prefix}id @someone\n{prefix}id #general\n{prefix}id @Moderator",
         },
     )
-    @app_commands.describe(target="User, role, or channel (blank = yourself)")
     @commands.cooldown(1, 5, commands.BucketType.user)
     async def id_cmd(
         self,
@@ -958,7 +1049,7 @@ class Utility(commands.Cog):
     # ══════════════════════════════════════════════════════════════════════════
     #  banner
     # ══════════════════════════════════════════════════════════════════════════
-    @commands.hybrid_command(
+    @commands.command(
         name="banner",
         aliases=["userbanner"],
         description="Show a user's profile banner.",
@@ -966,7 +1057,7 @@ class Utility(commands.Cog):
             "category": "🔍 Server & User Info",
             "short": "Show a user's profile banner",
             "usage": "banner [user]",
-            "desc": "Fetches and displays the user's profile banner with download links.",
+            "desc": "Fetches and displays the user's profile banner with download links. On slash this is `/info banner`.",
             "args": [
                 ("user", "Whose banner to show (blank = yourself)"),
             ],
@@ -974,7 +1065,6 @@ class Utility(commands.Cog):
             "example": "{prefix}banner @someone",
         },
     )
-    @app_commands.describe(user="User whose banner to show (leave blank for yourself)")
     @commands.cooldown(1, 5, commands.BucketType.user)
     async def banner(
         self, ctx: commands.Context, user: Optional[discord.Member] = None
@@ -1021,9 +1111,63 @@ class Utility(commands.Cog):
         await ctx.reply(embed=e, ephemeral=True)
 
     # ══════════════════════════════════════════════════════════════════════════
+    #  channelinfo
+    # ══════════════════════════════════════════════════════════════════════════
+    @commands.command(
+        name="channelinfo",
+        aliases=["ci", "channel"],
+        description="Info card for a channel.",
+        extras={
+            "category": "🔍 Server & User Info",
+            "short": "Info card for a channel",
+            "usage": "channelinfo [channel]",
+            "desc": "Shows channel type, ID, category, creation date, position, NSFW status, slowmode, and topic. On slash this is `/info channel`.",
+            "args": [
+                ("channel", "Channel to inspect (default: current channel)"),
+            ],
+            "perms": "None",
+            "example": "{prefix}channelinfo #general",
+        },
+    )
+    @commands.cooldown(1, 5, commands.BucketType.user)
+    async def channelinfo(self, ctx, channel: Optional[SafeTextChannel] = None):
+        ch = channel or ctx.channel
+        type_icons = {
+            discord.ChannelType.text: "📝",
+            discord.ChannelType.voice: "🔊",
+            discord.ChannelType.stage_voice: "🎙️",
+            discord.ChannelType.forum: "📋",
+            discord.ChannelType.news: "📰",
+        }
+        icon = type_icons.get(ch.type, "📢")
+        e = h.embed(title=f"{icon} #{ch.name}", color=h.BLUE)
+        e.add_field(name="🆔 ID", value=f"`{ch.id}`", inline=True)
+        e.add_field(
+            name="📂 Category",
+            value=ch.category.name if ch.category else "_None_",
+            inline=True,
+        )
+        e.add_field(
+            name="📅 Created",
+            value=discord.utils.format_dt(ch.created_at, style="R"),
+            inline=True,
+        )
+        e.add_field(name="📌 Position", value=str(ch.position), inline=True)
+        e.add_field(name="🔞 NSFW", value="Yes" if ch.is_nsfw() else "No", inline=True)
+        if hasattr(ch, "slowmode_delay") and ch.slowmode_delay:
+            e.add_field(
+                name="🐢 Slowmode", value=h.fmt_duration(ch.slowmode_delay), inline=True
+            )
+        if ch.topic:
+            e.add_field(name="📜 Topic", value=ch.topic[:500], inline=False)
+        e.set_footer(text="NanoBot")
+        e.timestamp = discord.utils.utcnow()
+        await ctx.reply(embed=e, ephemeral=True)
+
+    # ══════════════════════════════════════════════════════════════════════════
     #  roleinfo
     # ══════════════════════════════════════════════════════════════════════════
-    @commands.hybrid_command(
+    @commands.command(
         name="roleinfo",
         aliases=["role", "ri"],
         description="Info card for a server role.",
@@ -1031,7 +1175,7 @@ class Utility(commands.Cog):
             "category": "🔍 Server & User Info",
             "short": "Details about a server role",
             "usage": "roleinfo <role>",
-            "desc": "Color, position, member count, creation date, hoist/mentionable status, and notable permissions.",
+            "desc": "Color, position, member count, creation date, hoist/mentionable status, and notable permissions. On slash this is `/info role`.",
             "args": [
                 ("role", "Mention it or type the name"),
             ],
@@ -1039,7 +1183,6 @@ class Utility(commands.Cog):
             "example": "{prefix}roleinfo @Moderator",
         },
     )
-    @app_commands.describe(role="The role to inspect")
     @commands.cooldown(1, 5, commands.BucketType.user)
     async def roleinfo(self, ctx: commands.Context, *, role: discord.Role):
         now = discord.utils.utcnow()
@@ -1399,7 +1542,7 @@ class Utility(commands.Cog):
     # ══════════════════════════════════════════════════════════════════════════
     #  firstmsg — link to oldest message in a channel
     # ══════════════════════════════════════════════════════════════════════════
-    @commands.hybrid_command(
+    @commands.command(
         name="firstmsg",
         aliases=["first", "oldest"],
         description="Get a link to the first (oldest) message in a channel.",
@@ -1410,15 +1553,13 @@ class Utility(commands.Cog):
             "desc": (
                 "Fetches a direct jump link to the oldest message in the channel. "
                 "Handy for linking to #rules or pinned announcements on mobile "
-                "without having to scroll to the top."
+                "without having to scroll to the top. On slash this is "
+                "`/info firstmsg`."
             ),
             "args": [("channel", "Channel to look up (blank = current channel)")],
             "perms": "None",
             "example": "{prefix}firstmsg\n{prefix}firstmsg #rules",
         },
-    )
-    @app_commands.describe(
-        channel="Channel to look up (leave blank for current channel)"
     )
     @commands.cooldown(1, 10, commands.BucketType.channel)
     async def firstmsg(

@@ -43,8 +43,12 @@ Commands
   /fish quest                 → today's quest and your progress
   /fish events                → active fishing events and time left
   /fish toggle                → enable/disable fishing     (Manage Server)
-  /fish event <key> [minutes] → force-start a fishing event (bot owner)
   /fish config                → show settings              (Manage Server)
+
+Owner tool — prefix only (`with_app_command=False`), because forcing an event
+turns up a faucet that pays out in every server:
+
+  n!fish event <key> [minutes] → force-start a fishing event
 """
 
 import logging
@@ -939,17 +943,13 @@ class Fishing(commands.Cog):
     # mod running back-to-back 3-hour frenzies forever. Events still fire on
     # their own (~0.4% per cast) for everybody, which is the fun part; this is
     # only the manual override. Mods keep `/fish toggle`.
-    @fish.command(name="event", description="Force-start a fishing event (bot owner).")
-    @app_commands.describe(
-        key="Which event to start", minutes="Duration in minutes (default 15)"
-    )
-    @app_commands.choices(
-        key=[
-            app_commands.Choice(
-                name=EVENT_LABELS.get(e["key"], e["key"]), value=e["key"]
-            )
-            for e in EVENT_POOL
-        ]
+    # Prefix-only for the same reason it is owner-only: it is a lever on the
+    # coin faucet, not a fishing feature, and it has no business occupying a row
+    # in the /fish picker that every angler scrolls past. `n!fish event frenzy 30`.
+    @fish.command(
+        name="event",
+        description="Force-start a fishing event (bot owner).",
+        with_app_command=False,
     )
     @commands.is_owner()
     async def fish_event(self, ctx: commands.Context, key: str, minutes: int = 15):

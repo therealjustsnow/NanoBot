@@ -23,7 +23,6 @@ Commands:
   unfreeze         — remove a timeout early
   addrole          — give a role to a user
   removerole       — take a role from a user
-  channelinfo      — info card for a channel
   note             — add a mod note (invisible to the user)
   notes            — view mod notes for a user
   clearnotes       — wipe all notes for a user
@@ -1296,61 +1295,6 @@ class Moderation(TimedActionsMixin, commands.Cog):
         await action_log(
             ctx, "🎭", "removerole", target=user, detail=f"role: {role.name}"
         )
-
-    # ══════════════════════════════════════════════════════════════════════════
-    #  channelinfo
-    # ══════════════════════════════════════════════════════════════════════════
-    @commands.hybrid_command(
-        name="channelinfo",
-        aliases=["ci", "channel"],
-        description="Info card for a channel.",
-        extras={
-            "category": "🔎 Info & Notes",
-            "short": "Info card for a channel",
-            "usage": "channelinfo [channel]",
-            "desc": "Shows channel type, ID, category, creation date, position, NSFW status, slowmode, and topic.",
-            "args": [
-                ("channel", "Channel to inspect (default: current channel)"),
-            ],
-            "perms": "None",
-            "example": "{prefix}channelinfo #general",
-        },
-    )
-    @app_commands.describe(channel="Channel to inspect (default: current channel)")
-    @commands.cooldown(1, 5, commands.BucketType.user)
-    async def channelinfo(self, ctx, channel: Optional[SafeTextChannel] = None):
-        ch = channel or ctx.channel
-        type_icons = {
-            discord.ChannelType.text: "📝",
-            discord.ChannelType.voice: "🔊",
-            discord.ChannelType.stage_voice: "🎙️",
-            discord.ChannelType.forum: "📋",
-            discord.ChannelType.news: "📰",
-        }
-        icon = type_icons.get(ch.type, "📢")
-        e = h.embed(title=f"{icon} #{ch.name}", color=h.BLUE)
-        e.add_field(name="🆔 ID", value=f"`{ch.id}`", inline=True)
-        e.add_field(
-            name="📂 Category",
-            value=ch.category.name if ch.category else "_None_",
-            inline=True,
-        )
-        e.add_field(
-            name="📅 Created",
-            value=discord.utils.format_dt(ch.created_at, style="R"),
-            inline=True,
-        )
-        e.add_field(name="📌 Position", value=str(ch.position), inline=True)
-        e.add_field(name="🔞 NSFW", value="Yes" if ch.is_nsfw() else "No", inline=True)
-        if hasattr(ch, "slowmode_delay") and ch.slowmode_delay:
-            e.add_field(
-                name="🐢 Slowmode", value=h.fmt_duration(ch.slowmode_delay), inline=True
-            )
-        if ch.topic:
-            e.add_field(name="📜 Topic", value=ch.topic[:500], inline=False)
-        e.set_footer(text="NanoBot")
-        e.timestamp = discord.utils.utcnow()
-        await ctx.reply(embed=e, ephemeral=True)
 
     # ══════════════════════════════════════════════════════════════════════════
     #  note / notes / clearnotes

@@ -45,11 +45,6 @@ Commands
   /coin top [page] [scope]       → richest members (this server or global)
   /coin contrib [page] [scope]   → top contributors (alias: contributions)
   /coin gamble <amount>          → bet coins to double them (alias: bet)
-  /coin grant <amount> [member…] → add coins        (tag up to 5, or blank for
-                                                       a 25-member picker) (bot owner)
-  /coin take <amount> [member…]  → remove coins     (tag up to 5, or blank for
-                                                       a 25-member picker) (bot owner)
-  /coin reset [member]           → wipe a global wallet   (bot owner)
   /coin raidsize <min> <max>     → set party size   (Manage Server)
   /coin name <text>              → currency name    (Manage Server)
   /coin emoji <emoji>            → currency emoji   (Manage Server)
@@ -62,6 +57,16 @@ Commands
   /shop remove <id|name>         → delete an item   (Manage Server)
   /shop pending                  → custom-reward queue (Manage Server)
   /shop fulfill <id>             → mark reward delivered (Manage Server)
+
+Owner tools — prefix only (`with_app_command=False`), because a wallet is
+global and these three are the faucet/drain on it. Keeping them out of the
+slash tree also keeps /coin's picker to the ten things a member can actually
+run:
+
+  n!coin grant <amount> [member…] → add coins (tag up to 5, or blank for a
+                                      25-member picker)
+  n!coin take <amount> [member…]  → remove coins (same shape)
+  n!coin reset [member]           → wipe a global wallet (omit member: all)
 
 The reward amounts are not here: they mint into global wallets, so `!econ`
 lives in the owner-only admin cog.
@@ -537,17 +542,15 @@ class Economy(commands.Cog):
     # a wallet that spends in every server. That makes it the bot owner's, for
     # the same reason /coin reset already is — the difference between granting
     # and resetting is only the sign. See docs/global-economy.md.
+    #
+    # Prefix-only (`with_app_command=False`) for the same reason: it is bot-owner
+    # tooling, and an owner-only entry in /coin is dead weight in the picker of
+    # every member on every server. `n!coin grant 500 @a @b` still works, and the
+    # no-members-tagged form still opens the 25-member picker view.
     @coin.command(
         name="grant",
         description="Add coins to one or more members' (global) balances (bot owner).",
-    )
-    @app_commands.describe(
-        amount="Coins to add to each member's global wallet",
-        member="Member to credit (leave every member blank to open a 25-member picker)",
-        member2="Another member (optional)",
-        member3="Another member (optional)",
-        member4="Another member (optional)",
-        member5="Another member (optional)",
+        with_app_command=False,
     )
     @commands.is_owner()
     async def coin_grant(
@@ -570,14 +573,7 @@ class Economy(commands.Cog):
     @coin.command(
         name="take",
         description="Remove coins from members' (global) balances (bot owner).",
-    )
-    @app_commands.describe(
-        amount="Coins to remove from each member's global wallet",
-        member="Member to debit (leave every member blank to open a 25-member picker)",
-        member2="Another member (optional)",
-        member3="Another member (optional)",
-        member4="Another member (optional)",
-        member5="Another member (optional)",
+        with_app_command=False,
     )
     @commands.is_owner()
     async def coin_take(
@@ -657,8 +653,8 @@ class Economy(commands.Cog):
     @coin.command(
         name="reset",
         description="Wipe a wallet, or every wallet (bot owner only).",
+        with_app_command=False,
     )
-    @app_commands.describe(member="Member whose wallet to wipe (omit to wipe ALL)")
     @commands.is_owner()
     async def coin_reset(
         self, ctx: commands.Context, member: Optional[discord.Member] = None

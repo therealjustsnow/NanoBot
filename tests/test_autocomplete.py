@@ -58,11 +58,12 @@ _PICKER_OPTIONS = [
     ("profile cosmetics", "slot"),
     ("profile equip", "cosmetic"),
     ("profile unequip", "cosmetic"),
-    ("profile grant", "cosmetic"),
-    ("profile grantall", "cosmetic"),
-    ("profile grantall", "guild"),
-    ("profile revoke", "cosmetic"),
 ]
+
+# NOT listed above, deliberately: /profile grant, grantall and revoke are
+# bot-owner tools and are prefix-only now (with_app_command=False), so they have
+# no slash options to offer a picker for. test_owner_commands_are_not_slash
+# in tests/test_slash_surface.py is what holds that line.
 
 
 @pytest.mark.cogs(
@@ -427,21 +428,21 @@ async def test_unequip_autocomplete_lists_only_what_is_worn(bot):
 
 
 @pytest.mark.cogs("cogs.identity")
-async def test_grantall_guild_autocomplete_is_owner_only(bot):
-    """The cosmetic catalogue is public; the server list is not, and an
-    autocomplete fires before the command's is_owner check."""
-    guild = bot.guilds[0]
-    user = guild.members[0]
+async def test_owner_cosmetic_grants_have_no_slash_options_to_leak(bot):
+    """The cosmetic catalogue is public; the *server list* is not.
+
+    /profile grantall used to take a guild picker, which meant an autocomplete
+    listing every server the bot is in — and autocompletes fire before the
+    command's own is_owner check, so it needed its own gate. Moving the three
+    owner grants off slash removed the callback and the gate with it: there is
+    no interaction path to the guild list at all now.
+    """
     cog = bot.get_cog("Identity")
-    interaction = _stub_interaction(guild, user)
+    assert not hasattr(cog, "_grantall_guild_ac")
 
-    bot.owner_id = user.id + 1
-    assert await cog._grantall_guild_ac(interaction, "") == []
-
-    bot.owner_id = user.id
-    choices = await cog._grantall_guild_ac(interaction, "")
-    assert [c.value for c in choices] == [str(guild.id)]
-    assert "this server" in choices[0].name
+    for name in ("profile_grant", "profile_grantall", "profile_revoke"):
+        cmd = getattr(cog, name)
+        assert cmd.app_command is None, f"{name} is back on the slash tree"
 
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -455,6 +456,7 @@ _MOD_PICKER_OPTIONS = [
     ("recurring pause", "reminder_id"),
     ("recurring resume", "reminder_id"),
     ("recurring cancel", "reminder_id"),
+    ("recurring every", "interval"),
     ("automod badword remove", "word"),
     ("automod attachword remove", "word"),
     ("unban", "user_id"),
@@ -473,7 +475,7 @@ _MOD_PICKER_OPTIONS = [
     ("gatekeeper unmuteage", "duration"),
     ("gatekeeper kicktimeout", "duration"),
     ("remindme", "time"),
-    ("remind", "time"),
+    ("reminders user", "time"),
     ("welcome set", "color"),
     ("leave set", "color"),
 ]

@@ -84,13 +84,25 @@ Commands (hybrid — slash + prefix), category "🎵 Music":
   grab / save       — DM yourself the current track
   autoplay          — smart autoplay: queue YouTube-related tracks when the queue empties
   guildplay         — keep playing from the guild playlist when the queue empties
-  guildplaylist/gpl — manage the persistent server guild playlist (add takes playlists)
+                      (the playlist itself is curated over slash only —
+                       /music guildplaylist add|remove|list|clear)
   radio / 247       — toggle 24/7 mode: stay in voice even when empty (Manage Server)
   history / played  — show recently played tracks (clearhistory: Manage Server)
   blocksong / unblocksong / blockedsongs — song block list (Manage Server)
   blockuser / unblockuser — bar a member from music (Manage Server)
   join / summon     — connect the bot to your voice channel
   musichealth / mhealth — probe yt-dlp/proxy/cookies, diagnose 403/429 (owner)
+
+Slash layout: the playback controls stay flat (/play, /skip, /queue, /volume,
+… — typed constantly, so they earn their top-level slots). Everything
+occasional lives under /music, including the three library/moderation groups
+that used to hold top-level slots of their own:
+  /music guildplaylist add|remove|list|clear
+  /music blocksong add|remove|list
+  /music blockuser add|remove
+The prefix names are unchanged: `blocksong`, `unblocksong`, `blockedsongs`,
+`blockuser` and `unblockuser` are all still flat. Guild-playlist *curation* has
+always been slash-only — it moved from /guildplaylist to /music guildplaylist.
 """
 
 import asyncio
@@ -2001,11 +2013,16 @@ class Music(commands.Cog):
             )
         await ctx.reply(embed=h.ok(msg, "📻 24/7 Mode"))
 
-    # ── /guildplaylist group ─────────────────────────────────────────────────────
+    # ── /music guildplaylist group ───────────────────────────────────────────────
+    # Nested under /music rather than sitting at the top level: the playback
+    # controls (/play, /skip, /queue…) earn their flat slots by being typed
+    # constantly, but curating the server playlist is a once-in-a-while job that
+    # only clutters the picker for everyone else. `guild_only` is inherited from
+    # the parent — Discord only honours it on the top-level command anyway.
     gpl_group = app_commands.Group(
         name="guildplaylist",
         description="Manage the persistent server guild playlist.",
-        guild_only=True,
+        parent=music_slash,
     )
 
     @gpl_group.command(
@@ -2070,7 +2087,7 @@ class Music(commands.Cog):
     @gpl_group.command(
         name="remove", description="Remove a track from the guild playlist by position."
     )
-    @app_commands.describe(position="Position shown in /guildplaylist list")
+    @app_commands.describe(position="Position shown in /music guildplaylist list")
     async def apl_remove(self, interaction: discord.Interaction, position: int):
         entries = await db.get_autoplaylist(interaction.guild_id)
         if not 1 <= position <= len(entries):
@@ -2093,7 +2110,7 @@ class Music(commands.Cog):
         if not entries:
             return await interaction.response.send_message(
                 embed=h.info(
-                    "The guild playlist is empty.\nAdd tracks with `/guildplaylist add`.",
+                    "The guild playlist is empty.\nAdd tracks with `/music guildplaylist add`.",
                     "📻 Guild Playlist",
                 ),
                 ephemeral=True,
@@ -2382,11 +2399,13 @@ class Music(commands.Cog):
             )
         )
 
-    # ── /blocksong group (slash interface for song block list) ─────────────────
+    # ── /music blocksong group (slash interface for song block list) ───────────
+    # Manage-Server music moderation — nested for the same reason as
+    # guildplaylist above: rarely used, and never by the members it was showing up for.
     blocksong_group = app_commands.Group(
         name="blocksong",
         description="Manage the server's song block list.",
-        guild_only=True,
+        parent=music_slash,
     )
 
     @blocksong_group.command(
@@ -2447,11 +2466,11 @@ class Music(commands.Cog):
             ephemeral=True,
         )
 
-    # ── /blockuser group (slash interface for music user block list) ───────────
+    # ── /music blockuser group (slash interface for music user block list) ─────
     blockuser_group = app_commands.Group(
         name="blockuser",
         description="Manage the server's music user block list.",
-        guild_only=True,
+        parent=music_slash,
     )
 
     @blockuser_group.command(
