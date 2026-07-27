@@ -210,22 +210,22 @@ class SquadView(discord.ui.View):
         # under-pays (a support ping) instead of leaving a restorable squad
         # whose re-confirm would pay the whole party a second time.
         await self.cog._end_squad(self.squad_id)
-        for uid in party:
-            await db.add_coins(uid, reward)
-            await db.add_contribution(uid, reward)
-            await globalxp.award(uid, "coop")
+        paid, skipped = await self.cog._pay_party(party, "coop", reward)
         for child in self.children:
             child.disabled = True
         activity = f" for **{self.activity}**" if self.activity else ""
-        roster = ", ".join(f"<@{uid}>" for uid in party)
+        roster = ", ".join(f"<@{uid}>" for uid in paid) or "nobody"
+        body = (
+            f"🤝 The squad teamed up{activity}! **{len(paid)}** earned "
+            f"{self.cog._money(cfg, reward)} and **+{reward:,}** "
+            f"contribution.\n\n{roster}"
+        )
+        if skipped:
+            body += "\n\nStill on co-op cooldown, so nothing this time: " + ", ".join(
+                f"<@{uid}>" for uid in skipped
+            )
         await interaction.response.edit_message(
-            embed=h.ok(
-                f"🤝 The squad teamed up{activity}! All **{len(party)}** earned "
-                f"{self.cog._money(cfg, reward)} and **+{reward:,}** "
-                f"contribution.\n\n{roster}",
-                "Squad Confirmed",
-            ),
-            view=self,
+            embed=h.ok(body, "Squad Confirmed"), view=self
         )
         self.stop()
 
@@ -568,22 +568,24 @@ class RaidView(discord.ui.View):
         # Drop the persisted row BEFORE paying (same crash-safety trade as
         # SquadView: under-pay beats a restorable board that double-pays).
         await self.cog._end_raid(self.raid_id)
-        for uid in self.participants:
-            await db.add_coins(uid, reward)
-            await db.add_contribution(uid, reward)
-            await globalxp.award(uid, "coop")
+        paid, skipped = await self.cog._pay_party(
+            list(self.participants), "raid", reward
+        )
         for child in self.children:
             child.disabled = True
         what = f" for **{self.activity}**" if self.activity else ""
-        roster = ", ".join(f"<@{uid}>" for uid in self.participants)
+        roster = ", ".join(f"<@{uid}>" for uid in paid) or "nobody"
+        body = (
+            f"⚔️ Raid complete{what}! **{len(paid)}** members each earned "
+            f"{self.cog._money(cfg, reward)} + **{reward:,}** "
+            f"contribution.\n\n{roster}"
+        )
+        if skipped:
+            body += "\n\nStill on raid cooldown, so nothing this time: " + ", ".join(
+                f"<@{uid}>" for uid in skipped
+            )
         await interaction.response.edit_message(
-            embed=h.ok(
-                f"⚔️ Raid complete{what}! **{len(self.participants)}** members "
-                f"each earned {self.cog._money(cfg, reward)} + "
-                f"**{reward:,}** contribution.\n\n{roster}",
-                "Raid Rewards Paid",
-            ),
-            view=self,
+            embed=h.ok(body, "Raid Rewards Paid"), view=self
         )
         self.stop()
 

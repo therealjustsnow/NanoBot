@@ -89,6 +89,8 @@ from .constants import (
     REWARD_DEFAULTS,
     _DEFAULT_SHOP_ITEMS,
 )
+from cogs.activities.helpers import effective_cooldown
+
 from .helpers import (
     compute_daily,
     fmt_coins,
@@ -170,6 +172,63 @@ class Economy(commands.Cog):
 
     def _money(self, cfg: dict, amount: int) -> str:
         return fmt_coins(amount, cfg["currency_name"], cfg["currency_emoji"])
+
+    # ── co-op payouts ────────────────────────────────────────────────────────
+    async def _coop_cooldown(self, key: str) -> int:
+        """The bot-wide claim cooldown for `key` ("coop" or "raid")."""
+        overrides = await db.get_activity_cooldowns()
+        return effective_cooldown(key, overrides.get(key))
+
+    async def _check_coop_ready(self, ctx, key: str, label: str) -> bool:
+        """Refuse to open a board the host can't be paid for.
+
+        The real guard is the per-member claim in _pay_party; this is only so a
+        host finds out now rather than after five people have pressed Confirm.
+        Read-only — it never claims.
+        """
+        stats = await db.get_activity_stats(ctx.author.id)
+        last = stats.get(f"last_{key}", 0) or 0
+        if not last:
+            return True
+        left = int(await self._coop_cooldown(key) - (time.time() - last))
+        if left <= 0:
+            return True
+        await ctx.reply(
+            embed=h.warn(
+                f"You've already been paid for a {label} recently. "
+                f"Your next one is ready in **{h.fmt_duration(left)}**.",
+                "⏳ On cooldown",
+            ),
+            ephemeral=True,
+        )
+        return False
+
+    async def _pay_party(self, party: list[int], key: str, reward: int):
+        """Pay everyone in `party` who is off cooldown. Returns (paid, skipped).
+
+        The reward is a faucet — coins minted into a global wallet — and until
+        this existed it had no rate limit at all: only the *invoker* carried a
+        few seconds of command cooldown, so two members could confirm a squad
+        every half-minute, forever, risk-free. Each member now takes the same
+        atomic per-user claim an activity does, so the payout is bounded per
+        person however many boards they are tagged in.
+
+        Someone on cooldown is skipped rather than blocking the board, so one
+        member's timing can't cost the rest of the party their reward.
+        """
+        now = time.time()
+        cooldown = await self._coop_cooldown(key)
+        paid: list[int] = []
+        skipped: list[int] = []
+        for uid in party:
+            if await db.try_claim_activity(uid, key, now, cooldown):
+                skipped.append(uid)
+                continue
+            await db.add_coins(uid, reward)
+            await db.add_contribution(uid, reward)
+            await globalxp.award(uid, "coop")
+            paid.append(uid)
+        return paid, skipped
 
     def _effort(self, price: int) -> str:
         """ "~25m to earn" — what a shop price costs in play time.
@@ -828,12 +887,13 @@ class Economy(commands.Cog):
         if cfg["coop_reward"] <= 0:
             return await ctx.reply(
                 embed=h.warn(
-                    "Co-op rewards are disabled. An admin can enable them with "
-                    "`/coin coop <amount>`.",
+                    "Co-op rewards are switched off on this bot.",
                     "Disabled",
                 ),
                 ephemeral=True,
             )
+        if not await self._check_coop_ready(ctx, "coop", "squad"):
+            return
         # Collect any directly-tagged teammates, dropping bots/self/duplicates.
         partner_ids: list[int] = []
         for m in (member, member2, member3, member4, member5):
@@ -938,12 +998,13 @@ class Economy(commands.Cog):
         if cfg["raid_reward"] <= 0:
             return await ctx.reply(
                 embed=h.warn(
-                    "Raid rewards are disabled. An admin can enable them with "
-                    "`/coin raid <amount>`.",
+                    "Raid rewards are switched off on this bot.",
                     "Disabled",
                 ),
                 ephemeral=True,
             )
+        if not await self._check_coop_ready(ctx, "raid", "raid"):
+            return
         activity = (activity or "").strip()[:200]
         created_at = time.time()
         raid_id = await db.create_raid(

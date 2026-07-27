@@ -16,7 +16,7 @@ utils/db/settings.py. Migration 4 dropped the old per-guild columns.
 """
 
 from . import _cache
-from ._core import _commit, _conn, register_init
+from ._core import _commit, _conn, _ensure_columns, register_init
 
 # Whitelisted activity → (last-run column, lifetime-count column). Never build
 # these from user input — activity names are always validated against this
@@ -28,6 +28,13 @@ _ACTIVITY_COLUMNS: dict[str, tuple[str, str]] = {
     "hunt": ("last_hunt", "hunt_count"),
     "explore": ("last_explore", "explore_count"),
     "rob": ("last_rob", "rob_count"),
+    # /squad and /raid aren't /adventure activities, but their payouts are the
+    # same shape — a per-user claim on a global wallet — and this is the one
+    # atomic claim in the codebase, so they use it rather than growing a
+    # second. They deliberately stay out of cogs.activities.ACTIVITY_NAMES, so
+    # /adventure never lists or toggles them.
+    "coop": ("last_coop", "coop_count"),
+    "raid": ("last_raid", "raid_count"),
 }
 
 
@@ -62,7 +69,17 @@ async def _ensure_activities_tables():
             rob_count       INTEGER NOT NULL DEFAULT 0
         )
     """)
-    await _commit()
+    # Co-op claim columns — added after the baseline table (see the note on
+    # _ACTIVITY_COLUMNS).
+    await _ensure_columns(
+        "activities_stats",
+        {
+            "last_coop": "REAL NOT NULL DEFAULT 0",
+            "coop_count": "INTEGER NOT NULL DEFAULT 0",
+            "last_raid": "REAL NOT NULL DEFAULT 0",
+            "raid_count": "INTEGER NOT NULL DEFAULT 0",
+        },
+    )
 
 
 # ── Config ─────────────────────────────────────────────────────────────────────
@@ -139,6 +156,10 @@ def _stats_row(row) -> dict:
         "explore_count": row["explore_count"],
         "last_rob": row["last_rob"],
         "rob_count": row["rob_count"],
+        "last_coop": row["last_coop"],
+        "coop_count": row["coop_count"],
+        "last_raid": row["last_raid"],
+        "raid_count": row["raid_count"],
     }
 
 
@@ -154,13 +175,18 @@ _STATS_DEFAULTS = {
     "explore_count": 0,
     "last_rob": 0.0,
     "rob_count": 0,
+    "last_coop": 0.0,
+    "coop_count": 0,
+    "last_raid": 0.0,
+    "raid_count": 0,
 }
 
 
 async def get_activity_stats(user_id: int) -> dict:
     async with _conn().execute(
         "SELECT last_work, work_shifts, last_mine, mine_count, pickaxe_level, "
-        "last_hunt, hunt_count, last_explore, explore_count, last_rob, rob_count "
+        "last_hunt, hunt_count, last_explore, explore_count, last_rob, rob_count, "
+        "last_coop, coop_count, last_raid, raid_count "
         "FROM activities_stats WHERE user_id=?",
         (str(user_id),),
     ) as cur:

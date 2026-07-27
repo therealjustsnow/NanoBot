@@ -88,6 +88,10 @@ async def test_stats_defaults():
         "explore_count": 0,
         "last_rob": 0.0,
         "rob_count": 0,
+        "last_coop": 0.0,
+        "coop_count": 0,
+        "last_raid": 0.0,
+        "raid_count": 0,
     }
 
 

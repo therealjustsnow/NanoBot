@@ -92,6 +92,23 @@ async def test_out_of_range_and_unknown_activity_are_refused(bot):
     assert 30 < ACTIVITY_DEFAULT_COOLDOWNS["work"] // 2
 
 
+@pytest.mark.cogs("cogs.admin")
+async def test_cooldown_also_covers_the_coop_payouts(bot):
+    """/squad and /raid aren't /adventure activities, but their payout is the
+    same per-user claim on a global wallet, so !cooldown owns their length
+    too."""
+    author = config().members[0]
+    bot.owner_id = author.id
+
+    await dpytest.message("!cooldown", member=author)
+    listed = _reply().description
+    assert "/coop" in listed and "/raid" in listed
+
+    await dpytest.message("!cooldown coop 20m", member=author)
+    assert "20m" in _reply().description
+    assert await db.get_activity_cooldowns() == {"coop": 1200}
+
+
 # ── !econ (bot-wide coin faucets) ─────────────────────────────────────────────
 @pytest.mark.cogs("cogs.admin")
 async def test_a_non_owner_cannot_touch_reward_amounts(bot):

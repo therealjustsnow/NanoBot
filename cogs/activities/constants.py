@@ -243,12 +243,30 @@ COOLDOWN_PRESETS: tuple[int, ...] = (
     172_800,
 )
 
+# /squad and /raid live in cogs/economy, but their payout is a per-user claim on
+# a global wallet exactly like an activity's, so they share this registry (and
+# therefore `!cooldown` and `effective_cooldown`). They are NOT in
+# ACTIVITY_NAMES: /adventure neither lists nor toggles them.
+#
+# The lengths follow the same "≤~150 coins/hour" guardrail as the activities
+# above, measured against the default rewards: /squad pays 50 per member, so 30
+# minutes is 100/hour; /raid pays 100, so an hour is 100/hour. Before this they
+# had no claim at all — only the invoker's few-second command cooldown — so two
+# members could confirm a squad every half-minute for ~6,000 coins/hour each,
+# guaranteed and risk-free.
+COOP_COOLDOWN_DEFAULT = 1800  # 30 minutes
+COOP_COOLDOWN_MAX = 86_400
+RAID_COOLDOWN_DEFAULT = 3600  # 1 hour
+RAID_COOLDOWN_MAX = 172_800
+
 ACTIVITY_DEFAULT_COOLDOWNS: dict[str, int] = {
     "work": WORK_COOLDOWN_DEFAULT,
     "mine": MINE_COOLDOWN_DEFAULT,
     "hunt": HUNT_COOLDOWN_DEFAULT,
     "explore": EXPLORE_COOLDOWN_DEFAULT,
     "rob": ROB_COOLDOWN_DEFAULT,
+    "coop": COOP_COOLDOWN_DEFAULT,
+    "raid": RAID_COOLDOWN_DEFAULT,
 }
 
 # The smallest length the owner can set. Not a balance guardrail — the owner
@@ -262,4 +280,10 @@ ACTIVITY_COOLDOWN_BOUNDS: dict[str, tuple[int, int]] = {
     "hunt": (COOLDOWN_MIN, HUNT_COOLDOWN_MAX),
     "explore": (COOLDOWN_MIN, EXPLORE_COOLDOWN_MAX),
     "rob": (COOLDOWN_MIN, ROB_COOLDOWN_MAX),
+    "coop": (COOLDOWN_MIN, COOP_COOLDOWN_MAX),
+    "raid": (COOLDOWN_MIN, RAID_COOLDOWN_MAX),
 }
+
+# Everything `!cooldown` can set — the five /adventure activities plus the two
+# co-op payouts. ACTIVITY_NAMES stays the /adventure surface on purpose.
+COOLDOWN_KEYS: tuple[str, ...] = tuple(ACTIVITY_DEFAULT_COOLDOWNS)

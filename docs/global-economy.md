@@ -85,6 +85,29 @@ columns. `/fish` reached the same place from the other direction: its cast
 cooldown is a fixed 20s constant (migration 2 dropped its column). A guild still
 owns whether an activity runs there, which affects only its own members.
 
+### Every faucet needs a rate limit, not just a price
+
+Two holes stayed open after the amounts moved, and both were the same mistake:
+a faucet whose *amount* was governed but whose *rate* was not.
+
+`/squad` and `/raid` paid every participant with no per-user claim at all —
+only the invoker carried a few seconds of command cooldown, so two members
+could confirm a squad every half-minute, forever, with no risk. They now take
+the same atomic `try_claim_activity` claim an activity does (defaults 30m and
+1h, bot-wide via `!cooldown coop|raid`, chosen against the same "≤~150
+coins/hour" guardrail). A member on cooldown is skipped and named rather than
+blocking the board, so one person's timing can't cost the party.
+
+`/fish event` let a Manage-Server mod start a x2-catch-value frenzy for three
+hours, back to back, indefinitely — an income *multiplier* on a global wallet,
+which is a faucet knob however it is framed. It is bot-owner-only now. The
+random ~0.4%-per-cast events are untouched and still fire for everyone; mods
+keep `/fish toggle`.
+
+The rule that falls out: when adding a coin faucet, decide **who sets the
+amount** and **what bounds the rate**. A reward with no claim behind it is
+unbounded no matter how small the number is.
+
 ### Faucets are bot-wide; sinks stay with the guild
 
 The same argument settles every remaining economy setting, and the dividing line

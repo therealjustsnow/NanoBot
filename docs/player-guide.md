@@ -447,6 +447,12 @@ rank bonus on weekly-objective payouts. `/progress prestige confirm` does it.
 - **`/raid [activity]`** — opens a join board anyone can press **Join** on. The
   host (or a mod) presses **Finish** and everyone who joined gets paid.
 
+**Each of these pays you once per cooldown** — 30 minutes for a squad, an hour
+for a raid, the same in every server. You can join as many boards as you like;
+you just won't be paid twice inside the window. If you're on cooldown when a
+board settles, everyone else is still paid in full and you're named on the
+result, so your timing never costs the party.
+
 Contribution points are a lifetime stat — spending coins never lowers them —
 and they drive `/coin contrib` and its rank titles.
 
@@ -588,7 +594,7 @@ to configure.
 |---|---|
 | Currency & raids | `/coin name`, `/coin emoji`, `/coin raidsize`, `/coin config` |
 | Shop | `/shop seed`, `/shop add`, `/shop edit`, `/shop remove`, `/shop pending`, `/shop fulfill` |
-| Fishing | `/fish toggle`, `/fish event`, `/fish config` |
+| Fishing | `/fish toggle`, `/fish config` |
 | Casino | `/casino limit`, `/casino toggle`, `/casino config` |
 | Activities | `/adventure toggle`, `/adventure config` |
 | Leveling | `/level …` (per-server chat XP — deliberately **not** global) |

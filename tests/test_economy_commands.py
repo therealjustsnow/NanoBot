@@ -297,3 +297,75 @@ async def test_a_server_cannot_set_a_reward_amount(bot):
         assert cog.coin.get_command(gone) is None
     for kept in ("name", "emoji", "raidsize", "config"):
         assert cog.coin.get_command(kept) is not None
+
+
+# ── Co-op payouts are rate-limited per member ─────────────────────────────────
+# dpytest can't press a button, so these drive the payout path the views call
+# (Economy._pay_party) directly — the SellConfirmView precedent.
+@pytest.mark.cogs("cogs.economy")
+async def test_a_coop_payout_can_only_be_claimed_once_per_cooldown(bot):
+    """The gap this closes: the reward is a faucet and had no rate limit at all
+    — only the invoker's few-second command cooldown — so two members could
+    confirm a squad every half-minute forever."""
+    cog = bot.get_cog("Economy")
+    a, b = config().members[0].id, config().members[1].id
+
+    paid, skipped = await cog._pay_party([a, b], "coop", 50)
+    assert paid == [a, b] and skipped == []
+    assert await db.get_balance(a) == 50
+
+    # Straight back for another go: both are on cooldown, nobody is paid twice.
+    paid, skipped = await cog._pay_party([a, b], "coop", 50)
+    assert paid == [] and skipped == [a, b]
+    assert await db.get_balance(a) == 50
+
+
+@pytest.mark.cogs("cogs.economy")
+async def test_one_member_on_cooldown_does_not_cost_the_party(bot):
+    cog = bot.get_cog("Economy")
+    a, b = config().members[0].id, config().members[1].id
+
+    await cog._pay_party([a], "coop", 50)  # `a` alone claims first
+    paid, skipped = await cog._pay_party([a, b], "coop", 50)
+    assert paid == [b] and skipped == [a]
+    assert await db.get_balance(a) == 50 and await db.get_balance(b) == 50
+
+
+@pytest.mark.cogs("cogs.economy")
+async def test_squad_and_raid_claims_are_independent(bot):
+    cog = bot.get_cog("Economy")
+    a = config().members[0].id
+
+    assert (await cog._pay_party([a], "coop", 50))[0] == [a]
+    # A spent /squad must not block /raid — they're separate faucets.
+    assert (await cog._pay_party([a], "raid", 100))[0] == [a]
+    assert await db.get_balance(a) == 150
+    assert (await cog._pay_party([a], "raid", 100))[0] == []
+
+
+@pytest.mark.cogs("cogs.economy")
+async def test_the_coop_cooldown_is_bot_wide_and_owner_set(bot):
+    """Same rule as every other cooldown: the claim is per user, so the length
+    can't be a server's — it comes from bot_settings via !cooldown."""
+    cog = bot.get_cog("Economy")
+    from cogs.activities.constants import COOP_COOLDOWN_DEFAULT
+
+    assert await cog._coop_cooldown("coop") == COOP_COOLDOWN_DEFAULT
+    await db.set_activity_cooldown("coop", 60)
+    assert await cog._coop_cooldown("coop") == 60
+    # Junk in the row falls back to the default rather than to no cooldown.
+    await db.set_bot_setting("cooldown:coop", "soon")
+    assert await cog._coop_cooldown("coop") == COOP_COOLDOWN_DEFAULT
+
+
+@pytest.mark.cogs("cogs.economy")
+async def test_squad_refuses_to_open_while_the_host_is_on_cooldown(bot):
+    """The real guard is the per-member claim; this just tells the host now
+    rather than after five people have pressed Confirm."""
+    author, mate = config().members[0], config().members[1]
+    cog = bot.get_cog("Economy")
+    await cog._pay_party([author.id], "coop", 50)
+
+    await dpytest.message(f"!squad {mate.mention}", member=author)
+    sent = dpytest.get_message()
+    assert "cooldown" in sent.embeds[0].title.lower()

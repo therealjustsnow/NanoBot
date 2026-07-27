@@ -50,7 +50,7 @@ from utils import helpers as h
 from cogs.activities.constants import (
     ACTIVITY_COOLDOWN_BOUNDS,
     ACTIVITY_DEFAULT_COOLDOWNS,
-    ACTIVITY_NAMES,
+    COOLDOWN_KEYS,
 )
 from cogs.activities.helpers import effective_cooldown
 from cogs.economy.constants import COIN_MAX, REWARD_DEFAULTS, REWARD_LABELS
@@ -880,7 +880,7 @@ class Admin(ConfigMixin, commands.Cog):
 
         if not activity:
             lines = []
-            for name in ACTIVITY_NAMES:
+            for name in COOLDOWN_KEYS:
                 mark = "•" if name in overrides else "·"
                 default = ACTIVITY_DEFAULT_COOLDOWNS[name]
                 suffix = (
@@ -899,11 +899,11 @@ class Admin(ConfigMixin, commands.Cog):
             )
 
         name = activity.lower().strip()
-        if name not in ACTIVITY_NAMES:
+        if name not in COOLDOWN_KEYS:
             return await ctx.reply(
                 embed=h.err(
                     f"Unknown activity `{name}`. "
-                    f"Pick one of: {', '.join(f'`{a}`' for a in ACTIVITY_NAMES)}."
+                    f"Pick one of: {', '.join(f'`{a}`' for a in COOLDOWN_KEYS)}."
                 )
             )
 

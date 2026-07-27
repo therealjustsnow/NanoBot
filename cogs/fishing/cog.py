@@ -43,7 +43,7 @@ Commands
   /fish quest                 → today's quest and your progress
   /fish events                → active fishing events and time left
   /fish toggle                → enable/disable fishing     (Manage Server)
-  /fish event <key> [minutes] → force-start a fishing event (Manage Server)
+  /fish event <key> [minutes] → force-start a fishing event (bot owner)
   /fish config                → show settings              (Manage Server)
 """
 
@@ -932,7 +932,14 @@ class Fishing(commands.Cog):
         else:
             await ctx.reply(embed=h.ok("Fishing is now **disabled**."))
 
-    @fish.command(name="event", description="Force-start a fishing event.")
+    # Bot-owner only, not Manage Server. `frenzy` doubles catch *value* and
+    # `lucky_waters` shifts the rarity table toward the expensive tiers, so
+    # starting one is turning up the coin faucet — and the coins it mints spend
+    # in every server, not just the one that ran the command. Nothing stopped a
+    # mod running back-to-back 3-hour frenzies forever. Events still fire on
+    # their own (~0.4% per cast) for everybody, which is the fun part; this is
+    # only the manual override. Mods keep `/fish toggle`.
+    @fish.command(name="event", description="Force-start a fishing event (bot owner).")
     @app_commands.describe(
         key="Which event to start", minutes="Duration in minutes (default 15)"
     )
@@ -944,7 +951,7 @@ class Fishing(commands.Cog):
             for e in EVENT_POOL
         ]
     )
-    @commands.has_permissions(manage_guild=True)
+    @commands.is_owner()
     async def fish_event(self, ctx: commands.Context, key: str, minutes: int = 15):
         key = key.strip().lower()
         event_def = next((e for e in EVENT_POOL if e["key"] == key), None)
