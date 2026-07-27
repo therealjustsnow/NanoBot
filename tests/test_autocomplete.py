@@ -460,6 +460,8 @@ _MOD_PICKER_OPTIONS = [
     ("automod badword remove", "word"),
     ("automod attachword remove", "word"),
     ("unban", "user_id"),
+    ("purge", "only"),
+    ("purge", "mode"),
     ("cban", "wait"),
     ("tempban", "duration"),
     ("freeze", "duration"),

@@ -13,9 +13,9 @@ Commands:
   lock             — toggle channel lock for @everyone
   hide             — hide a channel from @everyone
   unhide           — restore @everyone visibility
-  purge            — bulk-delete with filters (bots, user, contains, starts/ends with)
-  snailpurge       — slow unrestricted delete with confirmation
-  clean            — delete recent bot messages
+  purge            — delete messages: filter by author or text, fast or slow
+  snailpurge       — prefix shorthand for `purge <n> mode:slow`
+  clean            — prefix shorthand for `purge <n> only:nanobot`
   echo             — make the bot send a message
   nuke             — clone channel + delete original (wipes all messages)
   moveall          — move all members between voice channels
@@ -72,6 +72,100 @@ log = logging.getLogger("NanoBot.moderation")
 # mod types as long as parse_duration accepts it, so an unlisted "3h17m" still
 # works. Each list is tuned to what its command actually allows (slowmode caps
 # at 5 minutes, a timeout at 28 days).
+# ── /purge `only:` filter ─────────────────────────────────────────────────────
+# `only` replaced the old `bots: bool` flag when /clean and /snailpurge were
+# folded into /purge. A bare `True` (the shape the old prefix flag took) still
+# means bots-only so `!purge 50 true` keeps working; anything unrecognised is
+# rejected out loud rather than silently ignored, because a filter that quietly
+# does nothing on a delete command is how you wipe a channel by accident.
+_INVALID = object()
+
+_PURGE_ONLY_LABELS = {
+    "humans": "🧑 Humans only",
+    "bots": "🤖 Bots only",
+    "nanobot": "🧹 NanoBot only",
+}
+
+_PURGE_ONLY_ALIASES = {
+    "true": "bots",
+    "yes": "bots",
+    "bot": "bots",
+    "human": "humans",
+    "people": "humans",
+    "me": "nanobot",
+    "self": "nanobot",
+    "nano": "nanobot",
+    "anyone": None,
+    "any": None,
+    "all": None,
+    "everyone": None,
+    "false": None,
+    "no": None,
+}
+
+
+_PURGE_MODES = ("fast", "slow")
+
+
+def _strip_option_label(value):
+    """Drop a `name:` prefix off a prefix-command argument.
+
+    Slash shows these options as `only:` and `mode:`, so a mod who learned the
+    command there will type `!purge 300 mode:slow` on the prefix — where
+    discord.py assigns positionally and that whole token lands in `only`. Rather
+    than answering with a baffling complaint about `only`, take the label off
+    and carry on.
+    """
+    if value is None:
+        return None
+    text = str(value).strip()
+    for label in ("only:", "mode:"):
+        if text.lower().startswith(label):
+            return text[len(label) :].strip()
+    return text
+
+
+def _normalise_purge_only(value):
+    """'' / None / 'anyone' → None (no author filter); a known value → itself;
+    anything else → the _INVALID sentinel."""
+    value = _strip_option_label(value)
+    if value is None:
+        return None
+    key = value.lower()
+    if not key:
+        return None
+    if key in _PURGE_ONLY_LABELS:
+        return key
+    if key in _PURGE_ONLY_ALIASES:
+        return _PURGE_ONLY_ALIASES[key]
+    return _INVALID
+
+
+def _resolve_purge_options(only, mode):
+    """Sort the `only` and `mode` arguments out, in either order.
+
+    Slash passes them by name and this is a no-op. The prefix assigns
+    positionally, so `!purge 300 slow` puts "slow" in the `only` slot — read it
+    as the mode instead of rejecting it, because "300 slow" is the obvious thing
+    to type and the alternative is six positional placeholders.
+
+    Returns (only, mode) with `only` possibly _INVALID, or (only, _INVALID) when
+    the mode itself is unrecognised.
+    """
+    only = _strip_option_label(only)
+    mode = _strip_option_label(mode)
+
+    # A mode word sitting in the `only` slot, with no mode given: it's the mode.
+    if only and only.lower() in _PURGE_MODES and not mode:
+        only, mode = None, only
+
+    resolved_only = _normalise_purge_only(only)
+    resolved_mode = (mode or "fast").lower()
+    if resolved_mode not in _PURGE_MODES:
+        resolved_mode = _INVALID
+    return resolved_only, resolved_mode
+
+
 _SLOW_DELAY_CHOICES = h.duration_picker(
     [
         ("Off", "0"),
@@ -794,86 +888,124 @@ class Moderation(TimedActionsMixin, commands.Cog):
     # ══════════════════════════════════════════════════════════════════════════
     #  purge
     # ══════════════════════════════════════════════════════════════════════════
+    # One command for deleting messages. There used to be three top-level
+    # entries — /purge, /clean (NanoBot's own messages) and /snailpurge (slow
+    # delete past Discord's 14-day bulk limit) — which is three slash slots and
+    # three things to remember for one job. /clean and /snailpurge were never
+    # different *commands*, only different filters and a different mechanism, so
+    # they are options now: `only:` picks whose messages go, `mode:` picks fast
+    # (bulk, ≤14 days, ≤100) or slow (one-by-one, any age, ≤500, confirmed).
+    #
+    # `/purge 50` is untouched — the primary flow keeps its exact shape, which
+    # is why this is options rather than a /purge group with a fallback. And
+    # `n!clean` / `n!snailpurge` are still flat prefix commands below.
     @commands.hybrid_command(
         name="purge",
-        description="Bulk delete messages with optional filters.",
+        description="Delete messages: filter by author or text, fast or slow.",
         extras={
             "category": "📢 Channel Controls",
-            "short": "Bulk delete with optional filters (1–100)",
-            "usage": "purge <amount> [bots] [user] [contains] [starts_with] [ends_with]",
-            "desc": "Deletes up to 100 messages. Combine filters: bots only, by user, text matching.",
+            "short": "Delete messages with optional filters",
+            "usage": "purge <amount> [only] [user] [contains] [starts_with] [ends_with] [mode]",
+            "desc": (
+                "Deletes messages in this channel.\n"
+                "**mode fast** (default) — bulk delete, up to 100, Discord's 14-day limit applies.\n"
+                "**mode slow** — one-by-one (~80/min), up to 500, works on messages of any age, "
+                "asks for a typed confirmation code first.\n"
+                "**only** narrows by author: anyone (default), humans, bots, or nanobot "
+                "(nanobot is what `{prefix}clean` does).\n"
+                "Filters combine."
+            ),
             "args": [
-                ("amount", "Number of messages to scan (1–100, required)"),
-                ("bots", "Only delete bot messages"),
+                ("amount", "Number of messages to scan (1–100 fast, 1–500 slow)"),
+                ("only", "Whose messages: anyone / humans / bots / nanobot"),
                 ("user", "Only delete from this user (mention, ID, or nickname)"),
                 ("contains", "Only messages containing this text"),
                 ("starts_with", "Only messages starting with this text"),
                 ("ends_with", "Only messages ending with this text"),
+                ("mode", "fast (default) or slow (past the 14-day limit)"),
             ],
             "perms": "Manage Messages",
-            "example": "{prefix}purge 50\n/purge amount:50 user:@spammer",
+            "example": "{prefix}purge 50\n/purge amount:50 user:@spammer\n/purge amount:300 mode:slow",
         },
     )
     @app_commands.describe(
-        amount="Number of messages to scan (1–100)",
-        bots="Only delete bot messages",
+        amount="Number of messages to scan (1–100 fast, 1–500 slow)",
+        only="Whose messages to delete (default: anyone)",
         user="Only messages from this user (mention, ID, or nickname)",
         contains="Only messages containing this text",
         starts_with="Only messages starting with this text",
         ends_with="Only messages ending with this text",
+        mode="fast = bulk delete (14-day limit) · slow = one-by-one, any age",
+    )
+    @app_commands.choices(
+        only=[
+            app_commands.Choice(name="Anyone (default)", value="anyone"),
+            app_commands.Choice(name="Humans only", value="humans"),
+            app_commands.Choice(name="Bots only", value="bots"),
+            app_commands.Choice(
+                name="NanoBot only (tidy up my own messages)", value="nanobot"
+            ),
+        ],
+        mode=[
+            app_commands.Choice(name="Fast — bulk delete, last 14 days", value="fast"),
+            app_commands.Choice(
+                name="Slow — one-by-one, any age, needs confirming", value="slow"
+            ),
+        ],
     )
     @has_mod_perms()
     async def purge(
         self,
         ctx,
         amount: int,
-        bots: Optional[bool] = None,
+        only: Optional[str] = None,
         user: Optional[str] = None,
         contains: Optional[str] = None,
         starts_with: Optional[str] = None,
         ends_with: Optional[str] = None,
+        mode: Optional[str] = None,
     ):
-        if not 1 <= amount <= 100:
+        only, mode = _resolve_purge_options(only, mode)
+        # On the prefix these two share a positional slot, so one message has to
+        # cover both — naming only the option the parser happened to fill would
+        # send a mod looking in the wrong place.
+        if only is _INVALID or mode is _INVALID:
             return await ctx.reply(
-                embed=h.err("Amount must be between **1** and **100**."), ephemeral=True
+                embed=h.err(
+                    "Not a filter I know.\n"
+                    "**who** — `anyone` · `humans` · `bots` · `nanobot`\n"
+                    "**mode** — `fast` (bulk, last 14 days) · `slow` (any age)"
+                ),
+                ephemeral=True,
             )
-        await ctx.defer(ephemeral=True)
-
-        # Resolve user filter
+        # Resolve the user filter before the mode split — both paths need it,
+        # and an unresolvable name should fail before the slow path asks for a
+        # confirmation code.
         target_member = None
         if user:
-            clean = user.strip("<@!>")
-            if clean.isdigit():
-                target_member = ctx.guild.get_member(int(clean))
-            if not target_member:
-                low = user.lower()
-                target_member = discord.utils.find(
-                    lambda m: m.display_name.lower() == low or m.name.lower() == low,
-                    ctx.guild.members,
-                )
-            if not target_member:
-                return await ctx.send(
+            target_member = self._resolve_purge_member(ctx, user)
+            if target_member is None:
+                return await ctx.reply(
                     embed=h.err(f"Couldn't find a member matching `{user}`."),
                     ephemeral=True,
                 )
 
-        checks = []
-        if bots:
-            checks.append(lambda m: m.author.bot)
-        if target_member:
-            checks.append(lambda m, t=target_member: m.author == t)
-        if contains:
-            low = contains.lower()
-            checks.append(lambda m, s=low: s in m.content.lower())
-        if starts_with:
-            low = starts_with.lower()
-            checks.append(lambda m, s=low: m.content.lower().startswith(s))
-        if ends_with:
-            low = ends_with.lower()
-            checks.append(lambda m, s=low: m.content.lower().endswith(s))
+        if mode == "slow":
+            return await self._slow_purge(ctx, amount, only, target_member)
 
-        def combined(m):
-            return all(c(m) for c in checks) if checks else True
+        if not 1 <= amount <= 100:
+            return await ctx.reply(
+                embed=h.err(
+                    "Amount must be between **1** and **100** in fast mode. "
+                    "Use `mode: slow` for up to 500."
+                ),
+                ephemeral=True,
+            )
+        await ctx.defer(ephemeral=True)
+
+        combined = self._purge_check(
+            ctx, only, target_member, contains, starts_with, ends_with
+        )
 
         deleted = await ctx.channel.purge(limit=amount + 1, check=combined, bulk=True)
         # Only subtract the command message from the count if it was actually
@@ -885,8 +1017,8 @@ class Moderation(TimedActionsMixin, commands.Cog):
         count = len(deleted) - (1 if cmd_deleted else 0)
 
         parts = [f"Deleted **{count}** message{'s' if count != 1 else ''}."]
-        if bots:
-            parts.append("🤖 Bots only")
+        if only:
+            parts.append(_PURGE_ONLY_LABELS[only])
         if target_member:
             parts.append(f"👤 {target_member.display_name} only")
         if contains:
@@ -908,39 +1040,72 @@ class Moderation(TimedActionsMixin, commands.Cog):
             + (f" from {target_member.display_name}" if target_member else ""),
         )
 
-    # ══════════════════════════════════════════════════════════════════════════
-    #  snailpurge
-    # ══════════════════════════════════════════════════════════════════════════
-    @commands.hybrid_command(
-        name="snailpurge",
-        description="Slow delete of older messages (no 14-day limit). Requires confirmation.",
-        extras={
-            "category": "📢 Channel Controls",
-            "short": "Slow delete up to 500 messages — no 14-day limit",
-            "usage": "snailpurge <amount>",
-            "desc": "Deletes messages one-by-one (~80/min) so it works on messages older than 14 days. Requires a confirmation code.",
-            "args": [
-                ("amount", "Number of messages to delete (1–500)"),
-            ],
-            "perms": "Manage Messages",
-            "example": "{prefix}snailpurge 200",
-        },
-    )
-    @app_commands.describe(amount="Number of messages to delete (1–500)")
-    @has_mod_perms()
-    async def snailpurge(self, ctx, amount: int):
+    # ── Purge helpers, shared by the fast/slow paths ─────────────────────────
+    @staticmethod
+    def _resolve_purge_member(ctx, user: str):
+        """Mention, ID, nickname or username → Member, or None."""
+        raw = user.strip("<@!>")
+        if raw.isdigit():
+            member = ctx.guild.get_member(int(raw))
+            if member:
+                return member
+        low = user.lower()
+        return discord.utils.find(
+            lambda m: m.display_name.lower() == low or m.name.lower() == low,
+            ctx.guild.members,
+        )
+
+    def _purge_check(self, ctx, only, target_member, contains, starts_with, ends_with):
+        """Build the message predicate both purge modes delete by."""
+        checks = []
+        if only == "bots":
+            checks.append(lambda m: m.author.bot)
+        elif only == "humans":
+            checks.append(lambda m: not m.author.bot)
+        elif only == "nanobot":
+            checks.append(lambda m, me=ctx.guild.me: m.author == me)
+        if target_member:
+            checks.append(lambda m, t=target_member: m.author == t)
+        if contains:
+            low = contains.lower()
+            checks.append(lambda m, s=low: s in m.content.lower())
+        if starts_with:
+            low = starts_with.lower()
+            checks.append(lambda m, s=low: m.content.lower().startswith(s))
+        if ends_with:
+            low = ends_with.lower()
+            checks.append(lambda m, s=low: m.content.lower().endswith(s))
+
+        def combined(m):
+            return all(c(m) for c in checks) if checks else True
+
+        return combined
+
+    async def _slow_purge(self, ctx, amount: int, only, target_member):
+        """`/purge … mode:slow` — one-by-one deletion, so it reaches messages
+        older than the 14 days Discord's bulk endpoint allows. Slow enough
+        (~80/min) and irreversible enough to be worth a typed confirmation."""
         if not 1 <= amount <= 500:
             return await ctx.reply(
-                embed=h.err("Amount must be between **1** and **500**."), ephemeral=True
+                embed=h.err("Amount must be between **1** and **500** in slow mode."),
+                ephemeral=True,
             )
+
+        filters = []
+        if only:
+            filters.append(_PURGE_ONLY_LABELS[only])
+        if target_member:
+            filters.append(f"👤 {target_member.display_name} only")
+        filter_line = ("\n" + "  ·  ".join(filters)) if filters else ""
 
         code = "".join(random.choices(string.digits, k=4))
         warn_e = h.warn(
-            f"⚠️ This will **slowly** delete the last **{amount}** messages in {ctx.channel.mention}.\n"
+            f"⚠️ This will **slowly** delete up to **{amount}** messages in "
+            f"{ctx.channel.mention}.{filter_line}\n"
             f"Bypasses Discord's 14-day limit but is much slower (~80 msg/min).\n\n"
             f"**To confirm, type:** `{code}`\n"
             f"_(30 seconds. Type anything else or wait to cancel.)_",
-            "🐌 Snail Purge — Confirm",
+            "🐌 Slow Purge — Confirm",
         )
         await ctx.reply(embed=warn_e, ephemeral=True)
 
@@ -951,7 +1116,7 @@ class Moderation(TimedActionsMixin, commands.Cog):
             reply = await self.bot.wait_for("message", check=check, timeout=30)
         except asyncio.TimeoutError:
             return await ctx.send(
-                embed=h.info("Snail purge cancelled (timed out).", "🐌 Cancelled"),
+                embed=h.info("Slow purge cancelled (timed out).", "🐌 Cancelled"),
                 ephemeral=True,
             )
 
@@ -961,7 +1126,7 @@ class Moderation(TimedActionsMixin, commands.Cog):
             except discord.HTTPException:
                 pass
             return await ctx.send(
-                embed=h.info("Snail purge cancelled (wrong code).", "🐌 Cancelled"),
+                embed=h.info("Slow purge cancelled (wrong code).", "🐌 Cancelled"),
                 ephemeral=True,
             )
 
@@ -972,14 +1137,17 @@ class Moderation(TimedActionsMixin, commands.Cog):
 
         await ctx.send(
             embed=h.ok(
-                f"Snail purge started — deleting up to **{amount}** messages...",
+                f"Slow purge started — deleting up to **{amount}** messages...",
                 "🐌 In Progress",
             ),
             ephemeral=True,
         )
 
+        matches = self._purge_check(ctx, only, target_member, None, None, None)
         deleted = 0
         async for message in ctx.channel.history(limit=amount):
+            if not matches(message):
+                continue
             try:
                 await message.delete()
                 deleted += 1
@@ -990,29 +1158,60 @@ class Moderation(TimedActionsMixin, commands.Cog):
                 await asyncio.sleep(2)
 
         log.warning(
-            f"snailpurge: {deleted}/{amount} by {ctx.author} in #{ctx.channel} / {ctx.guild}"
+            f"purge (slow): {deleted}/{amount} by {ctx.author} in "
+            f"#{ctx.channel} / {ctx.guild}"
         )
         await ctx.send(
             embed=h.ok(
-                f"Done. Deleted **{deleted}** message(s).", "🐌 Snail Purge Complete"
+                f"Done. Deleted **{deleted}** message(s).", "🐌 Slow Purge Complete"
             ),
             ephemeral=True,
         )
-        await action_log(
-            ctx, "🐌", "snailpurge", detail=f"{deleted} messages (slow delete)"
-        )
+        await action_log(ctx, "🐌", "purge", detail=f"{deleted} messages (slow delete)")
 
     # ══════════════════════════════════════════════════════════════════════════
-    #  clean
+    #  snailpurge / clean — prefix shorthands for the two /purge modes
     # ══════════════════════════════════════════════════════════════════════════
-    @commands.hybrid_command(
+    #  Both were top-level slash commands. Neither was a different command from
+    #  /purge — one is a filter (NanoBot's own messages), the other a mechanism
+    #  (one-by-one instead of bulk) — so on slash they are options now. The
+    #  prefix names stay flat because they are genuinely one-tap shorthands, and
+    #  taking a mobile mod's shorthand away to save a slash slot is a bad trade.
+    @commands.command(
+        name="snailpurge",
+        aliases=["slowpurge"],
+        description="Slow delete of older messages (no 14-day limit). Requires confirmation.",
+        extras={
+            "category": "📢 Channel Controls",
+            "short": "Slow delete up to 500 messages — no 14-day limit",
+            "usage": "snailpurge <amount>",
+            "desc": (
+                "Deletes messages one-by-one (~80/min) so it works on messages older "
+                "than 14 days. Requires a confirmation code. Shorthand for "
+                "`{prefix}purge <amount> mode:slow`, which is where it lives on slash."
+            ),
+            "args": [
+                ("amount", "Number of messages to delete (1–500)"),
+            ],
+            "perms": "Manage Messages",
+            "example": "{prefix}snailpurge 200",
+        },
+    )
+    @has_mod_perms()
+    async def snailpurge(self, ctx, amount: int):
+        await self._slow_purge(ctx, amount, None, None)
+
+    @commands.command(
         name="clean",
         description="Delete recent NanoBot messages from this channel.",
         extras={
             "category": "📢 Channel Controls",
             "short": "Delete NanoBot's own recent messages",
             "usage": "clean [amount]",
-            "desc": "Removes NanoBot's own messages from the channel.",
+            "desc": (
+                "Removes NanoBot's own messages from the channel. Shorthand for "
+                "`{prefix}purge <amount> only:nanobot`, which is where it lives on slash."
+            ),
             "args": [
                 ("amount", "Messages to scan (1–100, default 50)"),
             ],
@@ -1020,7 +1219,6 @@ class Moderation(TimedActionsMixin, commands.Cog):
             "example": "{prefix}clean 20",
         },
     )
-    @app_commands.describe(amount="How many messages to scan (1–100, default 50)")
     @has_mod_perms()
     async def clean(self, ctx, amount: int = 50):
         if not 1 <= amount <= 100:
@@ -1032,7 +1230,8 @@ class Moderation(TimedActionsMixin, commands.Cog):
             limit=amount, check=lambda m: m.author == ctx.guild.me, bulk=True
         )
         log.info(
-            f"clean: {len(deleted)} bot messages removed by {ctx.author} in #{ctx.channel} / {ctx.guild}"
+            f"clean: {len(deleted)} bot messages removed by {ctx.author} in "
+            f"#{ctx.channel} / {ctx.guild}"
         )
         await ctx.send(
             embed=h.ok(f"Removed **{len(deleted)}** bot message(s).", "🧹 Cleaned"),

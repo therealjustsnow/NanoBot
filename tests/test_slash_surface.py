@@ -36,7 +36,7 @@ DISCORD_TOP_LEVEL_CAP = 100
 # What we hold ourselves to. The gap is deliberate room for the next feature to
 # land without triggering an emergency reshuffle — if a change needs this
 # raised, that is the moment to group something instead.
-TOP_LEVEL_BUDGET = 92
+TOP_LEVEL_BUDGET = 86
 
 
 @pytest_asyncio.fixture
@@ -152,6 +152,12 @@ async def test_regrouped_commands_kept_their_prefix_names(tree_bot):
         "firstmsg",  # slash: /info firstmsg
         "blocksong",  # slash: /music blocksong add
         "blockuser",  # slash: /music blockuser add
+        "clear",  # slash: /music clear
+        "remove",  # slash: /music remove
+        "move",  # slash: /music move
+        "jump",  # slash: /music jump
+        "clean",  # slash: /purge <n> only:nanobot
+        "snailpurge",  # slash: /purge <n> mode:slow
         # NB: guild-playlist *curation* has no prefix twin and never had one —
         # it went straight from /guildplaylist to /music guildplaylist.
     ):
@@ -174,5 +180,43 @@ async def test_regrouped_commands_are_reachable_over_slash(tree_bot):
         "music blocksong add",
         "music blockuser add",
         "music guildplaylist add",
+        "music clear",
+        "music remove",
+        "music move",
+        "music jump",
     ):
         assert qualified_name in tree, f"/{qualified_name} is not in the slash tree"
+
+
+async def test_the_purge_family_is_one_command_on_slash(tree_bot):
+    """/clean and /snailpurge were never different commands from /purge — one
+    was a filter, the other a mechanism. On slash they are `only:` and `mode:`
+    options; on the prefix they stay as one-tap shorthands.
+
+    The important half of this is that the *primary* flow didn't change shape:
+    `/purge <amount>` must still be one required option and nothing else, which
+    is why this was done with options rather than by turning /purge into a
+    group with a fallback."""
+    tree = {
+        c.qualified_name: c for c in _walk_app_commands(tree_bot.tree.get_commands())
+    }
+
+    assert "clean" not in tree
+    assert "snailpurge" not in tree
+
+    purge = tree["purge"]
+    params = {p.name: p for p in purge.parameters}
+    required = [p.name for p in purge.parameters if p.required]
+    assert required == ["amount"], f"/purge gained a required option: {required}"
+
+    for name in ("only", "mode"):
+        assert name in params, f"/purge lost its {name} option"
+        assert params[name].choices, f"/purge {name} must be a tap-to-pick choice list"
+
+    assert {c.value for c in params["only"].choices} == {
+        "anyone",
+        "humans",
+        "bots",
+        "nanobot",
+    }
+    assert {c.value for c in params["mode"].choices} == {"fast", "slow"}

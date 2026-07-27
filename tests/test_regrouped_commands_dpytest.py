@@ -15,7 +15,9 @@ import pytest
 from discord.ext import test as dpytest
 
 import utils.db as db
-from tests.conftest import config
+from discord.ext import commands
+
+from tests.conftest import config, grant_perms
 
 
 # ── /remind → /reminders user (prefix name: !remind) ────────────────────────
@@ -181,3 +183,153 @@ async def test_prefix_coin_grant_works_for_the_owner(bot):
     reply = dpytest.get_message()
     assert reply.embeds
     assert await db.get_balance(target.id) == 500
+
+
+# ── /clean + /snailpurge → /purge only:… / mode:… ──────────────────────────
+def test_purge_options_are_order_and_label_tolerant():
+    """Slash passes `only` and `mode` by name; the prefix assigns positionally,
+    so `!purge 300 slow` puts "slow" in the `only` slot. Reading it as the mode
+    is the difference between the obvious thing working and six positional
+    placeholders."""
+    from cogs.moderation.cog import _INVALID, _resolve_purge_options
+
+    # The obvious prefix shapes.
+    assert _resolve_purge_options(None, None) == (None, "fast")
+    assert _resolve_purge_options("slow", None) == (None, "slow")
+    assert _resolve_purge_options("bots", None) == ("bots", "fast")
+    assert _resolve_purge_options("bots", "slow") == ("bots", "slow")
+
+    # Someone who learned the command on slash types the labels too.
+    assert _resolve_purge_options("mode:slow", None) == (None, "slow")
+    assert _resolve_purge_options("mode: slow", None) == (None, "slow")
+    assert _resolve_purge_options("only:bots", None) == ("bots", "fast")
+    assert _resolve_purge_options("only: nanobot", "mode: slow") == ("nanobot", "slow")
+
+    # An explicit mode still wins over a mode word in the only slot.
+    assert _resolve_purge_options("fast", "slow") == (_INVALID, "slow")
+
+    # Genuinely unknown values are still errors, one field at a time.
+    assert _resolve_purge_options("mods", None) == (_INVALID, "fast")
+    assert _resolve_purge_options(None, "medium") == (None, _INVALID)
+
+
+def test_purge_only_filter_normalises_its_input():
+    """`only` replaced a bare `bots: bool`, so the old prefix shape must keep
+    working — and an unrecognised value has to be rejected out loud. A filter
+    that silently does nothing on a delete command is how a channel gets wiped
+    by accident."""
+    from cogs.moderation.cog import _INVALID, _normalise_purge_only
+
+    # No filter at all.
+    for value in (None, "", "   ", "anyone", "any", "all", "everyone", "false", "no"):
+        assert _normalise_purge_only(value) is None, value
+
+    # The three real filters, plus the legacy `!purge 50 true` shape.
+    assert _normalise_purge_only("bots") == "bots"
+    assert _normalise_purge_only("BOTS") == "bots"
+    assert _normalise_purge_only("true") == "bots"
+    assert _normalise_purge_only("bot") == "bots"
+    assert _normalise_purge_only("humans") == "humans"
+    assert _normalise_purge_only("nanobot") == "nanobot"
+    assert _normalise_purge_only("self") == "nanobot"
+
+    # Anything else is an error, never a silently-ignored filter.
+    assert _normalise_purge_only("everybody") is _INVALID
+    assert _normalise_purge_only("mods") is _INVALID
+
+
+@pytest.mark.cogs("cogs.moderation")
+async def test_purge_rejects_an_unknown_filter_and_names_both_option_sets(bot):
+    """`only` and `mode` share one positional slot on the prefix, so the error
+    has to list both — naming whichever one the parser happened to fill would
+    send a mod hunting in the wrong place."""
+    author = config().members[0]
+    await grant_perms(author, manage_messages=True)
+    await grant_perms(config().guilds[0].me, manage_messages=True)
+
+    await dpytest.message("!purge 10 medium", member=author)
+    reply = dpytest.get_message()
+    body = reply.embeds[0].description or ""
+    assert "nanobot" in body and "slow" in body
+
+
+@pytest.mark.cogs("cogs.moderation")
+async def test_slow_mode_allows_an_amount_fast_mode_would_reject(bot):
+    """The two modes have different caps — 100 for a bulk delete, 500 for the
+    one-by-one path. Picking slow must apply slow's cap, not fast's."""
+    author = config().members[0]
+    await grant_perms(author, manage_messages=True)
+    await grant_perms(config().guilds[0].me, manage_messages=True)
+
+    # Fast mode stops at 100 and says how to go higher.
+    await dpytest.message("!purge 300", member=author)
+    reply = dpytest.get_message()
+    assert reply.embeds and "slow" in (reply.embeds[0].description or "").lower()
+
+    # Slow mode accepts it — and asks for a confirmation code rather than
+    # deleting anything.
+    await dpytest.message("!purge 300 slow", member=author)
+    confirm = dpytest.get_message()
+    assert confirm.embeds and "Confirm" in (confirm.embeds[0].title or "")
+
+
+@pytest.mark.cogs("cogs.moderation")
+async def test_slow_purge_still_bounds_its_amount(bot):
+    author = config().members[0]
+    await grant_perms(author, manage_messages=True)
+    await grant_perms(config().guilds[0].me, manage_messages=True)
+
+    await dpytest.message("!purge 900 slow", member=author)
+    reply = dpytest.get_message()
+    assert reply.embeds and "500" in (reply.embeds[0].description or "")
+
+
+@pytest.mark.cogs("cogs.moderation")
+async def test_snailpurge_prefix_shorthand_still_asks_to_confirm(bot):
+    """n!snailpurge is a shim onto the shared slow body now — it must still
+    reach the confirmation step rather than deleting straight away."""
+    author = config().members[0]
+    await grant_perms(author, manage_messages=True)
+    await grant_perms(config().guilds[0].me, manage_messages=True)
+
+    await dpytest.message("!snailpurge 200", member=author)
+    reply = dpytest.get_message()
+    assert reply.embeds and "Confirm" in (reply.embeds[0].title or "")
+
+
+@pytest.mark.cogs("cogs.moderation")
+async def test_clean_prefix_shorthand_still_works(bot):
+    author = config().members[0]
+    await grant_perms(author, manage_messages=True)
+    await grant_perms(config().guilds[0].me, manage_messages=True)
+
+    await dpytest.message("!clean 20", member=author)
+    reply = dpytest.get_message()
+    assert reply.embeds and "Cleaned" in (reply.embeds[0].title or "")
+
+
+@pytest.mark.cogs("cogs.moderation")
+async def test_purge_and_clean_still_need_manage_messages(bot):
+    """Reshaping a destructive command must not loosen its gate."""
+    author = config().members[0]
+    # Give the bot the permission but not the caller, so the check that fires is
+    # the one about the *user*.
+    await grant_perms(config().guilds[0].me, manage_messages=True)
+    for content in ("!purge 10", "!clean", "!snailpurge 10"):
+        with pytest.raises(commands.MissingPermissions):
+            await dpytest.message(content, member=author)
+
+
+# ── /clear /remove /move /jump → under /music ──────────────────────────────
+@pytest.mark.cogs("cogs.music")
+async def test_music_queue_editing_keeps_its_prefix_names(bot):
+    """The four queue commands moved under /music on slash only. With no
+    player connected they should all answer 'the queue is empty' — which is
+    enough to prove the prefix name still resolves to the right callback."""
+    author = config().members[0]
+
+    for content in ("!clear", "!remove 1", "!move 1 2", "!jump 1"):
+        await dpytest.message(content, member=author)
+        reply = dpytest.get_message()
+        assert reply.embeds, f"{content} produced no embed"
+        assert "empty" in (reply.embeds[0].description or "").lower(), content

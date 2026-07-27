@@ -80,6 +80,8 @@ NanoBot fixes that.
 - Search picker, `playnext`, `playnow`, `stream`, and `shuffleplay` for fast queue control
 - `follow` -- the bot tracks you between voice channels; `pldump` exports the queue
 - Per-server queue with playlist support, shuffle, move, jump, remove, and clear
+  (playback is flat -- `/play`, `/skip`, `/queue`, `/volume`; queue editing and the
+  server library live under `/music`, and every prefix name stays flat)
 - Democratic vote-skip (requester / Manage Server force-skip) with a configurable ratio
 - Loop modes (off / track / queue), volume 0-200%, playback speed, and seek
 - Audio effects: bassboost, nightcore, vaporwave, treble, 8D, muffle
@@ -340,9 +342,9 @@ Restricted to the bot owner. These are **prefix-only by design** -- slash comman
 | `/hide [channel]` | Hide a channel from @everyone (`view_channel = false`). |
 | `/unhide [channel]` | Restore @everyone visibility on a hidden channel. |
 | `/slow [delay] [length]` | Set slowmode (`30s`-`5m`) with optional timed auto-disable. No args = toggle. |
-| `/purge <amount>` | Bulk delete 1-100 messages. Filters: `bots`, `user`, `contains`, `starts_with`, `ends_with`. |
-| `/snailpurge <amount>` | Slow one-by-one delete (1-500). No 14-day limit. Requires confirmation code. |
-| `/clean [amount]` | Delete NanoBot's own recent messages from the channel. |
+| `/purge <amount>` | Delete messages. Filters: `only` (anyone/humans/bots/nanobot), `user`, `contains`, `starts_with`, `ends_with`, and `mode`. |
+| `/purge <amount> mode:slow` | One-by-one delete (1-500). No 14-day limit. Asks for a confirmation code. Prefix shorthand: `!snailpurge` |
+| `/purge <amount> only:nanobot` | Delete NanoBot's own recent messages. Prefix shorthand: `!clean` |
 | `/echo [channel] <message>` | Send a message as NanoBot. Prefix mode auto-deletes your trigger. |
 | `/nuke [reason]` | Clone channel + delete original -- wipes all history. Button confirmation required. **Irreversible.** |
 | `/moveall <to> [from]` | Move all members from one voice channel to another. Defaults to your current VC. |

@@ -93,13 +93,18 @@ Commands (hybrid — slash + prefix), category "🎵 Music":
   join / summon     — connect the bot to your voice channel
   musichealth / mhealth — probe yt-dlp/proxy/cookies, diagnose 403/429 (owner)
 
-Slash layout: the playback controls stay flat (/play, /skip, /queue, /volume,
-… — typed constantly, so they earn their top-level slots). Everything
+Slash layout: the playback controls stay flat (/play, /skip, /pause, /queue,
+/volume, … — typed constantly, so they earn their top-level slots). Everything
 occasional lives under /music, including the three library/moderation groups
-that used to hold top-level slots of their own:
+and the four queue-editing commands that used to hold top-level slots of their
+own:
+  /music queue · clear · remove · move · jump   (queue editing)
   /music guildplaylist add|remove|list|clear
   /music blocksong add|remove|list
   /music blockuser add|remove
+The queue four were the worst names on the tree: /clear, /remove, /move and
+/jump say nothing about music, and /clear sat one letter from moderation's
+/clean (delete bot messages) while doing something destructive.
 The prefix names are unchanged: `blocksong`, `unblocksong`, `blockedsongs`,
 `blockuser` and `unblockuser` are all still flat. Guild-playlist *curation* has
 always been slash-only — it moved from /guildplaylist to /music guildplaylist.
@@ -1108,7 +1113,14 @@ class Music(commands.Cog):
             return await ctx.reply(embed=h.err(_LOST_VOICE_MSG), ephemeral=True)
         await ctx.reply(embed=h.ok(f"Force-skipped **{title}**.", "⏭️ Skipped"))
 
-    @commands.hybrid_command(
+    # ── Queue editing: prefix-only, slash lives under /music ─────────────────
+    # `/jump`, `/move`, `/remove` and `/clear` each held a top-level slash slot
+    # under a name that said nothing about music — worst of all `/clear`, which
+    # sat one letter from the moderation cog's `/clean` (delete bot messages)
+    # and is destructive. Under /music the same words are unambiguous, and the
+    # four of them turn up together when you open the group. Prefix names are
+    # unchanged.
+    @commands.command(
         name="jump",
         aliases=["skipto"],
         description="Skip ahead to a track at a given queue position.",
@@ -1117,13 +1129,12 @@ class Music(commands.Cog):
             "sub": "📜 The Queue",
             "short": "Jump to a queue position",
             "usage": "jump <position>",
-            "desc": "Discards everything before the chosen position and plays it now.",
+            "desc": "Discards everything before the chosen position and plays it now. On slash this is `/music jump`.",
             "args": [("position", "Queue position to jump to")],
             "perms": "None",
             "example": "{prefix}jump 4",
         },
     )
-    @app_commands.describe(position="Queue position to jump to")
     @commands.guild_only()
     async def jump(self, ctx: commands.Context, position: int):
         player = self._active_player(ctx)
@@ -1286,7 +1297,7 @@ class Music(commands.Cog):
         if needs_pages:
             view.message = msg
 
-    @commands.hybrid_command(
+    @commands.command(
         name="move",
         description="Move a queued track to a new position.",
         extras={
@@ -1294,13 +1305,12 @@ class Music(commands.Cog):
             "sub": "📜 The Queue",
             "short": "Reorder a queued track",
             "usage": "move <from> <to>",
-            "desc": "Moves the track at one queue position to another.",
+            "desc": "Moves the track at one queue position to another. On slash this is `/music move`.",
             "args": [("from_pos", "Current position"), ("to_pos", "New position")],
             "perms": "None",
             "example": "{prefix}move 5 1",
         },
     )
-    @app_commands.describe(from_pos="Current position", to_pos="New position")
     @commands.guild_only()
     async def move(self, ctx: commands.Context, from_pos: int, to_pos: int):
         player = self._active_player(ctx)
@@ -1321,7 +1331,7 @@ class Music(commands.Cog):
             )
         )
 
-    @commands.hybrid_command(
+    @commands.command(
         name="remove",
         aliases=[],
         description="Remove a track from the queue by its position.",
@@ -1330,13 +1340,12 @@ class Music(commands.Cog):
             "sub": "📜 The Queue",
             "short": "Remove a queued track",
             "usage": "remove <position>",
-            "desc": "Removes a track from the queue using the number shown in `queue`.",
+            "desc": "Removes a track from the queue using the number shown in `queue`. On slash this is `/music remove`.",
             "args": [("position", "Queue position (see !queue)")],
             "perms": "None",
             "example": "{prefix}remove 3",
         },
     )
-    @app_commands.describe(position="Queue position (see /queue)")
     @commands.guild_only()
     async def remove(self, ctx: commands.Context, position: int):
         player = self._active_player(ctx)
@@ -1355,7 +1364,7 @@ class Music(commands.Cog):
             embed=h.ok(f"Removed **{removed.title}** from the queue.", "🗑️ Removed")
         )
 
-    @commands.hybrid_command(
+    @commands.command(
         name="clear",
         description="Empty the queue (keeps the current track playing).",
         extras={
@@ -1363,7 +1372,7 @@ class Music(commands.Cog):
             "sub": "📜 The Queue",
             "short": "Clear the queue",
             "usage": "clear",
-            "desc": "Removes every upcoming track. The current track keeps playing.",
+            "desc": "Removes every upcoming track. The current track keeps playing. On slash this is `/music clear`.",
             "args": [],
             "perms": "None",
             "example": "{prefix}clear",
@@ -2583,6 +2592,48 @@ class Music(commands.Cog):
     # Each builds a Context from the interaction and reuses the prefix callback
     # via Command.__call__ (which skips the prefix command's own checks; the
     # group/subcommand decorators below carry the slash-side gating instead).
+    # Queue editing — the four that used to hold generic top-level slots.
+    @music_slash.command(name="queue", description="Show the upcoming queue.")
+    async def slash_music_queue(self, interaction: discord.Interaction):
+        """A duplicate of the flat /queue, deliberately. Someone who opens
+        /music to edit the queue should be able to look at it from the same
+        place — the flat /queue keeps its slot because it is typed constantly."""
+        ctx = await commands.Context.from_interaction(interaction)
+        await self.queue(ctx)
+
+    @music_slash.command(
+        name="clear", description="Empty the queue (keeps the current track playing)."
+    )
+    async def slash_music_clear(self, interaction: discord.Interaction):
+        ctx = await commands.Context.from_interaction(interaction)
+        await self.clear(ctx)
+
+    @music_slash.command(
+        name="remove", description="Remove a track from the queue by its position."
+    )
+    @app_commands.describe(position="Queue position (see /queue)")
+    async def slash_music_remove(self, interaction: discord.Interaction, position: int):
+        ctx = await commands.Context.from_interaction(interaction)
+        await self.remove(ctx, position)
+
+    @music_slash.command(
+        name="move", description="Move a queued track to a new position."
+    )
+    @app_commands.describe(from_pos="Current position", to_pos="New position")
+    async def slash_music_move(
+        self, interaction: discord.Interaction, from_pos: int, to_pos: int
+    ):
+        ctx = await commands.Context.from_interaction(interaction)
+        await self.move(ctx, from_pos, to_pos)
+
+    @music_slash.command(
+        name="jump", description="Skip ahead to a track at a given queue position."
+    )
+    @app_commands.describe(position="Queue position to jump to")
+    async def slash_music_jump(self, interaction: discord.Interaction, position: int):
+        ctx = await commands.Context.from_interaction(interaction)
+        await self.jump(ctx, position)
+
     @music_slash.command(
         name="grab", description="Save the currently playing track to your DMs."
     )
