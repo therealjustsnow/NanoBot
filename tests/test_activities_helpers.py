@@ -198,6 +198,42 @@ def test_pick_explore_outcome_walks_the_table():
     assert pick_explore_outcome(0.999999) == EXPLORE_OUTCOMES[-1][0]
 
 
+def test_treasure_key_supply_tracks_chest_supply():
+    """Keys must not out-drop chests by more than a small margin.
+
+    A treasure_key does exactly one thing: open a treasure_chest. /explore is
+    the only chest faucet, but keys drop from /mine too — on a 30m cooldown
+    against explore's 3h, so mining's rate is multiplied by 6x the claims.
+    Comparing the raw percentages hides that; this compares expected drops per
+    day at full claim rate, which is what a player actually banks.
+
+    Some surplus is wanted (a chest with no key is worse than a spare key), but
+    a large one means keys pile up unspendable — the state this ratio was
+    tightened to fix, when it stood at 5.25:1.
+    """
+    from cogs.activities.constants import (
+        EXPLORE_COOLDOWN_DEFAULT,
+        MINE_COOLDOWN_DEFAULT,
+        MINE_TREASURE_KEY_CHANCE,
+    )
+
+    day = 86_400
+    explore_claims = day / EXPLORE_COOLDOWN_DEFAULT
+    mine_claims = day / MINE_COOLDOWN_DEFAULT
+    odds = dict(EXPLORE_OUTCOMES)
+
+    keys = (
+        explore_claims * odds["treasure_key"] + mine_claims * MINE_TREASURE_KEY_CHANCE
+    )
+    chests = explore_claims * odds["treasure_chest"]
+
+    assert chests > 0, "explore is the only chest source — it can't drop to zero"
+    assert 1.0 <= keys / chests <= 2.0, (
+        f"{keys:.2f} keys/day against {chests:.2f} chests/day "
+        f"({keys / chests:.2f}:1) — keys should modestly exceed chests, not bank up"
+    )
+
+
 def test_roll_coin_amount_bounds():
     assert roll_coin_amount(0.0, 100, 400) == 100
     assert roll_coin_amount(1.0, 100, 400) == 400

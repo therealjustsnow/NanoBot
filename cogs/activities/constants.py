@@ -78,7 +78,13 @@ MINE_COOLDOWN_MAX = 86_400
 MINE_CAVE_IN_CHANCE = 0.08
 
 # A small independent chance of a bonus treasure_key on top of the ore roll.
-MINE_TREASURE_KEY_CHANCE = 0.05
+#
+# Deliberately low relative to the chest rate below. A key is worthless on its
+# own — it only ever unlocks a treasure_chest, and /explore is the sole chest
+# source. Mining claims 48x a day against explore's 8, so even a modest rate
+# here dominates the key supply: at the original 0.05 it minted 2.4 keys/day
+# against 0.64 chests, and players banked keys they could never spend.
+MINE_TREASURE_KEY_CHANCE = 0.02
 
 ORES: dict[str, dict] = {
     "stone": {"name": "Stone", "emoji": "🪨", "value": 5},
@@ -151,11 +157,19 @@ EXPLORE_COINS_SMALL = (100, 400)
 EXPLORE_COINS_BIG = (500, 1000)
 
 # Must sum to 1.0. Walked in order by helpers.pick_explore_outcome.
+#
+# The chest weight sits *above* the key weight on purpose. Explore is the only
+# chest faucet, while keys also drop from /mine (a 30m cooldown against this
+# one's 3h) and can be crafted, so weighting keys higher here stacked a second
+# surplus on top of mining's. Together with MINE_TREASURE_KEY_CHANCE this lands
+# at roughly 1.5 keys per chest at full claim rate — enough slack that a found
+# chest is never stranded without a key, without banking keys that never open
+# anything.
 EXPLORE_OUTCOMES: list[tuple[str, float]] = [
     ("nothing", 0.30),
     ("coins_small", 0.35),
-    ("treasure_key", 0.12),
-    ("treasure_chest", 0.08),
+    ("treasure_key", 0.07),
+    ("treasure_chest", 0.13),
     ("lucky_charm", 0.10),
     ("coins_big", 0.05),
 ]

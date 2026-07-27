@@ -75,7 +75,7 @@ async def test_mine_dig_adds_ore_and_blocks_second_dig(bot, monkeypatch):
 
     guild = config().guilds[0]
     author = config().members[0]
-    # 0.5: no cave-in (>=0.08), no bonus key (>=0.05); deterministic ore pick.
+    # 0.5: no cave-in (>=0.08), no bonus key (>=0.02); deterministic ore pick.
     monkeypatch.setattr(activities.random, "random", lambda: 0.5)
     expected_key = pick_ore(0.5, 0.0)
 
