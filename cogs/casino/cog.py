@@ -337,6 +337,9 @@ class Casino(commands.Cog):
         description="Casino minigames — bet NanoCoins on flip, dice, slots, "
         "roulette, or blackjack.",
         invoke_without_command=True,
+        # Makes the bare overview (games, limits, jackpot, your record)
+        # reachable as /casino overview — it was prefix-only.
+        fallback="overview",
         extras={
             "category": "🪙 Economy",
             "sub": "🎲 Games",

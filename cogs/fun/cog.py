@@ -651,7 +651,6 @@ class Fun(commands.Cog):
             "received": got,
             "rank": rank[0] if rank else None,
             "streak_line": line,
-            "footer": "one account, every server",
         }
         async with self._cookie_render_lock:
             png = await asyncio.to_thread(cookie_card.render_cookie_card, data)

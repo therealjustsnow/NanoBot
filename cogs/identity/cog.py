@@ -169,8 +169,7 @@ class Identity(commands.Cog):
     def _levelup_embed(self, user: discord.abc.User, level: int) -> discord.Embed:
         embed = h.embed(
             "🌐 Global level up!",
-            f"**{user.display_name}** reached **global level {level}** — that's "
-            "your whole account, across every server.",
+            f"**{user.display_name}** reached **global level {level}**.",
             ACCENT,
         )
         unlocks = [
@@ -356,7 +355,6 @@ class Identity(commands.Cog):
             "banner": cosmetics.get((loadout.get("banner") or [""])[0]),
             "border": cosmetics.get((loadout.get("border") or [""])[0]),
             "nameplate": cosmetics.get((loadout.get("nameplate") or [""])[0]),
-            "footer": f"{ctx.guild.name} · one account, every server",
         }
         return data, notes
 

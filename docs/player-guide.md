@@ -276,8 +276,14 @@ Buying bait doesn't arm it — **use `/inventory use <bait>`** before casting.
 
 ## 💼 Jobs and adventures
 
-`/adventure` on its own is your dashboard: every activity, what it's for, its
-cooldown, and whether you're ready right now.
+`/adventure` on its own is your dashboard, and the place to start: it opens with
+how many activities are ready right now, then your two progression tracks (your
+work career title and how many shifts to the next one, plus your pickaxe tier),
+then every activity — what it's for, its cooldown, whether you're ready, and how
+many times you've done it.
+
+On a phone, tap `/adventure dashboard` — Discord can't run a command group by
+itself, so that's the same card under a name slash can reach.
 
 | Command | Cooldown | Risk | Reward |
 |---|---|---|---|
@@ -328,7 +334,8 @@ Everything you own that isn't coins or bagged fish lives in `/inventory`
 
 | Command | What it does |
 |---|---|
-| `/inventory` | Your items grouped by category, plus active buffs |
+| `/inventory` | Your items grouped by category, with totals and active buffs |
+| `/inventory view [category]` | The same view, slash-reachable; add a category (`bait`, `material`, …) to show just that one |
 | `/inventory use <item> [qty]` | Use a consumable — this is how bait and charms are armed |
 | `/inventory sell <item> [qty]` | Sell items for coins |
 | `/inventory sell all` | Sell **everything** sellable in one go |

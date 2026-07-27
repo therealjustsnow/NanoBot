@@ -134,6 +134,10 @@ class Crafting(commands.Cog):
         name="craft",
         description="Craft items from materials in your inventory.",
         invoke_without_command=True,
+        # Makes the bare recipe list (with craftable-now markers) reachable as
+        # /craft list — it was prefix-only, leaving /craft make/info as the
+        # only slash entry points to a surface you have to browse first.
+        fallback="list",
         extras={
             "category": "🪙 Economy",
             "sub": "🎒 Items & Crafting",
