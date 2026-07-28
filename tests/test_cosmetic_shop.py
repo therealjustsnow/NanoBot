@@ -173,7 +173,7 @@ async def test_each_cosmetic_aisle_marks_what_you_can_afford(bot):
         embed = dpytest.get_message().embeds[0]
         marks = " ".join(f.name for f in embed.fields)
         assert "🟢" in marks or "🔒" in marks, marks
-        assert "every server" in embed.footer.text
+        assert "/profile equip" in embed.footer.text
 
 
 @pytest.mark.cogs("cogs.economy")

@@ -135,6 +135,171 @@
       "source": "nasa",
       "nasa_id": "iss058e005282",
       "focus": "center"
+    },
+    {
+      "key": "banner_art_shower",
+      "slot": "banner",
+      "source": "commons",
+      "focus": "center",
+      "file": "Hiroshige, Sudden shower over Shin-Ōhashi bridge and Atake, 1857.jpg",
+      "title": "Sudden Shower over Shin-Ōhashi Bridge and Atake",
+      "credit": "Utagawa Hiroshige"
+    },
+    {
+      "key": "banner_art_thousand_li",
+      "slot": "banner",
+      "source": "commons",
+      "focus": "center",
+      "file": "Wang Ximeng - A Thousand Li of River (Bridge).jpg",
+      "title": "A Thousand Li of Rivers and Mountains",
+      "credit": "Wang Ximeng"
+    },
+    {
+      "key": "banner_art_shahnameh",
+      "slot": "banner",
+      "source": "commons",
+      "focus": "center",
+      "file": "Bizhan Shahnameh Met 1970.301.42 n02.jpg",
+      "title": "Folio from the Shahnameh (Book of Kings)",
+      "credit": "Persian, Safavid period"
+    },
+    {
+      "key": "banner_art_hunefer",
+      "slot": "banner",
+      "source": "commons",
+      "focus": "center",
+      "file": "Book of the Dead of Hunefer sheet 6.jpg",
+      "title": "Book of the Dead of Hunefer",
+      "credit": "Ancient Egyptian, 19th Dynasty"
+    },
+    {
+      "key": "banner_art_codex_borgia",
+      "slot": "banner",
+      "source": "commons",
+      "focus": "center",
+      "file": "Codex Borgia page 32.jpg",
+      "title": "Codex Borgia, page 32",
+      "credit": "Pre-Columbian Mesoamerican"
+    },
+    {
+      "key": "banner_art_chaekgeori",
+      "slot": "banner",
+      "source": "commons",
+      "focus": "center",
+      "file": "Chaekgeori, late 1800s, Six-panel folding screen, private collection.png",
+      "title": "Chaekgeori folding screen",
+      "credit": "Korean, Joseon dynasty"
+    },
+    {
+      "key": "banner_art_mucha",
+      "slot": "banner",
+      "source": "commons",
+      "focus": "center",
+      "file": "Alfons Mucha - La Plume, 1896-97.jpg",
+      "title": "La Plume",
+      "credit": "Alphonse Mucha"
+    },
+    {
+      "key": "banner_art_morris",
+      "slot": "banner",
+      "source": "commons",
+      "focus": "center",
+      "file": "Morris Strawberry Thief 1883.jpg",
+      "title": "Strawberry Thief",
+      "credit": "William Morris"
+    },
+    {
+      "key": "banner_art_haeckel",
+      "slot": "banner",
+      "source": "commons",
+      "focus": "center",
+      "file": "Haeckel Discomedusae 98.jpg",
+      "title": "Discomedusae, Kunstformen der Natur",
+      "credit": "Ernst Haeckel"
+    },
+    {
+      "key": "banner_art_audubon",
+      "slot": "banner",
+      "source": "commons",
+      "focus": "center",
+      "file": "Audubon-Flamingo.jpg",
+      "title": "American Flamingo, The Birds of America",
+      "credit": "John James Audubon"
+    },
+    {
+      "key": "banner_art_cellarius",
+      "slot": "banner",
+      "source": "commons",
+      "focus": "center",
+      "file": "Cellarius Harmonia Macrocosmica - Planisphaerium Ptolemaicum.jpg",
+      "title": "Planisphaerium Ptolemaicum, Harmonia Macrocosmica",
+      "credit": "Andreas Cellarius"
+    },
+    {
+      "key": "banner_art_jakuchu",
+      "slot": "banner",
+      "source": "commons",
+      "focus": "center",
+      "file": "Itō Jakuchū - Black rooster and nandin (Colorful Realm of Living Beings).jpg",
+      "title": "Black Rooster and Nandin, Colorful Realm of Living Beings",
+      "credit": "Itō Jakuchū"
+    },
+    {
+      "key": "banner_art_yosemite",
+      "slot": "banner",
+      "source": "commons",
+      "focus": "center",
+      "file": "Albert Bierstadt Yosemite Valley 1868.jpg",
+      "title": "Yosemite Valley",
+      "credit": "Albert Bierstadt"
+    },
+    {
+      "key": "banner_art_kandinsky",
+      "slot": "banner",
+      "source": "commons",
+      "focus": "center",
+      "file": "Vassily Kandinsky, 1913 - Composition 7.jpg",
+      "title": "Composition VII",
+      "credit": "Wassily Kandinsky"
+    },
+    {
+      "key": "banner_space_saturn",
+      "slot": "banner",
+      "source": "nasa",
+      "focus": "center",
+      "nasa_id": "PIA11657"
+    },
+    {
+      "key": "banner_space_andromeda",
+      "slot": "banner",
+      "source": "nasa",
+      "focus": "center",
+      "nasa_id": "GSFC_20171208_Archive_e000833"
+    },
+    {
+      "key": "banner_space_mars",
+      "slot": "banner",
+      "source": "nasa",
+      "focus": "center",
+      "nasa_id": "PIA24937"
+    },
+    {
+      "key": "wallet_art_morris",
+      "slot": "wallet",
+      "source": "commons",
+      "focus": "center",
+      "file": "Morris Strawberry Thief 1883.jpg",
+      "title": "Strawberry Thief",
+      "credit": "William Morris"
+    },
+    {
+      "key": "wallet_art_cellarius",
+      "slot": "wallet",
+      "source": "commons",
+      "focus": "center",
+      "file": "Cellarius Harmonia Macrocosmica - Planisphaerium Ptolemaicum.jpg",
+      "title": "Planisphaerium Ptolemaicum",
+      "credit": "Andreas Cellarius"
     }
   ]
 }

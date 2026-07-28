@@ -164,12 +164,6 @@ def render_wallet_card(data: dict) -> bytes:
         fill=INK,
     )
     draw.text((TEXT_X, SUB_Y), "Wallet", font=_font(20, bold=True), fill=INK_FAINT)
-    draw.text(
-        (TEXT_X + draw.textlength("Wallet", font=_font(20, bold=True)) + 12, SUB_Y),
-        "· the same balance in every server",
-        font=_font(18),
-        fill=INK_MUTED,
-    )
 
     # ── The balance: the whole point of the card ──
     if coin:

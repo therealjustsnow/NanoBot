@@ -143,7 +143,7 @@ class Fishing(commands.Cog):
             "desc": "Cast a line every 60 seconds, collect fish across seven "
             "rarity tiers, and sell them for coins. Buy better rods to improve "
             "your odds, climb the earnings leaderboard, and complete the species "
-            "dex. Your rod, level, bag, and dex are the same in every server. "
+            "dex. "
             "Admins can turn fishing on or off here.",
             "args": [],
             "perms": "Admin subcommands require Manage Server",
@@ -648,7 +648,7 @@ class Fishing(commands.Cog):
     @fish.command(name="top", description="Top-earning anglers, here or everywhere.")
     @app_commands.describe(
         page="Page number (10 per page)",
-        scope="This server's members, or every server (progress is global)",
+        scope="This server's members, or everyone",
     )
     @app_commands.choices(scope=SCOPE_CHOICES)
     @commands.cooldown(1, 5, commands.BucketType.user)

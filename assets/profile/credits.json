@@ -1,5 +1,16 @@
 [
   {
+    "url": "https://upload.wikimedia.org/wikipedia/commons/9/9a/Audubon-Flamingo.jpg",
+    "licence": "Public domain",
+    "credit": "John James Audubon",
+    "title": "American Flamingo, The Birds of America",
+    "page": "https://commons.wikimedia.org/wiki/File:Audubon-Flamingo.jpg",
+    "source": "Wikimedia Commons",
+    "key": "banner_art_audubon",
+    "slot": "banner",
+    "file": "banner/banner_art_audubon.webp"
+  },
+  {
     "url": "https://upload.wikimedia.org/wikipedia/commons/2/21/Vincent_Willem_van_Gogh_-_Cafe_Terrace_at_Night_%28Yorck%29.jpg",
     "licence": "Public domain",
     "credit": "Vincent van Gogh",
@@ -9,6 +20,39 @@
     "key": "banner_art_cafe_terrace",
     "slot": "banner",
     "file": "banner/banner_art_cafe_terrace.webp"
+  },
+  {
+    "url": "https://upload.wikimedia.org/wikipedia/commons/e/ea/Cellarius_Harmonia_Macrocosmica_-_Planisphaerium_Ptolemaicum.jpg",
+    "licence": "Public domain",
+    "credit": "Andreas Cellarius",
+    "title": "Planisphaerium Ptolemaicum, Harmonia Macrocosmica",
+    "page": "https://commons.wikimedia.org/wiki/File:Cellarius_Harmonia_Macrocosmica_-_Planisphaerium_Ptolemaicum.jpg",
+    "source": "Wikimedia Commons",
+    "key": "banner_art_cellarius",
+    "slot": "banner",
+    "file": "banner/banner_art_cellarius.webp"
+  },
+  {
+    "url": "https://upload.wikimedia.org/wikipedia/commons/4/4b/Chaekgeori%2C_late_1800s%2C_Six-panel_folding_screen%2C_private_collection.png",
+    "licence": "Public domain",
+    "credit": "Korean, Joseon dynasty",
+    "title": "Chaekgeori folding screen",
+    "page": "https://commons.wikimedia.org/wiki/File:Chaekgeori,_late_1800s,_Six-panel_folding_screen,_private_collection.png",
+    "source": "Wikimedia Commons",
+    "key": "banner_art_chaekgeori",
+    "slot": "banner",
+    "file": "banner/banner_art_chaekgeori.webp"
+  },
+  {
+    "url": "https://upload.wikimedia.org/wikipedia/commons/6/64/Codex_Borgia_page_32.jpg",
+    "licence": "Public domain",
+    "credit": "Pre-Columbian Mesoamerican",
+    "title": "Codex Borgia, page 32",
+    "page": "https://commons.wikimedia.org/wiki/File:Codex_Borgia_page_32.jpg",
+    "source": "Wikimedia Commons",
+    "key": "banner_art_codex_borgia",
+    "slot": "banner",
+    "file": "banner/banner_art_codex_borgia.webp"
   },
   {
     "url": "https://upload.wikimedia.org/wikipedia/commons/thumb/0/0d/Great_Wave_off_Kanagawa2.jpg/3840px-Great_Wave_off_Kanagawa2.jpg",
@@ -22,6 +66,50 @@
     "file": "banner/banner_art_great_wave.webp"
   },
   {
+    "url": "https://upload.wikimedia.org/wikipedia/commons/9/90/Haeckel_Discomedusae_98.jpg",
+    "licence": "Public domain",
+    "credit": "Ernst Haeckel",
+    "title": "Discomedusae, Kunstformen der Natur",
+    "page": "https://commons.wikimedia.org/wiki/File:Haeckel_Discomedusae_98.jpg",
+    "source": "Wikimedia Commons",
+    "key": "banner_art_haeckel",
+    "slot": "banner",
+    "file": "banner/banner_art_haeckel.webp"
+  },
+  {
+    "url": "https://upload.wikimedia.org/wikipedia/commons/7/7f/Book_of_the_Dead_of_Hunefer_sheet_6.jpg",
+    "licence": "Public domain",
+    "credit": "Ancient Egyptian, 19th Dynasty",
+    "title": "Book of the Dead of Hunefer",
+    "page": "https://commons.wikimedia.org/wiki/File:Book_of_the_Dead_of_Hunefer_sheet_6.jpg",
+    "source": "Wikimedia Commons",
+    "key": "banner_art_hunefer",
+    "slot": "banner",
+    "file": "banner/banner_art_hunefer.webp"
+  },
+  {
+    "url": "https://upload.wikimedia.org/wikipedia/commons/7/7d/It%C5%8D_Jakuch%C5%AB_-_Black_rooster_and_nandin_%28Colorful_Realm_of_Living_Beings%29.jpg",
+    "licence": "Public domain",
+    "credit": "Itō Jakuchū",
+    "title": "Black Rooster and Nandin, Colorful Realm of Living Beings",
+    "page": "https://commons.wikimedia.org/wiki/File:It%C5%8D_Jakuch%C5%AB_-_Black_rooster_and_nandin_(Colorful_Realm_of_Living_Beings).jpg",
+    "source": "Wikimedia Commons",
+    "key": "banner_art_jakuchu",
+    "slot": "banner",
+    "file": "banner/banner_art_jakuchu.webp"
+  },
+  {
+    "url": "https://upload.wikimedia.org/wikipedia/commons/b/b4/Vassily_Kandinsky%2C_1913_-_Composition_7.jpg",
+    "licence": "Public domain",
+    "credit": "Wassily Kandinsky",
+    "title": "Composition VII",
+    "page": "https://commons.wikimedia.org/wiki/File:Vassily_Kandinsky,_1913_-_Composition_7.jpg",
+    "source": "Wikimedia Commons",
+    "key": "banner_art_kandinsky",
+    "slot": "banner",
+    "file": "banner/banner_art_kandinsky.webp"
+  },
+  {
     "url": "https://upload.wikimedia.org/wikipedia/commons/f/f3/Gustav_Klimt_016.jpg",
     "licence": "Public domain",
     "credit": "Gustav Klimt",
@@ -31,6 +119,28 @@
     "key": "banner_art_kiss",
     "slot": "banner",
     "file": "banner/banner_art_kiss.webp"
+  },
+  {
+    "url": "https://upload.wikimedia.org/wikipedia/commons/2/2a/Morris_Strawberry_Thief_1883.jpg",
+    "licence": "Public domain",
+    "credit": "William Morris",
+    "title": "Strawberry Thief",
+    "page": "https://commons.wikimedia.org/wiki/File:Morris_Strawberry_Thief_1883.jpg",
+    "source": "Wikimedia Commons",
+    "key": "banner_art_morris",
+    "slot": "banner",
+    "file": "banner/banner_art_morris.webp"
+  },
+  {
+    "url": "https://upload.wikimedia.org/wikipedia/commons/0/0e/Alfons_Mucha_-_La_Plume%2C_1896-97.jpg",
+    "licence": "Public domain",
+    "credit": "Alphonse Mucha",
+    "title": "La Plume",
+    "page": "https://commons.wikimedia.org/wiki/File:Alfons_Mucha_-_La_Plume,_1896-97.jpg",
+    "source": "Wikimedia Commons",
+    "key": "banner_art_mucha",
+    "slot": "banner",
+    "file": "banner/banner_art_mucha.webp"
   },
   {
     "url": "https://upload.wikimedia.org/wikipedia/commons/thumb/4/4a/Hovhannes_Aivazovsky_-_The_Ninth_Wave_-_Google_Art_Project.jpg/3840px-Hovhannes_Aivazovsky_-_The_Ninth_Wave_-_Google_Art_Project.jpg",
@@ -55,6 +165,28 @@
     "file": "banner/banner_art_red_fuji.webp"
   },
   {
+    "url": "https://upload.wikimedia.org/wikipedia/commons/0/08/Bizhan_Shahnameh_Met_1970.301.42_n02.jpg",
+    "licence": "Public domain",
+    "credit": "Persian, Safavid period",
+    "title": "Folio from the Shahnameh (Book of Kings)",
+    "page": "https://commons.wikimedia.org/wiki/File:Bizhan_Shahnameh_Met_1970.301.42_n02.jpg",
+    "source": "Wikimedia Commons",
+    "key": "banner_art_shahnameh",
+    "slot": "banner",
+    "file": "banner/banner_art_shahnameh.webp"
+  },
+  {
+    "url": "https://upload.wikimedia.org/wikipedia/commons/thumb/7/72/Hiroshige%2C_Sudden_shower_over_Shin-%C5%8Chashi_bridge_and_Atake%2C_1857.jpg/3840px-Hiroshige%2C_Sudden_shower_over_Shin-%C5%8Chashi_bridge_and_Atake%2C_1857.jpg",
+    "licence": "Public domain",
+    "credit": "Utagawa Hiroshige",
+    "title": "Sudden Shower over Shin-Ōhashi Bridge and Atake",
+    "page": "https://commons.wikimedia.org/wiki/File:Hiroshige,_Sudden_shower_over_Shin-%C5%8Chashi_bridge_and_Atake,_1857.jpg",
+    "source": "Wikimedia Commons",
+    "key": "banner_art_shower",
+    "slot": "banner",
+    "file": "banner/banner_art_shower.webp"
+  },
+  {
     "url": "https://upload.wikimedia.org/wikipedia/commons/thumb/e/ea/Van_Gogh_-_Starry_Night_-_Google_Art_Project.jpg/3840px-Van_Gogh_-_Starry_Night_-_Google_Art_Project.jpg",
     "licence": "Public domain",
     "credit": "Vincent van Gogh",
@@ -75,6 +207,17 @@
     "key": "banner_art_temeraire",
     "slot": "banner",
     "file": "banner/banner_art_temeraire.webp"
+  },
+  {
+    "url": "https://upload.wikimedia.org/wikipedia/commons/thumb/4/43/Wang_Ximeng_-_A_Thousand_Li_of_River_%28Bridge%29.jpg/3840px-Wang_Ximeng_-_A_Thousand_Li_of_River_%28Bridge%29.jpg",
+    "licence": "Public domain",
+    "credit": "Wang Ximeng",
+    "title": "A Thousand Li of Rivers and Mountains",
+    "page": "https://commons.wikimedia.org/wiki/File:Wang_Ximeng_-_A_Thousand_Li_of_River_(Bridge).jpg",
+    "source": "Wikimedia Commons",
+    "key": "banner_art_thousand_li",
+    "slot": "banner",
+    "file": "banner/banner_art_thousand_li.webp"
   },
   {
     "url": "https://upload.wikimedia.org/wikipedia/commons/b/b9/Caspar_David_Friedrich_-_Wanderer_above_the_sea_of_fog.jpg",
@@ -110,6 +253,28 @@
     "file": "banner/banner_art_wheatfield.webp"
   },
   {
+    "url": "https://upload.wikimedia.org/wikipedia/commons/d/d8/Albert_Bierstadt_Yosemite_Valley_1868.jpg",
+    "licence": "Public domain",
+    "credit": "Albert Bierstadt",
+    "title": "Yosemite Valley",
+    "page": "https://commons.wikimedia.org/wiki/File:Albert_Bierstadt_Yosemite_Valley_1868.jpg",
+    "source": "Wikimedia Commons",
+    "key": "banner_art_yosemite",
+    "slot": "banner",
+    "file": "banner/banner_art_yosemite.webp"
+  },
+  {
+    "url": "https://images-assets.nasa.gov/image/GSFC_20171208_Archive_e000833/GSFC_20171208_Archive_e000833~orig.jpg",
+    "licence": "Public domain (U.S. Government work)",
+    "credit": "GSFC",
+    "title": "Hubble's High-Definition Panoramic View of the Andromeda Galaxy",
+    "page": "https://images.nasa.gov/details/GSFC_20171208_Archive_e000833",
+    "source": "NASA",
+    "key": "banner_space_andromeda",
+    "slot": "banner",
+    "file": "banner/banner_space_andromeda.webp"
+  },
+  {
     "url": "https://images-assets.nasa.gov/image/carina_nebula/carina_nebula~large.jpg",
     "licence": "Public domain (U.S. Government work)",
     "credit": "NASA ESA CSA STScI",
@@ -143,6 +308,17 @@
     "file": "banner/banner_space_jupiter.webp"
   },
   {
+    "url": "https://images-assets.nasa.gov/image/PIA24937/PIA24937~large.jpg",
+    "licence": "Public domain (U.S. Government work)",
+    "credit": "JPL",
+    "title": "A Picture Postcard From Curiosity's Navcams",
+    "page": "https://images.nasa.gov/details/PIA24937",
+    "source": "NASA",
+    "key": "banner_space_mars",
+    "slot": "banner",
+    "file": "banner/banner_space_mars.webp"
+  },
+  {
     "url": "https://images-assets.nasa.gov/image/GSFC_20171208_Archive_e000842/GSFC_20171208_Archive_e000842~large.jpg",
     "licence": "Public domain (U.S. Government work)",
     "credit": "GSFC",
@@ -152,6 +328,28 @@
     "key": "banner_space_pillars",
     "slot": "banner",
     "file": "banner/banner_space_pillars.webp"
+  },
+  {
+    "url": "https://images-assets.nasa.gov/image/PIA11657/PIA11657~orig.jpg",
+    "licence": "Public domain (U.S. Government work)",
+    "credit": "JPL",
+    "title": "Across Resplendent Rings",
+    "page": "https://images.nasa.gov/details/PIA11657",
+    "source": "NASA",
+    "key": "banner_space_saturn",
+    "slot": "banner",
+    "file": "banner/banner_space_saturn.webp"
+  },
+  {
+    "url": "https://upload.wikimedia.org/wikipedia/commons/e/ea/Cellarius_Harmonia_Macrocosmica_-_Planisphaerium_Ptolemaicum.jpg",
+    "licence": "Public domain",
+    "credit": "Andreas Cellarius",
+    "title": "Planisphaerium Ptolemaicum",
+    "page": "https://commons.wikimedia.org/wiki/File:Cellarius_Harmonia_Macrocosmica_-_Planisphaerium_Ptolemaicum.jpg",
+    "source": "Wikimedia Commons",
+    "key": "wallet_art_cellarius",
+    "slot": "wallet",
+    "file": "wallet/wallet_art_cellarius.webp"
   },
   {
     "url": "https://upload.wikimedia.org/wikipedia/commons/thumb/0/0d/Great_Wave_off_Kanagawa2.jpg/3840px-Great_Wave_off_Kanagawa2.jpg",
@@ -174,6 +372,17 @@
     "key": "wallet_art_kiss",
     "slot": "wallet",
     "file": "wallet/wallet_art_kiss.webp"
+  },
+  {
+    "url": "https://upload.wikimedia.org/wikipedia/commons/2/2a/Morris_Strawberry_Thief_1883.jpg",
+    "licence": "Public domain",
+    "credit": "William Morris",
+    "title": "Strawberry Thief",
+    "page": "https://commons.wikimedia.org/wiki/File:Morris_Strawberry_Thief_1883.jpg",
+    "source": "Wikimedia Commons",
+    "key": "wallet_art_morris",
+    "slot": "wallet",
+    "file": "wallet/wallet_art_morris.webp"
   },
   {
     "url": "https://images-assets.nasa.gov/image/iss058e005282/iss058e005282~large.jpg",

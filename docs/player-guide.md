@@ -168,12 +168,18 @@ answer to "how do I get that one?".
 
 Most banners are drawn fresh by the bot — clouds, marble, mesh gradients, frost
 and molten metal, each in its own palette — so no two look like the same
-recolour. The **Gallery** banners are real artwork instead: *The Starry Night*,
-*The Great Wave off Kanagawa*, *The Kiss*, the Webb telescope's Carina Nebula,
-Apollo 8's *Earthrise*. All of it is public domain, and every artist is credited
-in `assets/profile/CREDITS.md`. Three of them can't be bought at any price —
-*The Ninth Wave* is for anglers (2,000 fish), *Pillars of Creation* needs global
-level 75, and *Earthrise* is awarded at prestige 4.
+recolour. The **Gallery** banners are real artwork instead — 36 of them, from all over:
+*The Starry Night*, *The Great Wave off Kanagawa*, a Persian Shahnameh folio, an
+Egyptian Book of the Dead, a Korean chaekgeori screen, a William Morris textile,
+Mucha, Kandinsky, Audubon's flamingo, a 1660 star chart, and photographs from
+Hubble, Webb, Cassini, Curiosity and Apollo 8. All of it is public domain, and
+every artist is credited in `assets/profile/CREDITS.md`.
+
+Ten of them can't be bought at any price, and each is tied to what you actually
+do: *The Ninth Wave* for anglers (2,000 fish), Haeckel's jellyfish plate for a
+complete dex, Audubon's flamingo for 300 hunts, Bierstadt's *Yosemite Valley*
+for 800 digs, a Song-dynasty scroll for 400 expeditions, and the deep-sky ones
+for global levels 60/75/90 and prestige 4/6.
 - **Playing** — Deep Current (250 fish), Fishing Master (1,000 fish), Casino
   Champion (1,000 games), Tycoon (3,000,000 coins), Grinder (500 shifts).
 - **Staff & events** — Developer, Contributor, Early Supporter, Beta Tester,

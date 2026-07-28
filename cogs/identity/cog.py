@@ -253,8 +253,7 @@ class Identity(commands.Cog):
             "usage": "profile [subcommand]",
             "desc": "Your whole account on one image: global level, this "
             "server's level, coins, fishing, casino, activities, achievements, "
-            "prestige, and the badges/banner you've equipped. Your account is "
-            "the same in every server — only the server level line changes.",
+            "prestige, and the badges/banner you've equipped.",
             "args": ["member — whose profile to show (defaults to you)"],
             "perms": "None",
             "example": "{prefix}profile\n{prefix}profile @Friend\n"
@@ -737,7 +736,7 @@ class Identity(commands.Cog):
         left = max(0, int(REP_COOLDOWN - (time.time() - social["last_rep"])))
         lines = [f"You have **{social['rep']:,}** rep."]
         if rank:
-            lines.append(f"That's **#{rank[0]:,}** across every server.")
+            lines.append(f"That's **#{rank[0]:,}** overall.")
         lines.append(
             "You can give rep **now**."
             if not left

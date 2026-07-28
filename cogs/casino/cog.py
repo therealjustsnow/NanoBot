@@ -913,7 +913,7 @@ class Casino(commands.Cog):
     @casino.command(name="top", description="Top net winners, here or everywhere.")
     @app_commands.describe(
         page="Page number (10 per page)",
-        scope="This server's members, or every server (stats are global)",
+        scope="This server's members, or everyone",
     )
     @app_commands.choices(scope=SCOPE_CHOICES)
     @commands.cooldown(1, 5, commands.BucketType.user)

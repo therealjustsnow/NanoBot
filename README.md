@@ -692,7 +692,7 @@ Per-server message XP and levels (Mee6-style curve). **Off by default** -- enabl
 | `/coin top [page] [scope]` | Richest members — this server's members, or every server |
 | `/coin gamble <amount>` | Double-or-nothing bet (~45% win) |
 | `/shop` | The three aisles: profile cosmetics, wallet cosmetics, and this server's rewards |
-| `/shop profile` · `/shop wallet` | The **cosmetic shop** — banners, borders, nameplates, badges and coin styles for coins (bot-wide prices, since a cosmetic is worn on a global account). Includes the **Gallery**: real public-domain artwork (van Gogh, Hokusai, Klimt, Hubble/Webb/Apollo imagery), credited in `assets/profile/CREDITS.md` |
+| `/shop profile` · `/shop wallet` | The **cosmetic shop** — banners, borders, nameplates, badges and coin styles for coins (bot-wide prices, since a cosmetic is worn on a global account). Includes the **Gallery**: 36 pieces of real public-domain artwork spanning ukiyo-e, Persian and Mughal manuscript painting, a Mesoamerican codex, Art Nouveau, William Morris textiles, European oils and Hubble/Webb/Cassini/Apollo imagery — credited in `assets/profile/CREDITS.md` |
 | `/shop unlock <name>` | Buy a cosmetic |
 | `/shop server` · `/shop buy <item>` | Browse and redeem the rewards this server's mods set up |
 

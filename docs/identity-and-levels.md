@@ -203,10 +203,19 @@ neon ledger.
 
 ### Bundled artwork (the Gallery tier)
 
-Generated art is the baseline; seventeen cosmetics are real images instead —
-`banner_art_*` (paintings), `banner_space_*` (telescope and mission imagery) and
-`wallet_art_*`. They live in `assets/profile/<slot>/<key>.webp` and win over
-generation through the same asset-override path that has always existed.
+Generated art is the baseline; **36** cosmetics are real images instead —
+`banner_art_*` (paintings, prints, manuscripts and textiles), `banner_space_*`
+(telescope and mission imagery) and the `wallet_*` equivalents. They live in
+`assets/profile/<slot>/<key>.webp` and win over generation through the same
+asset-override path that has always existed.
+
+The set is chosen for breadth rather than one canon: ukiyo-e (Hokusai,
+Hiroshige), a Song-dynasty scroll, a Persian Shahnameh folio, an Egyptian
+papyrus, a Mesoamerican codex, a Korean chaekgeori screen, Itō Jakuchū, Art
+Nouveau (Mucha), a William Morris textile, Haeckel's and Audubon's scientific
+plates, a 17th-century celestial atlas, European oils (van Gogh, Klimt, Turner,
+Monet, Friedrich, Aivazovsky, Bierstadt), Kandinsky's abstraction, and imagery
+from Hubble, Webb, Cassini, Juno, Curiosity and Apollo.
 
 Everything bundled is **public domain**: paintings whose copyright expired
 (via Wikimedia Commons) and NASA imagery, which as a U.S. federal work is not
@@ -224,9 +233,13 @@ decoration: the palette drives the card's accent colour (chip bars, the rep
 pill), and if the file is ever missing the cosmetic degrades to generated art in
 its own colours rather than breaking.
 
-Three of them can only be earned — *The Ninth Wave* for 2,000 fish caught,
-*Pillars of Creation* at global level 75, *Earthrise* at prestige 4 — so the
-best-looking things on the card are not purely a coin question.
+Ten can only be earned, each hung off whichever activity it suits — *The Ninth
+Wave* for 2,000 fish caught, Haeckel's *Discomedusae* for a complete dex,
+Audubon's flamingo for 300 hunts, Bierstadt's *Yosemite Valley* for 800 digs,
+Wang Ximeng's scroll for 400 expeditions, Cellarius at global level 60,
+*Pillars of Creation* at 75, Andromeda at 90, Cassini's Saturn at prestige 6,
+*Earthrise* at prestige 4 — so the best-looking things on the card are not
+purely a coin question.
 
 A real painting needs treatment a generated gradient doesn't, and the renderer
 applies it on the asset path only: **cover-crop** to the card's aspect (a plain

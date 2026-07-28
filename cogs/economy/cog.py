@@ -285,9 +285,8 @@ class Economy(commands.Cog):
             "sub": "💰 Wallet & Shop",
             "short": "Check a coin balance",
             "usage": "balance [member]",
-            "desc": "Shows the coin balance, global wealth rank, and contribution "
-            "rank for you or another member. Balances are global — the same "
-            "wallet in every server.",
+            "desc": "Shows the coin balance, wealth rank, contribution rank "
+            "and daily streak for you or another member, as a card.",
             "args": ["member — whose balance to show (defaults to you)"],
             "perms": "None",
             "example": "{prefix}balance\n{prefix}bal @Friend",
@@ -360,7 +359,7 @@ class Economy(commands.Cog):
             "contribution_title": _rank_title(contrib[0]) if contrib else "",
             "streak": streak,
             "daily_line": daily_line,
-            "footer": "One wallet in every server · /shop wallet to dress it up",
+            "footer": "/shop wallet",
             "wallet": cosmetics.get((loadout.get("wallet") or [""])[0]),
             "coin": cosmetics.get((loadout.get("coin") or [""])[0]),
         }
@@ -545,7 +544,7 @@ class Economy(commands.Cog):
     @coin.command(name="top", description="Show the richest members.")
     @app_commands.describe(
         page="Page number (10 per page)",
-        scope="This server's members, or every server (wallets are global)",
+        scope="This server's members, or everyone",
     )
     @app_commands.choices(scope=SCOPE_CHOICES)
     @commands.cooldown(1, 5, commands.BucketType.user)
@@ -873,7 +872,7 @@ class Economy(commands.Cog):
     )
     @app_commands.describe(
         page="Page number (10 per page)",
-        scope="This server's members, or every server",
+        scope="This server's members, or everyone",
     )
     @app_commands.choices(scope=SCOPE_CHOICES)
     @commands.cooldown(1, 5, commands.BucketType.user)
@@ -1217,10 +1216,10 @@ class Economy(commands.Cog):
             "sub": "💰 Wallet & Shop",
             "short": "Redeem coins for rewards",
             "usage": "shop [subcommand]",
-            "desc": "Three aisles. `profile` and `wallet` sell card cosmetics for "
-            "coins (bot-wide prices, yours in every server); `server` is the "
-            "rewards your mods set up here — Discord roles or custom perks. "
-            "Admins manage the server aisle with Manage Server.",
+            "desc": "Three aisles. `profile` and `wallet` sell card cosmetics "
+            "for coins; `server` is the rewards your mods set up here — Discord "
+            "roles or custom perks. Admins manage the server aisle with "
+            "Manage Server.",
             "args": [],
             "perms": "Admin subcommands require Manage Server",
             "example": "{prefix}shop\n{prefix}shop profile\n"
@@ -1245,9 +1244,7 @@ class Economy(commands.Cog):
         coins = await db.get_balance(ctx.author.id)
         embed = h.embed(
             "🛍️ Shop",
-            f"You have {self._money(cfg, coins)}.\n"
-            "Pick an aisle — cosmetics are yours on every server, the server "
-            "aisle is this one's own rewards.",
+            f"You have {self._money(cfg, coins)}.\nPick an aisle.",
             h.BLUE,
         )
         for category in cosmetics.CATEGORIES:
@@ -1340,8 +1337,8 @@ class Economy(commands.Cog):
 
         embed = h.embed(
             f"{'🎨' if category == 'profile' else '💳'} {category.title()} Cosmetics",
-            f"You have {self._money(cfg, coins)}. Buy one with "
-            f"`/shop unlock <name>` — it's yours on every server.",
+            f"You have {self._money(cfg, coins)}. "
+            f"Buy one with `/shop unlock <name>`.",
             h.BLUE,
         )
         for d in stock[(page - 1) * per : page * per]:
@@ -1360,10 +1357,7 @@ class Economy(commands.Cog):
                 value=f"{d.description or '—'}\n*{meta}*",
                 inline=False,
             )
-        embed.set_footer(
-            text=f"Page {page}/{pages} · prices are the same in every server · "
-            "wear it with /profile equip"
-        )
+        embed.set_footer(text=f"Page {page}/{pages} · wear it with /profile equip")
         await ctx.reply(embed=embed)
 
     # ── /shop unlock ──────────────────────────────────────────────────────────────
