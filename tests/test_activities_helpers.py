@@ -9,10 +9,17 @@ import pytest
 from cogs.activities import (
     ACTIVITY_COOLDOWN_BOUNDS,
     ACTIVITY_DEFAULT_COOLDOWNS,
+    ACTIVITY_MAX_CHARGES,
+    ACTIVITY_NAMES,
     COOLDOWN_MIN,
     CAREER_LADDER,
+    ENCOUNTERS,
+    ENCOUNTER_CHANCE,
+    ENCOUNTER_OUTCOMES,
     EXPLORE_OUTCOMES,
+    HUNT_BAG_ODDS,
     HUNT_ODDS,
+    MINE_VEIN_ODDS,
     ORE_ODDS,
     ORES,
     PICKAXES,
@@ -20,28 +27,45 @@ from cogs.activities import (
     ROB_LUCK_BONUS,
     ROB_STEAL_CAP,
     ROB_SUCCESS_CAP,
+    STREAK_BONUS_CAP,
+    STREAK_BONUS_PER_DAY,
     WORK_PAY_MAX,
     WORK_PAY_MIN,
+    activity_coins_per_run,
+    adventure_coins_per_hour,
+    apply_streak,
     career_info,
+    charge_state,
     effective_cooldown,
+    encounters_for,
+    find_option,
     hunt_injury_fine,
+    max_charges,
     mine_odds,
+    next_adventure_streak,
     next_career,
     next_pickaxe,
+    outcome_coins,
     pick_explore_outcome,
     pick_hunt_catch,
     pick_ore,
     pick_work_scene,
     pickaxe_info,
+    resolve_encounter,
     rob_steal_amount,
     rob_success,
     roll_cave_in,
     roll_coin_amount,
+    roll_encounter,
+    roll_hunt_bag,
     roll_hunt_injury,
     roll_hunt_padlock,
     roll_mine_treasure_key,
+    roll_vein,
     roll_work_pay,
+    streak_multiplier,
 )
+from utils import items
 
 
 # ── Career ladder / /work ───────────────────────────────────────────────────────
@@ -202,10 +226,12 @@ def test_treasure_key_supply_tracks_chest_supply():
     """Keys must not out-drop chests by more than a small margin.
 
     A treasure_key does exactly one thing: open a treasure_chest. /explore is
-    the only chest faucet, but keys drop from /mine too — on a 30m cooldown
-    against explore's 3h, so mining's rate is multiplied by 6x the claims.
+    the only chest faucet, but keys drop from /mine too — on a far shorter
+    interval, so mining's rate is multiplied by several times the claims.
     Comparing the raw percentages hides that; this compares expected drops per
-    day at full claim rate, which is what a player actually banks.
+    day at full claim rate, which is what a player actually banks — and it is
+    computed from the live intervals, so re-pacing either activity is checked
+    here rather than quietly shifting the ratio.
 
     Some surplus is wanted (a chest with no key is worse than a spare key), but
     a large one means keys pile up unspendable — the state this ratio was
@@ -297,3 +323,228 @@ def test_effective_cooldown_never_degrades_to_no_cooldown():
     assert effective_cooldown("not_an_activity", None) > 0
     assert effective_cooldown("work", 0) == COOLDOWN_MIN
     assert effective_cooldown("work", -99) == COOLDOWN_MIN
+
+
+# ── Charges (the read-side mirror of the token bucket) ───────────────────────
+def test_every_activity_declares_a_charge_cap():
+    for activity in ACTIVITY_NAMES:
+        assert ACTIVITY_MAX_CHARGES[activity] >= 1
+        assert max_charges(activity) == ACTIVITY_MAX_CHARGES[activity]
+
+
+def test_rob_deliberately_banks_nothing():
+    """A stored-up run of robberies is a different experience for the person on
+    the receiving end. Its cooldown is a protection, not a pacer."""
+    assert ACTIVITY_MAX_CHARGES["rob"] == 1
+
+
+def test_an_unregistered_activity_banks_nothing():
+    """The safe answer: behave exactly as it did before charges existed."""
+    assert max_charges("not_an_activity") == 1
+
+
+def test_never_run_reads_as_a_full_bucket():
+    """activities_stats is one row per user, so an activity a member has never
+    touched still holds a 0 — that's a full bucket, not an empty one."""
+    state = charge_state(0, 100_000, 600, 3)
+    assert state == {"ready": 3, "max": 3, "next_in": 0}
+
+
+def test_charges_tick_back_one_interval_at_a_time():
+    now = 100_000
+    # Bucket drained (last == now), so nothing is ready.
+    assert charge_state(now, now, 600, 3)["ready"] == 0
+    assert charge_state(now, now, 600, 3)["next_in"] == 600
+    assert charge_state(now, now + 599, 600, 3)["ready"] == 0
+    assert charge_state(now, now + 600, 600, 3)["ready"] == 1
+    assert charge_state(now, now + 1199, 600, 3)["ready"] == 1
+    assert charge_state(now, now + 1200, 600, 3)["ready"] == 2
+
+
+def test_next_in_counts_down_to_the_next_charge_not_the_next_empty():
+    """Partway through refilling, the number a member wants is 'when does the
+    NEXT one land', not 'when is the bucket full again'."""
+    state = charge_state(100_000, 100_000 + 900, 600, 3)
+    assert state["ready"] == 1
+    assert state["next_in"] == 300
+
+
+def test_a_full_bucket_reports_no_wait():
+    assert charge_state(100_000, 100_000 + 99_999, 600, 3) == {
+        "ready": 3,
+        "max": 3,
+        "next_in": 0,
+    }
+
+
+def test_charge_state_matches_the_claim_it_mirrors():
+    """The read-side and the write-side are separate implementations (one is
+    Python, one is SQL), so they are asserted against each other: whatever
+    charge_state says is ready is exactly what try_claim_activity will allow."""
+    now = 100_000.0
+    cooldown, cap = 600, 4
+    last = 0.0
+    for _ in range(12):
+        state = charge_state(last, now, cooldown, cap)
+        floor = max(last, now - cap * cooldown) if last else now - cap * cooldown
+        allowed = now - floor >= cooldown
+        assert (state["ready"] > 0) is allowed
+        if not allowed:
+            break
+        last = floor + cooldown
+
+
+# ── Daily streak ─────────────────────────────────────────────────────────────
+def test_streak_continues_from_yesterday_and_resets_otherwise():
+    assert next_adventure_streak(19_999, 20_000, 4) == 5
+    assert next_adventure_streak(19_990, 20_000, 4) == 1  # a gap starts over
+    assert next_adventure_streak(0, 20_000, 0) == 1  # first ever
+
+
+def test_streak_multiplier_climbs_then_holds():
+    assert streak_multiplier(1) == 1.0  # day one is not a bonus
+    assert streak_multiplier(2) == pytest.approx(1 + STREAK_BONUS_PER_DAY)
+    assert streak_multiplier(999) == pytest.approx(1 + STREAK_BONUS_CAP)
+    days = [streak_multiplier(d) for d in range(1, 20)]
+    assert days == sorted(days)
+
+
+def test_streak_never_inflates_a_fine():
+    """A fine is a negative amount, and multiplying it up would punish the
+    member for turning up seven days running."""
+    assert apply_streak(-200, 7) == -200
+    assert apply_streak(0, 7) == 0
+    assert apply_streak(100, 7) > 100
+    assert apply_streak(100, 1) == 100
+
+
+# ── Veins and bags ───────────────────────────────────────────────────────────
+def test_vein_and_bag_tables_are_well_formed():
+    for table in (MINE_VEIN_ODDS, HUNT_BAG_ODDS):
+        assert math.isclose(sum(p for _n, p in table), 1.0)
+        sizes = [n for n, _p in table]
+        assert sizes == sorted(sizes)
+        assert min(sizes) >= 1
+
+
+def test_vein_and_bag_walk_their_tables():
+    assert roll_vein(0.0) == MINE_VEIN_ODDS[0][0]
+    assert roll_vein(0.999999) == MINE_VEIN_ODDS[-1][0]
+    assert roll_hunt_bag(0.0) == HUNT_BAG_ODDS[0][0]
+    assert roll_hunt_bag(0.999999) == HUNT_BAG_ODDS[-1][0]
+
+
+# ── Encounters ───────────────────────────────────────────────────────────────
+def test_every_encounter_is_well_formed():
+    for key, encounter in ENCOUNTERS.items():
+        assert encounter["activity"] in ACTIVITY_NAMES, key
+        assert encounter["title"] and encounter["prompt"] and encounter["emoji"], key
+        assert len(encounter["options"]) >= 2, key
+        seen = set()
+        for option in encounter["options"]:
+            assert option["key"] not in seen, key
+            seen.add(option["key"])
+            assert option["label"], key
+            assert math.isclose(sum(p for _o, p in option["outcomes"]), 1.0), key
+            for outcome_key, _p in option["outcomes"]:
+                assert outcome_key in ENCOUNTER_OUTCOMES, outcome_key
+
+
+def test_every_encounter_outcome_is_payable():
+    """An outcome names a coin range and/or a catalogue item, and nothing else
+    — the cog knows how to hand over exactly those two things."""
+    for key, outcome in ENCOUNTER_OUTCOMES.items():
+        assert outcome.get("text"), key
+        assert set(outcome) <= {"text", "coins", "item"}, key
+        if "coins" in outcome:
+            lo, hi = outcome["coins"]
+            assert lo <= hi, key
+        if "item" in outcome:
+            item_key, qty = outcome["item"]
+            assert items.find(item_key) is not None, key
+            assert qty >= 1, key
+
+
+def test_rob_has_no_encounters():
+    """It is already a coin flip with a decision in front of it."""
+    assert encounters_for("rob") == []
+
+
+def test_every_button_activity_has_something_to_encounter():
+    from cogs.activities.views import BUTTON_ACTIVITIES
+
+    for activity in BUTTON_ACTIVITIES:
+        assert encounters_for(activity), activity
+
+
+def test_encounter_fires_on_the_chance_boundary():
+    assert roll_encounter("work", ENCOUNTER_CHANCE - 0.001, 0.0) == "work_overtime"
+    assert roll_encounter("work", ENCOUNTER_CHANCE + 0.001, 0.0) is None
+    assert roll_encounter("rob", 0.0, 0.0) is None  # nothing registered
+
+
+def test_resolve_encounter_walks_the_option_table():
+    assert (
+        resolve_encounter("hunt_stag", "shoot", 0.0) is ENCOUNTER_OUTCOMES["stag_taken"]
+    )
+    assert (
+        resolve_encounter("hunt_stag", "shoot", 0.999999)
+        is ENCOUNTER_OUTCOMES["stag_lost"]
+    )
+    # A safe option that always pays lands on its single outcome either way.
+    for roll in (0.0, 0.5, 0.999999):
+        assert (
+            resolve_encounter("work_overtime", "leave", roll)
+            is ENCOUNTER_OUTCOMES["overtime_declined"]
+        )
+
+
+def test_resolve_encounter_shrugs_at_a_stale_press():
+    """The shape a button press takes after the registry changed underneath a
+    live message — never an exception."""
+    assert resolve_encounter("no_such_encounter", "stay", 0.5) is None
+    assert resolve_encounter("work_overtime", "no_such_option", 0.5) is None
+    assert find_option("work_overtime", "nope") is None
+
+
+def test_outcome_coins_can_charge_as_well_as_pay():
+    assert outcome_coins(ENCOUNTER_OUTCOMES["trader_sand"], 0.5) == -250
+    assert outcome_coins(ENCOUNTER_OUTCOMES["stag_lost"], 0.5) == 0
+    paid = outcome_coins(ENCOUNTER_OUTCOMES["overtime_paid"], 0.5)
+    lo, hi = ENCOUNTER_OUTCOMES["overtime_paid"]["coins"]
+    assert lo <= paid <= hi
+
+
+def test_the_greedy_option_is_a_real_gamble_not_a_free_win():
+    """Every encounter has to be a decision. If the risky option beat the safe
+    one on expectation *and* had no downside, there'd be nothing to choose."""
+    for key, encounter in ENCOUNTERS.items():
+        spreads = []
+        for option in encounter["options"]:
+            values = [
+                sum(ENCOUNTER_OUTCOMES[o].get("coins", (0, 0))) / 2
+                + (150 if "item" in ENCOUNTER_OUTCOMES[o] else 0)
+                for o, _p in option["outcomes"]
+            ]
+            spreads.append(max(values) - min(values))
+        assert max(spreads) > 0, f"{key} has no risky option"
+
+
+# ── The balance model ────────────────────────────────────────────────────────
+def test_rob_mints_nothing():
+    """It moves coins between two wallets and burns a fine. Counting it as
+    income would describe a transfer as a faucet."""
+    assert activity_coins_per_run("rob") == 0
+
+
+def test_the_loop_is_worth_roughly_what_the_docstring_claims():
+    """constants.py states ~1,200/h; a change that moves it a long way from
+    there needs the note updated, not just the number."""
+    assert 1000 < adventure_coins_per_hour() < 1500
+
+
+def test_luck_only_helps_the_activity_that_has_it():
+    """A pickaxe shifts ore odds and nothing else — /work does not pay more for
+    owning one."""
+    assert activity_coins_per_run("mine", 0.6) > activity_coins_per_run("mine", 0.0)
+    assert activity_coins_per_run("work", 0.6) == activity_coins_per_run("work", 0.0)

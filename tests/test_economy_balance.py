@@ -93,23 +93,104 @@ def test_the_shop_yardstick_matches_the_balance_model():
     assert seconds_to_afford(1) >= 1  # never rounds a real price down to "free"
 
 
-def test_fishing_is_the_right_denominator_for_the_yardstick():
-    """The yardstick quotes fishing time, and only fishing, because every other
-    faucet is an order of magnitude smaller — mixing them in would move the
-    estimate by less than the rounding while making it much harder to explain."""
+def adventure_coins_per_hour() -> float:
+    """The adventure loop's ceiling, recomputed from the raw tables.
+
+    Deliberately a second implementation of cogs.activities.helpers
+    .adventure_coins_per_hour — the production one is what /adventure and the
+    docs are written against, and asserting the two agree is what stops a tweak
+    to an odds table moving the economy without anyone noticing.
+    """
     from cogs.activities.constants import (
-        ACTIVITY_DEFAULT_COOLDOWNS,
+        ACTIVITY_DEFAULT_COOLDOWNS as CD,
+        EXPLORE_COINS_BIG,
+        EXPLORE_COINS_SMALL,
+        EXPLORE_OUTCOMES,
+        HUNT_BAG_ODDS,
+        HUNT_CATCHES,
+        HUNT_INJURY_CHANCE,
+        HUNT_INJURY_FINE_MAX,
+        HUNT_ODDS,
+        MINE_CAVE_IN_CHANCE,
+        MINE_VEIN_ODDS,
+        ORES,
+        ORE_ODDS,
         WORK_PAY_MAX,
         WORK_PAY_MIN,
     )
+
+    work = (WORK_PAY_MIN + WORK_PAY_MAX) / 2
+    ore = sum(p * ORES[k]["value"] for k, p in ORE_ODDS)
+    vein = sum(p * n for n, p in MINE_VEIN_ODDS)
+    mine = (1 - MINE_CAVE_IN_CHANCE) * vein * ore
+    catch = sum(p * HUNT_CATCHES[k]["value"] for k, p in HUNT_ODDS)
+    bag = sum(p * n for n, p in HUNT_BAG_ODDS)
+    hunt = bag * catch - HUNT_INJURY_CHANCE * (HUNT_INJURY_FINE_MAX / 2)
+    odds = dict(EXPLORE_OUTCOMES)
+    explore = odds["coins_small"] * (sum(EXPLORE_COINS_SMALL) / 2) + odds[
+        "coins_big"
+    ] * (sum(EXPLORE_COINS_BIG) / 2)
+
+    return sum(
+        run * 3600 / CD[activity]
+        for activity, run in (
+            ("work", work),
+            ("mine", mine),
+            ("hunt", hunt),
+            ("explore", explore),
+        )
+    )
+
+
+def test_the_adventure_loop_agrees_with_its_own_balance_model():
+    """cogs/activities publishes what its tables are worth; this recomputes it."""
+    from cogs.activities.helpers import adventure_coins_per_hour as prod
+
+    assert prod(0.0) == pytest.approx(adventure_coins_per_hour())
+
+
+def test_adventure_is_a_real_second_route_to_the_shop():
+    """The rebalance's actual claim, in one number.
+
+    Before it, the whole loop paid ~220 coins/hour against fishing's ~5,100 —
+    a twentieth — which is why a member who preferred adventuring to fishing
+    could never afford anything in the shop. Multiplying the payouts would have
+    made an activity better per *action* than a cast; the fix was to hand the
+    loop more actions (shorter intervals, banked charges, veins and bags), and
+    this is the bound on how far that went.
+    """
+    from cogs.economy.helpers import coins_per_hour
+
+    assert adventure_coins_per_hour() > 4 * 220  # ~5x the loop it replaced
+
+
+def test_fishing_is_still_the_right_denominator_for_the_yardstick():
+    """The yardstick quotes fishing time, and only fishing.
+
+    Adventure is a quarter of it now rather than a twentieth, which is the
+    point — but fishing is still the fastest way to earn by a clear margin, so
+    "how long would you have to fish for this" remains both the honest floor and
+    the easy one to explain. If this ever inverts, /shop's estimate is quoting
+    the wrong faucet and cogs/economy/helpers.py needs revisiting, not this
+    assertion relaxing.
+    """
     from cogs.economy.constants import REWARD_DEFAULTS
     from cogs.economy.helpers import coins_per_hour
 
-    work_hourly = (
-        (WORK_PAY_MIN + WORK_PAY_MAX) / 2 * (3600 / ACTIVITY_DEFAULT_COOLDOWNS["work"])
-    )
     daily_hourly = REWARD_DEFAULTS["daily"] / 24
-    assert coins_per_hour(0.0) > 20 * (work_hourly + daily_hourly)
+    assert coins_per_hour(0.0) > 3 * (adventure_coins_per_hour() + daily_hourly)
+
+
+def test_no_single_activity_out_earns_a_cast():
+    """Per action the loop was always generous — a shift paid 100 against a
+    cast's 28. Keeping the *rate* fix from turning into a payout fix is what
+    stops an angler being the mug: an activity's run may beat a cast, but not
+    by so much that casting looks foolish."""
+    from cogs.activities.constants import ACTIVITY_MAX_CHARGES
+    from cogs.activities.helpers import activity_coins_per_run
+
+    for activity in ACTIVITY_MAX_CHARGES:
+        assert activity_coins_per_run(activity) < 10 * coins_per_cast(0.0), activity
 
 
 # ── The faucet itself ────────────────────────────────────────────────────────

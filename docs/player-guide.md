@@ -304,24 +304,35 @@ Buying bait doesn't arm it — **use `/inventory use <bait>`** before casting.
 
 ## 💼 Jobs and adventures
 
-`/adventure` on its own is your dashboard, and the place to start: it opens with
-how many activities are ready right now, then your two progression tracks (your
-work career title and how many shifts to the next one, plus your pickaxe tier),
-then every activity — what it's for, its cooldown, whether you're ready, and how
-many times you've done it.
+`/adventure` on its own is your dashboard, and the place to start. It opens
+with how many runs you have banked right now, then your daily streak, then your
+two progression tracks (your work career title and how many shifts to the next
+one, plus your pickaxe tier), then every activity — what it's for, how fast it
+comes back, how many you've got waiting, and how many times you've done it.
+
+**And it has buttons.** Work, dig, hunt and explore each get one, so you can do
+everything that's ready without typing another command. There's a 🔄 Refresh
+button too, since charges tick back up while the card is sitting there. `/rob`
+doesn't get a button — it needs you to pick a target.
 
 On a phone, tap `/adventure dashboard` — Discord can't run a command group by
 itself, so that's the same card under a name slash can reach.
 
-| Command | Cooldown | Risk | Reward |
-|---|---|---|---|
-| `/work` | 1 hour | none | 60–140 coins + a 10-step career ladder |
-| `/mine` | 30 min | 8% cave-in (nothing) | Ore to sell, rare bonus treasure key |
-| `/adventure hunt` | 45 min | 12% injury fine | Pelts, meat, rare 🏆 Golden Antler, rare padlock |
-| `/adventure explore` | 3 hours | wasted trip | Nothing → coins → keys/chests/charms → a big find |
-| `/rob <member>` | 4 hours | 200 coin fine | 10–20% of their wallet (capped 1,000) |
+| Command | Comes back | Banks | Risk | Reward |
+|---|---|---|---|---|
+| `/work` | 20 min | 3 | none | 100–200 coins + a 10-step career ladder |
+| `/mine` | 12 min | 4 | 8% cave-in (nothing) | A vein of 1–4 ore, rare bonus treasure key |
+| `/adventure hunt` | 15 min | 3 | 12% injury fine | A bag of 1–3 pelts/meat, rare 🏆 Golden Antler, rare padlock |
+| `/adventure explore` | 45 min | 2 | wasted trip | Nothing → coins → keys/chests/charms → a big find |
+| `/rob <member>` | 2 hours | 1 | 200 coin fine | 10–20% of their wallet (capped 1,000) |
 
 *(These lengths are the same in every server.)*
+
+**You don't have to be there the moment it's ready.** Everything except `/rob`
+banks up: `/mine` comes back every 12 minutes and holds up to 4, so an hour
+away means four digs waiting, not three you missed. Once the bucket is full it
+stops filling, so there's no point saving for a week — but there's also no
+reason to set an alarm for a 12-minute cooldown, which is the whole idea.
 
 **One cooldown, everywhere.** These aren't per server. Doing `/work` in one
 server puts it on cooldown in every server you share with the bot, so there's
@@ -331,11 +342,29 @@ own server, but nobody except the bot's owner can change how *long* a cooldown
 lasts: since the cooldown follows you between servers, one server shortening it
 would speed the activity up for its members everywhere.
 
+### 🔥 Your daily streak
+
+The first activity you run each day starts (or continues) a streak, and a
+streak adds **+5% to every coin reward, up to +25%** on day 6 and after. Miss a
+day and it starts over at one. Any of the five counts — it's asking whether you
+turned up, not which button you pressed. Your dashboard shows what it's
+currently worth.
+
+### 🎲 Encounters
+
+Every so often a run turns into a decision instead of a result: a manager
+asking you to stay late, a seam running deeper than the props go, a stag on the
+treeline, a hooded trader with a sealed box. You get two buttons — one that
+always pays something modest, one that might pay a lot more and might not pay
+at all. Take your time; the buttons stay live for a couple of minutes. Walk
+away and you simply don't get the bonus.
+
 **`/work`** is the safe floor. Shifts add up to promotions (🍵 Intern all the
 way to 🏆 Legend of the Office), and each promotion pays a bit more.
 
-**`/mine`** yields 🪨 Stone → ⚫ Coal → ⚙️ Iron → 🟡 Gold → 💎 Diamond. Better
-pickaxes shift the odds toward the good stuff:
+**`/mine`** yields 🪨 Stone → ⚫ Coal → ⚙️ Iron → 🟡 Gold → 💎 Diamond. Each ore
+in a vein is rolled separately, so a fat seam can turn up a diamond next to the
+gravel. Better pickaxes shift the odds toward the good stuff:
 
 | Tier | Pickaxe | Price |
 |---|---|---|
@@ -584,8 +613,13 @@ Your personal rank on `/balance`, `/fish stats` and `/casino stats` is your
 
 ## 💡 Tips
 
-- **Set a rhythm.** `/daily` once a day, `/work` when you're around, cast a few
-  lines between things. `/adventure` tells you what's ready.
+- **Open `/adventure` and clear the board.** Activities bank up while you're
+  away, so one visit is usually several taps — and the buttons mean you never
+  have to type the commands.
+- **Run something every day.** Even one activity keeps your streak alive, and
+  the streak is worth up to +25% on every coin reward.
+- **Set a rhythm.** `/daily` once a day, `/adventure` when you're around, cast
+  a few lines between things.
 - **Arm your bait.** Buying it isn't enough — `/inventory use <bait>` first,
   and it only spends charges when you actually cast.
 - **Upgrade the rod before you hoard.** Rod luck compounds with every future
@@ -596,7 +630,7 @@ Your personal rank on `/balance`, `/fish stats` and `/casino stats` is your
 - **The house wins on average.** The casino is entertainment, not income; the
   streak bonus is the only edge you control.
 - **Don't rob broke people.** Minimum balances are enforced, and a padlocked
-  target just wastes your 4-hour cooldown.
+  target just wastes your 2-hour cooldown.
 - **Open `/profile` now and then.** Cosmetics you've earned only unlock when
   you look at your own card.
 - **Check `/progress weekly` on Mondays.** The objectives are picked for you

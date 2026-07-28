@@ -54,7 +54,11 @@ async def test_owner_sets_and_clears_a_cooldown(bot):
 
     await dpytest.message("!cooldown mine default", member=author)
     assert await db.get_activity_cooldowns() == {}
-    assert "30m" in _reply().description  # back to MINE_COOLDOWN_DEFAULT
+    # Back to MINE_COOLDOWN_DEFAULT — read from the constant, not spelled out,
+    # so re-pacing an activity doesn't break a test about the *setting*.
+    from utils.helpers import fmt_duration
+
+    assert fmt_duration(ACTIVITY_DEFAULT_COOLDOWNS["mine"]) in _reply().description
 
 
 @pytest.mark.cogs("cogs.admin")

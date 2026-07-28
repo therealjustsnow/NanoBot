@@ -63,19 +63,44 @@ Rules that keep the layers decoupled:
 
 ## Risk/reward profiles
 
-| Activity | Cooldown | Profile |
-|---|---|---|
-| `/work` | 1h | Safe, low variance; career-ladder progression |
-| `/mine` | 30m | Materials into inventory; pickaxe tiers as coin sink; small failure chance |
-| `/hunt` | 45m | Materials + rare trophy; injury fine risk; drops `/rob` defense |
-| `/explore` | 3h | High variance; treasure keys/chests/charms |
-| `/rob` | 4h | PvP; capped steal, fine on failure, item counterplay (`rob_shield`) |
-| `/fish` | ~20s | High-frequency core loop: XP, streaks, quests, events, bait |
-| `/casino …` | none | Pure risk; house edge 3–8%, progressive jackpot as long-shot |
-| `/daily`, `/squad`, `/raid` | 24h/social | Existing social/co-op faucets, unchanged |
+| Activity | Interval | Banks | Profile |
+|---|---|---|---|
+| `/work` | 20m | 3 | Safe, low variance; career-ladder progression |
+| `/mine` | 12m | 4 | Materials into inventory (a 1–4 ore vein); pickaxe tiers as coin sink; small failure chance |
+| `/hunt` | 15m | 3 | Materials + rare trophy (a 1–3 bag); injury fine risk; drops `/rob` defense |
+| `/explore` | 45m | 2 | High variance; treasure keys/chests/charms |
+| `/rob` | 2h | 1 | PvP; capped steal, fine on failure, item counterplay (`rob_shield`) |
+| `/fish` | ~20s | — | High-frequency core loop: XP, streaks, quests, events, bait |
+| `/casino …` | none | — | Pure risk; house edge 3–8%, progressive jackpot as long-shot |
+| `/daily`, `/squad`, `/raid` | 24h/social | — | Existing social/co-op faucets, unchanged |
 
 Sinks offsetting the new faucets: bait/consumable purchases, rod + pickaxe
 ladders, casino house edge, rob fines, shop items.
+
+### Attention, not multipliers
+
+The adventure activities and fishing are gated on different things, and getting
+that wrong is how the loop ended up paying a twentieth of what fishing did.
+Fishing is gated on **attention**: a 20s cast means ~180 actions in an hour you
+actually spend on it. The activities are gated on the **clock**: however long
+you sit there, an hour only ever contained a handful of runs. Per action they
+were never underpaid — a shift paid 100 against a cast's 28 — so raising the
+payouts would have made an activity strictly better than a cast while leaving
+the loop just as thin.
+
+The lever that works on a clock-gated activity is the number of actions:
+shorter intervals, **charges** that bank runs while a member is away (a token
+bucket on the existing `last_*` column — see
+`utils.db.activities.try_claim_activity`), and yields with a spread (veins,
+bags) so one tap has a range rather than a constant. That took the loop to
+~1,150 coins/hour, about a quarter of fishing, without changing which faucet is
+fastest and therefore without changing which one `/shop`'s time-to-earn quotes.
+
+Two multipliers sit on top and are deliberately *earned*, not idle: encounters
+(a two-button choice on ~8% of runs) and the adventure daily streak (+5%/day,
+capped +25%, on coin payouts only). Neither is counted in the hourly figure,
+because folding them in would describe a player who never misses a day as the
+baseline.
 
 ## Concurrency invariants (the patterns every accessor follows)
 
