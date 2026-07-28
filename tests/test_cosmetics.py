@@ -10,6 +10,7 @@ fails: it has to produce an image for a brand-new account, a maxed one, and a
 member whose avatar didn't download.
 """
 
+import io
 import json
 import os
 
@@ -290,10 +291,10 @@ def _card(**overrides):
     return data
 
 
-def test_card_renders_a_png_of_the_expected_size(tmp_path, monkeypatch):
+def test_card_renders_an_image_of_the_expected_size(tmp_path, monkeypatch):
     monkeypatch.setattr(profile_card, "CACHE_DIR", str(tmp_path / "cache"))
     png = profile_card.render_card(_card())
-    assert png[:8] == b"\x89PNG\r\n\x1a\n"
+    assert Image.open(io.BytesIO(png)).format == profile_card.IMAGE_FORMAT
     img = Image.open(__import__("io").BytesIO(png))
     assert img.size == (profile_card.W, profile_card.H)
 
@@ -312,13 +313,13 @@ def test_card_renders_for_a_brand_new_account(tmp_path, monkeypatch):
             "badges": [],
         }
     )
-    assert png[:8] == b"\x89PNG\r\n\x1a\n"
+    assert Image.open(io.BytesIO(png)).format == profile_card.IMAGE_FORMAT
 
 
 def test_card_survives_a_broken_avatar_and_a_very_long_name(tmp_path, monkeypatch):
     monkeypatch.setattr(profile_card, "CACHE_DIR", str(tmp_path / "cache"))
     png = profile_card.render_card(_card(name="A" * 60, avatar=b"this is not an image"))
-    assert png[:8] == b"\x89PNG\r\n\x1a\n"
+    assert Image.open(io.BytesIO(png)).format == profile_card.IMAGE_FORMAT
 
 
 def test_generated_art_is_cached_on_disk(tmp_path, monkeypatch):

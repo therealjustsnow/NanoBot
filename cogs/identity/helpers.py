@@ -44,6 +44,53 @@ def newly_unlocked(owned, ctx: dict) -> list[cosmetics.CosmeticDef]:
     ]
 
 
+def resolve_loadout(equipped: dict, owned, slots=None) -> dict[str, list[str]]:
+    """What a card should actually draw, per slot.
+
+    Filters the stored loadout down to cosmetics that still exist and are still
+    held (a revoked one silently stops being worn), then tops up from
+    DEFAULT_LOADOUT so a brand-new account never renders an empty card. Pure,
+    so both the profile card and the wallet card can share one answer — pass
+    `slots` to resolve only the ones a given card draws.
+    """
+    have = set(owned or ())
+    out: dict[str, list[str]] = {}
+    for slot in slots if slots is not None else cosmetics.SLOTS:
+        keys = [
+            k
+            for k in (equipped or {}).get(slot, [])
+            if cosmetics.get(k)
+            and (k in have or (cosmetics.get(k).unlock or {}).get("kind") == "default")
+        ]
+        if not keys:
+            keys = [
+                k for k in cosmetics.DEFAULT_LOADOUT.get(slot, []) if cosmetics.get(k)
+            ]
+        out[slot] = keys
+    return out
+
+
+def interleave_by_slot(pairs: list[tuple[str, object]]) -> list:
+    """Round-robin a (slot, row) list so every slot gets a turn.
+
+    Discord shows 25 autocomplete rows. Sorted by slot, the badge list alone is
+    longer than that, so a straight sort meant `/profile equip` never offered a
+    banner once the catalogue grew — the picker silently stopped being the
+    discovery UI it is supposed to be. Taking one row per slot per pass keeps
+    the visible 25 spread across everything you can wear, in each slot's own
+    order.
+    """
+    buckets: dict[str, list] = {}
+    for slot, row in pairs:
+        buckets.setdefault(slot, []).append(row)
+    out = []
+    while any(buckets.values()):
+        for rows in buckets.values():
+            if rows:
+                out.append(rows.pop(0))
+    return out
+
+
 def equip_result(slot: str, equipped: list[str], key: str) -> tuple[list[str], str]:
     """Work out the new loadout for a slot when `key` is equipped.
 

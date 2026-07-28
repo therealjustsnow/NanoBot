@@ -905,7 +905,7 @@ class Fun(commands.Cog):
             "usage": "cookie [user]",
             "desc": "Give someone a cookie, or run it bare to open your cookie "
             "jar: an image showing how many you've given and received, and "
-            "where you rank. Cookies follow your account into every server.",
+            "where you rank.",
             "args": [("user", "Who to give a cookie (optional)")],
             "perms": "None",
             "example": "{prefix}cookie @Snow",

@@ -41,6 +41,7 @@ Commands
   /profile cosmetics [slot]     → what you own, and how to unlock the rest
   /profile equip <cosmetic>     → wear a banner/border/nameplate/badge
   /profile unequip <cosmetic>   → take one off (or clear a slot)
+  /profile preview <cosmetic>   → try one on your card without owning it
   /profile badges [member]      → the badge gallery
   /profile rep [member]         → give someone rep (once a day), or see yours
 
@@ -108,8 +109,10 @@ from cogs.progression.stats import compute_stats_with_sources
 from .helpers import (
     announce_channel_id,
     equip_result,
+    interleave_by_slot,
     newly_unlocked,
     rarity_marker,
+    resolve_loadout,
     unlock_context,
 )
 
@@ -251,8 +254,7 @@ class Identity(commands.Cog):
             "usage": "profile [subcommand]",
             "desc": "Your whole account on one image: global level, this "
             "server's level, coins, fishing, casino, activities, achievements, "
-            "prestige, and the badges/banner you've equipped. Your account is "
-            "the same in every server — only the server level line changes.",
+            "prestige, and the badges/banner you've equipped.",
             "args": ["member — whose profile to show (defaults to you)"],
             "perms": "None",
             "example": "{prefix}profile\n{prefix}profile @Friend\n"
@@ -287,7 +289,10 @@ class Identity(commands.Cog):
         data["avatar"] = await self._avatar_bytes(member)
         async with self._render_lock:
             png = await asyncio.to_thread(profile_card.render_card, data)
-        file = discord.File(fp=io.BytesIO(png), filename=f"profile-{member.id}.png")
+        file = discord.File(
+            fp=io.BytesIO(png),
+            filename=f"profile-{member.id}.{profile_card.IMAGE_EXT}",
+        )
         content = None
         if notes and member.id == ctx.author.id:
             content = "🎁 Unlocked: " + ", ".join(f"**{n}**" for n in notes[:4])
@@ -411,26 +416,7 @@ class Identity(commands.Cog):
     async def _loadout(self, user_id: int, owned: dict) -> dict[str, list[str]]:
         """Equipped cosmetics, filtered to what's still owned and topped up with
         the defaults so a brand-new card looks finished."""
-        equipped = await db.get_equipped(user_id)
-        out: dict[str, list[str]] = {}
-        for slot in cosmetics.SLOTS:
-            keys = [
-                k
-                for k in equipped.get(slot, [])
-                if cosmetics.get(k)
-                and (
-                    k in owned
-                    or (cosmetics.get(k).unlock or {}).get("kind") == "default"
-                )
-            ]
-            if not keys:
-                keys = [
-                    k
-                    for k in cosmetics.DEFAULT_LOADOUT.get(slot, [])
-                    if cosmetics.get(k)
-                ]
-            out[slot] = keys
-        return out
+        return resolve_loadout(await db.get_equipped(user_id), owned)
 
     # ── /profile cosmetics ───────────────────────────────────────────────────
     @profile.command(
@@ -560,14 +546,18 @@ class Identity(commands.Cog):
         with the unlock line attached — so the picker doubles as the "how do I
         get that one?" answer instead of coming back empty on a new account.
         The markers match /profile cosmetics: ✅ worn · ▫️ owned · 🔒 locked.
+
+        Each bucket is interleaved across slots (see `interleave_by_slot`) so
+        the 25 rows Discord shows cover banners, borders, plates, badges and
+        the wallet pair rather than 25 badges.
         """
         q = (current or "").strip().lower()
         owned = await db.get_unlocked_cosmetics(interaction.user.id)
         equipped = await db.get_equipped(interaction.user.id)
         worn = {key for keys in equipped.values() for key in keys}
-        ready: list[app_commands.Choice[str]] = []
-        already: list[app_commands.Choice[str]] = []
-        locked: list[app_commands.Choice[str]] = []
+        ready: list[tuple[str, app_commands.Choice[str]]] = []
+        already: list[tuple[str, app_commands.Choice[str]]] = []
+        locked: list[tuple[str, app_commands.Choice[str]]] = []
         for d in sorted(
             cosmetics.COSMETICS.values(), key=lambda c: (c.slot, c.sort, c.name)
         ):
@@ -575,14 +565,21 @@ class Identity(commands.Cog):
                 continue
             default = (d.unlock or {}).get("kind") == "default"
             if d.key in worn:
-                already.append(self._cosmetic_choice(d, "✅", "already worn"))
+                already.append((d.slot, self._cosmetic_choice(d, "✅", "already worn")))
             elif d.key in owned or default:
-                ready.append(self._cosmetic_choice(d, "▫️", d.description))
+                ready.append((d.slot, self._cosmetic_choice(d, "▫️", d.description)))
             else:
                 locked.append(
-                    self._cosmetic_choice(d, "🔒", cosmetics.describe_unlock(d))
+                    (
+                        d.slot,
+                        self._cosmetic_choice(d, "🔒", cosmetics.describe_unlock(d)),
+                    )
                 )
-        return (ready + already + locked)[:25]
+        return (
+            interleave_by_slot(ready)
+            + interleave_by_slot(already)
+            + interleave_by_slot(locked)
+        )[:25]
 
     # ── /profile unequip ─────────────────────────────────────────────────────
     @profile.command(name="unequip", description="Take a cosmetic off your card.")
@@ -636,6 +633,84 @@ class Identity(commands.Cog):
                     )
                 )
         return choices[:25]
+
+    # ── /profile preview ─────────────────────────────────────────────────────
+    @profile.command(
+        name="preview",
+        description="See a cosmetic on your own card before you buy or equip it.",
+    )
+    @app_commands.describe(cosmetic="Pick one — owned or not, this only previews")
+    @commands.cooldown(1, 8, commands.BucketType.user)
+    async def profile_preview(self, ctx: commands.Context, *, cosmetic: str):
+        """Try a cosmetic on without owning it.
+
+        The shop can show what a banner looks like, but not what it looks like
+        *with your name, avatar and stats on top of it* — which is the thing
+        actually being bought. Nothing is equipped and nothing is charged; the
+        card is rendered with the pick swapped in and thrown away.
+        """
+        d = cosmetics.find(cosmetic)
+        if d is None:
+            return await ctx.reply(
+                embed=h.err(
+                    f"There's no cosmetic called **{cosmetic}**. "
+                    "See `/profile cosmetics` or `/shop profile`."
+                ),
+                ephemeral=True,
+            )
+        try:
+            await ctx.defer()
+        except Exception:
+            pass
+        data, _notes = await self._collect(ctx, ctx.author)
+        data["avatar"] = await self._avatar_bytes(ctx.author)
+        if d.slot == "badge":
+            worn = [b for b in (data.get("badges") or []) if b.key != d.key]
+            limit = cosmetics.SLOTS["badge"].max_equipped
+            # Show it in the last slot rather than dropping it when the
+            # showcase is full — a preview that silently omits the thing being
+            # previewed is worse than useless.
+            data["badges"] = (worn[: limit - 1]) + [d]
+        else:
+            data[d.slot] = d
+
+        async with self._render_lock:
+            png = await asyncio.to_thread(profile_card.render_card, data)
+        owned = await db.get_unlocked_cosmetics(ctx.author.id)
+        if d.key in owned or (d.unlock or {}).get("kind") == "default":
+            note = f"Preview — wear it for real with `/profile equip {d.name}`."
+        elif (d.unlock or {}).get("kind") == "purchase":
+            note = f"Preview — buy it with `/shop unlock {d.name}` ({d.price:,} coins)."
+        else:
+            note = f"Preview — {cosmetics.describe_unlock(d)}."
+        await ctx.reply(
+            content=f"👁️ {note}",
+            file=discord.File(
+                fp=io.BytesIO(png),
+                filename=f"preview-{ctx.author.id}.{profile_card.IMAGE_EXT}",
+            ),
+        )
+
+    @profile_preview.autocomplete("cosmetic")
+    async def _preview_ac(self, interaction: discord.Interaction, current: str):
+        """Everything in the catalogue — previewing is exactly the case where
+        you have not got it yet, so nothing is filtered out by ownership."""
+        q = (current or "").strip().lower()
+        owned = await db.get_unlocked_cosmetics(interaction.user.id)
+        rows: list[tuple[str, app_commands.Choice[str]]] = []
+        for d in sorted(
+            cosmetics.COSMETICS.values(), key=lambda c: (c.slot, c.sort, c.name)
+        ):
+            if not self._matches(d, q):
+                continue
+            if d.key in owned or (d.unlock or {}).get("kind") == "default":
+                detail = "owned"
+            elif (d.unlock or {}).get("kind") == "purchase":
+                detail = f"{d.price:,} coins"
+            else:
+                detail = cosmetics.describe_unlock(d)
+            rows.append((d.slot, self._cosmetic_choice(d, "👁️", detail)))
+        return interleave_by_slot(rows)[:25]
 
     # ── /profile badges ──────────────────────────────────────────────────────
     @profile.command(name="badges", description="The badge gallery.")
@@ -740,7 +815,7 @@ class Identity(commands.Cog):
         left = max(0, int(REP_COOLDOWN - (time.time() - social["last_rep"])))
         lines = [f"You have **{social['rep']:,}** rep."]
         if rank:
-            lines.append(f"That's **#{rank[0]:,}** across every server.")
+            lines.append(f"That's **#{rank[0]:,}** overall.")
         lines.append(
             "You can give rep **now**."
             if not left

@@ -116,12 +116,18 @@ catalogue.
 
 **Slots are data.** `SLOTS` maps a slot to how many can be worn at once:
 
-| Slot | Max worn | Drawn as |
-|---|---|---|
-| `banner` | 1 | the card background |
-| `border` | 1 | the frame |
-| `nameplate` | 1 | the plate behind the name |
-| `badge` | 6 | the showcase row along the bottom |
+| Slot | Card | Max worn | Drawn as |
+|---|---|---|---|
+| `banner` | profile | 1 | the card background |
+| `border` | profile | 1 | the frame |
+| `nameplate` | profile | 1 | the plate behind the name |
+| `badge` | profile | 6 | the showcase row along the bottom |
+| `wallet` | wallet | 1 | the `/balance` card background |
+| `coin` | wallet | 1 | the coin beside the balance |
+
+Each slot also declares a `category` — which card it dresses. That is what the
+shop sorts its aisles by (`/shop profile`, `/shop wallet`), so a third card
+later is a new category string rather than a new command.
 
 Adding a slot is one entry. `/profile equip` infers the slot from whatever
 you're equipping, so it needs no changes — and because its picker walks
@@ -138,15 +144,29 @@ rendering.
 {"kind": "prestige", "value": 3}
 {"kind": "achievement", "key": "fish_caught_100"}
 {"kind": "stat", "stat": "casino_games", "value": 1000}
+{"kind": "purchase"}                                 # bought with coins (+ price=)
 {"kind": "manual"}                                   # staff/event grant only
 ```
 
 `cosmetics.is_unlocked(def, ctx)` evaluates all of them against one context
 dict built per profile view, so checking the whole catalogue costs no extra
 queries. Earnable cosmetics unlock **lazily** when a member opens their own
-card (the achievement pattern); `manual` ones only ever arrive through
-`n!profile grant` (bot-owner, prefix-only), which is what makes event drops
-feel like awards.
+card (the achievement pattern) — and `/balance` does the same for the two
+wallet slots, so a member who never opens `/profile` still collects them;
+`manual` ones only ever arrive through `n!profile grant` (bot-owner,
+prefix-only), which is what makes event drops feel like awards.
+
+`purchase` is deliberately in the same "never earned" bucket as `manual`:
+`is_unlocked` returns False for it and `auto_unlockable()` filters it out, so
+the only way to hold one is `/shop unlock`. That is what makes the cosmetic
+shop a real coin sink instead of a preview of things you would have got anyway,
+and `tests/test_cosmetic_shop.py` asserts it from both ends.
+
+**Prices are bot-wide, in code.** A cosmetic is worn on a *global* account, so
+a per-guild price would mean the cheapest server on the bot set what everyone
+paid — the same reasoning that made the coin faucets owner-only, and the mirror
+of why a guild's own shop (roles, mod-fulfilled perks) stays per-guild. See
+`docs/global-economy.md`.
 
 **Adding cosmetics without touching code.** `data/cosmetics.json` is merged at
 cog load:
@@ -160,13 +180,125 @@ cog load:
 
 Bad entries are logged and skipped rather than taking the bot down.
 
+## Previews
+
+Two, because they answer different questions.
+
+`/shop profile` and `/shop wallet` attach a **contact sheet** of the page's
+stock (`profile_card.preview_sheet`, six per page, the embed's `set_image`
+pointing at the attachment). Discord allows one image per embed, so a page has
+to arrive as a single picture — which is also the mobile answer: one tap to
+zoom, no cross-referencing a list against thumbnails. Every slot previews as
+something meaningful rather than an empty rectangle: `preview_tile` stages a
+badge and a coin centred on a neutral tile, puts a sample name on a nameplate,
+and frames the tile itself with a border.
+
+`/profile preview <cosmetic>` renders **your own card** wearing it — including
+things you don't own. The shop can show what a banner looks like; it can't show
+what it looks like with your name, avatar, level bars and stat chips on top,
+which is the thing actually being bought. Nothing is equipped and nothing is
+charged. A badge preview lands in the last showcase slot when the showcase is
+full, because a preview that silently omits the previewed thing is worse than
+none.
+
+Neither draws emoji. The bundled font has no colour emoji, so affordability is
+a *colour* on the caption and `_font_safe` strips anything undrawable from a
+name — cosmetic names can come from `data/cosmetics.json`, so that filter is
+load-bearing rather than defensive.
+
 ## Artwork
 
 The bot ships **no binary art**. `utils/profile_card.py` generates everything
-from each definition's palette and glyph — gradient banners with soft geometry,
-rounded "gem" badges with an inner highlight, and prestige emblems whose metal
-*and* star-point count change with rank — then caches the result under
-`data/profile_cache/`.
+from each definition's palette and glyph — gradient banners, rounded "gem"
+badges with an inner highlight, struck coins with a milled edge, and prestige
+emblems whose metal *and* star-point count change with rank — then caches the
+result under `data/profile_cache/`.
+
+Three registries stop the catalogue looking like twenty recolours of one
+gradient, and they **compose**, which is where the variety actually comes from:
+
+| Knob | Registry | What it decides | Values |
+|---|---|---|---|
+| `texture` | `_TEXTURES` | what the surface is made of | `clouds`, `nebula`, `silk`, `frost`, `embers`, `mesh`, `flat` |
+| `pattern` | `_BANNER_PATTERNS` | the geometry drawn on it | `waves`, `rays`, `bokeh`, `grid`, `stars`, `hex`, `circuit`, `peaks`, `aurora`, `nebula` |
+| `style` | `_BORDER_STYLES` | the frame | `solid`, `double`, `glow`, `dashed`, `corners`, `ribbon` |
+
+An empty value is the original flat look, so nothing had to be restyled at
+once. Silk + waves is water; clouds + stars is a night sky; mesh + circuit is a
+neon ledger.
+
+### Bundled artwork (the Gallery tier)
+
+Generated art is the baseline; **36** cosmetics are real images instead —
+`banner_art_*` (paintings, prints, manuscripts and textiles), `banner_space_*`
+(telescope and mission imagery) and the `wallet_*` equivalents. They live in
+`assets/profile/<slot>/<key>.webp` and win over generation through the same
+asset-override path that has always existed.
+
+The set is chosen for breadth rather than one canon: ukiyo-e (Hokusai,
+Hiroshige), a Song-dynasty scroll, a Persian Shahnameh folio, an Egyptian
+papyrus, a Mesoamerican codex, a Korean chaekgeori screen, Itō Jakuchū, Art
+Nouveau (Mucha), a William Morris textile, Haeckel's and Audubon's scientific
+plates, a 17th-century celestial atlas, European oils (van Gogh, Klimt, Turner,
+Monet, Friedrich, Aivazovsky, Bierstadt), Kandinsky's abstraction, and imagery
+from Hubble, Webb, Cassini, Juno, Curiosity and Apollo.
+
+Everything bundled is **public domain**: paintings whose copyright expired
+(via Wikimedia Commons) and NASA imagery, which as a U.S. federal work is not
+subject to copyright. `scripts/fetch_cosmetic_art.py` reads
+`assets/profile/art_manifest.json`, resolves each entry against the source API,
+**re-checks the reported licence and refuses anything that is not public domain
+or CC0**, crops it to the card's aspect, and regenerates
+`assets/profile/CREDITS.md`. Adding a painting is one manifest entry plus one
+`CosmeticDef`; `tests/test_cosmetic_art.py` fails if either half is missing, if
+a bundled image has no credit, or if one is bundled under a licence the repo
+may not redistribute.
+
+Each art cosmetic keeps a palette sampled from its own image. That is not
+decoration: the palette drives the card's accent colour (chip bars, the rep
+pill), and if the file is ever missing the cosmetic degrades to generated art in
+its own colours rather than breaking.
+
+Ten can only be earned, each hung off whichever activity it suits — *The Ninth
+Wave* for 2,000 fish caught, Haeckel's *Discomedusae* for a complete dex,
+Audubon's flamingo for 300 hunts, Bierstadt's *Yosemite Valley* for 800 digs,
+Wang Ximeng's scroll for 400 expeditions, Cellarius at global level 60,
+*Pillars of Creation* at 75, Andromeda at 90, Cassini's Saturn at prestige 6,
+*Earthrise* at prestige 4 — so the best-looking things on the card are not
+purely a coin question.
+
+A real painting needs treatment a generated gradient doesn't, and the renderer
+applies it on the asset path only: **cover-crop** to the card's aspect (a plain
+resize stretched every painting — that was a real bug), dim to `ART_CEILING`,
+and vignette. The card then adds a heavier scrim and puts the chip grid and
+badge row on their own soft panel, so the painting stays bright in the top half
+instead of being dimmed into mud to make dense stats readable.
+
+**It is all still Pillow** — no numpy, no native noise extension, no bundled
+artwork. Stacking small random lattices through BICUBIC upscales *is* value
+noise (the resize does the interpolation), and summing octaves of it gives
+fractal Brownian motion — clouds, marble, terrain. `ImageOps.colorize` maps
+that grayscale field through the palette (three stops if the def gives a third
+colour), screen-blended radial gradients make mesh gradients, and a blur plus a
+screen blend makes bloom. A card-sized banner generates in ~110 ms and is then
+cached, so the cost is paid once per cosmetic per size.
+
+Two automatic passes keep the art usable rather than merely pretty. `_tame`
+measures the render's mean luminance and scales it back only if it is too
+bright — a banner is a *background*, and gold or ice palettes plus bloom can
+otherwise drown the white text; because it measures rather than being
+hand-tuned per palette, it also covers cosmetics added later from
+`data/cosmetics.json`. A small saturation push then undoes the greying that
+taming and blooming cause. Randomness is seeded on the cosmetic key, so art is
+deterministic and the on-disk cache never goes stale.
+
+**Output format.** A textured card is photographic, and PNG is the wrong
+container for it: ~430 KB and 2.5 s with `optimize=True`, versus ~50 KB of WebP
+in a fraction of the time with no visible difference. The cards encode through
+`profile_card.encode()` and the cogs name the attachment with
+`profile_card.IMAGE_EXT`, so the format is one constant to change. The on-disk
+art cache stays lossless PNG — it is composited into the next render rather
+than displayed, so it must not accumulate compression artefacts.
 
 To use real artwork later, drop a PNG at
 `assets/profile/<slot>/<key>.png`. The renderer prefers it automatically; no
@@ -181,8 +313,14 @@ is why the badges use geometric symbols rather than colour emoji.
 
 `render_card(data)` takes a plain dict and returns PNG bytes. It knows nothing
 about Discord or the database, which is what makes it testable headless and
-reusable for future cards (a server card, a leaderboard card). Layout constants
-live at the top of the module, so moving a block is a number change.
+reusable for future cards — `utils/cookie_card.py` and `utils/wallet_card.py`
+are the two that took it up on that. Layout constants live at the top of each
+module, so moving a block is a number change.
+
+`utils/wallet_card.py` is the `/balance` card: one balance, three tallies
+(rank, contribution, daily streak), a wallet banner and a coin style, and
+deliberately **no border** — a frame on a card that small crowds the number,
+and `/profile` is where a whole loadout is meant to be shown off.
 
 A render is ~200 ms of CPU, so the cog defers first and renders in a worker
 thread behind a small semaphore. Anything that can fail on its own —the avatar
@@ -197,9 +335,13 @@ art.
 | A badge | One `CosmeticDef` (or one JSON entry) |
 | A banner/border/nameplate | Same, with `slot=` set |
 | A new cosmetic *slot* | One `SlotDef` in `SLOTS` (+ draw it in the card if it's visual) |
+| A shop cosmetic | A `CosmeticDef` with `unlock={"kind": "purchase"}` and a `price` |
+| A new banner surface | One function + one `_TEXTURES` entry, then `texture="…"` on the defs |
+| A new banner look | One function + one `_BANNER_PATTERNS` entry, then `pattern="…"` on the defs |
+| A new border look | One function + one `_BORDER_STYLES` entry, then `style="…"` on the defs |
 | A new unlock condition | One branch in `is_unlocked` + one in `describe_unlock` |
 | A new global-XP source | One `XP_AWARDS` entry + one `await globalxp.award(...)` |
 | A one-off event drop to a whole server | `n!profile grantall <cosmetic> [guild_id]` (bot owner, prefix-only) |
-| Real artwork | Drop PNGs into `assets/profile/<slot>/` |
+| Real artwork | Drop an image into `assets/profile/<slot>/` (webp/png/jpg), or add a manifest entry and run `scripts/fetch_cosmetic_art.py` |
 | Animated cosmetics | Store a GIF asset and branch in `cosmetic_image` — the def/slot layer doesn't change |
 | A profile theme | A `theme` slot whose palette overrides the card's ink colours |

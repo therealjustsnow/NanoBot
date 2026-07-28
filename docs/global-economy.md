@@ -134,7 +134,7 @@ balance it against income they no longer set. That is backwards: before the
 move there was no single income rate to balance against, because a member's real
 earning rate depended on which servers they happened to be in. Now there is one,
 so the bot can state it. `cogs/economy/helpers.seconds_to_afford` converts a
-price into a time to earn and `/shop list|add` shows it ("~25m to earn"), which
+price into a time to earn and `/shop server|add` shows it ("~25m to earn"), which
 is the number a mod was actually reaching for. The denominator is fishing: at
 the 20s cast cooldown it pays ~5,000 coins/hour against `/work`'s 100 and
 `/daily`'s ~4, so any figure that blended the faucets would be wrong by an order
@@ -142,6 +142,24 @@ of magnitude. It is a floor — nobody fishes continuously — and the UI says s
 `tests/test_economy_balance.py` recomputes the same quantity from the raw drop
 tables and asserts the two agree, so the shop's estimate cannot drift away from
 the balance model.
+
+### The cosmetic aisles are the mirror case
+
+`/shop` now has three aisles: `server` (the per-guild rewards above) plus
+`profile` and `wallet`, which sell card cosmetics from `utils/cosmetics.py`.
+Those two are sinks as well — coins in, nothing but a look out — but their
+prices are **bot-wide code constants**, not a guild setting, and that is the
+same test applied the other way round. A guild's role or perk can only ever
+reach its own members, so its price is local. A cosmetic is worn on a global
+account: price it per guild and the cheapest server on the bot decides what
+everyone pays, exactly the failure mode that moved the faucets to `!econ`.
+
+So the rule generalises past "faucet or sink?": ask **who the thing it hands
+over can reach**. Guild-scoped reward → guild-scoped price. Account-scoped
+reward → bot-wide price, in code, next to the rod ladder and the item values.
+The one thing a guild still owns about a global system remains a *channel id*
+(where a global level-up is announced), because a channel cannot reach past the
+server it belongs to.
 
 ## 3. Migration (`utils/db/globalize.py`, migration 1)
 
