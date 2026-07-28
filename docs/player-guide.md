@@ -567,9 +567,15 @@ Every board offers two views. Pick with the `scope` option:
   (global) numbers.
 - **Global** — everyone who uses the bot.
 
-`/coin top` · `/coin contrib` · `/fish top` · `/casino top` ·
+`/coin top` · `/coin contrib` · `/fish top` · `/casino top` · `/level top` ·
 `/fish global <stat>` (cross-server, by stat: earnings, catches, casts,
 heaviest catch, XP, best streak).
+
+**Every board has buttons.** ◀️ ▶️ turn the page, and 🏠 This server / 🌍 Global
+switches the view without running the command again (`/fish global` gets a
+dropdown for its stat instead). `page:` and `scope:` still work if you'd rather
+jump straight to one. The buttons belong to whoever ran the command and stop
+responding after a few minutes.
 
 Your personal rank on `/balance`, `/fish stats` and `/casino stats` is your
 **global** rank.

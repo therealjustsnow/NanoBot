@@ -53,6 +53,7 @@ from discord import app_commands
 from discord.ext import commands
 
 from utils import db
+from utils import paginator
 from utils import globalxp
 from utils import helpers as h
 from utils.converters import SafeTextChannel
@@ -327,12 +328,17 @@ class Leveling(commands.Cog):
         await self._show_leaderboard(ctx, page)
 
     async def _show_leaderboard(self, ctx: commands.Context, page: int):
+        # No switch: this board is one server's XP by design (the account-wide
+        # level lives on /profile), so there is no second view to offer.
+        await paginator.send(ctx, lambda p, _: self._top_page(ctx, p), page=page)
+
+    async def _top_page(self, ctx: commands.Context, page: int) -> paginator.Page:
         page = max(1, page)
         per = 10
         total = await db.count_ranked(ctx.guild.id)
         if total == 0:
-            return await ctx.reply(
-                embed=h.info(
+            return paginator.Page(
+                h.info(
                     "No one has earned XP yet. Start chatting!",
                     "📈 Leaderboard",
                 )
@@ -354,7 +360,7 @@ class Leveling(commands.Cog):
 
         embed = h.embed("📈 XP Leaderboard", "\n".join(lines), h.BLUE)
         embed.set_footer(text=f"Page {page}/{pages} · {total} ranked")
-        await ctx.reply(embed=embed)
+        return paginator.Page(embed, page, pages)
 
     # ── /level set ─────────────────────────────────────────────────────────────
     @level.command(name="set", description="Set a member's XP to an exact amount.")

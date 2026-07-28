@@ -96,7 +96,7 @@ import discord
 from discord import app_commands
 from discord.ext import commands
 
-from utils import cosmetics, db, globalxp, profile_card, wallet_card
+from utils import cosmetics, db, globalxp, paginator, profile_card, wallet_card
 from utils import helpers as h
 from utils.helpers import SCOPE_CHOICES
 
@@ -561,6 +561,16 @@ class Economy(commands.Cog):
         await self._show_leaderboard(ctx, page, scope)
 
     async def _show_leaderboard(self, ctx: commands.Context, page: int, scope: str):
+        await paginator.send(
+            ctx,
+            lambda p, s: self._rich_page(ctx, p, s or "server"),
+            page=page,
+            switch=paginator.scope_switch(scope),
+        )
+
+    async def _rich_page(
+        self, ctx: commands.Context, page: int, scope: str
+    ) -> paginator.Page:
         """Rich list. Wallets are global, so "this server" is that same table
         filtered to the guild's members — both views rank the same coins."""
         cfg = await self._cfg(ctx.guild.id)
@@ -578,8 +588,8 @@ class Economy(commands.Cog):
             )
             offset = (page - 1) * per
         if total == 0:
-            return await ctx.reply(
-                embed=h.info(
+            return paginator.Page(
+                h.info(
                     "No one has any coins yet. Try `/daily`!",
                     f"{cfg['currency_emoji']} Rich List",
                 )
@@ -603,7 +613,7 @@ class Economy(commands.Cog):
             text=f"Page {page}/{pages} · {total} "
             + ("wallets across every server" if scope == "global" else "members here")
         )
-        await ctx.reply(embed=embed)
+        return paginator.Page(embed, page, pages)
 
     def _name_for(self, ctx: commands.Context, user_id: int) -> str:
         """Display name for a leaderboard row — a global board can list people
@@ -886,6 +896,16 @@ class Economy(commands.Cog):
     async def coin_contrib(
         self, ctx: commands.Context, page: int = 1, scope: str = "server"
     ):
+        await paginator.send(
+            ctx,
+            lambda p, s: self._contrib_page(ctx, p, s or "server"),
+            page=page,
+            switch=paginator.scope_switch(scope),
+        )
+
+    async def _contrib_page(
+        self, ctx: commands.Context, page: int, scope: str
+    ) -> paginator.Page:
         per = 10
         if scope == "global":
             total = await db.count_contrib()
@@ -900,8 +920,8 @@ class Economy(commands.Cog):
             )
             offset = (page - 1) * per
         if total == 0:
-            return await ctx.reply(
-                embed=h.info(
+            return paginator.Page(
+                h.info(
                     "No co-op contributions yet. Team up and use `/squad`!",
                     "🤝 Top Contributors",
                 )
@@ -922,7 +942,7 @@ class Economy(commands.Cog):
             title += " (Global)"
         embed = h.embed(title, "\n".join(lines), h.BLUE)
         embed.set_footer(text=f"Page {page}/{pages} · {total} contributors")
-        await ctx.reply(embed=embed)
+        return paginator.Page(embed, page, pages)
 
     # ── /coin raidsize (set party bounds) ─────────────────────────────────────────
     @coin.command(

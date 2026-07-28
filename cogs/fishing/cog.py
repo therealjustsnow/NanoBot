@@ -62,6 +62,7 @@ from discord.ext import commands
 
 from utils import db
 from utils import globalxp
+from utils import paginator
 from utils import helpers as h
 from utils.helpers import SCOPE_CHOICES
 from utils import items as item_catalog
@@ -655,6 +656,16 @@ class Fishing(commands.Cog):
     async def fish_top(
         self, ctx: commands.Context, page: int = 1, scope: str = "server"
     ):
+        await paginator.send(
+            ctx,
+            lambda p, s: self._top_page(ctx, p, s or "server"),
+            page=page,
+            switch=paginator.scope_switch(scope),
+        )
+
+    async def _top_page(
+        self, ctx: commands.Context, page: int, scope: str
+    ) -> paginator.Page:
         econ = await db.get_econ_config(ctx.guild.id)
         per = 10
         if scope == "global":
@@ -670,10 +681,8 @@ class Fishing(commands.Cog):
             )
             offset = (page - 1) * per
         if total == 0:
-            return await ctx.reply(
-                embed=h.info(
-                    "No one has earned anything yet. Try `/fish`!", "🎣 Anglers"
-                )
+            return paginator.Page(
+                h.info("No one has earned anything yet. Try `/fish`!", "🎣 Anglers")
             )
 
         medals = {1: "🥇", 2: "🥈", 3: "🥉"}
@@ -688,7 +697,7 @@ class Fishing(commands.Cog):
         title = "🎣 Top Anglers" + (" (Global)" if scope == "global" else "")
         embed = h.embed(title, "\n".join(lines), h.BLUE)
         embed.set_footer(text=f"Page {page}/{pages} · {total} anglers")
-        await ctx.reply(embed=embed)
+        return paginator.Page(embed, page, pages)
 
     def _name_for(self, ctx: commands.Context, user_id: int) -> str:
         """Display name for a leaderboard row — a global board lists anglers who
@@ -720,14 +729,30 @@ class Fishing(commands.Cog):
                 embed=h.err(f"I don't know the stat **{stat}**. Try: {valid}."),
                 ephemeral=True,
             )
+        # The stat is this board's second dimension the way scope is the other
+        # boards': six of them, so it's a dropdown rather than a button row.
+        await paginator.send(
+            ctx,
+            lambda p, s: self._global_page(ctx, p, s or "earned"),
+            page=page,
+            switch=paginator.Switch(
+                options=[(k, v["label"]) for k, v in db.GLOBAL_STATS.items()],
+                current=stat,
+                placeholder="Rank by another stat…",
+            ),
+        )
+
+    async def _global_page(
+        self, ctx: commands.Context, page: int, stat: str
+    ) -> paginator.Page:
         label = db.GLOBAL_STATS[stat]["label"]
         econ = await db.get_econ_config(ctx.guild.id)
         page = max(1, page)
         per = 10
         total = await db.count_global_leaderboard(stat)
         if total == 0:
-            return await ctx.reply(
-                embed=h.info(f"No one has any {label} yet.", "🌐 Global Leaderboard")
+            return paginator.Page(
+                h.info(f"No one has any {label} yet.", "🌐 Global Leaderboard")
             )
         pages = (total + per - 1) // per
         page = min(page, pages)
@@ -752,7 +777,7 @@ class Fishing(commands.Cog):
         embed.set_footer(
             text=f"Page {page}/{pages} · {total} anglers · every server combined"
         )
-        await ctx.reply(embed=embed)
+        return paginator.Page(embed, page, pages)
 
     # ── /fish buy ────────────────────────────────────────────────────────────
     @fish.command(name="buy", description="Buy bait or fishing consumables with coins.")
