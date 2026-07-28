@@ -531,6 +531,12 @@ Both cosmetic aisles **show you the art** — each page comes with a picture of
 what's on it, and `/profile preview <name>` puts any of it on your own card
 before you spend a coin.
 
+**Browse it with the buttons.** Every aisle has ◀️ ▶️ arrows to turn the page
+and a row underneath to hop between the aisles, so you never have to run the
+command again with a bigger page number (`page:` still works if you'd rather
+jump straight to one). The buttons belong to whoever ran the command — the
+listing counts your coins — and they stop responding after a few minutes.
+
 **The cosmetic aisles** cost coins and nothing else — no stat, no level. What
 you buy is yours on **every** server, so the prices are the same everywhere and
 your server's mods can't change them. Each listing marks 🟢 when you can afford

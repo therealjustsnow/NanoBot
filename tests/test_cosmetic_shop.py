@@ -317,3 +317,180 @@ async def test_the_server_aisle_still_answers_to_its_old_name(bot):
         await dpytest.message(invocation, member=author)
         embed = dpytest.get_message().embeds[0]
         assert any("VIP" in f.name for f in embed.fields)
+
+
+# ── The browser ───────────────────────────────────────────────────────────────
+# Every aisle was page-numbered with no way to turn a page: `/shop profile
+# page:5` to move one screen is the whole command retyped on a phone. dpytest
+# can't dispatch components, so the buttons are driven by hand (the
+# SellConfirmView pattern in tests/test_inventory_commands.py).
+class _FakeResponse:
+    def __init__(self):
+        self.sent = None
+
+    async def defer(self, *a, **kw):
+        return None
+
+    async def send_message(self, **kwargs):
+        self.sent = kwargs
+
+
+class _FakeInteraction:
+    """Minimal duck-typed Interaction for the /shop page + aisle buttons."""
+
+    def __init__(self, user_id, guild):
+        self.user = types.SimpleNamespace(id=user_id)
+        self.guild = guild
+        self.response = _FakeResponse()
+        self.edited: dict = {}
+
+    async def edit_original_response(self, **kwargs):
+        self.edited = kwargs
+        return None
+
+
+def _browser(ctx):
+    return ctx.kwargs["view"]
+
+
+def _labels(view):
+    return {b.label for b in view.children if b.label}
+
+
+@pytest.mark.cogs("cogs.economy")
+async def test_every_aisle_ships_a_switcher_and_page_arrows(bot):
+    author, guild = config().members[0], config().guilds[0]
+    cog = bot.get_cog("Economy")
+    ctx = _CapturingCtx(author, guild)
+    await cog._show_cosmetics(ctx, "profile", 1)
+
+    view = _browser(ctx)
+    # Every aisle is one tap away, and the one being viewed isn't pressable.
+    assert {"Shop", "Profile", "Wallet", "Server"} <= _labels(view)
+    current = [b for b in view.children if getattr(b, "aisle", None) == "profile"][0]
+    assert current.disabled
+    # Page 1 of many: back is dead, forward is live, and the count is on screen.
+    arrows = [b for b in view.children if getattr(b, "delta", None)]
+    assert {b.delta: b.disabled for b in arrows} == {-1: True, 1: False}
+    assert any(b.label == f"1/{view.pages}" for b in view.children)
+
+
+@pytest.mark.cogs("cogs.economy")
+async def test_the_forward_arrow_turns_the_page_and_swaps_the_art(bot):
+    author, guild = config().members[0], config().guilds[0]
+    cog = bot.get_cog("Economy")
+    ctx = _CapturingCtx(author, guild)
+    await cog._show_cosmetics(ctx, "profile", 1)
+    view = _browser(ctx)
+    assert view.pages > 1, "the profile aisle should span more than one page"
+    first = ctx.kwargs["file"].filename
+
+    interaction = _FakeInteraction(author.id, guild)
+    await [b for b in view.children if getattr(b, "delta", None) == 1][0].callback(
+        interaction
+    )
+
+    assert view.page == 2
+    assert "Page 2/" in interaction.edited["embed"].footer.text
+    # A fresh attachment, under a page-specific name: a same-named one on an
+    # edited message can be served from the client's cache, leaving page 2
+    # showing page 1's art.
+    turned = interaction.edited["attachments"][0]
+    assert turned.filename != first
+    assert interaction.edited["embed"].image.url == f"attachment://{turned.filename}"
+    assert len(turned.fp.getvalue()) > 1000
+    # And back is pressable now that there's something behind us.
+    assert not [b for b in view.children if getattr(b, "delta", None) == -1][0].disabled
+
+
+@pytest.mark.cogs("cogs.economy")
+async def test_a_scrolled_page_is_not_re_rendered(bot):
+    """Turning back to a page already seen shouldn't pay for the render again."""
+    author, guild = config().members[0], config().guilds[0]
+    cog = bot.get_cog("Economy")
+    ctx = _CapturingCtx(author, guild)
+    await cog._show_cosmetics(ctx, "profile", 1)
+    view = _browser(ctx)
+    forward = [b for b in view.children if getattr(b, "delta", None) == 1][0]
+
+    await forward.callback(_FakeInteraction(author.id, guild))
+    art = dict(view._art)
+    assert ("profile", 2) in art
+
+    calls = []
+    real = profile_card.preview_sheet
+    profile_card.preview_sheet = lambda *a, **kw: (calls.append(1), real(*a, **kw))[1]
+    try:
+        back = [b for b in view.children if getattr(b, "delta", None) == -1][0]
+        await back.callback(_FakeInteraction(author.id, guild))
+        assert view.page == 1
+        assert calls == [], "page 1's sheet was rendered a second time"
+    finally:
+        profile_card.preview_sheet = real
+
+
+@pytest.mark.cogs("cogs.economy")
+async def test_the_switcher_opens_another_aisle_at_its_first_page(bot):
+    author, guild = config().members[0], config().guilds[0]
+    await db.add_shop_item(guild.id, "VIP", 5_000, "custom", payload="a perk")
+    cog = bot.get_cog("Economy")
+    ctx = _CapturingCtx(author, guild)
+    await cog._show_cosmetics(ctx, "profile", 2)
+    view = _browser(ctx)
+
+    interaction = _FakeInteraction(author.id, guild)
+    server_btn = [b for b in view.children if getattr(b, "aisle", None) == "server"][0]
+    await server_btn.callback(interaction)
+
+    assert (view.aisle, view.page) == ("server", 1)
+    assert any("VIP" in f.name for f in interaction.edited["embed"].fields)
+    # The cosmetic sheet has to go with the listing it described.
+    assert interaction.edited["attachments"] == []
+
+
+@pytest.mark.cogs("cogs.economy")
+async def test_the_hub_is_an_aisle_of_the_browser(bot):
+    """The hub is reachable from any aisle, and has nothing to page through."""
+    author, guild = config().members[0], config().guilds[0]
+    cog = bot.get_cog("Economy")
+    ctx = _CapturingCtx(author, guild)
+    await cog._show_hub(ctx)
+    view = _browser(ctx)
+
+    assert view.pages == 1
+    assert not [b for b in view.children if getattr(b, "delta", None)]
+    interaction = _FakeInteraction(author.id, guild)
+    profile_btn = [b for b in view.children if getattr(b, "aisle", None) == "profile"][
+        0
+    ]
+    await profile_btn.callback(interaction)
+    assert view.aisle == "profile"
+    assert interaction.edited["attachments"], "the aisle previews what it sells"
+
+
+@pytest.mark.cogs("cogs.economy")
+async def test_only_the_member_who_asked_can_browse(bot):
+    """The listing is personalised — it counts your coins and marks what you
+    own — so someone else's press would repaint it with the wrong balance."""
+    author, other, guild = config().members[0], config().members[1], config().guilds[0]
+    cog = bot.get_cog("Economy")
+    ctx = _CapturingCtx(author, guild)
+    await cog._show_cosmetics(ctx, "profile", 1)
+    view = _browser(ctx)
+
+    interaction = _FakeInteraction(other.id, guild)
+    assert await view.interaction_check(interaction) is False
+    assert interaction.response.sent is not None
+    assert await view.interaction_check(_FakeInteraction(author.id, guild)) is True
+
+
+@pytest.mark.cogs("cogs.economy")
+async def test_a_page_past_the_end_lands_on_the_last_one(bot):
+    author, guild = config().members[0], config().guilds[0]
+    cog = bot.get_cog("Economy")
+    ctx = _CapturingCtx(author, guild)
+    await cog._show_cosmetics(ctx, "profile", 999)
+    view = _browser(ctx)
+
+    assert view.page == view.pages
+    assert [b for b in view.children if getattr(b, "delta", None) == 1][0].disabled
