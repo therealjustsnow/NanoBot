@@ -1,0 +1,189 @@
+[
+  {
+    "url": "https://upload.wikimedia.org/wikipedia/commons/2/21/Vincent_Willem_van_Gogh_-_Cafe_Terrace_at_Night_%28Yorck%29.jpg",
+    "licence": "Public domain",
+    "credit": "Vincent van Gogh",
+    "title": "Cafe Terrace at Night",
+    "page": "https://commons.wikimedia.org/wiki/File:Vincent_Willem_van_Gogh_-_Cafe_Terrace_at_Night_(Yorck).jpg",
+    "source": "Wikimedia Commons",
+    "key": "banner_art_cafe_terrace",
+    "slot": "banner",
+    "file": "banner/banner_art_cafe_terrace.webp"
+  },
+  {
+    "url": "https://upload.wikimedia.org/wikipedia/commons/thumb/0/0d/Great_Wave_off_Kanagawa2.jpg/3840px-Great_Wave_off_Kanagawa2.jpg",
+    "licence": "Public domain",
+    "credit": "Katsushika Hokusai",
+    "title": "The Great Wave off Kanagawa",
+    "page": "https://commons.wikimedia.org/wiki/File:Great_Wave_off_Kanagawa2.jpg",
+    "source": "Wikimedia Commons",
+    "key": "banner_art_great_wave",
+    "slot": "banner",
+    "file": "banner/banner_art_great_wave.webp"
+  },
+  {
+    "url": "https://upload.wikimedia.org/wikipedia/commons/f/f3/Gustav_Klimt_016.jpg",
+    "licence": "Public domain",
+    "credit": "Gustav Klimt",
+    "title": "The Kiss (Der Kuß)",
+    "page": "https://commons.wikimedia.org/wiki/File:Gustav_Klimt_016.jpg",
+    "source": "Wikimedia Commons",
+    "key": "banner_art_kiss",
+    "slot": "banner",
+    "file": "banner/banner_art_kiss.webp"
+  },
+  {
+    "url": "https://upload.wikimedia.org/wikipedia/commons/thumb/4/4a/Hovhannes_Aivazovsky_-_The_Ninth_Wave_-_Google_Art_Project.jpg/3840px-Hovhannes_Aivazovsky_-_The_Ninth_Wave_-_Google_Art_Project.jpg",
+    "licence": "Public domain",
+    "credit": "Ivan Aivazovsky",
+    "title": "The Ninth Wave",
+    "page": "https://commons.wikimedia.org/wiki/File:Hovhannes_Aivazovsky_-_The_Ninth_Wave_-_Google_Art_Project.jpg",
+    "source": "Wikimedia Commons",
+    "key": "banner_art_ninth_wave",
+    "slot": "banner",
+    "file": "banner/banner_art_ninth_wave.webp"
+  },
+  {
+    "url": "https://upload.wikimedia.org/wikipedia/commons/7/7f/Hokusai-fuji7.png",
+    "licence": "Public domain",
+    "credit": "Katsushika Hokusai",
+    "title": "Fine Wind, Clear Morning (Red Fuji)",
+    "page": "https://commons.wikimedia.org/wiki/File:Hokusai-fuji7.png",
+    "source": "Wikimedia Commons",
+    "key": "banner_art_red_fuji",
+    "slot": "banner",
+    "file": "banner/banner_art_red_fuji.webp"
+  },
+  {
+    "url": "https://upload.wikimedia.org/wikipedia/commons/thumb/e/ea/Van_Gogh_-_Starry_Night_-_Google_Art_Project.jpg/3840px-Van_Gogh_-_Starry_Night_-_Google_Art_Project.jpg",
+    "licence": "Public domain",
+    "credit": "Vincent van Gogh",
+    "title": "The Starry Night",
+    "page": "https://commons.wikimedia.org/wiki/File:Van_Gogh_-_Starry_Night_-_Google_Art_Project.jpg",
+    "source": "Wikimedia Commons",
+    "key": "banner_art_starry_night",
+    "slot": "banner",
+    "file": "banner/banner_art_starry_night.webp"
+  },
+  {
+    "url": "https://upload.wikimedia.org/wikipedia/commons/thumb/9/94/Turner%2C_J._M._W._-_The_Fighting_T%C3%A9m%C3%A9raire_tugged_to_her_last_Berth_to_be_broken.jpg/3840px-Turner%2C_J._M._W._-_The_Fighting_T%C3%A9m%C3%A9raire_tugged_to_her_last_Berth_to_be_broken.jpg",
+    "licence": "Public domain",
+    "credit": "J. M. W. Turner",
+    "title": "The Fighting Temeraire tugged to her last berth to be broken up, 1838",
+    "page": "https://commons.wikimedia.org/wiki/File:Turner,_J._M._W._-_The_Fighting_T%C3%A9m%C3%A9raire_tugged_to_her_last_Berth_to_be_broken.jpg",
+    "source": "Wikimedia Commons",
+    "key": "banner_art_temeraire",
+    "slot": "banner",
+    "file": "banner/banner_art_temeraire.webp"
+  },
+  {
+    "url": "https://upload.wikimedia.org/wikipedia/commons/b/b9/Caspar_David_Friedrich_-_Wanderer_above_the_sea_of_fog.jpg",
+    "licence": "Public domain",
+    "credit": "Caspar David Friedrich",
+    "title": "Wanderer above the Sea of Fog",
+    "page": "https://commons.wikimedia.org/wiki/File:Caspar_David_Friedrich_-_Wanderer_above_the_sea_of_fog.jpg",
+    "source": "Wikimedia Commons",
+    "key": "banner_art_wanderer",
+    "slot": "banner",
+    "file": "banner/banner_art_wanderer.webp"
+  },
+  {
+    "url": "https://upload.wikimedia.org/wikipedia/commons/a/aa/Claude_Monet_-_Water_Lilies_-_1906%2C_Ryerson.jpg",
+    "licence": "Public domain",
+    "credit": "Claude Monet",
+    "title": "Water Lilies",
+    "page": "https://commons.wikimedia.org/wiki/File:Claude_Monet_-_Water_Lilies_-_1906,_Ryerson.jpg",
+    "source": "Wikimedia Commons",
+    "key": "banner_art_water_lilies",
+    "slot": "banner",
+    "file": "banner/banner_art_water_lilies.webp"
+  },
+  {
+    "url": "https://upload.wikimedia.org/wikipedia/commons/b/ba/Vincent_van_Gogh_-_Wheatfield_with_crows_-_Google_Art_Project.jpg",
+    "licence": "Public domain",
+    "credit": "Vincent van Gogh",
+    "title": "Wheatfield with crows",
+    "page": "https://commons.wikimedia.org/wiki/File:Vincent_van_Gogh_-_Wheatfield_with_crows_-_Google_Art_Project.jpg",
+    "source": "Wikimedia Commons",
+    "key": "banner_art_wheatfield",
+    "slot": "banner",
+    "file": "banner/banner_art_wheatfield.webp"
+  },
+  {
+    "url": "https://images-assets.nasa.gov/image/carina_nebula/carina_nebula~large.jpg",
+    "licence": "Public domain (U.S. Government work)",
+    "credit": "NASA ESA CSA STScI",
+    "title": "James Webb Space Telescope NIRCam Image of the “Cosmic Cliffs” in Carina Nebula",
+    "page": "https://images.nasa.gov/details/carina_nebula",
+    "source": "NASA",
+    "key": "banner_space_carina",
+    "slot": "banner",
+    "file": "banner/banner_space_carina.webp"
+  },
+  {
+    "url": "https://images-assets.nasa.gov/image/GSFC_20171208_Archive_e000496/GSFC_20171208_Archive_e000496~small.jpg",
+    "licence": "Public domain (U.S. Government work)",
+    "credit": "GSFC",
+    "title": "NASA Releases New High-Resolution Earthrise Image",
+    "page": "https://images.nasa.gov/details/GSFC_20171208_Archive_e000496",
+    "source": "NASA",
+    "key": "banner_space_earthrise",
+    "slot": "banner",
+    "file": "banner/banner_space_earthrise.webp"
+  },
+  {
+    "url": "https://images-assets.nasa.gov/image/PIA21395/PIA21395~medium.jpg",
+    "licence": "Public domain (U.S. Government work)",
+    "credit": "JPL",
+    "title": "Jupiter's Great Red Spot Revealed",
+    "page": "https://images.nasa.gov/details/PIA21395",
+    "source": "NASA",
+    "key": "banner_space_jupiter",
+    "slot": "banner",
+    "file": "banner/banner_space_jupiter.webp"
+  },
+  {
+    "url": "https://images-assets.nasa.gov/image/GSFC_20171208_Archive_e000842/GSFC_20171208_Archive_e000842~large.jpg",
+    "licence": "Public domain (U.S. Government work)",
+    "credit": "GSFC",
+    "title": "Hubble Goes High Def to Revisit the Iconic 'Pillars of Creation'",
+    "page": "https://images.nasa.gov/details/GSFC_20171208_Archive_e000842",
+    "source": "NASA",
+    "key": "banner_space_pillars",
+    "slot": "banner",
+    "file": "banner/banner_space_pillars.webp"
+  },
+  {
+    "url": "https://upload.wikimedia.org/wikipedia/commons/thumb/0/0d/Great_Wave_off_Kanagawa2.jpg/3840px-Great_Wave_off_Kanagawa2.jpg",
+    "licence": "Public domain",
+    "credit": "Katsushika Hokusai",
+    "title": "The Great Wave off Kanagawa",
+    "page": "https://commons.wikimedia.org/wiki/File:Great_Wave_off_Kanagawa2.jpg",
+    "source": "Wikimedia Commons",
+    "key": "wallet_art_great_wave",
+    "slot": "wallet",
+    "file": "wallet/wallet_art_great_wave.webp"
+  },
+  {
+    "url": "https://upload.wikimedia.org/wikipedia/commons/f/f3/Gustav_Klimt_016.jpg",
+    "licence": "Public domain",
+    "credit": "Gustav Klimt",
+    "title": "The Kiss (Der Kuß)",
+    "page": "https://commons.wikimedia.org/wiki/File:Gustav_Klimt_016.jpg",
+    "source": "Wikimedia Commons",
+    "key": "wallet_art_kiss",
+    "slot": "wallet",
+    "file": "wallet/wallet_art_kiss.webp"
+  },
+  {
+    "url": "https://images-assets.nasa.gov/image/iss058e005282/iss058e005282~large.jpg",
+    "licence": "Public domain (U.S. Government work)",
+    "credit": "JSC",
+    "title": "View of the Earth's limb with an aurora",
+    "page": "https://images.nasa.gov/details/iss058e005282",
+    "source": "NASA",
+    "key": "wallet_space_aurora",
+    "slot": "wallet",
+    "file": "wallet/wallet_space_aurora.webp"
+  }
+]

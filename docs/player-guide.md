@@ -166,9 +166,14 @@ answer to "how do I get that one?".
   `/shop wallet` below. Bought ones can't be earned any other way, and earned
   ones can't be bought.
 
-Every banner is drawn fresh by the bot rather than picked from a folder of
-stock images — clouds, marble, nebulae, mesh gradients, frost and molten metal,
-each in its own palette — so no two look like the same recolour.
+Most banners are drawn fresh by the bot — clouds, marble, mesh gradients, frost
+and molten metal, each in its own palette — so no two look like the same
+recolour. The **Gallery** banners are real artwork instead: *The Starry Night*,
+*The Great Wave off Kanagawa*, *The Kiss*, the Webb telescope's Carina Nebula,
+Apollo 8's *Earthrise*. All of it is public domain, and every artist is credited
+in `assets/profile/CREDITS.md`. Three of them can't be bought at any price —
+*The Ninth Wave* is for anglers (2,000 fish), *Pillars of Creation* needs global
+level 75, and *Earthrise* is awarded at prestige 4.
 - **Playing** — Deep Current (250 fish), Fishing Master (1,000 fish), Casino
   Champion (1,000 games), Tycoon (3,000,000 coins), Grinder (500 shifts).
 - **Staff & events** — Developer, Contributor, Early Supporter, Beta Tester,

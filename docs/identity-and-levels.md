@@ -201,6 +201,40 @@ An empty value is the original flat look, so nothing had to be restyled at
 once. Silk + waves is water; clouds + stars is a night sky; mesh + circuit is a
 neon ledger.
 
+### Bundled artwork (the Gallery tier)
+
+Generated art is the baseline; seventeen cosmetics are real images instead —
+`banner_art_*` (paintings), `banner_space_*` (telescope and mission imagery) and
+`wallet_art_*`. They live in `assets/profile/<slot>/<key>.webp` and win over
+generation through the same asset-override path that has always existed.
+
+Everything bundled is **public domain**: paintings whose copyright expired
+(via Wikimedia Commons) and NASA imagery, which as a U.S. federal work is not
+subject to copyright. `scripts/fetch_cosmetic_art.py` reads
+`assets/profile/art_manifest.json`, resolves each entry against the source API,
+**re-checks the reported licence and refuses anything that is not public domain
+or CC0**, crops it to the card's aspect, and regenerates
+`assets/profile/CREDITS.md`. Adding a painting is one manifest entry plus one
+`CosmeticDef`; `tests/test_cosmetic_art.py` fails if either half is missing, if
+a bundled image has no credit, or if one is bundled under a licence the repo
+may not redistribute.
+
+Each art cosmetic keeps a palette sampled from its own image. That is not
+decoration: the palette drives the card's accent colour (chip bars, the rep
+pill), and if the file is ever missing the cosmetic degrades to generated art in
+its own colours rather than breaking.
+
+Three of them can only be earned — *The Ninth Wave* for 2,000 fish caught,
+*Pillars of Creation* at global level 75, *Earthrise* at prestige 4 — so the
+best-looking things on the card are not purely a coin question.
+
+A real painting needs treatment a generated gradient doesn't, and the renderer
+applies it on the asset path only: **cover-crop** to the card's aspect (a plain
+resize stretched every painting — that was a real bug), dim to `ART_CEILING`,
+and vignette. The card then adds a heavier scrim and puts the chip grid and
+badge row on their own soft panel, so the painting stays bright in the top half
+instead of being dimmed into mud to make dense stats readable.
+
 **It is all still Pillow** — no numpy, no native noise extension, no bundled
 artwork. Stacking small random lattices through BICUBIC upscales *is* value
 noise (the resize does the interpolation), and summing octaves of it gives
@@ -269,6 +303,6 @@ art.
 | A new unlock condition | One branch in `is_unlocked` + one in `describe_unlock` |
 | A new global-XP source | One `XP_AWARDS` entry + one `await globalxp.award(...)` |
 | A one-off event drop to a whole server | `n!profile grantall <cosmetic> [guild_id]` (bot owner, prefix-only) |
-| Real artwork | Drop PNGs into `assets/profile/<slot>/` |
+| Real artwork | Drop an image into `assets/profile/<slot>/` (webp/png/jpg), or add a manifest entry and run `scripts/fetch_cosmetic_art.py` |
 | Animated cosmetics | Store a GIF asset and branch in `cosmetic_image` — the def/slot layer doesn't change |
 | A profile theme | A `theme` slot whose palette overrides the card's ink colours |

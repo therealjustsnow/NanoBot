@@ -21,10 +21,12 @@ import io
 from PIL import Image, ImageDraw
 
 from utils import cosmetics
+from utils.profile_card import _asset_path as _art_file
 from utils.profile_card import (
     INK,
     INK_FAINT,
     INK_MUTED,
+    PANEL_FILL,
     _circle_mask,
     _fit_text,
     _font,
@@ -64,14 +66,18 @@ TALLY_COLS = 3
 TALLY_W = (W - PAD * 2 - TALLY_GAP * (TALLY_COLS - 1)) // TALLY_COLS
 
 
+def _photographic(banner) -> bool:
+    """Is this wallet banner real artwork rather than generated art? A painting
+    needs a heavier scrim under the balance (same rule as the profile card)."""
+    return banner is not None and _art_file(banner) is not None
+
+
 def _tally(base, draw, xy, size, label, value, sub, accent):
     """One bottom panel: small caps label, the number, one line of detail."""
     x, y = xy
     w, h = size
     panel = Image.new("RGBA", (w, h), (0, 0, 0, 0))
-    ImageDraw.Draw(panel).rounded_rectangle(
-        (0, 0, w - 1, h - 1), 16, fill=(255, 255, 255, 26)
-    )
+    ImageDraw.Draw(panel).rounded_rectangle((0, 0, w - 1, h - 1), 16, fill=PANEL_FILL)
     base.alpha_composite(panel, (x, y))
     draw.rounded_rectangle((x, y, x + 5, y + h - 1), 3, fill=accent)
 
@@ -113,7 +119,9 @@ def render_wallet_card(data: dict) -> bytes:
     card.paste(background, (0, 0))
     # Darken from the bottom up: the tallies sit on the busy part of a banner,
     # the header on the calm part.
-    scrim = _gradient((W, H), (0, 0, 0, 40), (0, 0, 0, 165))
+    scrim = _gradient(
+        (W, H), (0, 0, 0, 40), (0, 0, 0, 165 if not _photographic(banner) else 195)
+    )
     card.alpha_composite(scrim)
     draw = ImageDraw.Draw(card)
 

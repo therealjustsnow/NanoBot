@@ -1244,6 +1244,213 @@ register(
     ),
 )
 
+# ══════════════════════════════════════════════════════════════════════════════
+#  The Gallery — cosmetics backed by real artwork
+#
+#  Everything above is drawn by the renderer from a palette. These seventeen are
+#  the exception: each one has a real image at assets/profile/<slot>/<key>.webp,
+#  fetched by scripts/fetch_cosmetic_art.py from Wikimedia Commons (paintings
+#  whose copyright has long expired) and NASA (U.S. federal works, not subject
+#  to copyright). assets/profile/CREDITS.md lists every artist and source, and
+#  the fetch script re-checks the licence against the source API so an
+#  encumbered image cannot be added by editing a manifest line.
+#
+#  The palettes are still here and still matter: they are sampled from each
+#  painting, so they drive the card's accent colour (chip bars, the rep pill) —
+#  and if the asset file is ever missing, the cosmetic degrades to generated art
+#  in its own colours instead of breaking.
+#
+#  Deliberately the premium tier. Generated art stays the free/earned baseline;
+#  a Hokusai costs coins, and three of these can only be earned.
+# ══════════════════════════════════════════════════════════════════════════════
+register(
+    CosmeticDef(
+        key="banner_art_starry_night",
+        name="The Starry Night",
+        slot="banner",
+        description="Vincent van Gogh, 1889.",
+        unlock={"kind": "purchase"},
+        price=75_000,
+        palette=("#1D2121", "#6E8285", "#B79A19"),
+        rarity="legendary",
+        sort=60,
+    ),
+    CosmeticDef(
+        key="banner_art_great_wave",
+        name="The Great Wave",
+        slot="banner",
+        description="Katsushika Hokusai, c. 1831.",
+        unlock={"kind": "purchase"},
+        price=60_000,
+        palette=("#2A3E54", "#C6BFA3", "#CAA466"),
+        rarity="epic",
+        sort=61,
+    ),
+    CosmeticDef(
+        key="banner_art_cafe_terrace",
+        name="Café Terrace at Night",
+        slot="banner",
+        description="Vincent van Gogh, 1888.",
+        unlock={"kind": "purchase"},
+        price=65_000,
+        palette=("#2E2B2A", "#C19631", "#F2BD17"),
+        rarity="epic",
+        sort=62,
+    ),
+    CosmeticDef(
+        key="banner_art_wanderer",
+        name="Above the Sea of Fog",
+        slot="banner",
+        description="Caspar David Friedrich, 1818.",
+        unlock={"kind": "purchase"},
+        price=55_000,
+        palette=("#222328", "#BBC1CE", "#AA9172"),
+        rarity="epic",
+        sort=63,
+    ),
+    CosmeticDef(
+        key="banner_art_water_lilies",
+        name="Water Lilies",
+        slot="banner",
+        description="Claude Monet, 1906.",
+        unlock={"kind": "purchase"},
+        price=50_000,
+        palette=("#233B45", "#6D86AA", "#3B80A6"),
+        rarity="rare",
+        sort=64,
+    ),
+    CosmeticDef(
+        key="banner_art_wheatfield",
+        name="Wheatfield with Crows",
+        slot="banner",
+        description="Vincent van Gogh, 1890.",
+        unlock={"kind": "purchase"},
+        price=55_000,
+        palette=("#162F4D", "#A18821", "#C0A014"),
+        rarity="epic",
+        sort=65,
+    ),
+    CosmeticDef(
+        key="banner_art_red_fuji",
+        name="Fine Wind, Clear Morning",
+        slot="banner",
+        description="Katsushika Hokusai, c. 1831.",
+        unlock={"kind": "purchase"},
+        price=45_000,
+        palette=("#152424", "#AAB5BA", "#ED6733"),
+        rarity="rare",
+        sort=66,
+    ),
+    CosmeticDef(
+        key="banner_art_temeraire",
+        name="The Fighting Temeraire",
+        slot="banner",
+        description="J. M. W. Turner, 1839.",
+        unlock={"kind": "purchase"},
+        price=70_000,
+        palette=("#3A2E24", "#B69B7A", "#C2843D"),
+        rarity="epic",
+        sort=67,
+    ),
+    CosmeticDef(
+        key="banner_art_kiss",
+        name="The Kiss",
+        slot="banner",
+        description="Gustav Klimt, 1908.",
+        unlock={"kind": "purchase"},
+        price=120_000,
+        palette=("#4B461C", "#CD9C33", "#FCCB30"),
+        rarity="legendary",
+        sort=68,
+    ),
+    CosmeticDef(
+        key="banner_art_ninth_wave",
+        name="The Ninth Wave",
+        slot="banner",
+        description="Ivan Aivazovsky, 1850. Earned by anglers: 2,000 fish caught.",
+        unlock={"kind": "stat", "stat": "fish_caught", "value": 2000},
+        palette=("#252020", "#C59B67", "#DBB963"),
+        rarity="legendary",
+        sort=69,
+    ),
+    CosmeticDef(
+        key="banner_space_carina",
+        name="Carina Nebula",
+        slot="banner",
+        description="NASA/ESA/CSA James Webb Space Telescope, 2022.",
+        unlock={"kind": "purchase"},
+        price=100_000,
+        palette=("#1B181F", "#85654C", "#2171B8"),
+        rarity="legendary",
+        sort=70,
+    ),
+    CosmeticDef(
+        key="banner_space_pillars",
+        name="Pillars of Creation",
+        slot="banner",
+        description="NASA/ESA Hubble Space Telescope. Reach global level 75.",
+        unlock={"kind": "global_level", "value": 75},
+        palette=("#0A0B12", "#3C3B42", "#E2B67C"),
+        rarity="legendary",
+        sort=71,
+    ),
+    CosmeticDef(
+        key="banner_space_earthrise",
+        name="Earthrise",
+        slot="banner",
+        description="NASA, Apollo 8, 1968. Awarded at prestige 4.",
+        unlock={"kind": "prestige", "value": 4},
+        palette=("#05060A", "#4D4D4D", "#3C71C3"),
+        rarity="legendary",
+        sort=72,
+    ),
+    CosmeticDef(
+        key="banner_space_jupiter",
+        name="The Great Red Spot",
+        slot="banner",
+        description="NASA/JPL-Caltech, Juno.",
+        unlock={"kind": "purchase"},
+        price=80_000,
+        palette=("#3B2A22", "#E7A078", "#F3AC7F"),
+        rarity="epic",
+        sort=73,
+    ),
+    CosmeticDef(
+        key="wallet_art_kiss",
+        name="Klimt Purse",
+        slot="wallet",
+        description="Gustav Klimt's gold leaf, on your wallet.",
+        unlock={"kind": "purchase"},
+        price=150_000,
+        palette=("#55481C", "#CE9F40", "#FDCB30"),
+        rarity="legendary",
+        sort=20,
+    ),
+    CosmeticDef(
+        key="wallet_art_great_wave",
+        name="Great Wave Wallet",
+        slot="wallet",
+        description="Katsushika Hokusai, c. 1831.",
+        unlock={"kind": "purchase"},
+        price=70_000,
+        palette=("#2A3E54", "#C5C0A6", "#CCA669"),
+        rarity="epic",
+        sort=21,
+    ),
+    CosmeticDef(
+        key="wallet_space_aurora",
+        name="Aurora from Orbit",
+        slot="wallet",
+        description="NASA, International Space Station.",
+        unlock={"kind": "purchase"},
+        price=90_000,
+        palette=("#070306", "#2E4A5C", "#4FD6A0"),
+        rarity="epic",
+        sort=22,
+    ),
+)
+
+
 # Defaults a fresh account should already be wearing, so a first /profile (or
 # /balance) looks finished instead of empty.
 DEFAULT_LOADOUT: dict[str, list[str]] = {

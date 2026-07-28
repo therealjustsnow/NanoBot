@@ -1,0 +1,140 @@
+{
+  "_readme": [
+    "Source list for the bundled cosmetic artwork. Every entry must be public",
+    "domain or a licence that allows redistribution — scripts/fetch_cosmetic_art.py",
+    "reads the licence back from the source API and refuses anything else, so a",
+    "new entry cannot quietly add an encumbered image.",
+    "",
+    "Keys must match a CosmeticDef key in utils/cosmetics.py. `focus` picks the",
+    "crop anchor when the source aspect is taller than the card (top/center/bottom).",
+    "Optional `title`/`credit` override what the source API reports (a Japanese object name comes back untranslated); `licence` is never overridable."
+  ],
+  "art": [
+    {
+      "key": "banner_art_starry_night",
+      "slot": "banner",
+      "source": "commons",
+      "file": "Van Gogh - Starry Night - Google Art Project.jpg",
+      "focus": "center"
+    },
+    {
+      "key": "banner_art_great_wave",
+      "slot": "banner",
+      "source": "commons",
+      "file": "Great Wave off Kanagawa2.jpg",
+      "focus": "center",
+      "title": "The Great Wave off Kanagawa",
+      "credit": "Katsushika Hokusai"
+    },
+    {
+      "key": "banner_art_cafe_terrace",
+      "slot": "banner",
+      "source": "commons",
+      "file": "Vincent Willem van Gogh - Cafe Terrace at Night (Yorck).jpg",
+      "focus": "center"
+    },
+    {
+      "key": "banner_art_wanderer",
+      "slot": "banner",
+      "source": "commons",
+      "file": "Caspar David Friedrich - Wanderer above the sea of fog.jpg",
+      "focus": "center",
+      "title": "Wanderer above the Sea of Fog"
+    },
+    {
+      "key": "banner_art_water_lilies",
+      "slot": "banner",
+      "source": "commons",
+      "file": "Claude Monet - Water Lilies - 1906, Ryerson.jpg",
+      "focus": "center"
+    },
+    {
+      "key": "banner_art_wheatfield",
+      "slot": "banner",
+      "source": "commons",
+      "file": "Vincent van Gogh - Wheatfield with crows - Google Art Project.jpg",
+      "focus": "center"
+    },
+    {
+      "key": "banner_art_red_fuji",
+      "slot": "banner",
+      "source": "commons",
+      "file": "Hokusai-fuji7.png",
+      "focus": "center",
+      "title": "Fine Wind, Clear Morning (Red Fuji)"
+    },
+    {
+      "key": "banner_art_temeraire",
+      "slot": "banner",
+      "source": "commons",
+      "file": "Turner, J. M. W. - The Fighting Téméraire tugged to her last Berth to be broken.jpg",
+      "focus": "center"
+    },
+    {
+      "key": "banner_art_ninth_wave",
+      "slot": "banner",
+      "source": "commons",
+      "file": "Hovhannes Aivazovsky - The Ninth Wave - Google Art Project.jpg",
+      "focus": "center",
+      "credit": "Ivan Aivazovsky"
+    },
+    {
+      "key": "banner_art_kiss",
+      "slot": "banner",
+      "source": "commons",
+      "file": "Gustav Klimt 016.jpg",
+      "focus": "center"
+    },
+    {
+      "key": "banner_space_carina",
+      "slot": "banner",
+      "source": "nasa",
+      "nasa_id": "carina_nebula",
+      "focus": "center"
+    },
+    {
+      "key": "banner_space_pillars",
+      "slot": "banner",
+      "source": "nasa",
+      "nasa_id": "GSFC_20171208_Archive_e000842",
+      "focus": "center"
+    },
+    {
+      "key": "banner_space_earthrise",
+      "slot": "banner",
+      "source": "nasa",
+      "nasa_id": "GSFC_20171208_Archive_e000496",
+      "focus": "center"
+    },
+    {
+      "key": "banner_space_jupiter",
+      "slot": "banner",
+      "source": "nasa",
+      "nasa_id": "PIA21395",
+      "focus": "center"
+    },
+    {
+      "key": "wallet_art_kiss",
+      "slot": "wallet",
+      "source": "commons",
+      "file": "Gustav Klimt 016.jpg",
+      "focus": "center"
+    },
+    {
+      "key": "wallet_art_great_wave",
+      "slot": "wallet",
+      "source": "commons",
+      "file": "Great Wave off Kanagawa2.jpg",
+      "focus": "center",
+      "title": "The Great Wave off Kanagawa",
+      "credit": "Katsushika Hokusai"
+    },
+    {
+      "key": "wallet_space_aurora",
+      "slot": "wallet",
+      "source": "nasa",
+      "nasa_id": "iss058e005282",
+      "focus": "center"
+    }
+  ]
+}

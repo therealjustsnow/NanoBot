@@ -113,6 +113,7 @@ BADGE_SIZE = 56
 BADGE_GAP = 12
 BADGE_Y = H - PAD - BADGE_SIZE
 
+PANEL_FILL = (0, 0, 0, 105)  # translucent panel behind chips/tallies
 INK = (255, 255, 255, 255)
 INK_MUTED = (196, 201, 214, 255)
 INK_FAINT = (140, 146, 162, 255)
@@ -195,14 +196,46 @@ def _fit_text(draw, text: str, font_size: int, max_w: int, bold=True):
 
 
 # ── Generated cosmetic art ───────────────────────────────────────────────────
+# Real artwork ships as WebP (it is photographic); .png is still accepted so a
+# hand-drawn asset dropped in later needs no conversion.
+ASSET_EXTS = (".webp", ".png", ".jpg", ".jpeg")
+
+
 def _asset_path(d: cosmetics.CosmeticDef) -> str | None:
-    """Hand-made art for this cosmetic, if someone has added it."""
-    path = os.path.join(ASSET_DIR, d.slot, f"{d.key}.png")
-    return path if os.path.exists(path) else None
+    """Hand-made or bundled art for this cosmetic, if there is any."""
+    for ext in ASSET_EXTS:
+        path = os.path.join(ASSET_DIR, d.slot, f"{d.key}{ext}")
+        if os.path.exists(path):
+            return path
+    return None
 
 
-def _cached(d: cosmetics.CosmeticDef, size: tuple[int, int]) -> str:
-    return os.path.join(CACHE_DIR, d.slot, f"{d.key}_{size[0]}x{size[1]}.png")
+def _cached(d: cosmetics.CosmeticDef, size: tuple[int, int], tag: str = "") -> str:
+    suffix = f"_{tag}" if tag else ""
+    return os.path.join(CACHE_DIR, d.slot, f"{d.key}_{size[0]}x{size[1]}{suffix}.png")
+
+
+def _fit_cover(img: Image.Image, size: tuple[int, int]) -> Image.Image:
+    """Scale and crop to fill `size` without distorting the source.
+
+    A card is a fixed aspect and a painting is not, so something has to give.
+    Stretching is the one option that always looks wrong, and it is what the
+    plain `resize` this replaced was doing to every asset.
+    """
+    target_w, target_h = size
+    if img.size == size:
+        return img
+    scale = max(target_w / img.width, target_h / img.height)
+    resized = img.resize(
+        (
+            max(target_w, round(img.width * scale)),
+            max(target_h, round(img.height * scale)),
+        ),
+        Image.LANCZOS,
+    )
+    left = (resized.width - target_w) // 2
+    top = (resized.height - target_h) // 2
+    return resized.crop((left, top, left + target_w, top + target_h))
 
 
 def cosmetic_image(d: cosmetics.CosmeticDef, size: tuple[int, int]) -> Image.Image:
@@ -215,7 +248,15 @@ def cosmetic_image(d: cosmetics.CosmeticDef, size: tuple[int, int]) -> Image.Ima
     asset = _asset_path(d)
     if asset:
         try:
-            return Image.open(asset).convert("RGBA").resize(size, Image.LANCZOS)
+            # Cache the *treated* art too, keyed by the file's mtime so
+            # replacing the artwork invalidates it without a manual purge.
+            tag = f"a{int(os.path.getmtime(asset))}"
+            cached_asset = _cached(d, size, tag)
+            if os.path.exists(cached_asset):
+                return Image.open(cached_asset).convert("RGBA")
+            img = _prepare_asset(Image.open(asset).convert("RGBA"), d, size)
+            _write_cache(cached_asset, img)
+            return img
         except OSError:
             log.warning("Unreadable profile asset %s — generating instead", asset)
     cache = _cached(d, size)
@@ -225,14 +266,40 @@ def cosmetic_image(d: cosmetics.CosmeticDef, size: tuple[int, int]) -> Image.Ima
         except OSError:
             pass
     img = _generate(d, size)
+    _write_cache(cache, img)
+    return img
+
+
+def _write_cache(path: str, img: Image.Image) -> None:
     try:
-        os.makedirs(os.path.dirname(cache), exist_ok=True)
+        os.makedirs(os.path.dirname(path), exist_ok=True)
         # compress_level 3: this is a local scratch cache, so spending 200 ms
         # per file to save 15% of disk would be the wrong trade.
-        img.save(cache, "PNG", compress_level=3)
+        img.save(path, "PNG", compress_level=3)
     except OSError:  # pragma: no cover - read-only data dir
-        log.debug("Could not cache generated art for %s", d.key)
-    return img
+        log.debug("Could not cache art at %s", path)
+
+
+# How dark a real painting or photograph is pulled before it goes behind the
+# card's white text. Lower than the ceiling used for generated art: a painting
+# has bright passages a palette-driven gradient never produces (Hokusai's white
+# sky, van Gogh's wheat), and the text has to survive all of them.
+ART_CEILING = 118
+
+
+def _prepare_asset(
+    img: Image.Image, d: cosmetics.CosmeticDef, size: tuple[int, int]
+) -> Image.Image:
+    """Fit a bundled/hand-made asset to a slot, and make it text-safe.
+
+    Badges and coins are used at their own scale and stay untouched. A banner
+    is a *background*: it gets cropped to the card's aspect, dimmed until white
+    text reads over its brightest passage, and vignetted so the edges settle
+    behind the card's content.
+    """
+    if d.slot not in ("banner", "wallet"):
+        return img.resize(size, Image.LANCZOS)
+    return _vignette(_tame(_fit_cover(img, size), ART_CEILING), 80)
 
 
 def _generate(d: cosmetics.CosmeticDef, size: tuple[int, int]) -> Image.Image:
@@ -995,9 +1062,10 @@ def _draw_chip(base, draw, xy, size, label, value, accent):
     x, y = xy
     w, h = size
     chip = Image.new("RGBA", (w, h), (0, 0, 0, 0))
-    ImageDraw.Draw(chip).rounded_rectangle(
-        (0, 0, w - 1, h - 1), 14, fill=(255, 255, 255, 26)
-    )
+    # Darken rather than lighten: a 10%-white wash disappears over a bright
+    # painting, while a dark panel reads against both a pale Hokusai sky and a
+    # near-black generated banner.
+    ImageDraw.Draw(chip).rounded_rectangle((0, 0, w - 1, h - 1), 14, fill=PANEL_FILL)
     base.alpha_composite(chip, (x, y))
     draw.rounded_rectangle((x, y, x + 4, y + h - 1), 2, fill=accent)
     draw.text((x + 16, y + 10), label.upper(), font=_font(15), fill=INK_FAINT)
@@ -1020,6 +1088,28 @@ def encode(img: Image.Image) -> bytes:
     buf = io.BytesIO()
     img.save(buf, IMAGE_FORMAT, **_ENCODE_OPTS)
     return buf.getvalue()
+
+
+# Where the stats panel starts, and how far above that it fades in from.
+PANEL_TOP = CHIP_TOP - 22
+PANEL_FADE = 56
+
+
+def _content_panel(photographic: bool) -> Image.Image:
+    """The soft dark slab the chips and badges sit on."""
+    strength = 176 if photographic else 96
+    panel = Image.new("RGBA", (W, H), (0, 0, 0, 0))
+    panel.paste(
+        _gradient(
+            (W, H - PANEL_TOP + PANEL_FADE), (0, 0, 0, 0), (10, 11, 18, strength)
+        ),
+        (0, PANEL_TOP - PANEL_FADE),
+    )
+    # Below the fade the panel is flat, so the chips read the same all the way
+    # down instead of getting steadily darker.
+    flat = Image.new("RGBA", (W, H - PANEL_TOP), (10, 11, 18, strength))
+    panel.paste(flat, (0, PANEL_TOP))
+    return panel
 
 
 def render_card(data: dict) -> bytes:
@@ -1048,8 +1138,19 @@ def render_card(data: dict) -> bytes:
     card.paste(background, (0, 0))
 
     # Scrim: darken left-to-right so text stays readable over any banner art.
-    scrim = _gradient((W, H), (0, 0, 0, 170), (0, 0, 0, 60))
+    # A real painting carries detail and bright passages a palette gradient
+    # never does, so it gets a heavier wash plus a vertical one under the chip
+    # grid — the difference between "background" and "busy".
+    photographic = banner is not None and _asset_path(banner) is not None
+    left, right = (185, 90) if photographic else (170, 60)
+    scrim = _gradient((W, H), (0, 0, 0, left), (0, 0, 0, right))
     card.alpha_composite(scrim.rotate(90, expand=True).resize((W, H)))
+    # Dense stats over a painting is the hard case: dimming the whole banner
+    # far enough to read them wastes the artwork someone paid for. So the
+    # bottom half — chip grid and badge row — gets its own panel instead, and
+    # the top half keeps the art bright. The panel fades in rather than
+    # starting on a hard line.
+    card.alpha_composite(_content_panel(photographic))
 
     draw = ImageDraw.Draw(card)
 
@@ -1077,8 +1178,14 @@ def render_card(data: dict) -> bytes:
     if plate and plate.key != "plate_default":
         plate_w = int(draw.textlength(name, font=name_font)) + 36
         plate_img = _gradient((plate_w, 56), _palette(plate, 0), _palette(plate, 1))
-        plate_mask = _rounded_mask((plate_w, 56), 16)
-        card.paste(plate_img, (TEXT_X - 14, NAME_Y - 6), plate_mask)
+        # alpha_composite, not paste-with-mask: a plate palette can carry its
+        # own alpha (Frosted Glass is #FFFFFF33), and pasting discards it —
+        # which drew a solid white slab over the name instead of a tint.
+        rounded = ImageChops.multiply(
+            plate_img.getchannel("A"), _rounded_mask((plate_w, 56), 16)
+        )
+        plate_img.putalpha(rounded)
+        card.alpha_composite(plate_img, (TEXT_X - 14, NAME_Y - 6))
     draw.text((TEXT_X, NAME_Y), name, font=name_font, fill=INK)
     title = data.get("title")
     if title:
