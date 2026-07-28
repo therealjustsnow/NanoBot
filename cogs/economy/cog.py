@@ -17,6 +17,15 @@ guild's own role or mod-fulfilled perk, so no price it sets can affect anyone
 outside it. To make those prices pickable rather than guesswork, /shop shows
 each one as a time to earn. See docs/global-economy.md for the full scope split.
 
+There are now two kinds of sink, split into aisles by /shop. The **server**
+aisle is the one described above. The **cosmetic** aisles (profile and wallet)
+sell card looks from utils/cosmetics.py, and their prices are bot-wide code
+constants for the mirror of the same reason the faucets are: what you buy is
+worn on a global account, so a per-guild price would let the cheapest server on
+the bot decide what everyone paid. /balance is itself a rendered card now
+(utils/wallet_card.py) carrying a banner and a coin style, which is what those
+wallet cosmetics dress.
+
 Members hold a coin balance, claim a daily reward (with a consecutive-day
 streak bonus), and pay each other. They also reward co-op activity: /squad
 tags teammates who each confirm with a button (tag up to five directly, or tag
@@ -49,8 +58,12 @@ Commands
   /coin name <text>              → currency name    (Manage Server)
   /coin emoji <emoji>            → currency emoji   (Manage Server)
   /coin config                   → show settings    (Manage Server)
-  /shop list [page]              → browse rewards
-  /shop buy <id|name>            → redeem an item
+  /shop browse                   → the three aisles (bare `n!shop`)
+  /shop profile [page]           → buy /profile cosmetics with coins
+  /shop wallet [page]            → buy /balance card cosmetics with coins
+  /shop unlock <name>            → buy one cosmetic
+  /shop server [page]            → browse this server's rewards (alias: list)
+  /shop buy <id|name>            → redeem a server reward
   /shop seed                     → add starter rewards (Manage Server)
   /shop add …                    → create an item   (Manage Server)
   /shop edit <id|name> …         → edit an item     (Manage Server)
@@ -73,6 +86,7 @@ lives in the owner-only admin cog.
 """
 
 import asyncio
+import io
 import logging
 import random
 import time
@@ -82,19 +96,25 @@ import discord
 from discord import app_commands
 from discord.ext import commands
 
-from utils import db
-from utils import globalxp
+from utils import cosmetics, db, globalxp, wallet_card
 from utils import helpers as h
 from utils.helpers import SCOPE_CHOICES
 
 from .constants import (
     COIN_MAX,
     COOP_CONFIRM_TIMEOUT,
+    DAILY_COOLDOWN,
     RAID_TIMEOUT,
     REWARD_DEFAULTS,
     _DEFAULT_SHOP_ITEMS,
 )
 from cogs.activities.helpers import effective_cooldown
+
+# Pure helpers borrowed from the identity/progression packages so the wallet
+# card resolves a loadout and an unlock exactly the way the profile card does
+# (the cogs/images.py -> cogs/fun/sources.py precedent). No cog state is touched.
+from cogs.identity.helpers import rarity_marker, resolve_loadout, unlock_context
+from cogs.progression.stats import compute_stats
 
 from .helpers import (
     compute_daily,
@@ -127,6 +147,11 @@ class Economy(commands.Cog):
         self._raid_tasks: dict[int, asyncio.Task] = {}
         self._squads: dict[int, SquadView] = {}
         self._squad_tasks: dict[int, asyncio.Task] = {}
+        # Wallet-card rendering is CPU work; two at a time keeps a burst of
+        # /balance calls from starving the event loop's thread pool.
+        self._render_lock = asyncio.Semaphore(2)
+        # Serializes a cosmetic purchase's debit-then-unlock per member.
+        self._shop_locks = h.KeyedLocks()
 
     async def cog_load(self):
         # restore_schedules only fires from on_ready, so a hot-reload after the
@@ -274,33 +299,117 @@ class Economy(commands.Cog):
     async def balance(
         self, ctx: commands.Context, member: Optional[discord.Member] = None
     ):
+        """The wallet card — the same numbers as before, drawn instead of listed.
+
+        It is deliberately a smaller card than /profile: one balance, three
+        tallies, a banner and a coin. /profile is where a whole loadout is shown
+        off; this answers "how much have I got" and gets out of the way.
+        """
         member = member or ctx.author
         if member.bot:
             return await ctx.reply(
                 embed=h.err("Bots don't hold coins."), ephemeral=True
             )
+        # Render + avatar fetch take a moment; both defer calls are best-effort
+        # (the profile card's pattern) so a failed defer never costs the card.
+        try:
+            await ctx.defer()
+        except Exception:
+            pass
         cfg = await self._cfg(ctx.guild.id)
+        data = await self._wallet_data(ctx, member, cfg)
+        data["avatar"] = await self._avatar_bytes(member)
+        async with self._render_lock:
+            png = await asyncio.to_thread(wallet_card.render_wallet_card, data)
+        await ctx.reply(
+            file=discord.File(fp=io.BytesIO(png), filename=f"wallet-{member.id}.png")
+        )
+
+    async def _wallet_data(self, ctx: commands.Context, member, cfg: dict) -> dict:
+        """Everything the wallet card draws, plus any wallet cosmetic the
+        member has just qualified for (their own card only, the same lazy
+        unlock the profile card does)."""
         res = await db.get_econ_rank(member.id)
         coins = res[1] if res else 0
-        rank_pos = res[0] if res else None
         contrib = await db.get_contrib_rank(member.id)
+        last_daily, streak = await db.get_daily_state(member.id)
 
-        embed = h.embed(f"{cfg['currency_emoji']} {member.display_name}", color=h.BLUE)
-        embed.set_thumbnail(url=member.display_avatar.url)
-        embed.add_field(name="Balance", value=self._money(cfg, coins), inline=True)
-        embed.add_field(
-            name="Global rank",
-            value=f"**#{rank_pos}**" if rank_pos else "Unranked",
-            inline=True,
+        left = int(DAILY_COOLDOWN - (time.time() - last_daily)) if last_daily else 0
+        daily_line = (
+            "Daily ready now" if left <= 0 else f"Daily in {h.fmt_duration(left)}"
         )
-        
-        if contrib:
-            embed.add_field(
-                name="🤝 Contribution",
-                value=f"**{contrib[1]:,}** pts · {_rank_title(contrib[0])} (#{contrib[0]})",
-                inline=False,
-            )
-        await ctx.reply(embed=embed)
+
+        owned = await db.get_unlocked_cosmetics(member.id)
+        if member.id == ctx.author.id:
+            unlocked = await self._unlock_wallet_cosmetics(member.id, owned, coins)
+            if unlocked:
+                owned = await db.get_unlocked_cosmetics(member.id)
+        loadout = resolve_loadout(
+            await db.get_equipped(member.id), owned, slots=("wallet", "coin")
+        )
+        return {
+            "name": member.display_name,
+            "balance": coins,
+            "currency": f"{cfg['currency_name']}s",
+            "rank": res[0] if res else None,
+            "contribution": contrib[1] if contrib else 0,
+            "contribution_rank": contrib[0] if contrib else None,
+            "contribution_title": _rank_title(contrib[0]) if contrib else "",
+            "streak": streak,
+            "daily_line": daily_line,
+            "footer": "One wallet in every server · /shop wallet to dress it up",
+            "wallet": cosmetics.get((loadout.get("wallet") or [""])[0]),
+            "coin": cosmetics.get((loadout.get("coin") or [""])[0]),
+        }
+
+    async def _unlock_wallet_cosmetics(
+        self, user_id: int, owned: dict, balance: int
+    ) -> list[str]:
+        """Hand over any *wallet* cosmetic this member now qualifies for.
+
+        /profile evaluates the whole catalogue; this evaluates only the two
+        wallet slots, and only the stat keys those rules actually name — so
+        checking them costs the couple of reads the wallet card was going to
+        make anyway rather than a full stats sweep.
+        """
+        defs = [
+            d
+            for slot in ("wallet", "coin")
+            for d in cosmetics.in_slot(slot)
+            if d.key not in owned
+        ]
+        wanted = {
+            (d.unlock or {}).get("stat")
+            for d in defs
+            if (d.unlock or {}).get("kind") == "stat"
+        } - {None}
+        stats = await compute_stats(user_id, sorted(wanted)) if wanted else {}
+        stats["balance"] = balance  # already in hand; don't re-read it
+        ctx_unlock = unlock_context(
+            global_level=globalxp.level_progress(await db.get_global_xp(user_id))[0],
+            prestige=(await db.get_progression(user_id))["prestige"],
+            achievements=(),
+            stats=stats,
+        )
+        names = []
+        for d in defs:
+            if (d.unlock or {}).get("kind") in ("manual", "purchase", "achievement"):
+                continue
+            if cosmetics.is_unlocked(d, ctx_unlock) and await db.unlock_cosmetic(
+                user_id, d.key, at=time.time()
+            ):
+                names.append(d.name)
+        return names
+
+    async def _avatar_bytes(self, member) -> Optional[bytes]:
+        """The member's avatar as PNG bytes, or None (the card then draws an
+        initial tile). Never let a CDN hiccup fail the whole command."""
+        try:
+            asset = member.display_avatar.replace(size=256, static_format="png")
+            return await asyncio.wait_for(asset.read(), timeout=5)
+        except Exception:
+            log.debug("avatar fetch failed for %s", member.id, exc_info=True)
+            return None
 
     # ══════════════════════════════════════════════════════════════════════════
     #  /daily  — flat
@@ -1097,31 +1206,272 @@ class Economy(commands.Cog):
     # ══════════════════════════════════════════════════════════════════════════
     @commands.hybrid_group(
         name="shop",
-        description="Browse and redeem rewards with your coins. See /shop list.",
+        description="Spend your coins: profile looks, wallet looks, server rewards.",
         invoke_without_command=True,
+        fallback="browse",
         extras={
             "category": "🪙 Economy",
             "sub": "💰 Wallet & Shop",
             "short": "Redeem coins for rewards",
             "usage": "shop [subcommand]",
-            "desc": "Spend your coins on rewards mods set up: Discord roles or custom "
-            "rewards (in-game loot, perks, anything). Admins manage items with "
-            "Manage Server.",
+            "desc": "Three aisles. `profile` and `wallet` sell card cosmetics for "
+            "coins (bot-wide prices, yours in every server); `server` is the "
+            "rewards your mods set up here — Discord roles or custom perks. "
+            "Admins manage the server aisle with Manage Server.",
             "args": [],
             "perms": "Admin subcommands require Manage Server",
-            "example": "{prefix}shop\n{prefix}shop buy Personal Role",
+            "example": "{prefix}shop\n{prefix}shop profile\n"
+            "{prefix}shop unlock Nebula\n{prefix}shop buy Personal Role",
         },
     )
     @commands.guild_only()
     async def shop(self, ctx: commands.Context):
-        await self._show_shop(ctx, 1)
+        await self._show_hub(ctx)
 
-    # ── /shop list ────────────────────────────────────────────────────────────────
-    @shop.command(name="list", description="Browse the items you can buy.")
+    async def _show_hub(self, ctx: commands.Context):
+        """The landing view: which aisle sells what.
+
+        One shop grew into three different things — a guild's roles and perks,
+        profile cosmetics, and now wallet cosmetics — and a single flat list
+        mixed a mod's "Custom Colour" with a banner. Sorting them by what they
+        dress means each aisle can also say the thing that matters about it:
+        the cosmetic ones are global and bot-priced, the server one is not.
+        """
+        cfg = await self._cfg(ctx.guild.id)
+        owned = await db.get_unlocked_cosmetics(ctx.author.id)
+        coins = await db.get_balance(ctx.author.id)
+        embed = h.embed(
+            "🛍️ Shop",
+            f"You have {self._money(cfg, coins)}.\n"
+            "Pick an aisle — cosmetics are yours on every server, the server "
+            "aisle is this one's own rewards.",
+            h.BLUE,
+        )
+        for category in cosmetics.CATEGORIES:
+            stock = cosmetics.purchasable(category)
+            if not stock:
+                continue
+            unowned = [d for d in stock if d.key not in owned]
+            cheapest = min((d.price for d in unowned), default=0)
+            labels = ", ".join(s.label.lower() for s in cosmetics.slots_in(category))
+            line = (
+                f"**{len(stock) - len(unowned)}/{len(stock)}** owned · {labels}\n"
+                f"`/shop {category}` to browse"
+            )
+            if unowned:
+                line += f" · from {self._money(cfg, cheapest)}"
+            embed.add_field(
+                name=f"{'🎨' if category == 'profile' else '💳'} "
+                f"{category.title()} cosmetics",
+                value=line,
+                inline=False,
+            )
+        total = await db.count_shop_items(ctx.guild.id, enabled_only=True)
+        embed.add_field(
+            name="🏠 Server rewards",
+            value=(
+                f"**{total}** item{'' if total == 1 else 's'} set up by this "
+                "server's mods · `/shop server` to browse"
+                if total
+                else "Nothing yet — mods can add rewards with `/shop seed` or "
+                "`/shop add`."
+            ),
+            inline=False,
+        )
+        embed.set_footer(
+            text="Cosmetics: /shop unlock <name> · server rewards: /shop buy <name>"
+        )
+        await ctx.reply(embed=embed)
+
+    # ── /shop server ──────────────────────────────────────────────────────────────
+    # Named for its aisle now that there are three. `list` stays as a prefix
+    # alias — it was the name for a long time and costs nothing to keep.
+    @shop.command(
+        name="server",
+        aliases=["list"],
+        description="Browse the rewards this server's mods set up.",
+    )
     @app_commands.describe(page="Page number (8 per page)")
     @commands.cooldown(1, 5, commands.BucketType.user)
     async def shop_list(self, ctx: commands.Context, page: int = 1):
         await self._show_shop(ctx, page)
+
+    # ── /shop profile · /shop wallet ──────────────────────────────────────────────
+    @shop.command(
+        name="profile",
+        description="Buy banners, borders, nameplates and badges for /profile.",
+    )
+    @app_commands.describe(page="Page number (10 per page)")
+    @commands.cooldown(1, 5, commands.BucketType.user)
+    async def shop_profile(self, ctx: commands.Context, page: int = 1):
+        await self._show_cosmetics(ctx, "profile", page)
+
+    @shop.command(
+        name="wallet",
+        description="Buy banners and coin styles for your /balance card.",
+    )
+    @app_commands.describe(page="Page number (10 per page)")
+    @commands.cooldown(1, 5, commands.BucketType.user)
+    async def shop_wallet(self, ctx: commands.Context, page: int = 1):
+        await self._show_cosmetics(ctx, "wallet", page)
+
+    async def _show_cosmetics(self, ctx: commands.Context, category: str, page: int):
+        """One cosmetic aisle, grouped by slot.
+
+        Prices are the same on every server (see utils/cosmetics.py's PRICING
+        note): what you buy is worn on a global account, so a per-guild price
+        would let the cheapest server on the bot set everyone's. The guild's own
+        shop is untouched by that — a role only exists here.
+        """
+        cfg = await self._cfg(ctx.guild.id)
+        stock = cosmetics.purchasable(category)
+        if not stock:
+            return await ctx.reply(
+                embed=h.info(f"Nothing is for sale in the {category} aisle yet.")
+            )
+        per = 10
+        pages = max(1, (len(stock) + per - 1) // per)
+        page = min(max(1, page), pages)
+        owned = await db.get_unlocked_cosmetics(ctx.author.id)
+        coins = await db.get_balance(ctx.author.id)
+
+        embed = h.embed(
+            f"{'🎨' if category == 'profile' else '💳'} {category.title()} Cosmetics",
+            f"You have {self._money(cfg, coins)}. Buy one with "
+            f"`/shop unlock <name>` — it's yours on every server.",
+            h.BLUE,
+        )
+        for d in stock[(page - 1) * per : page * per]:
+            if d.key in owned:
+                mark, meta = "✅", "owned"
+            elif coins >= d.price:
+                mark, meta = "🟢", f"{self._money(cfg, d.price)} · you can afford this"
+            else:
+                mark, meta = (
+                    "🔒",
+                    f"{self._money(cfg, d.price)} · {self._effort(d.price - coins)} away",
+                )
+            embed.add_field(
+                name=f"{mark} {rarity_marker(d.rarity)} {d.name} "
+                f"({cosmetics.SLOTS[d.slot].label})",
+                value=f"{d.description or '—'}\n*{meta}*",
+                inline=False,
+            )
+        embed.set_footer(
+            text=f"Page {page}/{pages} · prices are the same in every server · "
+            "wear it with /profile equip"
+        )
+        await ctx.reply(embed=embed)
+
+    # ── /shop unlock ──────────────────────────────────────────────────────────────
+    @shop.command(
+        name="unlock",
+        description="Buy a profile or wallet cosmetic with your coins.",
+    )
+    @app_commands.describe(cosmetic="Pick one — 🟢 means you can afford it")
+    @commands.cooldown(1, 3, commands.BucketType.user)
+    async def shop_unlock(self, ctx: commands.Context, *, cosmetic: str):
+        d = cosmetics.find(cosmetic)
+        if d is None:
+            return await ctx.reply(
+                embed=h.err(
+                    f"There's no cosmetic called **{cosmetic}**. "
+                    "See `/shop profile` or `/shop wallet`."
+                ),
+                ephemeral=True,
+            )
+        if (d.unlock or {}).get("kind") != "purchase":
+            return await ctx.reply(
+                embed=h.warn(
+                    f"**{d.name}** isn't for sale — {cosmetics.describe_unlock(d)}.",
+                    "Not in the shop",
+                ),
+                ephemeral=True,
+            )
+        cfg = await self._cfg(ctx.guild.id)
+        # Serialize per user: the debit and the unlock are two writes, and a
+        # double-tap must not be able to pay twice for one cosmetic.
+        async with self._shop_locks.hold(ctx.author.id):
+            owned = await db.get_unlocked_cosmetics(ctx.author.id)
+            if d.key in owned:
+                return await ctx.reply(
+                    embed=h.info(
+                        f"You already own **{d.name}** — wear it with "
+                        f"`/profile equip {d.name}`."
+                    ),
+                    ephemeral=True,
+                )
+            if not await db.try_debit_coins(ctx.author.id, d.price):
+                balance = await db.get_balance(ctx.author.id)
+                short = d.price - balance
+                return await ctx.reply(
+                    embed=h.err(
+                        f"**{d.name}** costs {self._money(cfg, d.price)} and you "
+                        f"have {self._money(cfg, balance)} — "
+                        f"{self._money(cfg, short)} short ({self._effort(short)})."
+                    ),
+                    ephemeral=True,
+                )
+            try:
+                bought = await db.unlock_cosmetic(ctx.author.id, d.key, at=time.time())
+            except Exception:
+                await db.add_coins(ctx.author.id, d.price)
+                raise
+            if not bought:
+                # Lost a race (a grant landed first) — never charge for it.
+                await db.add_coins(ctx.author.id, d.price)
+                return await ctx.reply(
+                    embed=h.info(f"You already own **{d.name}** — nothing charged."),
+                    ephemeral=True,
+                )
+
+        await globalxp.award(ctx.author.id, "shop")
+        balance = await db.get_balance(ctx.author.id)
+        slot = cosmetics.SLOTS[d.slot]
+        await ctx.reply(
+            embed=h.ok(
+                f"Bought {rarity_marker(d.rarity)} **{d.name}** "
+                f"({slot.label}) for {self._money(cfg, d.price)}.\n"
+                f"Wear it with `/profile equip {d.name}`"
+                + (
+                    " and check it on `/balance`."
+                    if d.category == "wallet"
+                    else " and check it on `/profile`."
+                )
+                + f"\nBalance: {self._money(cfg, balance)}",
+                "🛍️ Unlocked",
+            )
+        )
+
+    @shop_unlock.autocomplete("cosmetic")
+    async def _shop_unlock_ac(self, interaction: discord.Interaction, current: str):
+        """Affordable first, then the rest, then what you already own — the
+        /craft make + /fish buy pattern, with the price on every row."""
+        q = (current or "").strip().lower()
+        owned = await db.get_unlocked_cosmetics(interaction.user.id)
+        coins = await db.get_balance(interaction.user.id)
+        ready: list[app_commands.Choice[str]] = []
+        soon: list[app_commands.Choice[str]] = []
+        have: list[app_commands.Choice[str]] = []
+        for d in cosmetics.purchasable():
+            if q and q not in d.name.lower() and q not in d.key.lower():
+                if q not in d.slot.lower() and q not in d.category:
+                    continue
+            label = f"{cosmetics.SLOTS[d.slot].label}: {d.name} — {d.price:,} coins"
+            if d.key in owned:
+                have.append(
+                    app_commands.Choice(name=f"✅ {label} (owned)"[:100], value=d.key)
+                )
+            elif coins >= d.price:
+                ready.append(app_commands.Choice(name=f"🟢 {label}"[:100], value=d.key))
+            else:
+                soon.append(
+                    app_commands.Choice(
+                        name=f"🔒 {label} (need {d.price - coins:,} more)"[:100],
+                        value=d.key,
+                    )
+                )
+        return (ready + soon + have)[:25]
 
     async def _show_shop(self, ctx: commands.Context, page: int):
         cfg = await self._cfg(ctx.guild.id)
@@ -1173,7 +1523,7 @@ class Economy(commands.Cog):
         record = await self._resolve_item(ctx.guild.id, item)
         if not record or not record["enabled"]:
             return await ctx.reply(
-                embed=h.err(f"No shop item matches `{item}`. Try `/shop list`."),
+                embed=h.err(f"No shop item matches `{item}`. Try `/shop server`."),
                 ephemeral=True,
             )
 

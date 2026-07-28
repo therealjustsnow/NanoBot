@@ -99,7 +99,8 @@ NanoBot fixes that.
 
 **Economy**
 - Per-server NanoCoin currency (name and emoji are configurable)
-- `/balance`, `/daily` (24h cooldown with a consecutive-day streak bonus), and `/pay`
+- `/balance` (a rendered wallet card), `/daily` (24h cooldown with a consecutive-day streak bonus), and `/pay`
+- A cosmetic shop (`/shop profile`, `/shop wallet`) that turns coins into profile- and wallet-card looks
 - `/coin top` rich list and `/coin gamble` double-or-nothing
 - Admin grant / take / reset and per-server daily-amount + streak-bonus tuning
 
@@ -682,14 +683,18 @@ Per-server message XP and levels (Mee6-style curve). **Off by default** -- enabl
 | Command | Description |
 |---------|-------------|
 | `/profile [user]` | Your account **card image** — global level, this server's level, coins, fishing, casino, work, items, achievements, prestige emblem and equipped badges (alias: `/card`) |
-| `/profile cosmetics` | Banners, borders, nameplates and badges you own — and how to unlock the rest |
+| `/profile cosmetics` | Banners, borders, nameplates, badges, wallet banners and coin styles you own — and how to unlock the rest |
 | `/profile equip <name>` | Wear a cosmetic on your card (`/profile unequip` to remove) |
 | `/profile badges [user]` | The badge gallery |
-| `/balance [user]` | Show a coin balance and global rank |
+| `/balance [user]` | Your **wallet card image** — balance, global rank, contribution, daily streak, wearing your wallet banner and coin style |
 | `/daily` | Claim the daily reward (24h cooldown, consecutive-day streak bonus) |
 | `/pay <user> <amount>` | Transfer coins to another member |
 | `/coin top [page] [scope]` | Richest members — this server's members, or every server |
 | `/coin gamble <amount>` | Double-or-nothing bet (~45% win) |
+| `/shop` | The three aisles: profile cosmetics, wallet cosmetics, and this server's rewards |
+| `/shop profile` · `/shop wallet` | The **cosmetic shop** — banners, borders, nameplates, badges and coin styles for coins (bot-wide prices, since a cosmetic is worn on a global account) |
+| `/shop unlock <name>` | Buy a cosmetic |
+| `/shop server` · `/shop buy <item>` | Browse and redeem the rewards this server's mods set up |
 
 **Admin subcommands** *(Manage Server):*
 

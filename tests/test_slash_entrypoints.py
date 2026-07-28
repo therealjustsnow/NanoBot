@@ -14,7 +14,7 @@ This guard pins the rule for every economy group. A group is fine when either:
   * it declares a `fallback`, or
   * its bare form just runs an action that already has its own subcommand
     (`/mine` digs and `/mine dig` exists; `/fish` casts, `/coin` shows the
-    leaderboard `/coin top` shows, `/shop` shows `/shop list`).
+    leaderboard `/coin top` shows).
 Anything else is a landing view with no slash entry point.
 """
 
@@ -35,7 +35,10 @@ _EXPECTED_ENTRYPOINTS = {
     "mine": "dig",
     "fish": "cast",
     "coin": "top",
-    "shop": "list",
+    # /shop's bare form used to be the guild item list; it is now the aisle hub
+    # (profile / wallet / server cosmetics), which is a landing view and so
+    # needs its own slash entry point.
+    "shop": "fallback",
 }
 
 _ECONOMY_COGS = (

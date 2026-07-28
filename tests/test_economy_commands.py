@@ -13,12 +13,25 @@ from tests.conftest import config, grant_perms
 
 
 @pytest.mark.cogs("cogs.economy")
-async def test_balance_replies(bot):
+async def test_balance_replies_with_a_wallet_card(bot):
+    """/balance is a rendered card now, not an embed."""
     author = config().members[0]
+    await db.add_coins(author.id, 4_200)
+
     await dpytest.message("!balance", member=author)
     sent = dpytest.get_message()
-    assert sent.embeds
-    assert author.display_name in sent.embeds[0].title
+    assert sent.attachments, "the wallet should come back as an image"
+    attachment = sent.attachments[0]
+    assert attachment.filename.endswith(".png")
+    assert attachment.size > 1000  # a real render, not an empty file
+
+
+@pytest.mark.cogs("cogs.economy")
+async def test_balance_works_for_a_brand_new_account(bot):
+    """No coins, no streak, nothing equipped — still a card, never an error."""
+    author = config().members[1]
+    await dpytest.message("!balance", member=author)
+    assert dpytest.get_message().attachments
 
 
 @pytest.mark.cogs("cogs.economy")

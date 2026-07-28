@@ -108,8 +108,10 @@ from cogs.progression.stats import compute_stats_with_sources
 from .helpers import (
     announce_channel_id,
     equip_result,
+    interleave_by_slot,
     newly_unlocked,
     rarity_marker,
+    resolve_loadout,
     unlock_context,
 )
 
@@ -411,26 +413,7 @@ class Identity(commands.Cog):
     async def _loadout(self, user_id: int, owned: dict) -> dict[str, list[str]]:
         """Equipped cosmetics, filtered to what's still owned and topped up with
         the defaults so a brand-new card looks finished."""
-        equipped = await db.get_equipped(user_id)
-        out: dict[str, list[str]] = {}
-        for slot in cosmetics.SLOTS:
-            keys = [
-                k
-                for k in equipped.get(slot, [])
-                if cosmetics.get(k)
-                and (
-                    k in owned
-                    or (cosmetics.get(k).unlock or {}).get("kind") == "default"
-                )
-            ]
-            if not keys:
-                keys = [
-                    k
-                    for k in cosmetics.DEFAULT_LOADOUT.get(slot, [])
-                    if cosmetics.get(k)
-                ]
-            out[slot] = keys
-        return out
+        return resolve_loadout(await db.get_equipped(user_id), owned)
 
     # ── /profile cosmetics ───────────────────────────────────────────────────
     @profile.command(
@@ -560,14 +543,18 @@ class Identity(commands.Cog):
         with the unlock line attached — so the picker doubles as the "how do I
         get that one?" answer instead of coming back empty on a new account.
         The markers match /profile cosmetics: ✅ worn · ▫️ owned · 🔒 locked.
+
+        Each bucket is interleaved across slots (see `interleave_by_slot`) so
+        the 25 rows Discord shows cover banners, borders, plates, badges and
+        the wallet pair rather than 25 badges.
         """
         q = (current or "").strip().lower()
         owned = await db.get_unlocked_cosmetics(interaction.user.id)
         equipped = await db.get_equipped(interaction.user.id)
         worn = {key for keys in equipped.values() for key in keys}
-        ready: list[app_commands.Choice[str]] = []
-        already: list[app_commands.Choice[str]] = []
-        locked: list[app_commands.Choice[str]] = []
+        ready: list[tuple[str, app_commands.Choice[str]]] = []
+        already: list[tuple[str, app_commands.Choice[str]]] = []
+        locked: list[tuple[str, app_commands.Choice[str]]] = []
         for d in sorted(
             cosmetics.COSMETICS.values(), key=lambda c: (c.slot, c.sort, c.name)
         ):
@@ -575,14 +562,21 @@ class Identity(commands.Cog):
                 continue
             default = (d.unlock or {}).get("kind") == "default"
             if d.key in worn:
-                already.append(self._cosmetic_choice(d, "✅", "already worn"))
+                already.append((d.slot, self._cosmetic_choice(d, "✅", "already worn")))
             elif d.key in owned or default:
-                ready.append(self._cosmetic_choice(d, "▫️", d.description))
+                ready.append((d.slot, self._cosmetic_choice(d, "▫️", d.description)))
             else:
                 locked.append(
-                    self._cosmetic_choice(d, "🔒", cosmetics.describe_unlock(d))
+                    (
+                        d.slot,
+                        self._cosmetic_choice(d, "🔒", cosmetics.describe_unlock(d)),
+                    )
                 )
-        return (ready + already + locked)[:25]
+        return (
+            interleave_by_slot(ready)
+            + interleave_by_slot(already)
+            + interleave_by_slot(locked)
+        )[:25]
 
     # ── /profile unequip ─────────────────────────────────────────────────────
     @profile.command(name="unequip", description="Take a cosmetic off your card.")

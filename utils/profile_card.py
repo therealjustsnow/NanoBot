@@ -1,11 +1,19 @@
 """utils/profile_card.py — renders the /profile card as an image.
 
 Everything is drawn with Pillow at call time; the bot ships no binary artwork.
-Each cosmetic declares a palette and a glyph (utils/cosmetics.py) and this
-module turns that into clean, flat vector-style art — gradients, rounded
-rectangles, rings — cached to ``data/profile_cache/``. Drop a real PNG at
-``assets/profile/<slot>/<key>.png`` and it is used instead, no code change:
-that's the "don't sink time into art now, swap it in later" contract.
+Each cosmetic declares a palette, a glyph, and optionally a ``pattern`` or
+``style`` (utils/cosmetics.py) and this module turns that into clean, flat
+vector-style art — gradients, rounded rectangles, rings — cached to
+``data/profile_cache/``. Drop a real PNG at ``assets/profile/<slot>/<key>.png``
+and it is used instead, no code change: that's the "don't sink time into art
+now, swap it in later" contract.
+
+The two look registries (``_BANNER_PATTERNS`` for banner/wallet artwork,
+``_BORDER_STYLES`` for frames) are what stop the catalogue looking like twenty
+recolours of one gradient: a new look is one function plus one registry line,
+and the cosmetic selects it by name. Random placement inside a pattern is
+seeded on the cosmetic key, so art is deterministic and the on-disk cache never
+goes stale.
 
 Layout lives in the LAYOUT constants below rather than being scattered through
 the drawing code, so moving a block or adding a row is a number change. The
@@ -22,6 +30,7 @@ import io
 import logging
 import math
 import os
+import random
 
 from PIL import Image, ImageDraw, ImageFilter, ImageFont
 
@@ -205,30 +214,309 @@ def cosmetic_image(d: cosmetics.CosmeticDef, size: tuple[int, int]) -> Image.Ima
 def _generate(d: cosmetics.CosmeticDef, size: tuple[int, int]) -> Image.Image:
     if d.slot == "badge":
         return _generate_badge(d, size)
-    if d.slot == "banner":
+    if d.slot in ("banner", "wallet"):
         return _generate_banner(d, size)
+    if d.slot == "coin":
+        return _generate_coin(d, size)
     return _gradient(size, _palette(d, 0), _palette(d, 1))
 
 
-def _generate_banner(d: cosmetics.CosmeticDef, size) -> Image.Image:
-    """A flat gradient plus a couple of soft geometric shapes — enough to read
-    as designed artwork at card size without being noisy behind text."""
-    img = _gradient(size, _palette(d, 0), _palette(d, 1))
-    w, h = size
-    overlay = Image.new("RGBA", size, (0, 0, 0, 0))
-    draw = ImageDraw.Draw(overlay)
-    accent = _palette(d, 1)
-    soft = (accent[0], accent[1], accent[2], 38)
-    # Two large off-canvas circles + a diagonal sweep: reads as depth, costs
-    # nothing, and stays out of the text areas on the left.
+# ── Banner patterns ──────────────────────────────────────────────────────────
+# Each entry draws into a transparent overlay that is blurred and composited
+# over the def's gradient. They all take (draw, sharp, w, h, accent, rng) and
+# return a blur radius, so adding a look is one function plus one registry line
+# — the same "extend by data" contract the catalogue itself has. `sharp` is a
+# second overlay that is composited *without* the blur, which is how a heavily
+# blurred pattern can still carry crisp detail (nebula's stars).
+#
+# Two rules keep them usable rather than merely pretty: nothing may be opaque
+# enough to fight the text drawn on top, and the left third of the card (avatar,
+# name, level bars) stays comparatively clear.
+
+
+def _soft(colour, alpha: int):
+    return (colour[0], colour[1], colour[2], alpha)
+
+
+def _pattern_default(draw, sharp, w, h, accent, rng) -> float:
+    """Two large off-canvas circles + a diagonal sweep: reads as depth, costs
+    nothing, and stays out of the text areas on the left."""
+    soft = _soft(accent, 38)
     draw.ellipse((w * 0.62, -h * 0.55, w * 1.25, h * 0.85), fill=soft)
     draw.ellipse((w * 0.45, h * 0.45, w * 1.1, h * 1.9), fill=soft)
     draw.polygon(
         [(w * 0.05, h), (w * 0.35, 0), (w * 0.45, 0), (w * 0.15, h)],
         fill=(255, 255, 255, 12),
     )
-    img.alpha_composite(overlay.filter(ImageFilter.GaussianBlur(1.2)))
+    return 1.2
+
+
+def _pattern_waves(draw, sharp, w, h, accent, rng) -> float:
+    """Stacked sine crests along the bottom — water without drawing water."""
+    for i in range(4):
+        base = h * (0.55 + i * 0.14)
+        amp = h * 0.09 * (1 - i * 0.15)
+        pts = [
+            (x, base + amp * math.sin(x / w * math.pi * 2.2 + i * 0.9))
+            for x in range(0, w + 12, 12)
+        ]
+        crest = list(pts)
+        pts += [(w, h), (0, h)]
+        draw.polygon(pts, fill=_soft(accent, 46 + i * 14))
+        # A pale line along each crest: on a dark palette the fill alone is the
+        # same colour as the water and the waves vanish.
+        draw.line(crest, fill=(255, 255, 255, 34 + i * 10), width=3, joint="curve")
+    return 1.4
+
+
+def _pattern_rays(draw, sharp, w, h, accent, rng) -> float:
+    """A fan from the top-right corner — light through a window."""
+    ox, oy = w * 0.92, -h * 0.15
+    for i in range(9):
+        a0 = math.radians(96 + i * 10.5)
+        a1 = a0 + math.radians(4.5)
+        span = w * 2
+        draw.polygon(
+            [
+                (ox, oy),
+                (ox + span * math.cos(a0), oy + span * math.sin(a0)),
+                (ox + span * math.cos(a1), oy + span * math.sin(a1)),
+            ],
+            fill=(255, 255, 255, 16 if i % 2 else 26),
+        )
+    draw.ellipse(
+        (ox - w * 0.22, oy - w * 0.22, ox + w * 0.22, oy + w * 0.22),
+        fill=_soft(accent, 60),
+    )
+    return 2.0
+
+
+def _pattern_bokeh(draw, sharp, w, h, accent, rng) -> float:
+    """Out-of-focus lights, weighted to the right so text stays clean."""
+    for _ in range(22):
+        r = rng.uniform(w * 0.02, w * 0.09)
+        cx = rng.uniform(w * 0.25, w * 1.02)
+        cy = rng.uniform(-h * 0.1, h * 1.05)
+        alpha = int(rng.uniform(14, 46))
+        draw.ellipse((cx - r, cy - r, cx + r, cy + r), fill=_soft(accent, alpha))
+    return 3.0
+
+
+def _pattern_grid(draw, sharp, w, h, accent, rng) -> float:
+    """An even neon grid — arcade backdrop."""
+    step = max(28, w // 26)
+    for x in range(0, w + step, step):
+        draw.line([(x, 0), (x, h)], fill=_soft(accent, 30), width=2)
+    for y in range(0, h + step, step):
+        draw.line([(0, y), (w, y)], fill=_soft(accent, 22), width=2)
+    draw.rectangle((0, h * 0.72, w, h), fill=_soft(accent, 18))
+    return 0.6
+
+
+def _pattern_stars(draw, sharp, w, h, accent, rng) -> float:
+    """A field of small dots plus a handful of four-point sparkles."""
+    for _ in range(70):
+        x, y = rng.uniform(0, w), rng.uniform(0, h)
+        r = rng.uniform(1.0, 2.6)
+        sharp.ellipse((x - r, y - r, x + r, y + r), fill=(255, 255, 255, 130))
+    for _ in range(7):
+        x, y = rng.uniform(w * 0.3, w), rng.uniform(0, h)
+        s = rng.uniform(7, 16)
+        draw.polygon(
+            [(x, y - s), (x + s * 0.28, y), (x, y + s), (x - s * 0.28, y)],
+            fill=(255, 255, 255, 150),
+        )
+        draw.polygon(
+            [(x - s, y), (x, y - s * 0.28), (x + s, y), (x, y + s * 0.28)],
+            fill=(255, 255, 255, 150),
+        )
+    return 0.5
+
+
+def _pattern_hex(draw, sharp, w, h, accent, rng) -> float:
+    """A honeycomb of outlines, fading in from the right."""
+    r = max(22, w // 22)
+    dx, dy = r * 1.5, r * math.sqrt(3)
+    col = 0
+    x = w * 0.30
+    while x < w + r:
+        y = -r if col % 2 == 0 else -r + dy / 2
+        while y < h + r:
+            pts = [
+                (
+                    x + r * math.cos(math.radians(60 * i)),
+                    y + r * math.sin(math.radians(60 * i)),
+                )
+                for i in range(6)
+            ]
+            fade = min(1.0, (x - w * 0.25) / max(1.0, w * 0.75))
+            draw.polygon(pts, outline=_soft(accent, int(20 + 45 * fade)))
+            y += dy
+        x += dx
+        col += 1
+    return 0.8
+
+
+def _pattern_nebula(draw, sharp, w, h, accent, rng) -> float:
+    """Overlapping clouds — heavy blur does most of the work."""
+    for _ in range(9):
+        r = rng.uniform(w * 0.12, w * 0.34)
+        cx = rng.uniform(w * 0.2, w * 1.05)
+        cy = rng.uniform(-h * 0.2, h * 1.2)
+        draw.ellipse(
+            (cx - r, cy - r * 0.7, cx + r, cy + r * 0.7),
+            fill=_soft(accent, int(rng.uniform(20, 48))),
+        )
+    for _ in range(70):
+        x, y = rng.uniform(0, w), rng.uniform(0, h)
+        r = rng.uniform(0.9, 2.2)
+        sharp.ellipse((x - r, y - r, x + r, y + r), fill=(255, 255, 255, 190))
+    return 8.0
+
+
+def _pattern_circuit(draw, sharp, w, h, accent, rng) -> float:
+    """Orthogonal traces with pads — one continuous walk per line."""
+    step = max(24, w // 30)
+    for _ in range(14):
+        x = rng.randrange(0, w, step)
+        y = rng.randrange(0, h, step)
+        pts = [(x, y)]
+        for _ in range(rng.randint(3, 7)):
+            if rng.random() < 0.5:
+                x = max(0, min(w, x + rng.choice((-1, 1)) * step * rng.randint(1, 4)))
+            else:
+                y = max(0, min(h, y + rng.choice((-1, 1)) * step * rng.randint(1, 4)))
+            pts.append((x, y))
+        draw.line(pts, fill=_soft(accent, 55), width=2, joint="curve")
+        draw.ellipse((x - 4, y - 4, x + 4, y + 4), fill=_soft(accent, 90))
+    return 0.7
+
+
+def _pattern_peaks(draw, sharp, w, h, accent, rng) -> float:
+    """Two mountain ridges, the far one paler."""
+    for layer, (base, height, alpha) in enumerate(((0.92, 0.42, 30), (1.02, 0.30, 52))):
+        pts = [(0, h)]
+        x = 0.0
+        up = True
+        while x < w:
+            step = w * rng.uniform(0.10, 0.20)
+            x = min(w, x + step)
+            y = h * base - (h * height * rng.uniform(0.5, 1.0) if up else 0)
+            pts.append((x, y))
+            up = not up
+        pts.append((w, h))
+        draw.polygon(pts, fill=_soft(accent, alpha) if layer else (255, 255, 255, 16))
+    return 1.0
+
+
+def _pattern_aurora(draw, sharp, w, h, accent, rng) -> float:
+    """Vertical curtains of light, blurred hard."""
+    for i in range(6):
+        x = w * (0.25 + i * 0.14)
+        width = w * rng.uniform(0.04, 0.10)
+        skew = w * rng.uniform(-0.12, 0.12)
+        draw.polygon(
+            [
+                (x, -h * 0.1),
+                (x + width, -h * 0.1),
+                (x + width + skew, h * 1.1),
+                (x + skew, h * 1.1),
+            ],
+            fill=_soft(accent, int(rng.uniform(28, 60))),
+        )
+    return 12.0
+
+
+_BANNER_PATTERNS = {
+    "": _pattern_default,
+    "waves": _pattern_waves,
+    "rays": _pattern_rays,
+    "bokeh": _pattern_bokeh,
+    "grid": _pattern_grid,
+    "stars": _pattern_stars,
+    "hex": _pattern_hex,
+    "nebula": _pattern_nebula,
+    "circuit": _pattern_circuit,
+    "peaks": _pattern_peaks,
+    "aurora": _pattern_aurora,
+}
+
+
+def _generate_banner(d: cosmetics.CosmeticDef, size) -> Image.Image:
+    """A flat gradient plus the def's pattern — enough to read as designed
+    artwork at card size without being noisy behind text.
+
+    The random placement some patterns use is seeded on the cosmetic key, so a
+    banner looks the same every time it is drawn (and the on-disk cache stays
+    valid) while two banners never land identically.
+    """
+    img = _gradient(size, _palette(d, 0), _palette(d, 1))
+    w, h = size
+    overlay = Image.new("RGBA", size, (0, 0, 0, 0))
+    crisp = Image.new("RGBA", size, (0, 0, 0, 0))
+    pattern = _BANNER_PATTERNS.get(d.pattern or "", _pattern_default)
+    blur = pattern(
+        ImageDraw.Draw(overlay),
+        ImageDraw.Draw(crisp),
+        w,
+        h,
+        _palette(d, 1),
+        random.Random(d.key),
+    )
+    img.alpha_composite(overlay.filter(ImageFilter.GaussianBlur(blur)))
+    img.alpha_composite(crisp)
     return img
+
+
+def _generate_coin(d: cosmetics.CosmeticDef, size) -> Image.Image:
+    """A struck coin: milled edge, inner ring, the def's glyph in the middle.
+
+    The wallet card's centrepiece, and the reason `coin` is its own slot — a
+    member who has bought nothing still gets a proper coin, they just get the
+    default one.
+    """
+    w, h = size
+    side = min(w, h)
+    scale = 4
+    big = side * scale
+    img = Image.new("RGBA", (big, big), (0, 0, 0, 0))
+    face = _gradient((big, big), _palette(d, 0), _palette(d, 1), diagonal=False)
+    img.paste(face, (0, 0), _circle_mask(big))
+    draw = ImageDraw.Draw(img)
+
+    # Milled edge — short spokes around the rim, the detail that reads as
+    # "coin" rather than "circle" even at 96px.
+    cx = cy = big / 2
+    for i in range(48):
+        angle = math.pi * 2 * i / 48
+        r0, r1 = big * 0.455, big * 0.495
+        draw.line(
+            [
+                (cx + r0 * math.cos(angle), cy + r0 * math.sin(angle)),
+                (cx + r1 * math.cos(angle), cy + r1 * math.sin(angle)),
+            ],
+            fill=(255, 255, 255, 70),
+            width=max(2, scale),
+        )
+    inset = big * 0.12
+    draw.ellipse(
+        (inset, inset, big - inset, big - inset),
+        outline=(255, 255, 255, 110),
+        width=max(2, scale),
+    )
+    glyph = d.glyph or "◉"
+    font = _fit_text(draw, glyph, int(big * 0.46), int(big * 0.56), bold=True)
+    bbox = draw.textbbox((0, 0), glyph, font=font)
+    draw.text(
+        (
+            (big - (bbox[2] - bbox[0])) / 2 - bbox[0],
+            (big - (bbox[3] - bbox[1])) / 2 - bbox[1],
+        ),
+        glyph,
+        font=font,
+        fill=(255, 255, 255, 240),
+    )
+    return img.resize((side, side), Image.LANCZOS)
 
 
 def _generate_badge(d: cosmetics.CosmeticDef, size) -> Image.Image:
@@ -317,6 +605,131 @@ def prestige_emblem(rank: int, size: int = PRESTIGE_SIZE) -> Image.Image:
             fill=(20, 20, 26, 255),
         )
     return img.resize((size, size), Image.LANCZOS)
+
+
+# ── Border styles ────────────────────────────────────────────────────────────
+# Same contract as the banner patterns: one function per look, registered by
+# name, selected by the def's `style`. "" is the original two-line frame, so an
+# existing border keeps rendering exactly as it did.
+
+
+def _border_solid(draw, box, radius, inner, outer):
+    x0, y0, x1, y1 = box
+    draw.rounded_rectangle((x0, y0, x1, y1), radius, outline=outer, width=5)
+    draw.rounded_rectangle(
+        (x0 + 5, y0 + 5, x1 - 5, y1 - 5), radius - 5, outline=inner, width=2
+    )
+
+
+def _border_double(draw, box, radius, inner, outer):
+    x0, y0, x1, y1 = box
+    draw.rounded_rectangle((x0, y0, x1, y1), radius, outline=outer, width=4)
+    draw.rounded_rectangle(
+        (x0 + 12, y0 + 12, x1 - 12, y1 - 12), radius - 10, outline=inner, width=3
+    )
+
+
+def _border_glow(draw, box, radius, inner, outer):
+    """Concentric strokes fading outwards — a light source, not a frame."""
+    x0, y0, x1, y1 = box
+    for i in range(7):
+        alpha = int(150 * (1 - i / 7))
+        draw.rounded_rectangle(
+            (x0 + i * 3, y0 + i * 3, x1 - i * 3, y1 - i * 3),
+            max(2, radius - i * 3),
+            outline=(outer[0], outer[1], outer[2], alpha),
+            width=3,
+        )
+    draw.rounded_rectangle((x0, y0, x1, y1), radius, outline=inner, width=2)
+
+
+def _border_dashed(draw, box, radius, inner, outer):
+    x0, y0, x1, y1 = box
+    dash, gap = 26, 16
+    for x in range(x0 + radius, x1 - radius, dash + gap):
+        end = min(x + dash, x1 - radius)
+        draw.line([(x, y0 + 3), (end, y0 + 3)], fill=outer, width=4)
+        draw.line([(x, y1 - 3), (end, y1 - 3)], fill=outer, width=4)
+    for y in range(y0 + radius, y1 - radius, dash + gap):
+        end = min(y + dash, y1 - radius)
+        draw.line([(x0 + 3, y), (x0 + 3, end)], fill=outer, width=4)
+        draw.line([(x1 - 3, y), (x1 - 3, end)], fill=outer, width=4)
+    draw.rounded_rectangle((x0, y0, x1, y1), radius, outline=inner, width=1)
+
+
+def _border_corners(draw, box, radius, inner, outer):
+    """Brackets at the four corners and nothing along the edges."""
+    x0, y0, x1, y1 = box
+    arm = 84
+    for cx, cy, sx, sy in (
+        (x0, y0, 1, 1),
+        (x1, y0, -1, 1),
+        (x0, y1, 1, -1),
+        (x1, y1, -1, -1),
+    ):
+        draw.line([(cx + sx * radius, cy), (cx + sx * arm, cy)], fill=outer, width=6)
+        draw.line([(cx, cy + sy * radius), (cx, cy + sy * arm)], fill=outer, width=6)
+        draw.line(
+            [(cx + sx * radius, cy + sy * 12), (cx + sx * (arm - 18), cy + sy * 12)],
+            fill=inner,
+            width=2,
+        )
+
+
+def _border_ribbon(draw, box, radius, inner, outer):
+    """A thick outer band with an inner hairline and solid corner blocks."""
+    x0, y0, x1, y1 = box
+    draw.rounded_rectangle((x0, y0, x1, y1), radius, outline=outer, width=9)
+    draw.rounded_rectangle(
+        (x0 + 13, y0 + 13, x1 - 13, y1 - 13), radius - 11, outline=inner, width=2
+    )
+    block = 30
+    for cx, cy, sx, sy in (
+        (x0, y0, 1, 1),
+        (x1, y0, -1, 1),
+        (x0, y1, 1, -1),
+        (x1, y1, -1, -1),
+    ):
+        draw.polygon(
+            [
+                (cx + sx * 4, cy + sy * block),
+                (cx + sx * block, cy + sy * 4),
+                (cx + sx * block, cy + sy * block),
+            ],
+            fill=inner,
+        )
+
+
+_BORDER_STYLES = {
+    "": _border_solid,
+    "solid": _border_solid,
+    "double": _border_double,
+    "glow": _border_glow,
+    "dashed": _border_dashed,
+    "corners": _border_corners,
+    "ribbon": _border_ribbon,
+}
+
+
+def draw_border(card: Image.Image, border, *, radius: int = RADIUS) -> None:
+    """Composite a border cosmetic onto a finished card, in place.
+
+    Takes the card so a second card type can frame itself the same way; the
+    wallet card deliberately doesn't (see utils/wallet_card.py).
+    """
+    if not border or border.key == "border_none":
+        return
+    w, h = card.size
+    frame = Image.new("RGBA", (w, h), (0, 0, 0, 0))
+    style = _BORDER_STYLES.get(border.style or "", _border_solid)
+    style(
+        ImageDraw.Draw(frame),
+        (2, 2, w - 3, h - 3),
+        radius,
+        _palette(border, 0),
+        _palette(border, 1),
+    )
+    card.alpha_composite(frame)
 
 
 # ── The card ─────────────────────────────────────────────────────────────────
@@ -555,19 +968,7 @@ def render_card(data: dict) -> bytes:
         )
 
     # ── Border + rounded corners ──
-    if border and border.key != "border_none":
-        frame = Image.new("RGBA", (W, H), (0, 0, 0, 0))
-        fdraw = ImageDraw.Draw(frame)
-        fdraw.rounded_rectangle(
-            (2, 2, W - 3, H - 3),
-            RADIUS,
-            outline=_palette(border, 1),
-            width=5,
-        )
-        fdraw.rounded_rectangle(
-            (7, 7, W - 8, H - 8), RADIUS - 5, outline=_palette(border, 0), width=2
-        )
-        card.alpha_composite(frame)
+    draw_border(card, border)
 
     out = Image.new("RGBA", (W, H), (0, 0, 0, 0))
     out.paste(card, (0, 0), _rounded_mask((W, H), RADIUS))

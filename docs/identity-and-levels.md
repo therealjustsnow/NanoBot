@@ -116,12 +116,18 @@ catalogue.
 
 **Slots are data.** `SLOTS` maps a slot to how many can be worn at once:
 
-| Slot | Max worn | Drawn as |
-|---|---|---|
-| `banner` | 1 | the card background |
-| `border` | 1 | the frame |
-| `nameplate` | 1 | the plate behind the name |
-| `badge` | 6 | the showcase row along the bottom |
+| Slot | Card | Max worn | Drawn as |
+|---|---|---|---|
+| `banner` | profile | 1 | the card background |
+| `border` | profile | 1 | the frame |
+| `nameplate` | profile | 1 | the plate behind the name |
+| `badge` | profile | 6 | the showcase row along the bottom |
+| `wallet` | wallet | 1 | the `/balance` card background |
+| `coin` | wallet | 1 | the coin beside the balance |
+
+Each slot also declares a `category` — which card it dresses. That is what the
+shop sorts its aisles by (`/shop profile`, `/shop wallet`), so a third card
+later is a new category string rather than a new command.
 
 Adding a slot is one entry. `/profile equip` infers the slot from whatever
 you're equipping, so it needs no changes — and because its picker walks
@@ -138,15 +144,29 @@ rendering.
 {"kind": "prestige", "value": 3}
 {"kind": "achievement", "key": "fish_caught_100"}
 {"kind": "stat", "stat": "casino_games", "value": 1000}
+{"kind": "purchase"}                                 # bought with coins (+ price=)
 {"kind": "manual"}                                   # staff/event grant only
 ```
 
 `cosmetics.is_unlocked(def, ctx)` evaluates all of them against one context
 dict built per profile view, so checking the whole catalogue costs no extra
 queries. Earnable cosmetics unlock **lazily** when a member opens their own
-card (the achievement pattern); `manual` ones only ever arrive through
-`n!profile grant` (bot-owner, prefix-only), which is what makes event drops
-feel like awards.
+card (the achievement pattern) — and `/balance` does the same for the two
+wallet slots, so a member who never opens `/profile` still collects them;
+`manual` ones only ever arrive through `n!profile grant` (bot-owner,
+prefix-only), which is what makes event drops feel like awards.
+
+`purchase` is deliberately in the same "never earned" bucket as `manual`:
+`is_unlocked` returns False for it and `auto_unlockable()` filters it out, so
+the only way to hold one is `/shop unlock`. That is what makes the cosmetic
+shop a real coin sink instead of a preview of things you would have got anyway,
+and `tests/test_cosmetic_shop.py` asserts it from both ends.
+
+**Prices are bot-wide, in code.** A cosmetic is worn on a *global* account, so
+a per-guild price would mean the cheapest server on the bot set what everyone
+paid — the same reasoning that made the coin faucets owner-only, and the mirror
+of why a guild's own shop (roles, mod-fulfilled perks) stays per-guild. See
+`docs/global-economy.md`.
 
 **Adding cosmetics without touching code.** `data/cosmetics.json` is merged at
 cog load:
@@ -163,10 +183,20 @@ Bad entries are logged and skipped rather than taking the bot down.
 ## Artwork
 
 The bot ships **no binary art**. `utils/profile_card.py` generates everything
-from each definition's palette and glyph — gradient banners with soft geometry,
-rounded "gem" badges with an inner highlight, and prestige emblems whose metal
-*and* star-point count change with rank — then caches the result under
-`data/profile_cache/`.
+from each definition's palette and glyph — gradient banners, rounded "gem"
+badges with an inner highlight, struck coins with a milled edge, and prestige
+emblems whose metal *and* star-point count change with rank — then caches the
+result under `data/profile_cache/`.
+
+Two registries stop the catalogue looking like twenty recolours of one
+gradient. `_BANNER_PATTERNS` draws the banner/wallet treatments (`waves`,
+`rays`, `bokeh`, `grid`, `stars`, `hex`, `nebula`, `circuit`, `peaks`,
+`aurora`) and `_BORDER_STYLES` the frames (`solid`, `double`, `glow`, `dashed`,
+`corners`, `ribbon`); a def picks one by name in `pattern`/`style`, and an
+empty value is the original look. A pattern draws into a blurred overlay plus a
+second sharp one (that is how nebula keeps crisp stars behind soft cloud), and
+any randomness inside it is seeded on the cosmetic key — so art is
+deterministic and the on-disk cache never goes stale.
 
 To use real artwork later, drop a PNG at
 `assets/profile/<slot>/<key>.png`. The renderer prefers it automatically; no
@@ -181,8 +211,14 @@ is why the badges use geometric symbols rather than colour emoji.
 
 `render_card(data)` takes a plain dict and returns PNG bytes. It knows nothing
 about Discord or the database, which is what makes it testable headless and
-reusable for future cards (a server card, a leaderboard card). Layout constants
-live at the top of the module, so moving a block is a number change.
+reusable for future cards — `utils/cookie_card.py` and `utils/wallet_card.py`
+are the two that took it up on that. Layout constants live at the top of each
+module, so moving a block is a number change.
+
+`utils/wallet_card.py` is the `/balance` card: one balance, three tallies
+(rank, contribution, daily streak), a wallet banner and a coin style, and
+deliberately **no border** — a frame on a card that small crowds the number,
+and `/profile` is where a whole loadout is meant to be shown off.
 
 A render is ~200 ms of CPU, so the cog defers first and renders in a worker
 thread behind a small semaphore. Anything that can fail on its own —the avatar
@@ -197,6 +233,9 @@ art.
 | A badge | One `CosmeticDef` (or one JSON entry) |
 | A banner/border/nameplate | Same, with `slot=` set |
 | A new cosmetic *slot* | One `SlotDef` in `SLOTS` (+ draw it in the card if it's visual) |
+| A shop cosmetic | A `CosmeticDef` with `unlock={"kind": "purchase"}` and a `price` |
+| A new banner look | One function + one `_BANNER_PATTERNS` entry, then `pattern="…"` on the defs |
+| A new border look | One function + one `_BORDER_STYLES` entry, then `style="…"` on the defs |
 | A new unlock condition | One branch in `is_unlocked` + one in `describe_unlock` |
 | A new global-XP source | One `XP_AWARDS` entry + one `await globalxp.award(...)` |
 | A one-off event drop to a whole server | `n!profile grantall <cosmetic> [guild_id]` (bot owner, prefix-only) |

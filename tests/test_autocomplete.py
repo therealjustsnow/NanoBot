@@ -48,6 +48,7 @@ _PICKER_OPTIONS = [
     ("inventory give", "item"),
     ("inventory info", "item"),
     ("shop buy", "item"),
+    ("shop unlock", "cosmetic"),
     ("shop edit", "item"),
     ("shop remove", "item"),
     ("shop fulfill", "purchase_id"),
@@ -375,9 +376,16 @@ async def test_equip_autocomplete_orders_wearable_then_worn_then_locked(bot):
     assert "banner_default" in [c.value for c in choices]
     locked = [c for c in choices if c.name.startswith("🔒")]
     assert locked, "locked cosmetics stay listed, with their unlock line"
-    assert cosmetics.describe_unlock(cosmetics.get("banner_ember")) in "".join(
-        c.name for c in locked
-    )
+    # Every locked row carries how to get it. (Which specific ones are visible
+    # depends on the catalogue's size — Discord shows 25 rows — so this asserts
+    # the property, not one hand-picked key.)
+    for choice in locked:
+        d = cosmetics.get(choice.value)
+        assert cosmetics.describe_unlock(d)[:24] in choice.name, choice.name
+    # And the 25 rows are spread across the slots rather than being eaten by
+    # the longest one: the badge list alone is longer than the whole picker.
+    slots = {cosmetics.get(c.value).slot for c in choices}
+    assert len(slots) >= 4, sorted(slots)
 
     # Own one and wear it: it moves out of locked and gets the worn marker.
     await db.unlock_cosmetic(user.id, "banner_ember", at=0)

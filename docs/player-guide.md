@@ -130,14 +130,17 @@ with leveling switched off doesn't stop your global progress.
 
 ## 🎖️ Badges, banners, and cosmetics
 
-Your card is customisable. Four kinds of cosmetic:
+Both of your cards are customisable — the profile card and the wallet card
+(`/balance`) have their own slots:
 
-| Slot | What it changes | How many |
-|---|---|---|
-| **Banner** | The artwork behind your card | 1 |
-| **Border** | The frame around it | 1 |
-| **Nameplate** | The plate behind your name | 1 |
-| **Badges** | The row along the bottom | up to 6 |
+| Slot | Card | What it changes | How many |
+|---|---|---|---|
+| **Banner** | profile | The artwork behind your card | 1 |
+| **Border** | profile | The frame around it | 1 |
+| **Nameplate** | profile | The plate behind your name | 1 |
+| **Badges** | profile | The row along the bottom | up to 6 |
+| **Wallet banner** | wallet | The artwork behind your balance | 1 |
+| **Coin style** | wallet | The coin next to your balance | 1 |
 
 | Command | What it does |
 |---|---|
@@ -158,6 +161,10 @@ answer to "how do I get that one?".
   Ascended at 100.
 - **Prestige** — Royal Velvet at prestige 1, the Prestige Frame at 3, plus
   Prestige I/V/X badges.
+- **Coins** — a whole aisle of banners, borders, nameplates, badges, wallet
+  banners and coin styles is simply for sale: see `/shop profile` and
+  `/shop wallet` below. Bought ones can't be earned any other way, and earned
+  ones can't be bought.
 - **Playing** — Deep Current (250 fish), Fishing Master (1,000 fish), Casino
   Champion (1,000 games), Tycoon (3,000,000 coins), Grinder (500 shifts).
 - **Staff & events** — Developer, Contributor, Early Supporter, Beta Tester,
@@ -176,7 +183,7 @@ extra star point at each tier.
 
 | Command | What it does |
 |---|---|
-| `/balance [member]` | Your balance, global rank, contribution rank |
+| `/balance [member]` | Your **wallet card**: balance, global rank, contribution, daily streak |
 | `/daily` | Claim your daily coins (24h). Consecutive days add a streak bonus |
 | `/pay <member> <amount>` | Send coins to someone |
 | `/coin gamble <amount>` | Double-or-nothing, ~45% to win |
@@ -496,7 +503,21 @@ Both follow your account into every server, like everything else you own.
 
 ## 🛒 The shop
 
-`/shop list` shows what your server sells; `/shop buy <item>` redeems it (the
+`/shop` opens the hub — three aisles, one wallet:
+
+| Aisle | What it sells | Buy with |
+|---|---|---|
+| `/shop profile` | Banners, borders, nameplates and badges for `/profile` | `/shop unlock <name>` |
+| `/shop wallet` | Wallet banners and coin styles for `/balance` | `/shop unlock <name>` |
+| `/shop server` | The rewards your mods set up here | `/shop buy <item>` |
+
+**The cosmetic aisles** cost coins and nothing else — no stat, no level. What
+you buy is yours on **every** server, so the prices are the same everywhere and
+your server's mods can't change them. Each listing marks 🟢 when you can afford
+it, 🔒 with how much more you need, or ✅ when you already own it. Wear it with
+`/profile equip <name>`.
+
+**The server aisle** is your server's own; `/shop buy <item>` redeems it (the
 option is a pick list with prices and ✅/🔒 affordability).
 
 Two kinds of reward: **roles**, granted instantly by the bot, and **custom**
@@ -592,7 +613,12 @@ Winner — are handed out by staff. Equip up to six with `/profile equip`.
 
 **Can I change my card's background?**
 Yes: `/profile cosmetics` lists the banners, borders and nameplates you own,
-and `/profile equip <name>` puts one on.
+and `/profile equip <name>` puts one on. If nothing you own appeals, `/shop
+profile` and `/shop wallet` sell more for coins.
+
+**Why does my balance look different?**
+`/balance` draws a card now instead of listing numbers — same figures, plus
+your daily streak. `/shop wallet` sells backgrounds and coin styles for it.
 
 **Where did `/fish cooldown` go?**
 The cast cooldown is now a fixed 20 seconds for everyone, so there's nothing
