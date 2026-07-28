@@ -96,7 +96,7 @@ import discord
 from discord import app_commands
 from discord.ext import commands
 
-from utils import cosmetics, db, globalxp, wallet_card
+from utils import cosmetics, db, globalxp, profile_card, wallet_card
 from utils import helpers as h
 from utils.helpers import SCOPE_CHOICES
 
@@ -1329,19 +1329,28 @@ class Economy(commands.Cog):
             return await ctx.reply(
                 embed=h.info(f"Nothing is for sale in the {category} aisle yet.")
             )
-        per = 10
+        # Six a page rather than ten: each one is previewed as real art now, and
+        # a taller sheet just pushes the prices off a phone screen.
+        per = 6
         pages = max(1, (len(stock) + per - 1) // per)
         page = min(max(1, page), pages)
         owned = await db.get_unlocked_cosmetics(ctx.author.id)
         coins = await db.get_balance(ctx.author.id)
+        try:
+            await ctx.defer()
+        except Exception:
+            pass
 
         embed = h.embed(
             f"{'🎨' if category == 'profile' else '💳'} {category.title()} Cosmetics",
             f"You have {self._money(cfg, coins)}. "
-            f"Buy one with `/shop unlock <name>`.",
+            f"Buy one with `/shop unlock <name>`, or see it on your own card "
+            f"first with `/profile preview <name>`.",
             h.BLUE,
         )
-        for d in stock[(page - 1) * per : page * per]:
+        shown = stock[(page - 1) * per : page * per]
+        previews = []
+        for d in shown:
             if d.key in owned:
                 mark, meta = "✅", "owned"
             elif coins >= d.price:
@@ -1357,8 +1366,28 @@ class Economy(commands.Cog):
                 value=f"{d.description or '—'}\n*{meta}*",
                 inline=False,
             )
+            # No emoji in the caption: the card font has none, so the sheet
+            # says "affordable" in colour instead (see preview_sheet).
+            previews.append(
+                (
+                    d,
+                    d.name,
+                    "owned" if d.key in owned else f"{d.price:,} coins",
+                    d.key in owned or coins >= d.price,
+                )
+            )
+
+        # The whole point: a name and a price don't tell anyone what a banner
+        # looks like. Discord allows one image per embed, so the page's art
+        # arrives as a single contact sheet.
+        async with self._render_lock:
+            sheet = await asyncio.to_thread(profile_card.preview_sheet, previews)
+        file = discord.File(
+            fp=io.BytesIO(sheet), filename=f"preview.{profile_card.IMAGE_EXT}"
+        )
+        embed.set_image(url=f"attachment://preview.{profile_card.IMAGE_EXT}")
         embed.set_footer(text=f"Page {page}/{pages} · wear it with /profile equip")
-        await ctx.reply(embed=embed)
+        await ctx.reply(embed=embed, file=file)
 
     # ── /shop unlock ──────────────────────────────────────────────────────────────
     @shop.command(

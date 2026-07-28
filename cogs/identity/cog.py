@@ -41,6 +41,7 @@ Commands
   /profile cosmetics [slot]     → what you own, and how to unlock the rest
   /profile equip <cosmetic>     → wear a banner/border/nameplate/badge
   /profile unequip <cosmetic>   → take one off (or clear a slot)
+  /profile preview <cosmetic>   → try one on your card without owning it
   /profile badges [member]      → the badge gallery
   /profile rep [member]         → give someone rep (once a day), or see yours
 
@@ -632,6 +633,84 @@ class Identity(commands.Cog):
                     )
                 )
         return choices[:25]
+
+    # ── /profile preview ─────────────────────────────────────────────────────
+    @profile.command(
+        name="preview",
+        description="See a cosmetic on your own card before you buy or equip it.",
+    )
+    @app_commands.describe(cosmetic="Pick one — owned or not, this only previews")
+    @commands.cooldown(1, 8, commands.BucketType.user)
+    async def profile_preview(self, ctx: commands.Context, *, cosmetic: str):
+        """Try a cosmetic on without owning it.
+
+        The shop can show what a banner looks like, but not what it looks like
+        *with your name, avatar and stats on top of it* — which is the thing
+        actually being bought. Nothing is equipped and nothing is charged; the
+        card is rendered with the pick swapped in and thrown away.
+        """
+        d = cosmetics.find(cosmetic)
+        if d is None:
+            return await ctx.reply(
+                embed=h.err(
+                    f"There's no cosmetic called **{cosmetic}**. "
+                    "See `/profile cosmetics` or `/shop profile`."
+                ),
+                ephemeral=True,
+            )
+        try:
+            await ctx.defer()
+        except Exception:
+            pass
+        data, _notes = await self._collect(ctx, ctx.author)
+        data["avatar"] = await self._avatar_bytes(ctx.author)
+        if d.slot == "badge":
+            worn = [b for b in (data.get("badges") or []) if b.key != d.key]
+            limit = cosmetics.SLOTS["badge"].max_equipped
+            # Show it in the last slot rather than dropping it when the
+            # showcase is full — a preview that silently omits the thing being
+            # previewed is worse than useless.
+            data["badges"] = (worn[: limit - 1]) + [d]
+        else:
+            data[d.slot] = d
+
+        async with self._render_lock:
+            png = await asyncio.to_thread(profile_card.render_card, data)
+        owned = await db.get_unlocked_cosmetics(ctx.author.id)
+        if d.key in owned or (d.unlock or {}).get("kind") == "default":
+            note = f"Preview — wear it for real with `/profile equip {d.name}`."
+        elif (d.unlock or {}).get("kind") == "purchase":
+            note = f"Preview — buy it with `/shop unlock {d.name}` ({d.price:,} coins)."
+        else:
+            note = f"Preview — {cosmetics.describe_unlock(d)}."
+        await ctx.reply(
+            content=f"👁️ {note}",
+            file=discord.File(
+                fp=io.BytesIO(png),
+                filename=f"preview-{ctx.author.id}.{profile_card.IMAGE_EXT}",
+            ),
+        )
+
+    @profile_preview.autocomplete("cosmetic")
+    async def _preview_ac(self, interaction: discord.Interaction, current: str):
+        """Everything in the catalogue — previewing is exactly the case where
+        you have not got it yet, so nothing is filtered out by ownership."""
+        q = (current or "").strip().lower()
+        owned = await db.get_unlocked_cosmetics(interaction.user.id)
+        rows: list[tuple[str, app_commands.Choice[str]]] = []
+        for d in sorted(
+            cosmetics.COSMETICS.values(), key=lambda c: (c.slot, c.sort, c.name)
+        ):
+            if not self._matches(d, q):
+                continue
+            if d.key in owned or (d.unlock or {}).get("kind") == "default":
+                detail = "owned"
+            elif (d.unlock or {}).get("kind") == "purchase":
+                detail = f"{d.price:,} coins"
+            else:
+                detail = cosmetics.describe_unlock(d)
+            rows.append((d.slot, self._cosmetic_choice(d, "👁️", detail)))
+        return interleave_by_slot(rows)[:25]
 
     # ── /profile badges ──────────────────────────────────────────────────────
     @profile.command(name="badges", description="The badge gallery.")

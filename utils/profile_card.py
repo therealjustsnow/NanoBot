@@ -39,6 +39,7 @@ Rendering is CPU-bound: call it through ``asyncio.to_thread`` (the cog does).
 
 from __future__ import annotations
 
+import functools
 import io
 import logging
 import math
@@ -181,6 +182,27 @@ def _circle_mask(size: int) -> Image.Image:
     mask = Image.new("L", (size, size), 0)
     ImageDraw.Draw(mask).ellipse((0, 0, size - 1, size - 1), 255)
     return mask
+
+
+@functools.lru_cache(maxsize=2048)
+def _glyph_missing(char: str) -> bool:
+    """Does the bundled font lack this character?
+
+    Colour emoji and exotic symbols draw as tofu boxes, which is why the badge
+    glyphs are restricted to what DejaVu covers. Cosmetic *names* have no such
+    restriction — they can come from data/cosmetics.json — so anything drawn
+    from a name is filtered through `_font_safe` first.
+    """
+    font = _font(24)
+    try:
+        return bytes(font.getmask(char)) == bytes(font.getmask("\uffff"))
+    except Exception:  # pragma: no cover - bitmap fallback font
+        return False
+
+
+def _font_safe(text: str) -> str:
+    """Drop characters the font can't draw, so a caption never shows tofu."""
+    return "".join(c for c in str(text) if c.isspace() or not _glyph_missing(c)).strip()
 
 
 def _fit_text(draw, text: str, font_size: int, max_w: int, bold=True):
@@ -1038,6 +1060,115 @@ def draw_border(card: Image.Image, border, *, radius: int = RADIUS) -> None:
         _palette(border, 1),
     )
     card.alpha_composite(frame)
+
+
+# ── Shop previews ────────────────────────────────────────────────────────────
+# A price and an artist's name are not enough to spend 95,000 coins on: nobody
+# knows what "Composition VII" looks like cropped to a banner. These render the
+# actual art, so browsing an aisle shows what is on sale rather than describing
+# it.
+
+PREVIEW_TILE = (336, 188)
+PREVIEW_COLS = 2
+PREVIEW_GAP = 12
+PREVIEW_CAPTION = 52
+PREVIEW_BG = (16, 17, 24, 255)
+PREVIEW_OK = (121, 224, 143, 255)  # sub-caption colour when you can afford it
+
+
+def preview_tile(d: cosmetics.CosmeticDef, size=PREVIEW_TILE) -> Image.Image:
+    """One cosmetic, drawn the way it will actually appear.
+
+    A banner is its own artwork, so it *is* the tile. The others have to be
+    staged: a badge and a coin are centred on a neutral tile, a nameplate gets
+    a sample name on it, and a border frames the tile itself — otherwise every
+    border would preview as an identical empty rectangle.
+    """
+    w, h = size
+    if d.slot in ("banner", "wallet"):
+        return cosmetic_image(d, size).convert("RGBA")
+
+    tile = _gradient(size, _rgba("#171A24"), _rgba("#242938")).convert("RGBA")
+    if d.slot in ("badge", "coin"):
+        side = int(h * 0.62)
+        tile.alpha_composite(
+            cosmetic_image(d, (side, side)), ((w - side) // 2, (h - side) // 2)
+        )
+    elif d.slot == "nameplate":
+        plate_w, plate_h = int(w * 0.66), int(h * 0.32)
+        plate = _gradient((plate_w, plate_h), _palette(d, 0), _palette(d, 1))
+        plate.putalpha(
+            ImageChops.multiply(
+                plate.getchannel("A"), _rounded_mask((plate_w, plate_h), 14)
+            )
+        )
+        origin = ((w - plate_w) // 2, (h - plate_h) // 2)
+        tile.alpha_composite(plate, origin)
+        draw = ImageDraw.Draw(tile)
+        font = _font(int(plate_h * 0.52), bold=True)
+        label = "Your Name"
+        draw.text(
+            (
+                origin[0] + (plate_w - draw.textlength(label, font=font)) / 2,
+                origin[1] + plate_h * 0.2,
+            ),
+            label,
+            font=font,
+            fill=INK,
+        )
+    elif d.slot == "border":
+        draw_border(tile, d, radius=18)
+    return tile
+
+
+def preview_sheet(items, columns: int = PREVIEW_COLS) -> bytes:
+    """A contact sheet of cosmetics with captions, as one attachable image.
+
+    `items` is [(CosmeticDef, caption, sub_caption[, available]), …]. Discord
+    allows one image per embed, so a page of previews has to arrive as a single
+    picture — which is also the mobile-friendly answer: one tap to zoom, no
+    cross-referencing a list against thumbnails.
+
+    `available` tints the sub-caption green. Affordability is shown by *colour*
+    rather than a ✅/🔒 prefix because the bundled font has no colour emoji and
+    would draw one as a tofu box — the same constraint that limits badge glyphs.
+    """
+    items = list(items)
+    if not items:
+        return encode(Image.new("RGBA", (16, 16), PREVIEW_BG))
+    tw, th = PREVIEW_TILE
+    cols = max(1, min(columns, len(items)))
+    rows = (len(items) + cols - 1) // cols
+    cell_h = th + PREVIEW_CAPTION
+    sheet = Image.new(
+        "RGBA",
+        (
+            cols * tw + (cols + 1) * PREVIEW_GAP,
+            rows * cell_h + (rows + 1) * PREVIEW_GAP,
+        ),
+        PREVIEW_BG,
+    )
+    draw = ImageDraw.Draw(sheet)
+    for i, entry in enumerate(items):
+        d, caption, sub = entry[0], entry[1], entry[2]
+        available = bool(entry[3]) if len(entry) > 3 else False
+        x = PREVIEW_GAP + (i % cols) * (tw + PREVIEW_GAP)
+        y = PREVIEW_GAP + (i // cols) * (cell_h + PREVIEW_GAP)
+        tile = Image.new("RGBA", PREVIEW_TILE, (0, 0, 0, 0))
+        tile.paste(preview_tile(d), (0, 0), _rounded_mask(PREVIEW_TILE, 14))
+        sheet.alpha_composite(tile, (x, y))
+        name = _font_safe(caption)
+        draw.text(
+            (x + 2, y + th + 8), name, font=_fit_text(draw, name, 21, tw - 8), fill=INK
+        )
+        if sub:
+            draw.text(
+                (x + 2, y + th + 32),
+                _font_safe(sub),
+                font=_font(16),
+                fill=PREVIEW_OK if available else INK_MUTED,
+            )
+    return encode(sheet)
 
 
 # ── The card ─────────────────────────────────────────────────────────────────

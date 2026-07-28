@@ -685,6 +685,7 @@ Per-server message XP and levels (Mee6-style curve). **Off by default** -- enabl
 | `/profile [user]` | Your account **card image** — global level, this server's level, coins, fishing, casino, work, items, achievements, prestige emblem and equipped badges (alias: `/card`) |
 | `/profile cosmetics` | Banners, borders, nameplates, badges, wallet banners and coin styles you own — and how to unlock the rest |
 | `/profile equip <name>` | Wear a cosmetic on your card (`/profile unequip` to remove) |
+| `/profile preview <name>` | Try any cosmetic on your own card before buying — nothing equipped, nothing charged |
 | `/profile badges [user]` | The badge gallery |
 | `/balance [user]` | Your **wallet card image** — balance, global rank, contribution, daily streak, wearing your wallet banner and coin style |
 | `/daily` | Claim the daily reward (24h cooldown, consecutive-day streak bonus) |

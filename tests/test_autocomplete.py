@@ -58,6 +58,7 @@ _PICKER_OPTIONS = [
     ("adventure toggle", "activity"),
     ("profile cosmetics", "slot"),
     ("profile equip", "cosmetic"),
+    ("profile preview", "cosmetic"),
     ("profile unequip", "cosmetic"),
 ]
 

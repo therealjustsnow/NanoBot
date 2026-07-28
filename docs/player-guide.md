@@ -145,6 +145,7 @@ Both of your cards are customisable — the profile card and the wallet card
 | Command | What it does |
 |---|---|
 | `/profile cosmetics [slot]` | Everything you own, and how to unlock the rest |
+| `/profile preview <name>` | See it on **your** card before you buy — nothing is equipped or charged |
 | `/profile equip <name>` | Wear it (the slot is worked out for you) |
 | `/profile unequip <name>` | Take it off — or pass a slot name to clear it |
 | `/profile badges [member]` | The badge gallery, yours or someone else's |
@@ -525,6 +526,10 @@ Both follow your account into every server, like everything else you own.
 | `/shop profile` | Banners, borders, nameplates and badges for `/profile` | `/shop unlock <name>` |
 | `/shop wallet` | Wallet banners and coin styles for `/balance` | `/shop unlock <name>` |
 | `/shop server` | The rewards your mods set up here | `/shop buy <item>` |
+
+Both cosmetic aisles **show you the art** — each page comes with a picture of
+what's on it, and `/profile preview <name>` puts any of it on your own card
+before you spend a coin.
 
 **The cosmetic aisles** cost coins and nothing else — no stat, no level. What
 you buy is yours on **every** server, so the prices are the same everywhere and

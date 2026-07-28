@@ -35,6 +35,49 @@ async def test_profile_works_for_a_brand_new_account(bot):
 
 
 @pytest.mark.cogs("cogs.identity")
+async def test_preview_renders_a_cosmetic_you_do_not_own_without_granting_it(bot):
+    """Try-before-you-buy: the card comes back wearing it, but nothing is
+    unlocked, equipped or charged."""
+    author = config().members[0]
+    await dpytest.message("!profile preview Nebula", member=author)
+    sent = dpytest.get_message()
+
+    # The note that says it is only a preview rides on `content`, which dpytest
+    # cannot see on a file-carrying (multipart) send — the load-bearing part is
+    # that nothing was granted, equipped or charged.
+    assert sent.attachments, "a preview should come back as a card image"
+    assert "banner_nebula" not in await db.get_unlocked_cosmetics(author.id)
+    assert (await db.get_equipped(author.id)).get("banner", []) == []
+
+
+@pytest.mark.cogs("cogs.identity")
+async def test_preview_shows_a_badge_even_when_the_showcase_is_full(bot):
+    """A preview that silently drops the thing being previewed is worse than
+    no preview."""
+    author = config().members[1]
+    worn = [d.key for d in cosmetics.in_slot("badge")[:6]]
+    for key in worn:
+        await db.unlock_cosmetic(author.id, key, at=0)
+    await db.set_equipped(author.id, "badge", worn)
+
+    cog = bot.get_cog("Identity")
+    bot.get_command("profile preview")._buckets._cache.clear()
+    await dpytest.message("!profile preview Infinite", member=author)
+    assert dpytest.get_message().attachments
+    # Still exactly six worn, and the preview never touched the loadout.
+    assert (await db.get_equipped(author.id)).get("badge") == worn
+    assert cog is not None
+
+
+@pytest.mark.cogs("cogs.identity")
+async def test_preview_rejects_an_unknown_name(bot):
+    author = config().members[0]
+    bot.get_command("profile preview")._buckets._cache.clear()
+    await dpytest.message("!profile preview not a real cosmetic", member=author)
+    assert dpytest.get_message().embeds
+
+
+@pytest.mark.cogs("cogs.identity")
 async def test_chat_awards_global_xp_once_per_cooldown(bot):
     author = config().members[0]
     await dpytest.message("hello", member=author)

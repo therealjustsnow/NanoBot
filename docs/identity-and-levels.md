@@ -180,6 +180,32 @@ cog load:
 
 Bad entries are logged and skipped rather than taking the bot down.
 
+## Previews
+
+Two, because they answer different questions.
+
+`/shop profile` and `/shop wallet` attach a **contact sheet** of the page's
+stock (`profile_card.preview_sheet`, six per page, the embed's `set_image`
+pointing at the attachment). Discord allows one image per embed, so a page has
+to arrive as a single picture — which is also the mobile answer: one tap to
+zoom, no cross-referencing a list against thumbnails. Every slot previews as
+something meaningful rather than an empty rectangle: `preview_tile` stages a
+badge and a coin centred on a neutral tile, puts a sample name on a nameplate,
+and frames the tile itself with a border.
+
+`/profile preview <cosmetic>` renders **your own card** wearing it — including
+things you don't own. The shop can show what a banner looks like; it can't show
+what it looks like with your name, avatar, level bars and stat chips on top,
+which is the thing actually being bought. Nothing is equipped and nothing is
+charged. A badge preview lands in the last showcase slot when the showcase is
+full, because a preview that silently omits the previewed thing is worse than
+none.
+
+Neither draws emoji. The bundled font has no colour emoji, so affordability is
+a *colour* on the caption and `_font_safe` strips anything undrawable from a
+name — cosmetic names can come from `data/cosmetics.json`, so that filter is
+load-bearing rather than defensive.
+
 ## Artwork
 
 The bot ships **no binary art**. `utils/profile_card.py` generates everything

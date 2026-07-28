@@ -162,18 +162,112 @@ async def test_the_hub_lists_every_aisle(bot):
         assert expected in names, names
 
 
+class _CapturingCtx:
+    """A duck-typed Context that records what a command replied with.
+
+    dpytest reads a send's JSON payload, which is empty for a *multipart*
+    request — so once a reply carries a file, its embed and content are
+    invisible to `dpytest.get_message()`. The aisle now attaches a preview
+    image, so its embed has to be inspected here instead. (Same reason
+    tests/test_inventory_commands.py drives SellConfirmView by hand.)
+    """
+
+    def __init__(self, author, guild):
+        self.author, self.guild = author, guild
+        self.kwargs: dict = {}
+
+    async def defer(self, *a, **kw):
+        return None
+
+    async def reply(self, *args, **kwargs):
+        self.kwargs = kwargs
+        return None
+
+
 @pytest.mark.cogs("cogs.economy")
 async def test_each_cosmetic_aisle_marks_what_you_can_afford(bot):
     author = config().members[0]
+    guild = config().guilds[0]
     await db.add_coins(author.id, 6_000)  # enough for the cheapest, not the rest
+    cog = bot.get_cog("Economy")
 
     for aisle in ("profile", "wallet"):
-        _clear_cooldown(bot, f"shop {aisle}")
-        await dpytest.message(f"!shop {aisle}", member=author)
-        embed = dpytest.get_message().embeds[0]
+        ctx = _CapturingCtx(author, guild)
+        await cog._show_cosmetics(ctx, aisle, 1)
+        embed = ctx.kwargs["embed"]
         marks = " ".join(f.name for f in embed.fields)
         assert "🟢" in marks or "🔒" in marks, marks
         assert "/profile equip" in embed.footer.text
+
+
+@pytest.mark.cogs("cogs.economy")
+async def test_an_aisle_shows_the_art_it_is_selling(bot):
+    """The answer to "what am I actually buying?" — a name and a price don't
+    tell anyone what a banner looks like."""
+    author = config().members[0]
+    guild = config().guilds[0]
+    cog = bot.get_cog("Economy")
+
+    ctx = _CapturingCtx(author, guild)
+    await cog._show_cosmetics(ctx, "profile", 1)
+
+    file = ctx.kwargs["file"]
+    assert file.filename.endswith(f".{profile_card.IMAGE_EXT}")
+    # The embed must point *at that attachment*, or Discord renders the preview
+    # as a loose image below the listing instead of inside it.
+    assert ctx.kwargs["embed"].image.url == f"attachment://{file.filename}"
+    assert len(file.fp.getvalue()) > 1000, "the preview should be a real render"
+
+
+@pytest.mark.cogs("cogs.economy")
+async def test_an_aisle_still_replies_end_to_end(bot):
+    """The stub-context tests above bypass dispatch, so one real invocation
+    keeps the command wiring itself covered."""
+    author = config().members[0]
+    await dpytest.message("!shop profile", member=author)
+    assert dpytest.get_message().attachments
+
+
+def test_preview_captions_never_contain_tofu():
+    """The bundled font has no colour emoji, so anything drawn from a name or a
+    caption is filtered — a 🟢 in a caption renders as an empty box."""
+    assert profile_card._font_safe("🟢 Neon Glow ✅") == "Neon Glow"
+    assert profile_card._font_safe("The Great Wave off Kanagawa")
+    for d in cosmetics.COSMETICS.values():
+        assert profile_card._font_safe(d.name), f"{d.key}'s name is undrawable"
+
+
+def test_preview_sheet_marks_affordability_by_colour(bot=None):
+    """Affordability has to survive the no-emoji rule, so it is a colour."""
+    from PIL import Image
+
+    d = cosmetics.purchasable()[0]
+    cheap = Image.open(
+        __import__("io").BytesIO(
+            profile_card.preview_sheet([(d, d.name, "1 coin", True)], columns=1)
+        )
+    ).convert("RGB")
+    dear = Image.open(
+        __import__("io").BytesIO(
+            profile_card.preview_sheet([(d, d.name, "1 coin", False)], columns=1)
+        )
+    ).convert("RGB")
+    assert cheap.tobytes() != dear.tobytes()
+
+
+def test_preview_sheet_renders_every_slot_type():
+    """Each slot has to preview as something recognisable: a banner is its own
+    art, but a border would otherwise be an empty rectangle and a nameplate an
+    invisible one."""
+    from PIL import Image
+
+    picks = [d for slot in cosmetics.SLOTS for d in cosmetics.in_slot(slot)[:1]]
+    raw = profile_card.preview_sheet([(d, d.name, "1 coin") for d in picks])
+    sheet = Image.open(__import__("io").BytesIO(raw))
+    assert sheet.format == profile_card.IMAGE_FORMAT
+    # Two columns, so the sheet grows in rows rather than off the side.
+    assert sheet.width < sheet.height
+    assert profile_card.preview_sheet([])  # never raises on an empty page
 
 
 @pytest.mark.cogs("cogs.economy")
