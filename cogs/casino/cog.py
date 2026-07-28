@@ -62,6 +62,7 @@ from discord.ext import commands
 
 from utils import db
 from utils import globalxp
+from utils import paginator
 from utils import helpers as h
 from utils.helpers import SCOPE_CHOICES
 
@@ -920,6 +921,16 @@ class Casino(commands.Cog):
     async def casino_top(
         self, ctx: commands.Context, page: int = 1, scope: str = "server"
     ):
+        await paginator.send(
+            ctx,
+            lambda p, s: self._top_page(ctx, p, s or "server"),
+            page=page,
+            switch=paginator.scope_switch(scope),
+        )
+
+    async def _top_page(
+        self, ctx: commands.Context, page: int, scope: str
+    ) -> paginator.Page:
         econ = await db.get_econ_config(ctx.guild.id)
         per = 10
         if scope == "global":
@@ -935,8 +946,8 @@ class Casino(commands.Cog):
             )
             offset = (page - 1) * per
         if total == 0:
-            return await ctx.reply(
-                embed=h.info("No one has played yet. Try `/casino`!", "🎰 Players")
+            return paginator.Page(
+                h.info("No one has played yet. Try `/casino`!", "🎰 Players")
             )
 
         medals = {1: "🥇", 2: "🥈", 3: "🥉"}
@@ -951,7 +962,7 @@ class Casino(commands.Cog):
         title = "🎰 Top Winners" + (" (Global)" if scope == "global" else "")
         embed = h.embed(title, "\n".join(lines), h.BLUE)
         embed.set_footer(text=f"Page {page}/{pages} · {total} players")
-        await ctx.reply(embed=embed)
+        return paginator.Page(embed, page, pages)
 
     def _name_for(self, ctx: commands.Context, user_id: int) -> str:
         """Display name for a leaderboard row — a global board lists players who

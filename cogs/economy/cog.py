@@ -96,7 +96,7 @@ import discord
 from discord import app_commands
 from discord.ext import commands
 
-from utils import cosmetics, db, globalxp, profile_card, wallet_card
+from utils import cosmetics, db, globalxp, paginator, profile_card, wallet_card
 from utils import helpers as h
 from utils.helpers import SCOPE_CHOICES
 
@@ -124,7 +124,14 @@ from .helpers import (
     _rank_title,
     _scaled_price,
 )
-from .views import MassCoinPickerView, RaidView, SquadBuilderView, SquadView
+from .views import (
+    MassCoinPickerView,
+    RaidView,
+    ShopPage,
+    ShopView,
+    SquadBuilderView,
+    SquadView,
+)
 
 log = logging.getLogger("NanoBot.economy")
 
@@ -554,6 +561,16 @@ class Economy(commands.Cog):
         await self._show_leaderboard(ctx, page, scope)
 
     async def _show_leaderboard(self, ctx: commands.Context, page: int, scope: str):
+        await paginator.send(
+            ctx,
+            lambda p, s: self._rich_page(ctx, p, s or "server"),
+            page=page,
+            switch=paginator.scope_switch(scope),
+        )
+
+    async def _rich_page(
+        self, ctx: commands.Context, page: int, scope: str
+    ) -> paginator.Page:
         """Rich list. Wallets are global, so "this server" is that same table
         filtered to the guild's members — both views rank the same coins."""
         cfg = await self._cfg(ctx.guild.id)
@@ -571,8 +588,8 @@ class Economy(commands.Cog):
             )
             offset = (page - 1) * per
         if total == 0:
-            return await ctx.reply(
-                embed=h.info(
+            return paginator.Page(
+                h.info(
                     "No one has any coins yet. Try `/daily`!",
                     f"{cfg['currency_emoji']} Rich List",
                 )
@@ -596,7 +613,7 @@ class Economy(commands.Cog):
             text=f"Page {page}/{pages} · {total} "
             + ("wallets across every server" if scope == "global" else "members here")
         )
-        await ctx.reply(embed=embed)
+        return paginator.Page(embed, page, pages)
 
     def _name_for(self, ctx: commands.Context, user_id: int) -> str:
         """Display name for a leaderboard row — a global board can list people
@@ -879,6 +896,16 @@ class Economy(commands.Cog):
     async def coin_contrib(
         self, ctx: commands.Context, page: int = 1, scope: str = "server"
     ):
+        await paginator.send(
+            ctx,
+            lambda p, s: self._contrib_page(ctx, p, s or "server"),
+            page=page,
+            switch=paginator.scope_switch(scope),
+        )
+
+    async def _contrib_page(
+        self, ctx: commands.Context, page: int, scope: str
+    ) -> paginator.Page:
         per = 10
         if scope == "global":
             total = await db.count_contrib()
@@ -893,8 +920,8 @@ class Economy(commands.Cog):
             )
             offset = (page - 1) * per
         if total == 0:
-            return await ctx.reply(
-                embed=h.info(
+            return paginator.Page(
+                h.info(
                     "No co-op contributions yet. Team up and use `/squad`!",
                     "🤝 Top Contributors",
                 )
@@ -915,7 +942,7 @@ class Economy(commands.Cog):
             title += " (Global)"
         embed = h.embed(title, "\n".join(lines), h.BLUE)
         embed.set_footer(text=f"Page {page}/{pages} · {total} contributors")
-        await ctx.reply(embed=embed)
+        return paginator.Page(embed, page, pages)
 
     # ── /coin raidsize (set party bounds) ─────────────────────────────────────────
     @coin.command(
@@ -1230,7 +1257,49 @@ class Economy(commands.Cog):
     async def shop(self, ctx: commands.Context):
         await self._show_hub(ctx)
 
+    # ── the browser ───────────────────────────────────────────────────────────
+    # Every aisle is page-numbered, so every aisle needs a way to turn a page:
+    # `/shop profile page:5` to move one screen is a command re-typed on a
+    # phone. The three listings and the hub are built as ShopPages here and
+    # sent through one path, so ShopView can move between them by calling
+    # _shop_page again — the buttons never duplicate a listing's own code.
+    async def _shop_page(
+        self,
+        guild: discord.Guild,
+        user_id: int,
+        aisle: str,
+        page: int = 1,
+        cached_art: Optional[bytes] = None,
+    ) -> ShopPage:
+        """Build one shop screen. `aisle` is a cosmetics category, or server/browse."""
+        if aisle == "server":
+            return await self._server_page(guild.id, page)
+        if aisle in cosmetics.CATEGORIES:
+            return await self._cosmetics_page(
+                guild.id, user_id, aisle, page, cached_art
+            )
+        return await self._hub_page(guild.id, user_id)
+
+    async def _send_shop(self, ctx: commands.Context, aisle: str, page: int):
+        """Reply with an aisle and hang the browser off it."""
+        if aisle in cosmetics.CATEGORIES:
+            # The preview sheet is a real render; take the 3s interaction
+            # deadline off the table before doing it.
+            try:
+                await ctx.defer()
+            except Exception:
+                pass
+        result = await self._shop_page(ctx.guild, ctx.author.id, aisle, page)
+        view = ShopView(self, ctx.author.id, aisle, result)
+        kwargs: dict = {"embed": result.embed, "view": view}
+        if (file := result.file()) is not None:
+            kwargs["file"] = file
+        view.message = await ctx.reply(**kwargs)
+
     async def _show_hub(self, ctx: commands.Context):
+        await self._send_shop(ctx, "browse", 1)
+
+    async def _hub_page(self, guild_id: int, user_id: int) -> ShopPage:
         """The landing view: which aisle sells what.
 
         One shop grew into three different things — a guild's roles and perks,
@@ -1239,9 +1308,9 @@ class Economy(commands.Cog):
         dress means each aisle can also say the thing that matters about it:
         the cosmetic ones are global and bot-priced, the server one is not.
         """
-        cfg = await self._cfg(ctx.guild.id)
-        owned = await db.get_unlocked_cosmetics(ctx.author.id)
-        coins = await db.get_balance(ctx.author.id)
+        cfg = await self._cfg(guild_id)
+        owned = await db.get_unlocked_cosmetics(user_id)
+        coins = await db.get_balance(user_id)
         embed = h.embed(
             "🛍️ Shop",
             f"You have {self._money(cfg, coins)}.\nPick an aisle.",
@@ -1266,7 +1335,7 @@ class Economy(commands.Cog):
                 value=line,
                 inline=False,
             )
-        total = await db.count_shop_items(ctx.guild.id, enabled_only=True)
+        total = await db.count_shop_items(guild_id, enabled_only=True)
         embed.add_field(
             name="🏠 Server rewards",
             value=(
@@ -1281,7 +1350,7 @@ class Economy(commands.Cog):
         embed.set_footer(
             text="Cosmetics: /shop unlock <name> · server rewards: /shop buy <name>"
         )
-        await ctx.reply(embed=embed)
+        return ShopPage(embed)
 
     # ── /shop server ──────────────────────────────────────────────────────────────
     # Named for its aisle now that there are three. `list` stays as a prefix
@@ -1316,6 +1385,16 @@ class Economy(commands.Cog):
         await self._show_cosmetics(ctx, "wallet", page)
 
     async def _show_cosmetics(self, ctx: commands.Context, category: str, page: int):
+        await self._send_shop(ctx, category, page)
+
+    async def _cosmetics_page(
+        self,
+        guild_id: int,
+        user_id: int,
+        category: str,
+        page: int,
+        cached_art: Optional[bytes] = None,
+    ) -> ShopPage:
         """One cosmetic aisle, grouped by slot.
 
         Prices are the same on every server (see utils/cosmetics.py's PRICING
@@ -1323,23 +1402,17 @@ class Economy(commands.Cog):
         would let the cheapest server on the bot set everyone's. The guild's own
         shop is untouched by that — a role only exists here.
         """
-        cfg = await self._cfg(ctx.guild.id)
+        cfg = await self._cfg(guild_id)
         stock = cosmetics.purchasable(category)
         if not stock:
-            return await ctx.reply(
-                embed=h.info(f"Nothing is for sale in the {category} aisle yet.")
-            )
+            return ShopPage(h.info(f"Nothing is for sale in the {category} aisle yet."))
         # Six a page rather than ten: each one is previewed as real art now, and
         # a taller sheet just pushes the prices off a phone screen.
         per = 6
         pages = max(1, (len(stock) + per - 1) // per)
         page = min(max(1, page), pages)
-        owned = await db.get_unlocked_cosmetics(ctx.author.id)
-        coins = await db.get_balance(ctx.author.id)
-        try:
-            await ctx.defer()
-        except Exception:
-            pass
+        owned = await db.get_unlocked_cosmetics(user_id)
+        coins = await db.get_balance(user_id)
 
         embed = h.embed(
             f"{'🎨' if category == 'profile' else '💳'} {category.title()} Cosmetics",
@@ -1379,15 +1452,20 @@ class Economy(commands.Cog):
 
         # The whole point: a name and a price don't tell anyone what a banner
         # looks like. Discord allows one image per embed, so the page's art
-        # arrives as a single contact sheet.
-        async with self._render_lock:
-            sheet = await asyncio.to_thread(profile_card.preview_sheet, previews)
-        file = discord.File(
-            fp=io.BytesIO(sheet), filename=f"preview.{profile_card.IMAGE_EXT}"
-        )
-        embed.set_image(url=f"attachment://preview.{profile_card.IMAGE_EXT}")
+        # arrives as a single contact sheet. A page the member has already
+        # scrolled through hands its sheet back in rather than re-rendering.
+        if cached_art is None:
+            async with self._render_lock:
+                cached_art = await asyncio.to_thread(
+                    profile_card.preview_sheet, previews
+                )
+        # The filename carries the page: same-named attachments on one edited
+        # message can be served from the client's cache, which would leave page
+        # 2 showing page 1's art.
+        filename = f"preview_{category}_{page}.{profile_card.IMAGE_EXT}"
+        embed.set_image(url=f"attachment://{filename}")
         embed.set_footer(text=f"Page {page}/{pages} · wear it with /profile equip")
-        await ctx.reply(embed=embed, file=file)
+        return ShopPage(embed, page, pages, cached_art, filename)
 
     # ── /shop unlock ──────────────────────────────────────────────────────────────
     @shop.command(
@@ -1500,13 +1578,16 @@ class Economy(commands.Cog):
         return (ready + soon + have)[:25]
 
     async def _show_shop(self, ctx: commands.Context, page: int):
-        cfg = await self._cfg(ctx.guild.id)
+        await self._send_shop(ctx, "server", page)
+
+    async def _server_page(self, guild_id: int, page: int) -> ShopPage:
+        cfg = await self._cfg(guild_id)
         page = max(1, page)
         per = 8
-        total = await db.count_shop_items(ctx.guild.id, enabled_only=True)
+        total = await db.count_shop_items(guild_id, enabled_only=True)
         if total == 0:
-            return await ctx.reply(
-                embed=h.info(
+            return ShopPage(
+                h.info(
                     "The shop is empty. Admins can drop in starter rewards with "
                     "`/shop seed`, or add their own with `/shop add`.",
                     "🛒 Shop",
@@ -1516,7 +1597,7 @@ class Economy(commands.Cog):
         page = min(page, pages)
         offset = (page - 1) * per
         items = await db.list_shop_items(
-            ctx.guild.id, enabled_only=True, limit=per, offset=offset
+            guild_id, enabled_only=True, limit=per, offset=offset
         )
 
         embed = h.embed("🛒 Shop", color=h.BLUE)
@@ -1538,7 +1619,7 @@ class Economy(commands.Cog):
             text=f"Page {page}/{pages} · buy with /shop buy <id or name> · "
             "times assume non-stop fishing, so real ones run longer"
         )
-        await ctx.reply(embed=embed)
+        return ShopPage(embed, page, pages)
 
     # ── /shop buy ─────────────────────────────────────────────────────────────────
     @shop.command(name="buy", description="Redeem an item by its id or name.")

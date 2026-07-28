@@ -1,9 +1,11 @@
 """discord.ui views for the economy cog: /squad assembly + confirm, /raid join
-board, and the /coin grant|take mass-member picker."""
+board, the /coin grant|take mass-member picker, and the /shop browser."""
 
 from __future__ import annotations
 
+import io
 import time
+from dataclasses import dataclass
 from typing import TYPE_CHECKING, Callable, Optional
 
 import discord
@@ -12,7 +14,7 @@ from utils import db
 from utils import globalxp
 from utils import helpers as h
 
-from .constants import COOP_CONFIRM_TIMEOUT, RAID_TIMEOUT
+from .constants import COOP_CONFIRM_TIMEOUT, RAID_TIMEOUT, SHOP_BROWSE_TIMEOUT
 
 if TYPE_CHECKING:
     from .cog import Economy
@@ -735,5 +737,173 @@ class MassCoinPickerView(discord.ui.View):
             await self.message.edit(
                 embed=h.warn("Mass coin update expired.", "⏳ Expired"), view=self
             )
+        except discord.HTTPException:
+            pass
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+#  /shop  browser
+# ══════════════════════════════════════════════════════════════════════════════
+# The aisles, in the order they appear on the switcher row: key, label, emoji.
+# "browse" is the hub — the landing screen the group's fallback renders.
+SHOP_AISLES: tuple[tuple[str, str, str], ...] = (
+    ("browse", "Shop", "🛍️"),
+    ("profile", "Profile", "🎨"),
+    ("wallet", "Wallet", "💳"),
+    ("server", "Server", "🏠"),
+)
+
+
+@dataclass
+class ShopPage:
+    """One rendered shop screen, and where it sits in its aisle.
+
+    The cog builds these; the view only moves between them. `image` is the
+    cosmetic aisles' preview sheet as raw bytes rather than a discord.File,
+    because a File's buffer is consumed on send and a page a member scrolls
+    back to has to be sendable again.
+    """
+
+    embed: discord.Embed
+    page: int = 1
+    pages: int = 1
+    image: Optional[bytes] = None
+    filename: Optional[str] = None
+
+    def file(self) -> Optional[discord.File]:
+        if self.image is None or self.filename is None:
+            return None
+        return discord.File(fp=io.BytesIO(self.image), filename=self.filename)
+
+
+class _ShopNavButton(discord.ui.Button):
+    """A page arrow. Moves `delta` pages within the aisle being viewed."""
+
+    def __init__(self, delta: int, emoji: str, disabled: bool):
+        super().__init__(
+            emoji=emoji, style=discord.ButtonStyle.secondary, disabled=disabled, row=0
+        )
+        self.delta = delta
+
+    async def callback(self, interaction: discord.Interaction):
+        view: "ShopView" = self.view
+        await view.go(interaction, view.aisle, view.page + self.delta)
+
+
+class _ShopAisleButton(discord.ui.Button):
+    """A switcher button — opens another aisle at its first page."""
+
+    def __init__(self, aisle: str, label: str, emoji: str, current: bool):
+        super().__init__(
+            label=label,
+            emoji=emoji,
+            style=(
+                discord.ButtonStyle.primary
+                if current
+                else discord.ButtonStyle.secondary
+            ),
+            disabled=current,
+            row=1,
+        )
+        self.aisle = aisle
+
+    async def callback(self, interaction: discord.Interaction):
+        await self.view.go(interaction, self.aisle, 1)
+
+
+class ShopView(discord.ui.View):
+    """Tap-to-browse navigation for /shop.
+
+    Every aisle was page-numbered but had no way to turn a page: seeing the
+    next six cosmetics meant re-running the whole command with `page:5`, which
+    on a phone is retyping it. Arrows move within an aisle, the second row
+    switches between them, and the hub is one of those aisles rather than a
+    separate screen you have to back out to.
+
+    Transient by design — no persistent custom_ids, the way the /squad and
+    /raid boards have. Nothing is bought or charged here, so a restart that
+    orphans these buttons costs a member nothing but a re-run, and the listing
+    is personalised (your coins, what you own) so it shouldn't outlive the
+    person who asked for it either. For the same reason only the invoker can
+    press: everyone else's `/shop` shows their own balance.
+    """
+
+    def __init__(self, cog: "Economy", invoker_id: int, aisle: str, page: ShopPage):
+        super().__init__(timeout=SHOP_BROWSE_TIMEOUT)
+        self.cog = cog
+        self.invoker_id = invoker_id
+        self.aisle = aisle
+        self.page = page.page
+        self.pages = page.pages
+        self.message: Optional[discord.Message] = None
+        # Rendered preview sheets, keyed (aisle, page). A page turn back to one
+        # already seen shouldn't pay for the render twice — including back to
+        # the page the command itself rendered, which is why the screen the
+        # view was built around is remembered here rather than only in `go`.
+        self._art: dict[tuple[str, int], bytes] = {}
+        self._remember(aisle, page)
+        self._build()
+
+    def _remember(self, aisle: str, page: ShopPage):
+        if page.image is not None:
+            self._art[(aisle, page.page)] = page.image
+
+    # ── layout ────────────────────────────────────────────────────────────────
+    def _build(self):
+        """Rebuild both rows for the aisle/page currently on screen."""
+        self.clear_items()
+        if self.pages > 1:
+            self.add_item(_ShopNavButton(-1, "◀️", self.page <= 1))
+            indicator = discord.ui.Button(
+                label=f"{self.page}/{self.pages}",
+                style=discord.ButtonStyle.secondary,
+                disabled=True,
+                row=0,
+            )
+            self.add_item(indicator)
+            self.add_item(_ShopNavButton(1, "▶️", self.page >= self.pages))
+        for aisle, label, emoji in SHOP_AISLES:
+            self.add_item(_ShopAisleButton(aisle, label, emoji, aisle == self.aisle))
+
+    # ── interaction ───────────────────────────────────────────────────────────
+    async def interaction_check(self, interaction: discord.Interaction) -> bool:
+        if interaction.user.id != self.invoker_id:
+            await interaction.response.send_message(
+                embed=h.info("Run `/shop` yourself to browse — it shows your coins."),
+                ephemeral=True,
+            )
+            return False
+        return True
+
+    async def go(self, interaction: discord.Interaction, aisle: str, page: int):
+        """Repaint the message with another aisle/page."""
+        # A cosmetic page re-renders its preview sheet, which is real work, so
+        # acknowledge the press first and edit once the page is ready.
+        await interaction.response.defer()
+        result = await self.cog._shop_page(
+            interaction.guild,
+            self.invoker_id,
+            aisle,
+            page,
+            cached_art=self._art.get((aisle, page)),
+        )
+        self._remember(aisle, result)
+        self.aisle, self.page, self.pages = aisle, result.page, result.pages
+        self._build()
+        # attachments= is always passed: leaving it off keeps the *previous*
+        # page's preview sheet attached to a screen that no longer describes it.
+        await interaction.edit_original_response(
+            embed=result.embed,
+            attachments=[f] if (f := result.file()) else [],
+            view=self,
+        )
+
+    async def on_timeout(self):
+        if self.message is None:
+            return
+        for child in self.children:
+            child.disabled = True
+        try:
+            await self.message.edit(view=self)
         except discord.HTTPException:
             pass

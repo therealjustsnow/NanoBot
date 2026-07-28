@@ -60,6 +60,13 @@ COOP_CONFIRM_TIMEOUT = 1800  # 30 min, matches RAID_TIMEOUT
 # How long an open /raid board stays joinable before it auto-expires unpaid.
 RAID_TIMEOUT = 1800  # 30 min
 
+# How long /shop's page arrows and aisle switcher stay pressable. Browsing is
+# read-only — nothing is charged by a page turn — so this is only about not
+# leaving dead buttons around: long enough to read a catalogue on a phone,
+# short enough that an old listing stops responding rather than repainting
+# someone else's stale prices.
+SHOP_BROWSE_TIMEOUT = 300  # 5 min
+
 # Starter shop catalogue. A fresh guild's shop is empty, which reads as broken,
 # so /shop seed drops in this curated set of generic community rewards. They're
 # all `custom` kind (a mod fulfils them) because role rewards need a guild's own

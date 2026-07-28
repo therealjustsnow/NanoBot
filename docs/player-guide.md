@@ -531,6 +531,12 @@ Both cosmetic aisles **show you the art** — each page comes with a picture of
 what's on it, and `/profile preview <name>` puts any of it on your own card
 before you spend a coin.
 
+**Browse it with the buttons.** Every aisle has ◀️ ▶️ arrows to turn the page
+and a row underneath to hop between the aisles, so you never have to run the
+command again with a bigger page number (`page:` still works if you'd rather
+jump straight to one). The buttons belong to whoever ran the command — the
+listing counts your coins — and they stop responding after a few minutes.
+
 **The cosmetic aisles** cost coins and nothing else — no stat, no level. What
 you buy is yours on **every** server, so the prices are the same everywhere and
 your server's mods can't change them. Each listing marks 🟢 when you can afford
@@ -561,9 +567,15 @@ Every board offers two views. Pick with the `scope` option:
   (global) numbers.
 - **Global** — everyone who uses the bot.
 
-`/coin top` · `/coin contrib` · `/fish top` · `/casino top` ·
+`/coin top` · `/coin contrib` · `/fish top` · `/casino top` · `/level top` ·
 `/fish global <stat>` (cross-server, by stat: earnings, catches, casts,
 heaviest catch, XP, best streak).
+
+**Every board has buttons.** ◀️ ▶️ turn the page, and 🏠 This server / 🌍 Global
+switches the view without running the command again (`/fish global` gets a
+dropdown for its stat instead). `page:` and `scope:` still work if you'd rather
+jump straight to one. The buttons belong to whoever ran the command and stop
+responding after a few minutes.
 
 Your personal rank on `/balance`, `/fish stats` and `/casino stats` is your
 **global** rank.
