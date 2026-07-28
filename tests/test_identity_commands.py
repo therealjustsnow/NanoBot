@@ -8,7 +8,7 @@ from discord.ext import commands
 from discord.ext import test as dpytest
 
 import utils.db as db
-from utils import cosmetics, globalxp
+from utils import cosmetics, globalxp, profile_card
 from tests.conftest import config
 
 
@@ -22,7 +22,7 @@ async def test_profile_sends_a_card_image(bot):
     sent = dpytest.get_message()
     assert sent.attachments, "the profile should come back as an image"
     attachment = sent.attachments[0]
-    assert attachment.filename.endswith(".png")
+    assert attachment.filename.endswith(f".{profile_card.IMAGE_EXT}")
     assert attachment.size > 1000  # a real render, not an empty file
 
 

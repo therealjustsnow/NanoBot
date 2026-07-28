@@ -32,7 +32,11 @@ from utils.profile_card import (
     _rgba,
     _rounded_mask,
     cosmetic_image,
+    encode,
 )
+from utils.profile_card import IMAGE_EXT  # re-exported: the cogs name files with it
+
+__all__ = ["render_wallet_card", "IMAGE_EXT"]
 
 # ── Layout ───────────────────────────────────────────────────────────────────
 W, H = 920, 450
@@ -85,7 +89,7 @@ def _tally(base, draw, xy, size, label, value, sub, accent):
 
 
 def render_wallet_card(data: dict) -> bytes:
-    """Render the wallet card and return PNG bytes.
+    """Render the wallet card and return encoded image bytes.
 
     `data` keys (all optional except `name`):
       name, avatar (raw image bytes), balance, currency (plural name),
@@ -227,6 +231,4 @@ def render_wallet_card(data: dict) -> bytes:
 
     out = Image.new("RGBA", (W, H), (0, 0, 0, 0))
     out.paste(card, (0, 0), _rounded_mask((W, H), RADIUS))
-    buffer = io.BytesIO()
-    out.save(buffer, "PNG", optimize=True)
-    return buffer.getvalue()
+    return encode(out)

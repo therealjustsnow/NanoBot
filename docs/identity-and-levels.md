@@ -188,15 +188,44 @@ badges with an inner highlight, struck coins with a milled edge, and prestige
 emblems whose metal *and* star-point count change with rank — then caches the
 result under `data/profile_cache/`.
 
-Two registries stop the catalogue looking like twenty recolours of one
-gradient. `_BANNER_PATTERNS` draws the banner/wallet treatments (`waves`,
-`rays`, `bokeh`, `grid`, `stars`, `hex`, `nebula`, `circuit`, `peaks`,
-`aurora`) and `_BORDER_STYLES` the frames (`solid`, `double`, `glow`, `dashed`,
-`corners`, `ribbon`); a def picks one by name in `pattern`/`style`, and an
-empty value is the original look. A pattern draws into a blurred overlay plus a
-second sharp one (that is how nebula keeps crisp stars behind soft cloud), and
-any randomness inside it is seeded on the cosmetic key — so art is
+Three registries stop the catalogue looking like twenty recolours of one
+gradient, and they **compose**, which is where the variety actually comes from:
+
+| Knob | Registry | What it decides | Values |
+|---|---|---|---|
+| `texture` | `_TEXTURES` | what the surface is made of | `clouds`, `nebula`, `silk`, `frost`, `embers`, `mesh`, `flat` |
+| `pattern` | `_BANNER_PATTERNS` | the geometry drawn on it | `waves`, `rays`, `bokeh`, `grid`, `stars`, `hex`, `circuit`, `peaks`, `aurora`, `nebula` |
+| `style` | `_BORDER_STYLES` | the frame | `solid`, `double`, `glow`, `dashed`, `corners`, `ribbon` |
+
+An empty value is the original flat look, so nothing had to be restyled at
+once. Silk + waves is water; clouds + stars is a night sky; mesh + circuit is a
+neon ledger.
+
+**It is all still Pillow** — no numpy, no native noise extension, no bundled
+artwork. Stacking small random lattices through BICUBIC upscales *is* value
+noise (the resize does the interpolation), and summing octaves of it gives
+fractal Brownian motion — clouds, marble, terrain. `ImageOps.colorize` maps
+that grayscale field through the palette (three stops if the def gives a third
+colour), screen-blended radial gradients make mesh gradients, and a blur plus a
+screen blend makes bloom. A card-sized banner generates in ~110 ms and is then
+cached, so the cost is paid once per cosmetic per size.
+
+Two automatic passes keep the art usable rather than merely pretty. `_tame`
+measures the render's mean luminance and scales it back only if it is too
+bright — a banner is a *background*, and gold or ice palettes plus bloom can
+otherwise drown the white text; because it measures rather than being
+hand-tuned per palette, it also covers cosmetics added later from
+`data/cosmetics.json`. A small saturation push then undoes the greying that
+taming and blooming cause. Randomness is seeded on the cosmetic key, so art is
 deterministic and the on-disk cache never goes stale.
+
+**Output format.** A textured card is photographic, and PNG is the wrong
+container for it: ~430 KB and 2.5 s with `optimize=True`, versus ~50 KB of WebP
+in a fraction of the time with no visible difference. The cards encode through
+`profile_card.encode()` and the cogs name the attachment with
+`profile_card.IMAGE_EXT`, so the format is one constant to change. The on-disk
+art cache stays lossless PNG — it is composited into the next render rather
+than displayed, so it must not accumulate compression artefacts.
 
 To use real artwork later, drop a PNG at
 `assets/profile/<slot>/<key>.png`. The renderer prefers it automatically; no
@@ -234,6 +263,7 @@ art.
 | A banner/border/nameplate | Same, with `slot=` set |
 | A new cosmetic *slot* | One `SlotDef` in `SLOTS` (+ draw it in the card if it's visual) |
 | A shop cosmetic | A `CosmeticDef` with `unlock={"kind": "purchase"}` and a `price` |
+| A new banner surface | One function + one `_TEXTURES` entry, then `texture="…"` on the defs |
 | A new banner look | One function + one `_BANNER_PATTERNS` entry, then `pattern="…"` on the defs |
 | A new border look | One function + one `_BORDER_STYLES` entry, then `style="…"` on the defs |
 | A new unlock condition | One branch in `is_unlocked` + one in `describe_unlock` |

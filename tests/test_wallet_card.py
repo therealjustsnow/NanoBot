@@ -12,7 +12,7 @@ import io
 
 from PIL import Image
 
-from utils import cosmetics, wallet_card
+from utils import cosmetics, profile_card, wallet_card
 
 FULL = {
     "name": "Longestpossible Displayname Here",
@@ -29,9 +29,12 @@ FULL = {
 
 
 def _render(data: dict) -> Image.Image:
-    png = wallet_card.render_wallet_card(data)
-    assert png[:8] == b"\x89PNG\r\n\x1a\n"
-    return Image.open(io.BytesIO(png))
+    """Render and decode, asserting the bytes really are the format the cogs
+    name the attachment after."""
+    raw = wallet_card.render_wallet_card(data)
+    img = Image.open(io.BytesIO(raw))
+    assert img.format == profile_card.IMAGE_FORMAT
+    return img
 
 
 def test_renders_a_full_account():

@@ -165,6 +165,10 @@ answer to "how do I get that one?".
   banners and coin styles is simply for sale: see `/shop profile` and
   `/shop wallet` below. Bought ones can't be earned any other way, and earned
   ones can't be bought.
+
+Every banner is drawn fresh by the bot rather than picked from a folder of
+stock images — clouds, marble, nebulae, mesh gradients, frost and molten metal,
+each in its own palette — so no two look like the same recolour.
 - **Playing** — Deep Current (250 fish), Fishing Master (1,000 fish), Casino
   Champion (1,000 games), Tycoon (3,000,000 coins), Grinder (500 shifts).
 - **Staff & events** — Developer, Contributor, Early Supporter, Beta Tester,

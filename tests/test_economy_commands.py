@@ -9,6 +9,7 @@ from discord.ext import test as dpytest
 import utils.db as db
 from cogs.economy import _DEFAULT_SHOP_ITEMS
 from cogs.economy.helpers import seconds_to_afford
+from utils import wallet_card
 from tests.conftest import config, grant_perms
 
 
@@ -22,7 +23,7 @@ async def test_balance_replies_with_a_wallet_card(bot):
     sent = dpytest.get_message()
     assert sent.attachments, "the wallet should come back as an image"
     attachment = sent.attachments[0]
-    assert attachment.filename.endswith(".png")
+    assert attachment.filename.endswith(f".{wallet_card.IMAGE_EXT}")
     assert attachment.size > 1000  # a real render, not an empty file
 
 

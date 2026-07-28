@@ -322,7 +322,10 @@ class Economy(commands.Cog):
         async with self._render_lock:
             png = await asyncio.to_thread(wallet_card.render_wallet_card, data)
         await ctx.reply(
-            file=discord.File(fp=io.BytesIO(png), filename=f"wallet-{member.id}.png")
+            file=discord.File(
+                fp=io.BytesIO(png),
+                filename=f"wallet-{member.id}.{wallet_card.IMAGE_EXT}",
+            )
         )
 
     async def _wallet_data(self, ctx: commands.Context, member, cfg: dict) -> dict:

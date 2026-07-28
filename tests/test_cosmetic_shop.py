@@ -74,10 +74,11 @@ def test_coin_glyphs_render_in_the_bundled_font():
     assert not bad, f"coin glyphs not covered by the font: {bad}"
 
 
-def test_every_declared_pattern_and_style_is_implemented():
-    """A typo in a def's `pattern` would silently fall back to the default look
-    rather than failing, so the registry membership is checked explicitly."""
+def test_every_declared_texture_pattern_and_style_is_implemented():
+    """A typo in a def's `texture`/`pattern` would silently fall back to the
+    default look rather than failing, so registry membership is checked."""
     for d in cosmetics.COSMETICS.values():
+        assert d.texture in profile_card._TEXTURES, (d.key, d.texture)
         assert d.pattern in profile_card._BANNER_PATTERNS, (d.key, d.pattern)
         assert d.style in profile_card._BORDER_STYLES, (d.key, d.style)
 

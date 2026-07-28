@@ -289,7 +289,10 @@ class Identity(commands.Cog):
         data["avatar"] = await self._avatar_bytes(member)
         async with self._render_lock:
             png = await asyncio.to_thread(profile_card.render_card, data)
-        file = discord.File(fp=io.BytesIO(png), filename=f"profile-{member.id}.png")
+        file = discord.File(
+            fp=io.BytesIO(png),
+            filename=f"profile-{member.id}.{profile_card.IMAGE_EXT}",
+        )
         content = None
         if notes and member.id == ctx.author.id:
             content = "🎁 Unlocked: " + ", ".join(f"**{n}**" for n in notes[:4])
