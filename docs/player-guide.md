@@ -55,14 +55,14 @@ was kept, and anything you'd already claimed stayed claimed.
 
 ## 🚀 Start here (your first five minutes)
 
-1. `/daily` — free coins, once every 24 hours. Come back daily for a streak bonus.
+1. `/daily` — free coins, once every 24 hours. **The amount is a roll** — most days are ordinary, some are great, and roughly one in a hundred is a jackpot. Claiming on consecutive days adds a streak bonus on top.
 2. `/fish` — cast a line. You can cast again every **20 seconds**.
 3. `/fish sell` — turn your catch into coins (pick "Everything in your bag").
-4. `/work` — a safe paycheck, once an hour.
+4. `/adventure` — see everything that's waiting and hit **Collect all**.
 5. `/profile` — see everything you've built so far.
 
-Then keep going: `/adventure` shows every activity and whether you're off
-cooldown right now.
+Then come back later today, or tomorrow. Everything banks up for twelve hours,
+so there is nothing to keep on top of.
 
 ---
 
@@ -226,11 +226,15 @@ The biggest earner in the game, and the most hands-on.
 
 ```
 /fish              cast your line          (every 20 seconds)
+/fish hub          your dashboard — and the buttons for everything below
 /fish bag          what you're carrying
 /fish sell [fish]  sell one species, or everything
+/fish travel       the map: charter and move between fishing spots
+/fish shop         bait and tackle
+/fish trap         set a fish trap, or pull one that's ready
 /fish rod          your rod + the next upgrade
 /fish upgrade      buy the next rod
-/fish buy <item>   the bait shop
+/fish buy <item>   buy bait or tackle directly
 /fish bait         what bait you own and what's armed
 /fish quest        today's quest
 /fish events       what's boosting the water right now
@@ -239,23 +243,77 @@ The biggest earner in the game, and the most hands-on.
 /fish top / global leaderboards
 ```
 
+### You don't have to type any of that
+
+Every cast comes back with buttons:
+
+**🎣 Cast · 💰 Sell all · 🎒 Bag · 🗺️ Travel · 🛒 Shop · 🪤 Trap**
+
+Tap 🎣 and the same message becomes your next catch. A whole session is one
+message and your thumb. `/fish hub` opens the same buttons over a dashboard
+showing your spot, rod, level, bag, streak and today's quest.
+
+Bare `/fish` still casts, so nothing you already do has changed. If you press
+Cast too early you're told privately — your last catch stays on screen.
+
 ### What's new
 
-- **The cast cooldown is now a flat 20 seconds for everyone**, everywhere. It
-  used to be a per-server setting; since your fishing progress is one account,
-  one cooldown is the only thing that made sense — and it can't be dodged by
-  hopping servers.
-- `/fish sell` now shows a **pick list of what's actually in your bag**,
-  including a "sell everything" option.
-- `/fish buy` shows the bait shop as a list with prices, marked ✅ if you can
-  afford it.
+- **Fishing spots.** Five places to fish, each with species found nowhere else.
+  See below.
+- **Tackle.** A 🕸️ Cast Net pulls three fish from one cast; a 🪤 Fish Trap
+  fishes for you while you're away.
+- **The cast cooldown is a flat 20 seconds for everyone**, everywhere. Since
+  your fishing progress is one account, one cooldown is the only thing that
+  made sense — and it can't be dodged by hopping servers.
+- `/fish sell` shows a **pick list of what's actually in your bag**, including
+  a "sell everything" option.
 - `/fish top` can show **this server or every server** (`scope` option).
+
+### 🗺️ Where you fish
+
+`/fish travel` opens the map. Each spot has fish you can catch nowhere else,
+bends the odds its own way, and — past the first — carries a chance your line
+snaps and you lose the catch.
+
+| Spot | Needs | Charter | Snag risk | Only here |
+|---|---|---|---|---|
+| 🪷 Old Pond | — | free | none | your starting water |
+| 🏞️ River Bend | level 5 | 6,000 | 3% | 🦐 Crayfish, 🐍 River Eel, 🐟 Sturgeon |
+| 🪸 Coral Reef | level 12 | 35,000 | 6% | 🐠 Clownfish, 🐴 Seahorse, 🐢 Sea Turtle, 🛸 Manta Ray |
+| 🌊 The Deep | level 22 | 140,000 | 10% | 🔦 Lanternfish, 🪱 Gulper Eel, 🦑 Colossal Squid, 🦈 Frilled Shark |
+| 🕳️ Abyssal Trench | level 35 | 600,000 | 15% | 🐚 Hadal Snailfish, 👻 Abyssal Ray, 🐉 Leviathan, 🔮 Void Pearl |
+
+**A charter is bought once and yours forever**, in every server — after that,
+travelling back and forth is free. Nothing is ever taken away: every fish you
+could catch at the Old Pond is still catchable everywhere else.
+
+The deeper spots are a **trade, not a straight upgrade**. The Deep and the
+Trench hand you far more junk than the pond does; they're worth it because of
+what else is down there. Expect to lose a line now and then — a snag costs you
+that catch and the one bait charge that cast used, never the rest of your bait.
+
+### 🪤 Tackle
+
+| Item | Price | What it does |
+|---|---|---|
+| 🕸️ Cast Net | 500 | Your next 3 casts pull **three fish each** |
+| 🪤 Fish Trap | 250 | Set it and walk away; a full basket in 2 hours |
+
+Neither makes you money on paper — like bait, they cost more than they return.
+What you're buying is **time**: the 20-second cooldown is what actually limits
+fishing, and a net beats it while a trap ignores it completely.
+
+A trap is set where you're standing and pays out from *that* water, so a trap
+left at the Trench is worth a lot more than one in the pond. `/fish trap` sets
+one, tells you how long is left, and pulls it when it's ready.
 
 ### Rarities
 
 Seven tiers: 🗑️ Junk → ⚪ Common → 🟢 Uncommon → 🔵 Rare → 🟣 Epic →
-🟠 Legendary → 💰 Treasure. Thirty species in total (`/fish dex` tracks which
-ones you've caught — selling never erases your dex).
+🟠 Legendary → 💰 Treasure. Forty-four species in total, fourteen of which live
+at one spot only (`/fish dex` tracks which ones you've caught — selling never
+erases your dex, and a species you caught once stays in it even if you never go
+back).
 
 Heavier specimens of the same species are worth more. Your heaviest non-junk
 catch is remembered as your personal best. Treasure isn't a fish: it pays
@@ -297,6 +355,8 @@ next one with `/fish upgrade`.
 | 🧲 Treasure Magnet | 500 | +35% luck, 3 casts |
 | ⭐ XP Potion | 200 | XP multiplier, timed |
 
+(Nets and traps are on the same shelf — see 🪤 Tackle above.)
+
 Buying bait doesn't arm it — **use `/inventory use <bait>`** before casting.
 `/fish bait` shows what you own and what's currently armed.
 
@@ -304,24 +364,47 @@ Buying bait doesn't arm it — **use `/inventory use <bait>`** before casting.
 
 ## 💼 Jobs and adventures
 
-`/adventure` on its own is your dashboard, and the place to start: it opens with
-how many activities are ready right now, then your two progression tracks (your
-work career title and how many shifts to the next one, plus your pickaxe tier),
-then every activity — what it's for, its cooldown, whether you're ready, and how
-many times you've done it.
+`/adventure` on its own is your dashboard, and the place to start. It opens
+with how many runs you have banked right now, then your daily streak, then your
+two progression tracks (your work career title and how many shifts to the next
+one, plus your pickaxe tier), then every activity — what it's for, how fast it
+comes back, how many you've got waiting, and how many times you've done it.
+
+**And it has buttons.** Work, dig, hunt and explore each get one, so you can do
+everything that's ready without typing another command. There's a 🔄 Refresh
+button too, since charges tick back up while the card is sitting there. `/rob`
+doesn't get a button — it needs you to pick a target.
 
 On a phone, tap `/adventure dashboard` — Discord can't run a command group by
 itself, so that's the same card under a name slash can reach.
 
-| Command | Cooldown | Risk | Reward |
-|---|---|---|---|
-| `/work` | 1 hour | none | 60–140 coins + a 10-step career ladder |
-| `/mine` | 30 min | 8% cave-in (nothing) | Ore to sell, rare bonus treasure key |
-| `/adventure hunt` | 45 min | 12% injury fine | Pelts, meat, rare 🏆 Golden Antler, rare padlock |
-| `/adventure explore` | 3 hours | wasted trip | Nothing → coins → keys/chests/charms → a big find |
-| `/rob <member>` | 4 hours | 200 coin fine | 10–20% of their wallet (capped 1,000) |
+| Command | Comes back | Banks | Risk | Reward |
+|---|---|---|---|---|
+| `/work` | 3 hours | 4 (12h) | none | 200–360 coins + a 10-step career ladder |
+| `/mine` | 3 hours | 4 (12h) | 8% cave-in (nothing) | A vein of 4–14 ore, rare bonus treasure key |
+| `/adventure hunt` | 4 hours | 3 (12h) | 12% injury fine | A bag of 4–9 pelts/meat, rare 🏆 Golden Antler, rare padlock |
+| `/adventure explore` | 6 hours | 2 (12h) | wasted trip | Nothing → coins → keys/chests/charms → a big find |
+| `/rob <member>` | 4 hours | 1 | 200 coin fine | 10–20% of their wallet (capped 1,000) |
 
 *(These lengths are the same in every server.)*
+
+**This is built for checking in twice a day, not every twenty minutes.**
+
+Everything except `/rob` banks up for **twelve hours**. Come back at lunch and
+again in the evening and you will have lost nothing at all — the clock ran the
+whole time you were away, and it was all still sitting there. There is no alarm
+to set and no optimal schedule; showing up when you feel like it *is* the
+optimal schedule.
+
+Playing more often doesn't earn you more from these — you just collect the same
+total in smaller pieces. If you want a loop that rewards sitting down with it,
+that's fishing.
+
+**📥 Collect all** does the whole lot in one press. A full set of buckets is
+about thirteen banked runs, and tapping thirteen buttons is nobody's idea of a
+good time — one press runs them all and shows you the total. The individual
+buttons are still there if you only want to do the one thing, and
+`/adventure collect` works if the buttons have expired.
 
 **One cooldown, everywhere.** These aren't per server. Doing `/work` in one
 server puts it on cooldown in every server you share with the bot, so there's
@@ -331,11 +414,29 @@ own server, but nobody except the bot's owner can change how *long* a cooldown
 lasts: since the cooldown follows you between servers, one server shortening it
 would speed the activity up for its members everywhere.
 
+### 🔥 Your daily streak
+
+The first activity you run each day starts (or continues) a streak, and a
+streak adds **+5% to every coin reward, up to +25%** on day 6 and after. Miss a
+day and it starts over at one. Any of the five counts — it's asking whether you
+turned up, not which button you pressed. Your dashboard shows what it's
+currently worth.
+
+### 🎲 Encounters
+
+Every so often a run turns into a decision instead of a result: a manager
+asking you to stay late, a seam running deeper than the props go, a stag on the
+treeline, a hooded trader with a sealed box. You get two buttons — one that
+always pays something modest, one that might pay a lot more and might not pay
+at all. Take your time; the buttons stay live for a couple of minutes. Walk
+away and you simply don't get the bonus.
+
 **`/work`** is the safe floor. Shifts add up to promotions (🍵 Intern all the
 way to 🏆 Legend of the Office), and each promotion pays a bit more.
 
-**`/mine`** yields 🪨 Stone → ⚫ Coal → ⚙️ Iron → 🟡 Gold → 💎 Diamond. Better
-pickaxes shift the odds toward the good stuff:
+**`/mine`** yields 🪨 Stone → ⚫ Coal → ⚙️ Iron → 🟡 Gold → 💎 Diamond. Each ore
+in a vein is rolled separately, so a fat seam can turn up a diamond next to the
+gravel. Better pickaxes shift the odds toward the good stuff:
 
 | Tier | Pickaxe | Price |
 |---|---|---|
@@ -559,6 +660,31 @@ the effort they had in mind.
 
 ---
 
+## 🗳️ Voting
+
+`/vote` gives you links to top.gg and discordbotlist.com. It takes about thirty
+seconds, you can vote on each site once every 12 hours, and it genuinely helps
+more people find the bot.
+
+**Every vote pays you:**
+
+| | |
+|---|---|
+| 🪙 Coins | **250**, rising to **400** as you build a vote streak |
+| 📈 Coin boost | **+25%** on everything you earn, for **6 hours** |
+| 🍀 Luck boost | **+10%** for **6 hours** — better fish, better ore, better heists |
+| ⏰ Reminders | **50** slots instead of 25 |
+| 🎁 Milestone | Every **5th** vote drops a 🎁 Treasure Chest |
+
+The two boosts are timed, and voting again refreshes them rather than stacking
+them — so there's no point saving votes up. The coin boost applies to coins you
+**earn** (activities, selling fish), not to coins that just move around, so
+nobody can vote their way to a bigger `/pay` or a luckier casino night.
+
+NanoBot will DM you when your cooldown resets. `/vote notify off` stops that.
+
+---
+
 ## 🏆 Leaderboards
 
 Every board offers two views. Pick with the `scope` option:
@@ -584,8 +710,12 @@ Your personal rank on `/balance`, `/fish stats` and `/casino stats` is your
 
 ## 💡 Tips
 
-- **Set a rhythm.** `/daily` once a day, `/work` when you're around, cast a few
-  lines between things. `/adventure` tells you what's ready.
+- **Open `/adventure` and hit Collect all.** Everything banks for twelve hours,
+  so two visits a day loses you nothing and one press collects the lot.
+- **Run something every day.** Even one activity keeps your streak alive, and
+  the streak is worth up to +25% on every coin reward.
+- **Set a rhythm.** `/daily` once a day, `/adventure` when you're around, cast
+  a few lines between things.
 - **Arm your bait.** Buying it isn't enough — `/inventory use <bait>` first,
   and it only spends charges when you actually cast.
 - **Upgrade the rod before you hoard.** Rod luck compounds with every future

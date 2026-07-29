@@ -6,21 +6,37 @@ Economy activities — five distinct risk/reward profiles that pay out NanoCoins
   /work              — SAFE. Steady, low-risk pay with a 10-step career ladder:
                        the more shifts you rack up, the higher your title
                        climbs, and each promotion adds a small pay bonus.
-  /mine              — a dig every cooldown window. Yields ore items (stone →
-                       coal → iron → gold → diamond) by rarity roll into your
-                       inventory, with an occasional cave-in (no yield) and a
+  /mine              — a dig every cooldown window. Yields a vein of ore items
+                       (stone → coal → iron → gold → diamond), each rolled on
+                       its own, with an occasional cave-in (no yield) and a
                        rare bonus treasure key. A coin-priced pickaxe ladder
                        shifts the odds toward rarer ore.
-  /adventure hunt    — MEDIUM risk. Pelts and meat with a rare golden antler
-                       trophy, but a chance of getting injured (a small coin
-                       fine) — and a small chance of finding a padlock that
-                       blocks /rob for a day.
+  /adventure hunt    — MEDIUM risk. A bag of pelts and meat with a rare golden
+                       antler trophy, but a chance of getting injured (a small
+                       coin fine) — and a small chance of finding a padlock
+                       that blocks /rob for a day.
   /adventure explore — LONG SHOT. High-variance outcomes from nothing at all
                        to a big coin find, plus treasure keys/chests and
                        lucky charms.
   /rob               — PVP RISK. Try to steal a cut of another member's coins.
                        Guarded by minimum balances and a rob-shield item;
                        failure costs a fine.
+
+Three things make this a loop rather than a set of timers, all documented at
+length in constants.py:
+
+  charges     — every activity but /rob banks runs while you're away
+                (ACTIVITY_MAX_CHARGES), so an hour off comes back as three taps
+                rather than one. Same long-run rate, different shaped visit.
+  encounters  — ~8% of runs open a follow-up choice on buttons (ENCOUNTERS):
+                a safe option that always pays and a greedy one that might not.
+  daily streak— the first run of each day stamps a streak that multiplies coin
+                payouts up to +25%, so there's a reason to come back tomorrow.
+
+The dashboard is the front door to all of it: /adventure renders the card *and*
+a button per runnable activity (cogs/activities/views.py), so a member who has
+four things ready doesn't have to type four more commands to do them. Every
+button goes through `run_activity`, the same path the commands take.
 
 Coins ride the existing economy tables (db.add_coins et al.), and loot rides
 the shared inventory (utils/db/items.py), so earnings from any activity spend
@@ -48,8 +64,8 @@ Commands
   /mine upgrade                 → buy the next pickaxe tier with coins
   /mine stats                   → your pickaxe + dig stats
   /adventure                    → the dashboard: your career + pickaxe tier,
-                                  every activity's live status and cooldown,
-                                  and how many times you've run each
+                                  your daily streak, every activity's banked
+                                  charges, and a button to run each of them
   /adventure dashboard          → same card (the slash-reachable `fallback`;
                                   a group's own callback can't be invoked over
                                   slash, so without it the card was prefix-only)
@@ -66,6 +82,8 @@ owner-only admin cog.
 import logging
 import random
 import time
+from dataclasses import dataclass
+from typing import Optional
 
 import discord
 from discord import app_commands
@@ -80,6 +98,7 @@ from . import items as _register_items  # noqa: F401 - side-effect: registers it
 from .constants import (
     ACTIVITY_INFO,
     ACTIVITY_NAMES,
+    ENCOUNTERS,
     EXPLORE_COINS_BIG,
     EXPLORE_COINS_SMALL,
     EXPLORE_FLAVOR,
@@ -89,29 +108,60 @@ from .constants import (
     ROB_FINE,
     ROB_MIN_ROBBER_BALANCE,
     ROB_MIN_TARGET_BALANCE,
+    STREAK_BONUS_CAP,
 )
 from .helpers import (
+    apply_streak,
     career_info,
+    charge_state,
     effective_cooldown,
     hunt_injury_fine,
+    max_charges,
+    next_adventure_streak,
     next_career,
     next_pickaxe,
+    outcome_coins,
     pick_explore_outcome,
     pick_hunt_catch,
     pick_ore,
     pick_work_scene,
     pickaxe_info,
+    resolve_encounter,
     rob_steal_amount,
     rob_success,
     roll_cave_in,
     roll_coin_amount,
+    roll_encounter,
+    roll_hunt_bag,
     roll_hunt_injury,
     roll_hunt_padlock,
     roll_mine_treasure_key,
+    roll_vein,
     roll_work_pay,
+    streak_multiplier,
 )
+from .views import BUTTON_ACTIVITIES, AdventureView, EncounterView
 
 log = logging.getLogger("NanoBot.activities")
+
+
+@dataclass
+class ActivityRun:
+    """One completed (or refused) activity, ready to be shown.
+
+    The activities used to reply to a `Context` from inside their own bodies,
+    which meant the dashboard's buttons had no way to reuse them. Returning the
+    embed instead of sending it is what lets one code path serve a prefix
+    command, a slash command and a button press — so a change to how a dig
+    resolves can't drift between them.
+    """
+
+    embed: discord.Embed
+    view: Optional[discord.ui.View] = None
+    # False when the run was refused (cooldown, or switched off here). A
+    # refusal is only interesting to the person who asked, so on slash it goes
+    # out ephemerally rather than putting "not yet" in the channel.
+    claimed: bool = True
 
 
 class Activities(commands.Cog):
@@ -157,26 +207,310 @@ class Activities(commands.Cog):
         """
         return effective_cooldown(activity, cfg.get(f"{activity}_cooldown"))
 
+    def _charges(self, cfg: dict, stats: dict, activity: str, now: float = 0) -> dict:
+        """A member's charge bucket for one activity — read-only.
+
+        The claim in db.try_claim_activity is still the only thing that decides
+        whether a run happens; this is what the dashboard paints with, and it
+        may be a second or two stale by the time a button is pressed. That's
+        fine: the press re-claims.
+        """
+        return charge_state(
+            stats.get(f"last_{activity}", 0) or 0,
+            now or time.time(),
+            self._cooldown(cfg, activity),
+            max_charges(activity),
+        )
+
     def _remaining(self, cfg: dict, stats: dict, activity: str) -> int:
-        """Seconds left on an activity's cooldown (0 = ready). Read-only — the
-        claim itself still happens atomically in db.try_claim_activity."""
-        last = stats.get(f"last_{activity}", 0) or 0
-        if not last:
-            return 0
-        return max(0, int(self._cooldown(cfg, activity) - (time.time() - last)))
+        """Seconds until this activity can next be run (0 = ready now)."""
+        return self._charges(cfg, stats, activity)["next_in"]
 
     def _status_line(self, cfg: dict, stats: dict, activity: str) -> str:
-        """ "Ready now" / "Ready in 12m" / "Disabled" for one activity."""
+        """ "Ready now ×3" / "Ready in 12m" / "Disabled" for one activity."""
         if not cfg[f"{activity}_enabled"]:
             return "❌ Disabled here"
-        remaining = self._remaining(cfg, stats, activity)
-        if remaining:
-            return f"⏳ Ready in {h.fmt_duration(remaining)}"
+        charges = self._charges(cfg, stats, activity)
+        if not charges["ready"]:
+            return f"⏳ Ready in {h.fmt_duration(charges['next_in'])}"
+        if charges["max"] > 1:
+            return f"✅ Ready now ×{charges['ready']}"
         return "✅ Ready now"
 
-    def _next_up(self, cfg: dict, activity: str) -> str:
-        """Footer text telling a member when this activity comes back."""
-        return f"Next {activity} in {h.fmt_duration(self._cooldown(cfg, activity))}"
+    def _next_up(self, cfg: dict, activity: str, stats: dict | None = None) -> str:
+        """Footer text telling a member what's left and when more arrives.
+
+        A bare "next in 20m" was the right footer when one run emptied the tank.
+        With charges the more useful half is how many are still banked — that is
+        what decides whether they press the button again right now.
+        """
+        interval = h.fmt_duration(self._cooldown(cfg, activity))
+        if stats is None:
+            return f"Next {activity} in {interval}"
+        charges = self._charges(cfg, stats, activity)
+        if charges["ready"]:
+            return f"{charges['ready']} more ready now · +1 every {interval}"
+        return f"Next {activity} in {h.fmt_duration(charges['next_in'])}"
+
+    # ══════════════════════════════════════════════════════════════════════════
+    #  The shared run path — one activity, whatever invoked it
+    # ══════════════════════════════════════════════════════════════════════════
+    async def run_activity(
+        self, guild: discord.Guild, member: discord.abc.User, activity: str
+    ) -> ActivityRun:
+        """Check, claim, resolve, and describe one run of an activity.
+
+        The single entry point for /work, /mine dig, /adventure hunt|explore
+        and every dashboard button. /rob is not here: it takes a target and has
+        four guard rails of its own, none of which a button could ask about.
+
+        Order matters. The claim comes before anything is rolled or paid, so a
+        refusal costs nothing; the streak is stamped straight after, because the
+        payouts below are multiplied by it.
+        """
+        info = ACTIVITY_INFO[activity]
+        cfg = await self._cfg(guild.id)
+        if not cfg[f"{activity}_enabled"]:
+            return ActivityRun(h.err(info["disabled"]), claimed=False)
+
+        retry = await db.try_claim_activity(
+            member.id,
+            activity,
+            time.time(),
+            self._cooldown(cfg, activity),
+            max_charges(activity),
+        )
+        if retry:
+            return ActivityRun(
+                h.warn(
+                    info["wait"].format(wait=h.fmt_duration(retry)), info["wait_title"]
+                ),
+                claimed=False,
+            )
+
+        await globalxp.award(member.id, "activity")
+        stats = await db.get_activity_stats(member.id)
+        streak, streak_started = await self._touch_streak(member.id, stats)
+        econ = await db.get_econ_config(guild.id)
+        # A timed coin multiplier (voting, consumables) — read once and handed
+        # to the resolvers, so honouring it costs no extra query.
+        boost = await db.get_active_effects(member.id)
+
+        resolver = {
+            "work": self._resolve_work,
+            "mine": self._resolve_dig,
+            "hunt": self._resolve_hunt,
+            "explore": self._resolve_explore,
+        }[activity]
+        embed = await resolver(member, cfg, econ, stats, streak, boost)
+
+        if streak_started and streak > 1:
+            bonus = streak_multiplier(streak) - 1
+            embed.description += (
+                f"\n\n🔥 **{streak}-day streak** — coin rewards are "
+                f"+{bonus:.0%} for the rest of today."
+            )
+        elif streak_started:
+            embed.description += (
+                "\n\n🔥 Streak started. Come back tomorrow and coin rewards "
+                "start climbing."
+            )
+
+        return ActivityRun(*self._maybe_encounter(embed, member, guild, activity))
+
+    async def collect_all(
+        self, guild: discord.Guild, member: discord.abc.User
+    ) -> ActivityRun:
+        """Run every banked charge across every activity, and report the lot.
+
+        The point of the big charge caps is that a member who turns up twice a
+        day loses nothing — but "nothing lost" turned into thirteen separate
+        button presses, which is its own way of disrespecting someone's time.
+        This is the one press that empties the buckets.
+
+        Each run still goes through `run_activity`, so every claim is the same
+        atomic one and a charge that isn't really there is refused rather than
+        paid. Totals are measured as balance and inventory *deltas* around the
+        batch rather than reported by each resolver: that way the summary
+        describes what actually landed, including the streak multiplier, an
+        injury fine, or a cave-in that paid nothing.
+
+        At most one encounter survives a collect. They fire per run, so a full
+        bucket would otherwise stack a pile of two-button choices on one
+        message; the first is kept and the rest are dropped unrolled.
+        """
+        before_coins = await db.get_balance(member.id)
+        before_items = {
+            row["item_key"]: row["qty"] for row in await db.get_inventory(member.id)
+        }
+
+        ran: dict[str, int] = {}
+        view: Optional[discord.ui.View] = None
+        for activity in BUTTON_ACTIVITIES:
+            # Bounded by the cap as well as by the claim, so a bug in the
+            # bucket arithmetic can't turn this into an infinite payout loop.
+            for _ in range(max_charges(activity)):
+                run = await self.run_activity(guild, member, activity)
+                if not run.claimed:
+                    break
+                ran[activity] = ran.get(activity, 0) + 1
+                if view is None and run.view is not None:
+                    view = run.view
+
+        if not ran:
+            cfg = await self._cfg(guild.id)
+            stats = await db.get_activity_stats(member.id)
+            soonest = min(
+                (
+                    self._charges(cfg, stats, a)["next_in"]
+                    for a in BUTTON_ACTIVITIES
+                    if cfg[f"{a}_enabled"]
+                ),
+                default=0,
+            )
+            return ActivityRun(
+                h.warn(
+                    (
+                        f"Nothing banked yet — the next one lands in "
+                        f"**{h.fmt_duration(soonest)}**."
+                        if soonest
+                        else "Every activity is switched off in this server."
+                    ),
+                    "🧭 Nothing To Collect",
+                ),
+                claimed=False,
+            )
+
+        econ = await db.get_econ_config(guild.id)
+        after_coins = await db.get_balance(member.id)
+        after_items = {
+            row["item_key"]: row["qty"] for row in await db.get_inventory(member.id)
+        }
+        gained = {
+            key: qty - before_items.get(key, 0)
+            for key, qty in after_items.items()
+            if qty > before_items.get(key, 0)
+        }
+
+        total_runs = sum(ran.values())
+        desc = [
+            f"You worked through **{total_runs}** banked "
+            f"{'run' if total_runs == 1 else 'runs'}.",
+            " · ".join(
+                f"{ACTIVITY_INFO[a]['emoji']} {a.title()} ×{n}" for a, n in ran.items()
+            ),
+        ]
+        delta = after_coins - before_coins
+        if delta:
+            verb = "Earned" if delta > 0 else "Net"
+            desc.append(f"\n🪙 {verb} {self._money(econ, abs(delta))}")
+        if gained:
+            desc.append(
+                "🎒 "
+                + ", ".join(
+                    f"{item_catalogue.display(k)} ×{q}" for k, q in gained.items()
+                )
+            )
+        desc.append(f"\nBalance: {self._money(econ, after_coins)}")
+        embed = h.ok("\n".join(desc), "🧭 Collected")
+        embed.set_footer(text="Sell what you found with /inventory sell")
+        return ActivityRun(embed, view)
+
+    async def _touch_streak(self, user_id: int, stats: dict) -> tuple[int, bool]:
+        """Advance the adventure daily streak, once per day.
+
+        Returns (streak, started_today). The write is the conditional stamp in
+        db.try_claim_adventure_streak, so two activities run in the same second
+        can't both decide they were the first of the day; the loser re-reads
+        rather than guessing, since the winner may have moved the number.
+        """
+        today = int(time.time() // 86_400)
+        last_day = stats.get("last_day") or 0
+        current = stats.get("streak_days") or 0
+        if last_day == today:
+            return max(1, current), False
+        streak = next_adventure_streak(last_day, today, current)
+        if await db.try_claim_adventure_streak(user_id, today, streak):
+            return streak, True
+        fresh = await db.get_activity_stats(user_id)
+        return max(1, fresh["streak_days"] or 0), False
+
+    def _maybe_encounter(
+        self,
+        embed: discord.Embed,
+        member: discord.abc.User,
+        guild: discord.Guild,
+        activity: str,
+    ) -> tuple[discord.Embed, Optional[discord.ui.View]]:
+        """Roll for an encounter and, if one fires, hang it off the result.
+
+        It rides the same message rather than a second one: the encounter is
+        part of what just happened, and a separate post would bury the result
+        it belongs to.
+        """
+        key = roll_encounter(activity, random.random(), random.random())
+        if key is None:
+            return embed, None
+        encounter = ENCOUNTERS[key]
+        embed.add_field(
+            name=f"{encounter['emoji']} {encounter['title']}",
+            value=encounter["prompt"],
+            inline=False,
+        )
+        return embed, EncounterView(self, member.id, guild.id, key)
+
+    async def resolve_encounter(
+        self,
+        guild: discord.Guild,
+        member: discord.abc.User,
+        encounter_key: str,
+        option_key: str,
+        outcome_roll: float,
+        amount_roll: float,
+    ) -> discord.Embed:
+        """Pay out a chosen encounter option. Called only by EncounterView.
+
+        The view's single-use guard is what stops this being called twice for
+        one encounter; nothing here re-checks, because there is no row to check
+        against — an encounter exists only for as long as its message does.
+        """
+        econ = await db.get_econ_config(guild.id)
+        encounter = ENCOUNTERS.get(encounter_key)
+        outcome = resolve_encounter(encounter_key, option_key, outcome_roll)
+        if encounter is None or outcome is None:
+            # Only reachable if the registry changed under a live message.
+            return h.warn("That encounter is over.", "🌫️ Gone")
+
+        lines = [outcome["text"]]
+        coins = outcome_coins(outcome, amount_roll)
+        if coins > 0:
+            # Only the reward half is boosted — an option that charges for
+            # itself must not get more expensive because you voted.
+            coins = h.apply_coin_boost(coins, await db.get_active_effects(member.id))
+        if coins:
+            new_balance = await db.add_coins(member.id, coins)
+            verb = "You earned" if coins > 0 else "It cost you"
+            lines.append(
+                f"{verb} {self._money(econ, abs(coins))}.\n"
+                f"Balance: {self._money(econ, new_balance)}"
+            )
+        if "item" in outcome:
+            item_key, qty = outcome["item"]
+            await db.add_item(member.id, item_key, qty)
+            lines.append(f"You pocket {item_catalogue.display(item_key)} ×{qty}.")
+
+        title = f"{encounter['emoji']} {encounter['title']}"
+        return (h.err if coins < 0 and "item" not in outcome else h.ok)(
+            "\n".join(lines), title
+        )
+
+    async def _send_run(self, ctx: commands.Context, run: ActivityRun):
+        """Reply with a finished run, wiring up an encounter view if it opened."""
+        message = await ctx.reply(
+            embed=run.embed, view=run.view, ephemeral=not run.claimed
+        )
+        if run.view is not None:
+            run.view.message = message
 
     # ══════════════════════════════════════════════════════════════════════════
     #  /work — flat, safe
@@ -198,43 +532,40 @@ class Activities(commands.Cog):
     )
     @commands.guild_only()
     async def work(self, ctx: commands.Context):
-        cfg = await self._cfg(ctx.guild.id)
-        if not cfg["work_enabled"]:
-            return await ctx.reply(
-                embed=h.err("Working is disabled on this server."), ephemeral=True
-            )
-        before = await db.get_activity_stats(ctx.author.id)
-        retry = await db.try_claim_activity(
-            ctx.author.id, "work", time.time(), self._cooldown(cfg, "work")
+        await self._send_run(
+            ctx, await self.run_activity(ctx.guild, ctx.author, "work")
         )
-        if retry:
-            return await ctx.reply(
-                embed=h.warn(
-                    f"You're still on shift. Try again in **{h.fmt_duration(retry)}**.",
-                    "💼 Not Yet",
-                ),
-                ephemeral=True,
-            )
 
-        await globalxp.award(ctx.author.id, "activity")
-        stats = await db.get_activity_stats(ctx.author.id)
+    async def _resolve_work(
+        self, member, cfg: dict, econ: dict, stats: dict, streak: int, boost: dict
+    ) -> discord.Embed:
         info = career_info(stats["work_shifts"])
-        old_info = career_info(before["work_shifts"])
-        pay = roll_work_pay(random.random(), info["bonus"])
+        # `stats` is read after the claim, so work_shifts already counts this
+        # shift — the tier before it is the one a shift earlier.
+        promoted = info["tier"] > career_info(max(0, stats["work_shifts"] - 1))["tier"]
+        pay = h.apply_coin_boost(
+            apply_streak(roll_work_pay(random.random(), info["bonus"]), streak), boost
+        )
         scene = pick_work_scene(random.random())
-        econ = await db.get_econ_config(ctx.guild.id)
-        new_bal = await db.add_coins(ctx.author.id, pay)
+        new_bal = await db.add_coins(member.id, pay)
 
-        desc = f"{scene}\nYou earned {self._money(econ, pay)}.\nBalance: {self._money(econ, new_bal)}"
-        if info["tier"] > old_info["tier"]:
+        desc = (
+            f"{scene}\nYou earned {self._money(econ, pay)}.\n"
+            f"Balance: {self._money(econ, new_bal)}"
+        )
+        if promoted:
             desc += f"\n\n🎉 **Promoted!** You're now a {info['title']}."
         embed = h.ok(desc, f"💼 {info['title']}")
         nxt = next_career(stats["work_shifts"])
         if nxt:
             embed.set_footer(
-                text=f"Next promotion at {nxt['shifts']:,} shifts ({stats['work_shifts']:,} so far)"
+                text=f"Next promotion at {nxt['shifts']:,} shifts "
+                f"({stats['work_shifts']:,} so far) · "
+                f"{self._next_up(cfg, 'work', stats)}"
             )
-        await ctx.reply(embed=embed)
+        else:
+            embed.set_footer(text=self._next_up(cfg, "work", stats))
+        return embed
 
     # ══════════════════════════════════════════════════════════════════════════
     #  /mine  group
@@ -266,46 +597,50 @@ class Activities(commands.Cog):
         await self._do_dig(ctx)
 
     async def _do_dig(self, ctx: commands.Context):
-        cfg = await self._cfg(ctx.guild.id)
-        if not cfg["mine_enabled"]:
-            return await ctx.reply(
-                embed=h.err("Mining is disabled on this server."), ephemeral=True
-            )
-        retry = await db.try_claim_activity(
-            ctx.author.id, "mine", time.time(), self._cooldown(cfg, "mine")
+        await self._send_run(
+            ctx, await self.run_activity(ctx.guild, ctx.author, "mine")
         )
-        if retry:
-            return await ctx.reply(
-                embed=h.warn(
-                    f"Your pickaxe needs a rest. Dig again in **{h.fmt_duration(retry)}**.",
-                    "⛏️ Not Yet",
-                ),
-                ephemeral=True,
-            )
 
-        await globalxp.award(ctx.author.id, "activity")
+    async def _resolve_dig(
+        self, member, cfg: dict, econ: dict, stats: dict, streak: int, boost: dict
+    ) -> discord.Embed:
         if roll_cave_in(random.random()):
             embed = h.warn(
                 "The tunnel collapses behind you — you scramble out empty-handed.",
                 "⛏️ Cave-In",
             )
-            embed.set_footer(text=self._next_up(cfg, "mine"))
-            return await ctx.reply(embed=embed)
+            embed.set_footer(text=self._next_up(cfg, "mine", stats))
+            return embed
 
-        stats = await db.get_activity_stats(ctx.author.id)
         pickaxe = pickaxe_info(stats["pickaxe_level"])
-        ore_key = pick_ore(random.random(), pickaxe["luck"])
-        ore = ORES[ore_key]
-        await db.add_item(ctx.author.id, ore_key, 1)
+        # One vein, rolled ore by ore: a seam of four diamonds is possible and
+        # rare, which is the whole reason the size and the rarity are separate
+        # rolls rather than one lot of N identical rocks.
+        vein = roll_vein(random.random())
+        haul: dict[str, int] = {}
+        for _ in range(vein):
+            ore_key = pick_ore(random.random(), pickaxe["luck"])
+            haul[ore_key] = haul.get(ore_key, 0) + 1
+        for ore_key, qty in haul.items():
+            await db.add_item(member.id, ore_key, qty)
 
-        desc = f"You dig up {ore['emoji']} **{ore['name']}**!"
+        found = ", ".join(
+            f"{ORES[k]['emoji']} **{ORES[k]['name']}**" + (f" ×{q}" if q > 1 else "")
+            for k, q in haul.items()
+        )
+        desc = f"You dig up {found}!"
+        if vein >= 3:
+            desc = f"💥 The seam opens up — {found}!"
         if roll_mine_treasure_key(random.random()):
-            await db.add_item(ctx.author.id, "treasure_key", 1)
-            desc += f"\n{item_catalogue.display('treasure_key')} You also found a treasure key!"
+            await db.add_item(member.id, "treasure_key", 1)
+            desc += (
+                f"\n{item_catalogue.display('treasure_key')} You also found a "
+                "treasure key!"
+            )
         desc += "\n\nSell it with `/inventory sell`."
         embed = h.ok(desc, "⛏️ Dig")
-        embed.set_footer(text=self._next_up(cfg, "mine"))
-        await ctx.reply(embed=embed)
+        embed.set_footer(text=self._next_up(cfg, "mine", stats))
+        return embed
 
     # ── /mine upgrade ────────────────────────────────────────────────────────
     @mine.command(name="upgrade", description="Buy the next pickaxe tier with coins.")
@@ -416,37 +751,47 @@ class Activities(commands.Cog):
     )
     @commands.guild_only()
     async def adventure(self, ctx: commands.Context):
-        await self._show_adventure_overview(ctx)
+        await self._send_dashboard(ctx)
 
-    async def _show_adventure_overview(self, ctx: commands.Context):
-        """The member-facing landing card: your two progression tracks, every
-        activity's live status, and what you've done so far.
+    async def _send_dashboard(self, ctx: commands.Context):
+        embed, state = await self.adventure_dashboard(ctx.guild, ctx.author)
+        view = AdventureView(self, ctx.author.id, state)
+        view.message = await ctx.reply(embed=embed, view=view)
+
+    async def adventure_dashboard(
+        self, guild: discord.Guild, member: discord.abc.User
+    ) -> tuple[discord.Embed, dict]:
+        """The member-facing landing card, plus the state its buttons need.
 
         Read-only and cheap — two queries (the guild's switches, your stats
-        row); the career tier and pickaxe tier are derived from that same row,
-        so the progression block costs nothing extra. The settings dump stays
-        on /adventure config, and prestige/achievements stay on /progress —
-        this card deliberately doesn't restate them.
-        """
-        cfg = await self._cfg(ctx.guild.id)
-        stats = await db.get_activity_stats(ctx.author.id)
+        row); the career tier, the pickaxe tier and every charge bucket are
+        derived from that same row, so nothing here costs an extra round trip.
+        The settings dump stays on /adventure config, and prestige/achievements
+        stay on /progress — this card deliberately doesn't restate them.
 
-        ready = [
-            a
-            for a in ACTIVITY_NAMES
-            if cfg[f"{a}_enabled"] and not self._remaining(cfg, stats, a)
-        ]
-        if ready:
-            headline = f"**{len(ready)}** ready right now: " + ", ".join(
-                f"`/{a}`" for a in ready
+        Returns the embed and a `{"charges": …, "enabled": …}` dict, because
+        AdventureView needs the same numbers the card just rendered and
+        recomputing them would let the two disagree.
+        """
+        cfg = await self._cfg(guild.id)
+        stats = await db.get_activity_stats(member.id)
+        now = time.time()
+        charges = {a: self._charges(cfg, stats, a, now) for a in ACTIVITY_NAMES}
+        enabled = {a: bool(cfg[f"{a}_enabled"]) for a in ACTIVITY_NAMES}
+        state = {"charges": charges, "enabled": enabled}
+
+        # The headline counts *runs* available, not activities: with charges
+        # banked, "4 ready" would badly undersell a bucket holding nine.
+        runs = sum(charges[a]["ready"] for a in ACTIVITY_NAMES if enabled[a])
+        if runs:
+            ready = [a for a in ACTIVITY_NAMES if enabled[a] and charges[a]["ready"]]
+            headline = (
+                f"**{runs}** run{'s' if runs != 1 else ''} banked and waiting: "
+                + ", ".join(f"`/{a}`" for a in ready)
             )
         else:
             soonest = min(
-                (
-                    self._remaining(cfg, stats, a)
-                    for a in ACTIVITY_NAMES
-                    if cfg[f"{a}_enabled"]
-                ),
+                (charges[a]["next_in"] for a in ACTIVITY_NAMES if enabled[a]),
                 default=0,
             )
             headline = (
@@ -456,10 +801,30 @@ class Activities(commands.Cog):
             )
         embed = h.embed(
             "🧭 Adventure",
-            f"{headline}\nEvery way to earn beyond `/daily` and `/fish` — each on "
-            "its own cooldown.",
+            f"{headline}\nTap a button to run one — no need to type another "
+            "command.",
             h.BLUE,
         )
+
+        # ── The daily streak ─────────────────────────────────────────────────
+        # Shown whether or not it's live today, because the number a member
+        # wants is "what am I about to lose", not "what did I have".
+        streak = stats.get("streak_days") or 0
+        today = int(now // 86_400)
+        last_day = stats.get("last_day") or 0
+        if streak and last_day >= today - 1:
+            bonus = streak_multiplier(streak) - 1
+            streak_line = f"🔥 **{streak}-day streak** · +{bonus:.0%} on coin rewards"
+            if last_day != today:
+                streak_line += "\n└ Run anything today to keep it going."
+            elif bonus < STREAK_BONUS_CAP:
+                streak_line += "\n└ Comes back tomorrow a little bigger."
+        else:
+            streak_line = (
+                "🔥 **No streak** · run anything today to start one — coin "
+                f"rewards climb to +{STREAK_BONUS_CAP:.0%}"
+            )
+        embed.add_field(name="Daily streak", value=streak_line, inline=False)
 
         # ── The two progression tracks these activities feed ──────────────────
         career = career_info(stats["work_shifts"])
@@ -494,17 +859,28 @@ class Activities(commands.Cog):
             count = stats.get(f"{activity}_count") or (
                 stats["work_shifts"] if activity == "work" else 0
             )
+            bucket = charges[activity]
+            pace = f"every {h.fmt_duration(self._cooldown(cfg, activity))}"
+            if bucket["max"] > 1:
+                pace += f", up to {bucket['max']} banked"
             embed.add_field(
                 name=f"{info['emoji']} {info['command']}",
                 value=f"{info['blurb']}\n{self._status_line(cfg, stats, activity)} · "
-                f"every {h.fmt_duration(self._cooldown(cfg, activity))}\n"
-                f"Done **{count:,}×**",
+                f"{pace}\nDone **{count:,}×**",
                 inline=True,
             )
         embed.set_footer(
             text="Sell what you find with /inventory · badges on /progress"
         )
-        await ctx.reply(embed=embed)
+        return embed, state
+
+    # ── /adventure collect — the whole bucket, one command ───────────────────
+    @adventure.command(
+        name="collect",
+        description="Run everything you have banked, in one go.",
+    )
+    async def adventure_collect(self, ctx: commands.Context):
+        await self._send_run(ctx, await self.collect_all(ctx.guild, ctx.author))
 
     # ── /adventure hunt — medium risk ────────────────────────────────────────
     @adventure.command(
@@ -512,47 +888,46 @@ class Activities(commands.Cog):
         description="Hunt for pelts, meat, and rare trophies — a bit riskier.",
     )
     async def hunt(self, ctx: commands.Context):
-        cfg = await self._cfg(ctx.guild.id)
-        if not cfg["hunt_enabled"]:
-            return await ctx.reply(
-                embed=h.err("Hunting is disabled on this server."), ephemeral=True
-            )
-        retry = await db.try_claim_activity(
-            ctx.author.id, "hunt", time.time(), self._cooldown(cfg, "hunt")
+        await self._send_run(
+            ctx, await self.run_activity(ctx.guild, ctx.author, "hunt")
         )
-        if retry:
-            return await ctx.reply(
-                embed=h.warn(
-                    f"You're still resting up. Hunt again in **{h.fmt_duration(retry)}**.",
-                    "🏹 Not Yet",
-                ),
-                ephemeral=True,
-            )
 
-        await globalxp.award(ctx.author.id, "activity")
-        catch_key = pick_hunt_catch(random.random())
-        catch = HUNT_CATCHES[catch_key]
-        await db.add_item(ctx.author.id, catch_key, 1)
-        econ = await db.get_econ_config(ctx.guild.id)
-        desc = f"You bring back {catch['emoji']} **{catch['name']}**!"
+    async def _resolve_hunt(
+        self, member, cfg: dict, econ: dict, stats: dict, streak: int, boost: dict
+    ) -> discord.Embed:
+        # Each catch in the bag is rolled on its own, so a good hunt can turn up
+        # a trophy alongside the pelts rather than three of the same thing.
+        bag: dict[str, int] = {}
+        for _ in range(roll_hunt_bag(random.random())):
+            catch_key = pick_hunt_catch(random.random())
+            bag[catch_key] = bag.get(catch_key, 0) + 1
+        for catch_key, qty in bag.items():
+            await db.add_item(member.id, catch_key, qty)
+
+        caught = ", ".join(
+            f"{HUNT_CATCHES[k]['emoji']} **{HUNT_CATCHES[k]['name']}**"
+            + (f" ×{q}" if q > 1 else "")
+            for k, q in bag.items()
+        )
+        desc = f"You bring back {caught}!"
 
         if roll_hunt_injury(random.random()):
             fine = hunt_injury_fine(random.random())
             if fine > 0:
-                await db.add_coins(ctx.author.id, -fine)
+                await db.add_coins(member.id, -fine)
                 desc += (
                     f"\n🤕 You took a tumble on the way back and paid "
                     f"{self._money(econ, fine)} for a bandage."
                 )
 
         if roll_hunt_padlock(random.random()):
-            await db.add_item(ctx.author.id, "padlock", 1)
+            await db.add_item(member.id, "padlock", 1)
             desc += f"\n{item_catalogue.display('padlock')} You also found a padlock!"
 
         desc += "\n\nSell loot with `/inventory sell`."
         embed = h.embed("🏹 Hunt", desc, h.BLUE)
-        embed.set_footer(text=self._next_up(cfg, "hunt"))
-        await ctx.reply(embed=embed)
+        embed.set_footer(text=self._next_up(cfg, "hunt", stats))
+        return embed
 
     # ── /adventure explore — long shot ───────────────────────────────────────
     @adventure.command(
@@ -560,28 +935,15 @@ class Activities(commands.Cog):
         description="Explore for a long-shot reward — mostly nothing, occasionally huge.",
     )
     async def explore(self, ctx: commands.Context):
-        cfg = await self._cfg(ctx.guild.id)
-        if not cfg["explore_enabled"]:
-            return await ctx.reply(
-                embed=h.err("Exploring is disabled on this server."), ephemeral=True
-            )
-        retry = await db.try_claim_activity(
-            ctx.author.id, "explore", time.time(), self._cooldown(cfg, "explore")
+        await self._send_run(
+            ctx, await self.run_activity(ctx.guild, ctx.author, "explore")
         )
-        if retry:
-            return await ctx.reply(
-                embed=h.warn(
-                    f"You're still recovering from the last trip. Explore again in "
-                    f"**{h.fmt_duration(retry)}**.",
-                    "🧭 Not Yet",
-                ),
-                ephemeral=True,
-            )
 
-        await globalxp.award(ctx.author.id, "activity")
+    async def _resolve_explore(
+        self, member, cfg: dict, econ: dict, stats: dict, streak: int, boost: dict
+    ) -> discord.Embed:
         outcome = pick_explore_outcome(random.random())
         flavor = EXPLORE_FLAVOR[outcome]
-        econ = await db.get_econ_config(ctx.guild.id)
 
         if outcome == "nothing":
             embed = h.embed("🧭 Explore", flavor, h.GREY)
@@ -589,8 +951,10 @@ class Activities(commands.Cog):
             lo, hi = (
                 EXPLORE_COINS_SMALL if outcome == "coins_small" else EXPLORE_COINS_BIG
             )
-            amount = roll_coin_amount(random.random(), lo, hi)
-            new_bal = await db.add_coins(ctx.author.id, amount)
+            amount = h.apply_coin_boost(
+                apply_streak(roll_coin_amount(random.random(), lo, hi), streak), boost
+            )
+            new_bal = await db.add_coins(member.id, amount)
             title = "🧭 Big Find!" if outcome == "coins_big" else "🧭 Explore"
             embed = h.ok(
                 f"{flavor}\nYou found {self._money(econ, amount)}!\n"
@@ -598,12 +962,12 @@ class Activities(commands.Cog):
                 title,
             )
         else:
-            await db.add_item(ctx.author.id, outcome, 1)
+            await db.add_item(member.id, outcome, 1)
             embed = h.ok(
                 f"{flavor}\nYou found {item_catalogue.display(outcome)}!", "🧭 Explore"
             )
-        embed.set_footer(text=self._next_up(cfg, "explore"))
-        await ctx.reply(embed=embed)
+        embed.set_footer(text=self._next_up(cfg, "explore", stats))
+        return embed
 
     # ══════════════════════════════════════════════════════════════════════════
     #  /rob  — flat, PvP risk
@@ -632,7 +996,7 @@ class Activities(commands.Cog):
         econ = await db.get_econ_config(ctx.guild.id)
         if not cfg["rob_enabled"]:
             return await ctx.reply(
-                embed=h.err("Robbing is disabled on this server."), ephemeral=True
+                embed=h.err(ACTIVITY_INFO["rob"]["disabled"]), ephemeral=True
             )
         if member.bot:
             return await ctx.reply(embed=h.err("You can't rob a bot."), ephemeral=True)
@@ -677,13 +1041,21 @@ class Activities(commands.Cog):
         if retry:
             return await ctx.reply(
                 embed=h.warn(
-                    f"Lying low. Try again in **{h.fmt_duration(retry)}**.",
-                    "🥷 Not Yet",
+                    ACTIVITY_INFO["rob"]["wait"].format(wait=h.fmt_duration(retry)),
+                    ACTIVITY_INFO["rob"]["wait_title"],
                 ),
                 ephemeral=True,
             )
 
         await globalxp.award(ctx.author.id, "activity")
+        # /rob resolves on its own (it has a target and four guard rails that
+        # no button could ask about), but it is still one of the five, so it
+        # keeps the daily streak alive. The multiplier deliberately doesn't
+        # touch the payout: a robbery moves someone else's coins, and scaling
+        # that up would mint the difference out of nothing.
+        await self._touch_streak(
+            ctx.author.id, await db.get_activity_stats(ctx.author.id)
+        )
         robber_effects = await db.get_active_effects(ctx.author.id)
         has_luck = "luck" in robber_effects
         if rob_success(random.random(), has_luck):

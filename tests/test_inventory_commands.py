@@ -14,6 +14,7 @@ from discord.ext import commands
 from discord.ext import test as dpytest
 
 import utils.db as db
+from utils import items
 from cogs.inventory.constants import EFFECT_MAX_DURATION, EFFECT_MAX_USES
 from tests.conftest import config
 
@@ -183,13 +184,16 @@ async def test_sell_unsellable_item_refused(bot):
 async def test_sell_all_previews_without_selling_anything(bot):
     """The command only shows what would go — the sale waits for the button."""
     author = config().members[0]
-    await db.add_item(author.id, "iron_ore", 4)  # material, 25 ea
-    await db.add_item(author.id, "golden_antler", 1)  # treasure, 300 ea
+    await db.add_item(author.id, "iron_ore", 4)  # material
+    await db.add_item(author.id, "golden_antler", 1)  # treasure
 
     await dpytest.message("!inventory sell all", member=author)
     sent = dpytest.get_message()
     assert "Sell these?" in sent.embeds[0].title
-    assert "400" in sent.embeds[0].description  # 4×25 + 300
+    # Read the prices from the catalogue rather than spelling them out: these
+    # are balance numbers and this test is about the confirmation flow.
+    expected = 4 * items.get("iron_ore").value + items.get("golden_antler").value
+    assert f"{expected:,}" in sent.embeds[0].description
     assert await db.get_item_qty(author.id, "iron_ore") == 4
     assert await db.get_item_qty(author.id, "golden_antler") == 1
     assert await db.get_balance(author.id) == 0
@@ -214,7 +218,9 @@ async def test_sell_all_confirmed_clears_every_sellable_stack(bot):
     assert await db.get_item_qty(author.id, "iron_ore") == 0
     assert await db.get_item_qty(author.id, "golden_antler") == 0
     assert await db.get_item_qty(author.id, "treasure_key") == 2
-    assert await db.get_balance(author.id) == 4 * 25 + 300
+    assert await db.get_balance(author.id) == (
+        4 * items.get("iron_ore").value + items.get("golden_antler").value
+    )
 
 
 @pytest.mark.cogs("cogs.inventory", "cogs.activities")
@@ -250,7 +256,7 @@ async def test_sell_confirmation_is_single_use_and_owner_only(bot):
     second = _FakeInteraction(author.id)
     await view._on_confirm(second)  # already settled -> ephemeral no-op
     assert second.response.edited is None
-    assert await db.get_balance(author.id) == 100
+    assert await db.get_balance(author.id) == 4 * items.get("iron_ore").value
 
 
 @pytest.mark.cogs("cogs.inventory", "cogs.activities")
@@ -306,7 +312,7 @@ async def test_sell_category_only_touches_that_category(bot):
 
     assert await db.get_item_qty(author.id, "iron_ore") == 0
     assert await db.get_item_qty(author.id, "golden_antler") == 1
-    assert await db.get_balance(author.id) == 50
+    assert await db.get_balance(author.id) == 2 * items.get("iron_ore").value
 
 
 @pytest.mark.cogs("cogs.inventory", "cogs.activities")
@@ -320,7 +326,7 @@ async def test_sell_bare_category_name_works(bot):
     await _pending_sell(bot, author.id)._on_confirm(_FakeInteraction(author.id))
 
     assert await db.get_item_qty(author.id, "golden_antler") == 0
-    assert await db.get_balance(author.id) == 600
+    assert await db.get_balance(author.id) == 2 * items.get("golden_antler").value
 
 
 @pytest.mark.cogs("cogs.inventory", "cogs.activities")
@@ -335,7 +341,9 @@ async def test_sell_all_with_qty_caps_each_stack(bot):
 
     assert await db.get_item_qty(author.id, "iron_ore") == 3
     assert await db.get_item_qty(author.id, "coal") == 3
-    assert await db.get_balance(author.id) == 2 * 25 + 2 * 12
+    assert await db.get_balance(author.id) == (
+        2 * items.get("iron_ore").value + 2 * items.get("coal").value
+    )
 
 
 @pytest.mark.cogs("cogs.inventory", "cogs.activities")
@@ -351,7 +359,9 @@ async def test_sell_confirmed_after_items_spent_pays_only_what_is_left(bot):
     await db.try_consume_item(author.id, "iron_ore", 4)  # spent behind the preview
 
     await view._on_confirm(_FakeInteraction(author.id))
-    assert await db.get_balance(author.id) == 5 * 12  # coal only, no phantom ore
+    assert (
+        await db.get_balance(author.id) == 5 * items.get("coal").value
+    )  # coal only, no phantom ore
 
 
 @pytest.mark.cogs("cogs.inventory")

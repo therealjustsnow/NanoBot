@@ -212,7 +212,6 @@ groq_wyr_system = You generate Would You Rather questions for a Discord bot. ...
 | `votes` | `discordbotsgg_token` | No | discord.bots.gg bot token -- enables stat posting (the site has no voting or vote-webhook API) |
 | `votes` | `vote_webhook_port` | No | Port for the vote webhook HTTP server. Default `5000` |
 | `votes` | `vote_webhook_secret` | No | Shared secret for webhook verification |
-| `votes` | `webhook_allowed_ips` | No | Comma-separated IPs or CIDR ranges allowed to POST to the webhook server (e.g. `167.114.156.0/24,192.168.1.1`). Blank = allow all |
 | `groq` | `groq_api_key` | No | Groq API key for `/eli5` + daily WYR generation. Free at [console.groq.com](https://console.groq.com). Also accepts `GROQ_API_KEY` env var |
 | `scraper` | `fml_pages_per_scrape` | No | FML pages fetched per daily scrape. Default `500` |
 | `scraper` | `wyr_requests_per_scrape` | No | WYR requests per rating per daily scrape. Default `500` |
