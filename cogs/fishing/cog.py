@@ -13,8 +13,8 @@ rarity tiers (junk → common → uncommon → rare → epic → legendary → t
 Fish land in a bag and sell for NanoCoins; treasure pays coins on the spot.
 Better rods — bought with coins, a deliberate money sink — shift the odds away
 from junk toward the high tiers, alongside a fishing level (earned from XP per
-catch) and bait bought at the /fish shop (armed via /inventory use — see
-cogs/fishing/items.py). Lifetime earnings drive a fishing leaderboard (plus a
+catch) and bait bought at the /fish shop (armed from the shop's own ⚡ menu, or
+via /inventory use — see cogs/fishing/items.py). Lifetime earnings drive a fishing leaderboard (plus a
 cross-server /fish global one), a per-species dex tracks collection progress,
 and personal bests remember the heaviest catch. A once-a-day streak rewards
 logging in to fish, a daily quest gives members something concrete to chase,
@@ -35,7 +35,8 @@ Commands
   /fish bag                   → what you've caught, grouped by species
   /fish sell [fish|all]       → sell one species — or everything — for coins
   /fish travel [spot]         → the map: charter and move between spots
-  /fish shop                  → bait and tackle, one tap each
+  /fish shop                  → bait and tackle, one tap each, plus an ⚡ menu
+                                that arms what you own without leaving the shop
   /fish trap                  → set a fish trap, or pull a soaked one
   /fish rod                   → your rod + the next upgrade
   /fish upgrade               → buy the next rod tier with coins
@@ -77,6 +78,7 @@ import discord
 from discord import app_commands
 from discord.ext import commands
 
+from utils import consumables
 from utils import db
 from utils import globalxp
 from utils import paginator
@@ -87,6 +89,7 @@ from utils import items as item_catalog
 from . import items as _fishing_items  # noqa: F401 - registers bait/consumable defs
 from .items import FISH_TRAP
 from .constants import (
+    ARMABLE_EFFECTS,
     CAST_COOLDOWN,
     EVENT_DURATION_RANGE,
     EVENT_LABELS,
@@ -1119,8 +1122,8 @@ class Fishing(commands.Cog):
     )
     @commands.cooldown(1, 5, commands.BucketType.user)
     async def fish_shop(self, ctx: commands.Context):
-        screen, stock = await self.shop_screen(ctx.guild, ctx.author)
-        await self._send(ctx, screen, TackleShopView(self, ctx.author.id, stock))
+        screen, stock, gear = await self.shop_state(ctx.guild, ctx.author)
+        await self._send(ctx, screen, TackleShopView(self, ctx.author.id, stock, gear))
 
     async def shop_screen(
         self, guild: discord.Guild, member: discord.abc.User
@@ -1148,16 +1151,107 @@ class Fishing(commands.Cog):
                 f"{self._money(econ, item.price)}{have}\n{item.description}"
             )
         embed = h.embed("🛒 Tackle Shop", "\n\n".join(lines), h.BLUE)
+        armed = await self._armed_line(member)
+        if armed:
+            embed.add_field(name="Armed right now", value=armed, inline=False)
         embed.set_footer(
-            text=f"You have {balance:,} · buttons buy one, /fish buy takes a quantity"
+            text=f"You have {balance:,} · buttons buy one, the ⚡ menu arms what "
+            "you own, /fish buy takes a quantity"
         )
         return Screen(embed), stock
+
+    async def _armed_line(self, member: discord.abc.User) -> str:
+        """What's currently live, for the shelf and the arm menu to sit under.
+
+        Bought-but-not-armed is the mistake this whole menu exists to prevent,
+        so the shop says which of the two states you're in rather than leaving
+        it to `/fish bait`.
+        """
+        effects = await db.get_active_effects(member.id)
+        now = time.time()
+        lines = []
+        for key in ARMABLE_EFFECTS:
+            eff = effects.get(key)
+            if not eff:
+                continue
+            left = (
+                f"{h.fmt_duration(max(1, int(eff['expires_at'] - now)))} left"
+                if eff["expires_at"]
+                else f"{eff['uses_left']} cast(s) left"
+            )
+            lines.append(f"⚡ `{key}` +{eff['magnitude']:g} · {left}")
+        return "\n".join(lines)
 
     async def buy_one(
         self, guild: discord.Guild, member: discord.abc.User, item_key: str
     ) -> "Screen":
         """Buy a single item — what the shop's buttons do."""
         return await self.buy_items(guild, member, item_key, 1)
+
+    async def shop_state(
+        self, guild: discord.Guild, member: discord.abc.User
+    ) -> tuple["Screen", list[dict], list[dict]]:
+        """The shelf, what its buy buttons need, and what's armable right now.
+
+        Buying and arming are one errand — a bought bait does nothing until it
+        is armed — so every place that paints the shop reads both halves here
+        rather than remembering to fetch the second one.
+        """
+        screen, stock = await self.shop_screen(guild, member)
+        return screen, stock, await self.gear_stock(member)
+
+    async def gear_stock(self, member: discord.abc.User) -> list[dict]:
+        """Owned consumables an angler can arm from the shop, and what's live.
+
+        Filtered to the effects fishing actually reads — bait charges, the net,
+        the XP multiplier and generic luck. The shelf should offer to arm the
+        thing it just sold; a rob shield armed from a boat is nonsense, and the
+        whole inventory belongs to `/inventory use`.
+        """
+        live = await db.get_active_effects(member.id)
+        gear: list[dict] = []
+        for row in await consumables.owned_usable(member.id):
+            effect = (row["item"].effect or {}).get("key")
+            if effect in ARMABLE_EFFECTS:
+                gear.append({**row, "effect": effect, "armed": effect in live})
+        return gear
+
+    async def arm_gear(
+        self, guild: discord.Guild, member: discord.abc.User, keys: list[str]
+    ) -> "Screen":
+        """Arm bought consumables without leaving the shop — the ⚡ menu.
+
+        Bait that has been bought and not armed does nothing, and the only way
+        to arm it used to be a different cog's command: buy in `/fish shop`,
+        then go and type `/inventory use glowgrub` before every few casts. The
+        menu takes several at once because a loadout is usually bait *and* a
+        charm, and arming them one command at a time is the friction the whole
+        button row exists to remove.
+        """
+        lines: list[str] = []
+        armed = 0
+        async with self._lock(member.id):
+            for key in keys[: consumables.MAX_USE_TARGETS]:
+                result = await consumables.use_item(member.id, key, 1)
+                label = item_catalog.display(key)
+                if result.reason == "unknown" or result.reason == "not_usable":
+                    lines.append(f"🚫 {label} can't be armed.")
+                elif result.reason == "short":
+                    lines.append(f"❌ You've run out of {label}.")
+                else:
+                    armed += 1
+                    detail = (
+                        f"{h.fmt_duration(int(result.duration))}"
+                        if result.duration
+                        else f"{result.uses} cast(s)"
+                    )
+                    lines.append(f"⚡ Armed {label} — `{result.effect_key}`, {detail}.")
+        return Screen(
+            (h.ok if armed else h.warn)(
+                "\n".join(lines), "⚡ Armed" if armed else "⚡ Nothing Armed"
+            ),
+            ok=bool(armed),
+        )
 
     # ── /fish rod ────────────────────────────────────────────────────────────
     @fish.command(name="rod", description="See your rod and the next upgrade.")
@@ -1489,7 +1583,7 @@ class Fishing(commands.Cog):
         how = (
             "Set it with `/fish trap`."
             if d.key == FISH_TRAP
-            else f"Arm it with `/inventory use {d.name}`."
+            else "Arm it from the shop's ⚡ menu, or `/inventory use " f"{d.name}`."
         )
         return Screen(
             h.ok(

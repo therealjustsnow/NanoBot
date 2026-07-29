@@ -23,7 +23,10 @@ Commands
                                   a group's own callback can't be invoked over
                                   slash, so without it there was no way to
                                   simply *look* at your items over slash)
-  /inventory use <item> [qty]   → use a consumable (applies its effect)
+  /inventory use [item] [qty]   → use consumables (applies their effects).
+                                  `item` takes several, comma-separated, since a
+                                  loadout is rarely one buff; left empty it
+                                  opens a multi-select gear picker instead.
   /inventory sell <item> [qty]  → sell sellable items for coins; `item` also
                                   takes a bulk target — `all` for everything
                                   sellable, or a category (`cat:material`) —
@@ -42,20 +45,19 @@ from typing import Optional
 import discord
 from discord.ext import commands
 
-from utils import db
+from utils import consumables, db
 from utils import helpers as h
 from utils import items as item_catalog
 
 from .constants import (
     CATEGORY_SELL_PREFIX,
-    EFFECT_MAX_DURATION,
-    EFFECT_MAX_USES,
     MAX_BULK,
     SELL_ALL_ALIASES,
     SELL_CONFIRM_TIMEOUT,
+    USE_PICKER_TIMEOUT,
 )
 from .helpers import chest_payout
-from .views import SellConfirmView
+from .views import SellConfirmView, UseGearView
 
 log = logging.getLogger("NanoBot.inventory")
 
@@ -156,13 +158,15 @@ class Inventory(commands.Cog):
             "usage": "inventory [category]",
             "desc": "Everything you own beyond coins lives here: bait, "
             "consumables, crafting materials, treasure, and keys earned from "
-            "economy activities. Use consumables for temporary buffs, sell "
+            "economy activities. Use consumables for temporary buffs — several "
+            "at once, or tap them from a picker — sell "
             "spare materials for coins (one item, a whole category, or "
             "everything at once), or give items to friends.",
             "args": ["category — show one category only (optional)"],
             "perms": "None",
             "example": "{prefix}inventory\n{prefix}inventory bait\n"
             "{prefix}inventory use lucky charm\n"
+            "{prefix}inventory use\n"
             "{prefix}inventory sell iron ore 5\n{prefix}inventory sell all",
         },
     )
@@ -309,110 +313,222 @@ class Inventory(commands.Cog):
         await ctx.reply(embed=embed)
 
     # ── /inventory use ───────────────────────────────────────────────────────
-    @inventory.command(name="use", description="Use a consumable item.")
+    @inventory.command(name="use", description="Use consumable items.")
     @discord.app_commands.describe(
-        item="Pick a usable item you own", qty="How many to use at once (default 1)"
+        item="Pick a usable item you own — or several, separated by commas",
+        qty="How many of each to use at once (default 1)",
     )
     # NOTE: `item`/`qty` are plain positional params, not `*, item, qty` —
     # discord.py's prefix parser only transforms the first keyword-only
     # parameter, which silently pins qty at its default under prefix
     # invocation. Multi-word names need quotes in prefix form ("lucky charm"),
-    # or use the underscore key (lucky_charm); slash options are unaffected.
+    # or use the underscore key (lucky_charm) — and so does a comma-separated
+    # list, since prefix splits on whitespace to find qty. Slash hands the whole
+    # option over as one string, so a list needs nothing there, and a phone user
+    # who would rather not type at all has the picker.
     async def inventory_use(
-        self, ctx: commands.Context, item: str, qty: Optional[int] = 1
+        self, ctx: commands.Context, item: Optional[str] = None, qty: Optional[int] = 1
     ):
-        d = item_catalog.find(item)
-        if d is None:
-            return await ctx.reply(
-                embed=h.err(
-                    f"I don't know any item called **{item}**. Run `/inventory` to "
-                    "see what you own."
-                ),
-                ephemeral=True,
-            )
-        qty = max(1, min(int(qty or 1), MAX_BULK))
-        async with self._lock(ctx.author.id):
-            if d.key == "treasure_chest":
-                return await self._open_chest(ctx, qty)
-            if not d.effect:
-                return await ctx.reply(
-                    embed=h.warn(f"{item_catalog.display(d.key)} can't be used."),
-                    ephemeral=True,
-                )
-            # Stacking cap: qty multiplies the granted duration/charges, so
-            # clamp qty to whatever fits under the per-command effect ceiling
-            # (never below 1 — a single big item is always usable). Only the
-            # clamped qty is consumed, so no items are eaten without effect.
-            per_uses = int(d.effect.get("uses", 0))
-            per_duration = float(d.effect.get("duration", 0))
-            if per_duration > 0:
-                qty = min(qty, max(1, int(EFFECT_MAX_DURATION // per_duration)))
-            elif per_uses > 0:
-                qty = min(qty, max(1, EFFECT_MAX_USES // per_uses))
-            uses = per_uses * qty
-            duration = per_duration * qty
-            if not await db.try_consume_item(ctx.author.id, d.key, qty):
-                have = await db.get_item_qty(ctx.author.id, d.key)
-                return await ctx.reply(
-                    embed=h.err(
-                        f"You need **{qty}** × {item_catalog.display(d.key)} "
-                        f"but only have **{have}**."
-                    ),
-                    ephemeral=True,
-                )
-            await db.grant_effect(
-                ctx.author.id,
-                d.effect["key"],
-                float(d.effect.get("magnitude", 0)),
-                duration=duration,
-                uses=uses,
-            )
-        if duration:
-            detail = f"active for **{h.fmt_duration(int(duration))}**"
-        else:
-            detail = f"**{uses}** use(s) ready"
-        await ctx.reply(
-            embed=h.ok(
-                f"Used {qty} × {item_catalog.display(d.key)} — "
-                f"`{d.effect['key']}` effect {detail}.",
-                "✨ Item Used",
-            )
+        """Arm one item, several, or open the gear picker and tap a few.
+
+        `item` takes a comma-separated list because arming a loadout used to be
+        one command per buff — three commands to fish with bait, luck and XP up,
+        which is three times the friction for one decision. Left empty it opens
+        the picker instead, where a multi-select does the same thing in one tap.
+        """
+        targets = h.split_targets(item or "", consumables.MAX_USE_TARGETS)
+        if not targets:
+            return await self._use_picker(ctx)
+        embed, armed = await self.run_use(
+            ctx.author.id, ctx.guild.id, targets, max(1, min(int(qty or 1), MAX_BULK))
         )
+        await ctx.reply(embed=embed, ephemeral=not armed)
 
     @inventory_use.autocomplete("item")
     async def _use_ac(self, interaction: discord.Interaction, current: str):
-        return await self._owned_choices(interaction, current, usable_only=True)
+        """Usable stacks, plus an everything-wearable row when there's more than
+        one — the picker is where a loadout gets armed in one tap."""
+        choices = await self._owned_choices(interaction, current, usable_only=True)
+        q = (current or "").strip().lower()
+        if len(choices) > 1 and (not q or q in "everything"):
+            # A choice value is capped at 100 chars, so the row carries as many
+            # whole keys as fit — never a truncated one, which would come back
+            # as "no item called bait_gl".
+            keys: list[str] = []
+            for choice in choices[: consumables.MAX_USE_TARGETS]:
+                if len(", ".join(keys + [choice.value])) > 100:
+                    break
+                keys.append(choice.value)
+            if len(keys) > 1:
+                choices.insert(
+                    0,
+                    discord.app_commands.Choice(
+                        name=f"✨ Use one of each — {len(keys)} items"[:100],
+                        value=", ".join(keys),
+                    ),
+                )
+        return choices[:25]
 
-    async def _open_chest(self, ctx: commands.Context, qty: int):
-        """Chests need a key each: consume chest+key pairs, pay coins."""
-        uid = ctx.author.id
-        keys = await db.get_item_qty(uid, "treasure_key")
-        chests = await db.get_item_qty(uid, "treasure_chest")
-        qty = min(qty, keys, chests)
-        if qty <= 0:
+    async def _use_picker(self, ctx: commands.Context):
+        """The tap-to-arm gear list — what a bare `/inventory use` shows."""
+        gear = await consumables.owned_usable(ctx.author.id)
+        if not gear:
             return await ctx.reply(
-                embed=h.warn(
-                    "Opening a chest takes one 🧰 Treasure Chest **and** one "
-                    "🗝️ Treasure Key. You need at least one of each."
+                embed=h.info(
+                    "You've nothing to use yet. Bait, charms and chests come "
+                    "from `/fish shop`, mining, hunting and events — anything "
+                    "usable turns up here.",
+                    "✨ Nothing to Use",
                 ),
                 ephemeral=True,
             )
-        if not await db.try_consume_item(uid, "treasure_chest", qty):
-            return await ctx.reply(
-                embed=h.err("Those chests just vanished — try again.")
+        view = UseGearView(
+            self,
+            user_id=ctx.author.id,
+            guild_id=ctx.guild.id,
+            gear=gear,
+            timeout=USE_PICKER_TIMEOUT,
+        )
+        view.message = await ctx.reply(embed=self._gear_embed(gear), view=view)
+
+    async def remaining_gear(self, user_id: int) -> list[dict]:
+        """What's still usable — the picker re-reads through this after a press."""
+        return await consumables.owned_usable(user_id)
+
+    def _gear_embed(self, gear: list[dict]) -> discord.Embed:
+        """The picker's card: what's usable, and what each one grants."""
+        lines = []
+        for row in gear:
+            d = row["item"]
+            effect = d.effect or {}
+            if effect.get("duration"):
+                detail = (
+                    f"`{effect['key']}` for "
+                    f"{h.fmt_duration(int(effect['duration']))} each"
+                )
+            elif effect.get("uses"):
+                detail = f"`{effect['key']}` × {effect['uses']} use(s) each"
+            else:
+                detail = "needs a 🗝️ Treasure Key"
+            lines.append(
+                f"{item_catalog.display(d.key)} × **{row['qty']:,}** — {detail}"
             )
-        if not await db.try_consume_item(uid, "treasure_key", qty):
-            await db.add_item(uid, "treasure_chest", qty)
-            return await ctx.reply(embed=h.err("Your keys just vanished — try again."))
+        embed = h.embed(
+            "✨ Use Your Gear",
+            "Pick everything you want armed — one of each goes in one press.\n\n"
+            + "\n".join(lines)[:3500],
+            ACCENT,
+        )
+        embed.set_footer(text="/inventory use <item> [qty] takes a quantity")
+        return embed
+
+    async def run_use(
+        self,
+        user_id: int,
+        guild_id: int,
+        targets: list[str],
+        qty: int = 1,
+    ) -> tuple[discord.Embed, int]:
+        """Arm every named item and describe what landed.
+
+        One target keeps the wording it always had — a chest says it opened, a
+        buff says what it granted and for how long. Several are summarised line
+        by line, since that is what a multi-pick means, and each line carries
+        its own refusal so one missing charm can't silently swallow the rest.
+        """
+        lines: list[str] = []
+        singles: list[discord.Embed] = []
+        armed = 0
+        async with self._lock(user_id):
+            for target in targets:
+                ok, line, embed = await self._use_one(user_id, guild_id, target, qty)
+                armed += 1 if ok else 0
+                lines.append(line)
+                singles.append(embed)
+        if len(targets) == 1:
+            return singles[0], armed
+        embed = (h.ok if armed else h.warn)(
+            "\n".join(lines),
+            f"✨ Armed {armed} of {len(targets)}" if armed else "✨ Nothing Armed",
+        )
+        embed.set_footer(text="See what's running with /inventory")
+        return embed, armed
+
+    async def _use_one(
+        self, user_id: int, guild_id: int, target: str, qty: int
+    ) -> tuple[bool, str, discord.Embed]:
+        """Use one item. Returns (worked, summary line, standalone embed).
+
+        Both forms come out of one call because a single-item use replies with
+        the embed and a multi-item one with the line, and they must never
+        disagree about what happened.
+        """
+        d = item_catalog.find(target)
+        if d is None:
+            return (
+                False,
+                f"❔ No item called **{target}**.",
+                h.err(
+                    f"I don't know any item called **{target}**. Run `/inventory` "
+                    "to see what you own."
+                ),
+            )
+        label = item_catalog.display(d.key)
+        if d.key == "treasure_chest":
+            return await self._open_chests(user_id, guild_id, qty)
+        result = await consumables.use_item(user_id, d.key, qty)
+        if result.reason == "not_usable":
+            return (
+                False,
+                f"🚫 {label} can't be used.",
+                h.warn(f"{label} can't be used."),
+            )
+        if result.reason == "short":
+            short = (
+                f"You need **{result.qty}** × {label} but only have "
+                f"**{result.have}**."
+            )
+            return False, f"❌ {short}", h.err(short)
+        detail = (
+            f"active for **{h.fmt_duration(int(result.duration))}**"
+            if result.duration
+            else f"**{result.uses}** use(s) ready"
+        )
+        body = f"Used {result.qty} × {label} — `{result.effect_key}` effect {detail}."
+        return True, f"✅ {body}", h.ok(body, "✨ Item Used")
+
+    async def _open_chests(
+        self, user_id: int, guild_id: int, qty: int
+    ) -> tuple[bool, str, discord.Embed]:
+        """Chests need a key each: consume chest+key pairs, pay coins."""
+        keys = await db.get_item_qty(user_id, "treasure_key")
+        chests = await db.get_item_qty(user_id, "treasure_chest")
+        qty = min(qty, keys, chests)
+        if qty <= 0:
+            need = (
+                "Opening a chest takes one 🧰 Treasure Chest **and** one "
+                "🗝️ Treasure Key. You need at least one of each."
+            )
+            return False, f"🔒 {need}", h.warn(need)
+        if not await db.try_consume_item(user_id, "treasure_chest", qty):
+            gone = "Those chests just vanished — try again."
+            return False, f"❌ {gone}", h.err(gone)
+        if not await db.try_consume_item(user_id, "treasure_key", qty):
+            await db.add_item(user_id, "treasure_chest", qty)
+            gone = "Your keys just vanished — try again."
+            return False, f"❌ {gone}", h.err(gone)
         coins = sum(chest_payout(random.random()) for _ in range(qty))
-        await db.add_coins(uid, coins)
-        econ = await db.get_econ_config(ctx.guild.id)  # currency label only
-        await ctx.reply(
-            embed=h.embed(
+        await db.add_coins(user_id, coins)
+        econ = await db.get_econ_config(guild_id)  # currency label only
+        money = self._money(econ, coins)
+        return (
+            True,
+            f"🧰 Opened **{qty}** chest(s) — {money}.",
+            h.embed(
                 "🧰 Chest Opened!" if qty == 1 else f"🧰 {qty} Chests Opened!",
-                f"Inside you find {self._money(econ, coins)}!",
+                f"Inside you find {money}!",
                 0xF1C40F,
-            )
+            ),
         )
 
     # ── /inventory sell ──────────────────────────────────────────────────────

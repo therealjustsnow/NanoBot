@@ -406,6 +406,23 @@ def apply_coin_boost(amount: int, effects: dict) -> int:
     return max(amount, round(amount * coin_boost_multiplier(effects)))
 
 
+def split_targets(raw: str, limit: int = 10) -> list[str]:
+    """Read one text option as a list of picks.
+
+    Anything worn or armed comes in sets — bait *and* a charm, a banner *and*
+    three badges — and one command per pick is the whole cost of having a
+    loadout on a phone. So the options that take a name take several, separated
+    by commas (or semicolons, which is what a phone keyboard offers first). A
+    single name with no separator in it behaves exactly as it always did, which
+    is what lets this be added to an existing option without changing it.
+
+    `limit` is a sanity bound, not a feature: a picker shows 25 rows and each
+    pick is a write, so a pasted essay is cut rather than run.
+    """
+    parts = [p.strip() for p in (raw or "").replace(";", ",").split(",")]
+    return [p for p in parts if p][:limit]
+
+
 def fmt_coins(amount: int, name: str, emoji: str) -> str:
     """Render a coin amount, e.g. '🪙 1,234 NanoCoins'.
 

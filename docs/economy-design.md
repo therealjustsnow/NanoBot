@@ -45,8 +45,13 @@ Rules that keep the layers decoupled:
   import time (`cogs/fishing/items.py`, `cogs/activities/items.py`), so a new
   item — or a whole new category — never touches the schema. Unknown keys
   (removed items still owned) degrade gracefully to their raw key.
-- **Effects are an interpretation contract.** `/inventory use` writes an
-  item's `effect` dict into `user_effects`; whichever cog cares reads it.
+- **Effects are an interpretation contract.** Using an item writes its
+  `effect` dict into `user_effects`; whichever cog cares reads it. The write
+  itself lives in `utils/consumables.py` (clamp the quantity, consume the stack
+  atomically, grant the effect) because two surfaces now do it: `/inventory use`
+  and the ⚡ menu in `/fish shop`, which exists so bought bait can be armed
+  where it was bought. A cog that sells a consumable should arm it too, and it
+  reaches for that module rather than another cog.
   Current vocabulary:
   - `luck` — timed, generic; fishing adds it to rod luck, activities add it
     to rare-find odds.

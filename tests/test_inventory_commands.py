@@ -19,10 +19,24 @@ from cogs.inventory.constants import EFFECT_MAX_DURATION, EFFECT_MAX_USES
 from tests.conftest import config
 
 
+def views():
+    """The view module the *live* cog is using.
+
+    Loading a cog replaces `cogs.inventory.views` in sys.modules, so a class
+    bound at collection time is a different object from the one the cog builds —
+    an `isinstance` against it passes in isolation and fails in a full run, which
+    is the most annoying possible way to learn this (see tests/test_fishing_views).
+    """
+    import cogs.inventory.views as module
+
+    return module
+
+
 class _FakeResponse:
     def __init__(self):
         self.edited = None
         self.sent = None
+        self.deferred = False
 
     async def edit_message(self, **kwargs):
         self.edited = kwargs
@@ -30,13 +44,44 @@ class _FakeResponse:
     async def send_message(self, **kwargs):
         self.sent = kwargs
 
+    async def defer(self, **kwargs):
+        self.deferred = True
+
+
+class _FakeMessage:
+    def __init__(self):
+        self.edits = []
+
+    async def edit(self, **kwargs):
+        self.edits.append(kwargs)
+
 
 class _FakeInteraction:
-    """Minimal duck-typed discord.Interaction for the confirm buttons."""
+    """Minimal duck-typed discord.Interaction for the confirm buttons and the
+    gear picker's select."""
 
     def __init__(self, user_id: int):
         self.user = types.SimpleNamespace(id=user_id)
         self.response = _FakeResponse()
+        self.edited = None
+
+    async def edit_original_response(self, **kwargs):
+        self.edited = kwargs
+        return _FakeMessage()
+
+
+class _FakeCtx:
+    """Just enough Context for the picker — dpytest doesn't surface the view a
+    reply carried, and the view is the thing under test."""
+
+    def __init__(self, member, guild):
+        self.author = member
+        self.guild = guild
+        self.replied = None
+
+    async def reply(self, **kwargs):
+        self.replied = kwargs
+        return _FakeMessage()
 
 
 def _pending_sell(bot, user_id):
@@ -135,6 +180,116 @@ async def test_use_bulk_timed_effect_capped_at_duration_ceiling(bot):
     # lucky_charm is 1800s a use → cap allows 48; the other 952 stay owned.
     expected_used = EFFECT_MAX_DURATION // 1800
     assert await db.get_item_qty(author.id, "lucky_charm") == 1000 - expected_used
+
+
+@pytest.mark.cogs("cogs.inventory", "cogs.fishing")
+async def test_use_arms_several_items_from_one_command(bot):
+    """A loadout is bait *and* a charm, and arming it was one command each.
+
+    Quoted here because a prefix invocation splits on whitespace — `item` is
+    positional so that `qty` can follow it — and slash hands the whole list over
+    as one option, which is the surface this is for.
+    """
+    author = config().members[0]
+    await db.add_item(author.id, "lucky_charm", 1)
+    await db.add_item(author.id, "bait_worm", 1)
+
+    await dpytest.message('!inventory use "lucky_charm, bait_worm"', member=author)
+    sent = dpytest.get_message()
+
+    assert "Armed 2 of 2" in sent.embeds[0].title
+    effects = await db.get_active_effects(author.id)
+    assert {"luck", "fish_bait"} <= set(effects)
+    assert await db.get_item_qty(author.id, "lucky_charm") == 0
+    assert await db.get_item_qty(author.id, "bait_worm") == 0
+
+
+@pytest.mark.cogs("cogs.inventory", "cogs.fishing")
+async def test_one_bad_pick_in_a_list_does_not_stop_the_rest(bot):
+    """Each line carries its own refusal — a charm you've run out of can't
+    swallow the bait you have."""
+    author = config().members[0]
+    await db.add_item(author.id, "bait_worm", 1)
+
+    await dpytest.message('!inventory use "lucky_charm, bait_worm"', member=author)
+    desc = dpytest.get_message().embeds[0].description
+
+    assert "lucky" in desc.lower() and "Worm" in desc
+    assert "fish_bait" in await db.get_active_effects(author.id)
+
+
+@pytest.mark.cogs("cogs.inventory")
+async def test_bare_use_opens_the_gear_picker(bot):
+    author, guild = config().members[0], config().guilds[0]
+    await db.add_item(author.id, "lucky_charm", 2)
+    cog = bot.get_cog("Inventory")
+    ctx = _FakeCtx(author, guild)
+
+    await cog._use_picker(ctx)
+
+    view = ctx.replied["view"]
+    # By class *name*: loading several cogs can reload the views module, so the
+    # live class is not always the object an import at collection time bound.
+    assert type(view).__name__ == "UseGearView"
+    assert [o.value for o in view.select.options] == ["lucky_charm"]
+    # Nothing is armed by opening it.
+    assert await db.get_active_effects(author.id) == {}
+
+
+@pytest.mark.cogs("cogs.inventory", "cogs.fishing")
+async def test_the_picker_arms_everything_selected_in_one_press(bot):
+    author, guild = config().members[0], config().guilds[0]
+    await db.add_item(author.id, "lucky_charm", 1)
+    await db.add_item(author.id, "bait_worm", 1)
+    cog = bot.get_cog("Inventory")
+    ctx = _FakeCtx(author, guild)
+    await cog._use_picker(ctx)
+    view = ctx.replied["view"]
+    view.select._values = ["lucky_charm", "bait_worm"]
+    interaction = _FakeInteraction(author.id)
+
+    await view._on_select(interaction)
+
+    assert {"luck", "fish_bait"} <= set(await db.get_active_effects(author.id))
+    # The card is repainted with the result, and the emptied list closes itself.
+    assert interaction.edited["embed"].title.startswith("✨ Armed")
+    assert view.children == []
+
+
+@pytest.mark.cogs("cogs.inventory")
+async def test_the_picker_is_invoker_only(bot):
+    author, other, guild = config().members[0], config().members[1], config().guilds[0]
+    await db.add_item(author.id, "lucky_charm", 1)
+    cog = bot.get_cog("Inventory")
+    ctx = _FakeCtx(author, guild)
+    await cog._use_picker(ctx)
+    view = ctx.replied["view"]
+
+    assert await view.interaction_check(_FakeInteraction(author.id)) is True
+    theirs = _FakeInteraction(other.id)
+    assert await view.interaction_check(theirs) is False
+    assert theirs.response.sent["ephemeral"] is True
+
+
+@pytest.mark.cogs("cogs.inventory", "cogs.fishing")
+async def test_the_use_picker_offers_a_use_one_of_each_row_with_whole_keys(bot):
+    """A choice value is capped at 100 chars, and a truncated key would come
+    back as "no item called bait_gl"."""
+    author = config().members[0]
+    await db.add_item(author.id, "lucky_charm", 1)
+    await db.add_item(author.id, "bait_worm", 1)
+    cog = bot.get_cog("Inventory")
+    interaction = types.SimpleNamespace(
+        user=types.SimpleNamespace(id=author.id), guild_id=config().guilds[0].id
+    )
+
+    choices = await cog._use_ac(interaction, "")
+
+    assert choices[0].name.startswith("✨")
+    keys = [k.strip() for k in choices[0].value.split(",")]
+    assert set(keys) == {"lucky_charm", "bait_worm"}
+    # Whole keys only — every one still resolves in the catalogue.
+    assert all(items.get(k) is not None for k in keys)
 
 
 @pytest.mark.cogs("cogs.inventory")

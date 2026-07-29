@@ -473,6 +473,14 @@ NET_CATCHES = 3
 TRAP_SOAK = 7200
 TRAP_CATCHES = 10
 
+# What the tackle shop's ⚡ menu will arm: the effects a cast actually reads.
+# Bought bait does nothing until it's armed, and the only place to arm it used
+# to be another cog's command — but the shelf still has no business arming a rob
+# shield, so the offer is scoped to what fishing itself honours. Generic `luck`
+# is in because `cast_once` adds it to the rod's; anything else belongs to
+# `/inventory use`.
+ARMABLE_EFFECTS = ("fish_bait", "fish_net", "fish_xp", "luck")
+
 # ── Daily streak ─────────────────────────────────────────────────────────────
 STREAK_COIN_PER_DAY = 10
 STREAK_COIN_CAP = 100

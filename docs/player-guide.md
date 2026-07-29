@@ -146,8 +146,8 @@ Both of your cards are customisable — the profile card and the wallet card
 |---|---|
 | `/profile cosmetics [slot]` | Everything you own, and how to unlock the rest |
 | `/profile preview <name>` | See it on **your** card before you buy — nothing is equipped or charged |
-| `/profile equip <name>` | Wear it (the slot is worked out for you) |
-| `/profile unequip <name>` | Take it off — or pass a slot name to clear it |
+| `/profile equip [name]` | Wear it (the slot is worked out for you). Name several, separated by commas — or run it bare and tap a few from the menu |
+| `/profile unequip [name]` | Take it off — several at once, a slot name to clear that slot, or bare to pick from what's on |
 | `/profile badges [member]` | The badge gallery, yours or someone else's |
 
 On slash commands you never type a cosmetic name: `equip` and `unequip` pop up
@@ -230,7 +230,7 @@ The biggest earner in the game, and the most hands-on.
 /fish bag          what you're carrying
 /fish sell [fish]  sell one species, or everything
 /fish travel       the map: charter and move between fishing spots
-/fish shop         bait and tackle
+/fish shop         bait and tackle — and the ⚡ menu that arms what you own
 /fish trap         set a fish trap, or pull one that's ready
 /fish rod          your rod + the next upgrade
 /fish upgrade      buy the next rod
@@ -357,8 +357,10 @@ next one with `/fish upgrade`.
 
 (Nets and traps are on the same shelf — see 🪤 Tackle above.)
 
-Buying bait doesn't arm it — **use `/inventory use <bait>`** before casting.
-`/fish bait` shows what you own and what's currently armed.
+Buying bait doesn't arm it. The quickest way is the **⚡ menu in `/fish shop`**:
+it lists the bait, nets and charms you own and arms everything you pick in one
+press, right where you bought them. `/inventory use <bait>` does the same thing
+from anywhere, and `/fish bait` shows what's currently armed.
 
 ---
 
@@ -465,7 +467,7 @@ Everything you own that isn't coins or bagged fish lives in `/inventory`
 |---|---|
 | `/inventory` | Your items grouped by category, with totals and active buffs |
 | `/inventory view [category]` | The same view, slash-reachable; add a category (`bait`, `material`, …) to show just that one |
-| `/inventory use <item> [qty]` | Use a consumable — this is how bait and charms are armed |
+| `/inventory use [item] [qty]` | Use a consumable — this is how bait and charms are armed. Name several, separated by commas, or run it bare and tap them from a menu |
 | `/inventory sell <item> [qty]` | Sell items for coins |
 | `/inventory sell all` | Sell **everything** sellable in one go |
 | `/inventory sell cat:material` | Sell one whole category (materials, treasure, …) |
@@ -716,8 +718,9 @@ Your personal rank on `/balance`, `/fish stats` and `/casino stats` is your
   the streak is worth up to +25% on every coin reward.
 - **Set a rhythm.** `/daily` once a day, `/adventure` when you're around, cast
   a few lines between things.
-- **Arm your bait.** Buying it isn't enough — `/inventory use <bait>` first,
-  and it only spends charges when you actually cast.
+- **Arm your bait.** Buying it isn't enough — tap the ⚡ menu in `/fish shop`
+  (or `/inventory use <bait>`) first, and it only spends charges when you
+  actually cast.
 - **Upgrade the rod before you hoard.** Rod luck compounds with every future
   cast; a pile of coins doesn't.
 - **Sell in bulk.** `/fish sell` → "Everything in your bag".
@@ -757,7 +760,8 @@ is the bot owner's call, not a server's — `coin grant`, `coin take` and
 shop prices, which only decides what its own rewards cost.
 
 **I bought bait and nothing changed.**
-Use it: `/inventory use <bait>`. Check `/fish bait` to confirm it's armed.
+Arm it: the ⚡ menu at the bottom of `/fish shop`, or `/inventory use <bait>`.
+Check `/fish bait` to confirm.
 
 **Fishing/casino/rob doesn't work here.**
 The server has that feature switched off. Ask a moderator, or play it in
@@ -771,7 +775,8 @@ Server level is this community's chat XP, tuned by its admins. Both are on
 **How do I get badges?**
 Play (fishing, casino, work, prestige, global levels) and they unlock
 automatically when you open `/profile`. A few — Developer, Beta Tester, Event
-Winner — are handed out by staff. Equip up to six with `/profile equip`.
+Winner — are handed out by staff. Equip up to six with `/profile equip` — name
+them in one go (`/profile equip angler, high roller`) or run it bare and tap.
 
 **Can I change my card's background?**
 Yes: `/profile cosmetics` lists the banners, borders and nameplates you own,
