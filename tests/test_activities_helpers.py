@@ -32,7 +32,8 @@ from cogs.activities import (
     WORK_PAY_MAX,
     WORK_PAY_MIN,
     activity_coins_per_run,
-    adventure_coins_per_hour,
+    adventure_coins_per_day,
+    coins_banked_after,
     apply_streak,
     career_info,
     charge_state,
@@ -538,9 +539,42 @@ def test_rob_mints_nothing():
 
 
 def test_the_loop_is_worth_roughly_what_the_docstring_claims():
-    """constants.py states ~1,200/h; a change that moves it a long way from
-    there needs the note updated, not just the number."""
-    assert 1000 < adventure_coins_per_hour() < 1500
+    """constants.py states ~7,500 a day; a change that moves it a long way from
+    there needs the note updated, not just the number.
+
+    A *day* rather than an hour, because with every cap covering half a day
+    that is the figure a real player sees — the hourly rate is generation, not
+    income, and nobody experiences it.
+    """
+    assert 6_500 < adventure_coins_per_day() < 8_500
+
+
+def test_every_cap_covers_half_a_day_of_its_own_interval():
+    """The rule the whole re-pace turns on. A cap shorter than the gap between
+    real visits silently throws away everything past it, which is exactly what
+    a two-hour cap was doing before this."""
+    for activity, cap in ACTIVITY_MAX_CHARGES.items():
+        if activity == "rob":
+            continue  # deliberately banks nothing; see constants.py
+        banked_hours = cap * ACTIVITY_DEFAULT_COOLDOWNS[activity] / 3600
+        assert banked_hours >= 12, f"{activity} only banks {banked_hours:.1f}h"
+
+
+def test_being_away_all_day_beats_being_away_an_hour():
+    """The symptom this fixes, asserted directly: the old caps saturated after
+    two hours, so a day away paid the same as a lunch break."""
+    hour = coins_banked_after(1)
+    half_day = coins_banked_after(12)
+    full_day = coins_banked_after(24)
+    assert half_day > hour * 3
+    # And past half a day it stops, which is the cap doing its job — banking a
+    # week would make the loop an idle game rather than a reason to come back.
+    assert full_day == half_day
+
+
+def test_two_visits_a_day_collect_essentially_everything():
+    """The design target in one line: turning up twice must not be punished."""
+    assert 2 * coins_banked_after(12) >= 0.95 * adventure_coins_per_day()
 
 
 def test_luck_only_helps_the_activity_that_has_it():

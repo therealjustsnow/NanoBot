@@ -11,6 +11,7 @@ from discord.ext import test as dpytest
 
 import utils.db as db
 from cogs.activities import (
+    ACTIVITY_DEFAULT_COOLDOWNS,
     ACTIVITY_MAX_CHARGES,
     EXPLORE_COINS_SMALL,
     EXPLORE_OUTCOMES,
@@ -194,14 +195,20 @@ async def test_hunt_injury_deducts_fine(bot, monkeypatch):
     from cogs.activities.constants import HUNT_INJURY_FINE_MAX
 
     author = config().members[0]
-    await db.add_coins(author.id, 100)
-    # bag of one, catch, injury(<.12), fine roll, no padlock
-    monkeypatch.setattr(activities.random, "random", _rolls(0.1, 0.5, 0.05, 0.4, 0.9))
+    await db.add_coins(author.id, 500)
+    # The bag is rolled first and each catch in it after that, so the injury
+    # roll's position depends on the bag size — derive it rather than counting.
+    catches = roll_hunt_bag(0.1)
+    monkeypatch.setattr(
+        activities.random,
+        "random",
+        _rolls(0.1, *([0.5] * catches), 0.05, 0.4, 0.9),
+    )
 
     await dpytest.message("!adventure hunt", member=author)
     sent = dpytest.get_message()
     assert "tumble" in sent.embeds[0].description
-    assert await db.get_balance(author.id) == 100 - round(0.4 * HUNT_INJURY_FINE_MAX)
+    assert await db.get_balance(author.id) == 500 - round(0.4 * HUNT_INJURY_FINE_MAX)
 
 
 @pytest.mark.cogs("cogs.activities")
@@ -209,8 +216,10 @@ async def test_hunt_padlock_found(bot, monkeypatch):
     from cogs.activities import cog as activities
 
     author = config().members[0]
-    # bag of one, catch, no injury (>=.12), padlock (<.06)
-    monkeypatch.setattr(activities.random, "random", _rolls(0.1, 0.5, 0.9, 0.02))
+    catches = roll_hunt_bag(0.1)
+    monkeypatch.setattr(
+        activities.random, "random", _rolls(0.1, *([0.5] * catches), 0.9, 0.02)
+    )
 
     await dpytest.message("!adventure hunt", member=author)
     assert await db.get_item_qty(author.id, "padlock") == 1
@@ -477,7 +486,11 @@ async def test_a_partly_spent_bucket_still_shows_what_is_left(bot):
     guild = config().guilds[0]
     author = config().members[0]
     await db.try_claim_activity(
-        author.id, "mine", time.time(), 720, ACTIVITY_MAX_CHARGES["mine"]
+        author.id,
+        "mine",
+        time.time(),
+        ACTIVITY_DEFAULT_COOLDOWNS["mine"],
+        ACTIVITY_MAX_CHARGES["mine"],
     )
 
     await dpytest.message("!adventure", member=author)

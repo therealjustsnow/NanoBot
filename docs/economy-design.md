@@ -65,17 +65,44 @@ Rules that keep the layers decoupled:
 
 | Activity | Interval | Banks | Profile |
 |---|---|---|---|
-| `/work` | 20m | 3 | Safe, low variance; career-ladder progression |
-| `/mine` | 12m | 4 | Materials into inventory (a 1–4 ore vein); pickaxe tiers as coin sink; small failure chance |
-| `/hunt` | 15m | 3 | Materials + rare trophy (a 1–3 bag); injury fine risk; drops `/rob` defense |
-| `/explore` | 45m | 2 | High variance; treasure keys/chests/charms |
-| `/rob` | 2h | 1 | PvP; capped steal, fine on failure, item counterplay (`rob_shield`) |
+| `/work` | 3h | 4 (12h) | Safe, low variance; career-ladder progression |
+| `/mine` | 3h | 4 (12h) | Materials into inventory (a 4–14 ore vein); pickaxe tiers as coin sink; small failure chance |
+| `/hunt` | 4h | 3 (12h) | Materials + rare trophy (a 4–9 bag); injury fine risk; drops `/rob` defense |
+| `/explore` | 6h | 2 (12h) | High variance; treasure keys/chests/charms |
+| `/rob` | 4h | 1 | PvP; capped steal, fine on failure, item counterplay (`rob_shield`) |
 | `/fish` | ~20s | — | High-frequency core loop: XP, streaks, quests, events, bait, spots |
 | `/casino …` | none | — | Pure risk; house edge 3–8%, progressive jackpot as long-shot |
 | `/daily`, `/squad`, `/raid` | 24h/social | — | Existing social/co-op faucets, unchanged |
 
 Sinks offsetting the new faucets: bait/consumable purchases, rod + pickaxe
 ladders, casino house edge, rob fines, shop items.
+
+### Paced for two visits a day
+
+The single most important number in this document is not a price, it is a
+description of a player: **someone who opens Discord a couple of times a day,
+does a handful of things, and leaves.** Every earlier version of this economy
+was implicitly balanced for somebody who was always there, and that produced
+figures nobody ever saw — a per-hour income rate that required sixteen hours of
+attention, and charge caps holding two hours so that a working day away paid
+the same as a lunch break.
+
+Two levers, deliberately separated:
+
+* the **interval** governs what an engaged player finds waiting, so it should
+  be short enough that there is usually something to do;
+* the **cap** governs what a casual player *loses*, so it should cover the gap
+  between real visits — half a day.
+
+Sized that way the two converge: a member who turns up twice collects
+essentially everything the clock generated, and one who checks in hourly
+collects the same total in smaller pieces. Playing more is no longer how you
+earn — it is how you spend your time, and the reward for it is fishing.
+
+Everything downstream follows from that. Prices are asserted in **days of
+ordinary play** rather than coins or grind-hours (tests/test_economy_balance.py),
+and the casual/grinder gap is a bounded number (~1.5x) rather than whatever
+falls out of the last thing that got tuned.
 
 ### Attention, not multipliers
 
@@ -88,13 +115,14 @@ were never underpaid — a shift paid 100 against a cast's 28 — so raising the
 payouts would have made an activity strictly better than a cast while leaving
 the loop just as thin.
 
-The lever that works on a clock-gated activity is the number of actions:
-shorter intervals, **charges** that bank runs while a member is away (a token
-bucket on the existing `last_*` column — see
-`utils.db.activities.try_claim_activity`), and yields with a spread (veins,
-bags) so one tap has a range rather than a constant. That took the loop to
-~1,150 coins/hour, about a quarter of fishing, without changing which faucet is
-fastest and therefore without changing which one `/shop`'s time-to-earn quotes.
+The lever that works on a clock-gated activity is the number of actions a
+member actually collects: **charges** that bank runs while they're away (a
+token bucket on the existing `last_*` column — see
+`utils.db.activities.try_claim_activity`) with caps covering half a day, and
+yields with a spread (veins, bags) so one tap has a range rather than a
+constant. That takes the loop to ~7,500 coins/day fully collected by two
+visits, without changing which faucet rewards attention and therefore without
+changing which one `/shop`'s time-to-earn quotes.
 
 Two multipliers sit on top and are deliberately *earned*, not idle: encounters
 (a two-button choice on ~8% of runs) and the adventure daily streak (+5%/day,

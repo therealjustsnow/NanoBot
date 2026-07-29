@@ -1,47 +1,52 @@
 """Activities cog constants: career ladder, catalogues, odds tables, tool
 ladders, encounters, and the interval defaults/bounds.
 
-Why these numbers moved
-───────────────────────
-The adventure loop used to pay ~220 coins/hour with every activity claimed
-around the clock, against fishing's ~5,100 for an hour of actual casting. That
-ratio is what made the shop unreachable for the people who *prefer* this loop:
-a 55,000-coin cosmetic was eleven hours of fishing or two hundred and fifty of
-adventuring, so anyone who ignored fishing simply never bought anything.
+Who this is paced for
+─────────────────────
+A player who opens Discord, runs a handful of commands, and goes back to their
+life — twice a day, not once an hour. That sentence is the whole balance model,
+and it is worth stating because the previous two passes both quietly assumed
+somebody who was always there.
 
-The diagnosis was not that the payouts were small. Per *action* they were
-generous — a shift paid 100 against a cast's 28. The problem was that the loop
-offered about five actions an hour and fishing offered a hundred and eighty. So
-both halves of the fix are about actions, not multipliers:
+The first pass priced everything per *hour of claiming*, which nobody does. The
+second added charges, which helped, but sized the caps at two hours — so being
+away for two hours and being away for a whole day paid exactly the same, and a
+member checking in twice a day collected about a tenth of what the loop was
+nominally generating. The theoretical rate was a number no real person ever saw.
 
-  * intervals came down and every activity now banks charges (see
-    `ACTIVITY_MAX_CHARGES` and utils.db.activities.try_claim_activity), so
-    being away for an hour returns three taps rather than one, and a cooldown
-    stops being a punishment for having a life;
-  * the yields that were a flat one-item-per-run grew a spread — ore comes in
-    veins, a hunt fills a bag — so the same tap has a range worth watching.
+The fix is to decouple two things that had been conflated:
 
-Balance after the change (all five claimed at full rate, before encounters and
-the daily streak):
-  /work    20m x3 charges, pay 100-200 (+career bonus up to 72)  → EV ~505/h
-  /mine    12m x4 charges, ore EV ~21 x a ~1.96 vein, 8% cave-in → EV ~190/h
-  /hunt    15m x3 charges, catch EV ~32 x a ~1.75 bag, net fine  → EV ~210/h
-  /explore 45m x2 charges, coin EV ~220 (rest is non-coin items) → EV ~295/h
-  /rob      2h x1 charge,  steal capped 1000/attempt             → zero-sum
+  the **interval** decides what an engaged player finds waiting when they check
+  in, so it wants to be short enough that there is usually something there;
+  the **cap** decides what a casual player *loses* by not being there, so it
+  wants to cover the gap between real visits — half a day.
+
+Sized that way, a member who shows up twice a day collects essentially 100% of
+what the clock generated, and someone who checks in hourly collects the same
+total in smaller pieces. Playing more stops being how you earn and becomes how
+you spend your time; the reward for it is fishing, which is the one faucet that
+genuinely pays for attention.
+
+Balance (every activity claimed, before encounters and the daily streak):
+  /work    3h x4 charges, pay 200-360 (+career bonus up to 140) → ~300/run
+  /mine    3h x4 charges, ore EV ~31 x a ~6.9 vein, 8% cave-in  → ~200/run
+  /hunt    4h x3 charges, catch EV ~48 x a ~6 bag, net fine     → ~280/run
+  /explore 6h x2 charges, coin EV ~460 (rest is non-coin items) → ~450/run
+  /rob     4h x1 charge,  steal capped 1000/attempt             → zero-sum
            wealth *transfer* (not newly minted coins) plus a fine that's a
-           pure sink, so the per-hour income guardrail doesn't apply the same
-           way — it never inflates the total coin supply.
+           pure sink, so the income guardrail doesn't apply the same way — it
+           never inflates the total coin supply.
 
-That is ~1,200/h, a shade under a quarter of fishing, up from a twentieth.
-Fishing stays the fastest way to earn — it is the one faucet that rewards
-sitting still and grinding, and nothing here should take that away from the
-people doing it — but the adventure loop is now a real second route to the
-shop rather than a rounding error beside it. `helpers.adventure_coins_per_hour`
-computes that figure from the tables in this file, and
-tests/test_economy_balance.py recomputes it independently and asserts the ratio
-to fishing, so neither side can drift.
+That is ~7,500 coins a day over 26 runs, of which two visits collect all of it
+in 13 taps — or one, with Collect all. Against a member who also fishes for a
+solid hour, the gap is about 1.5x rather than the 3.5x it used to be.
+`helpers.adventure_coins_per_hour` publishes the rate and
+`helpers.adventure_coins_per_day` the figure that actually matters;
+tests/test_economy_balance.py recomputes both from these tables, asserts the
+casual/grinder gap, and turns every ladder price into *days of ordinary play*
+— so a change that only works for someone playing constantly fails CI.
 
-Two multipliers ride on top and are deliberately excluded from the figure
+Two multipliers ride on top and are deliberately excluded from the figures
 above, because both are earned rather than idle: encounters (`ENCOUNTERS`, a
 follow-up choice on ~8% of runs, worth roughly +8%) and the daily streak
 (`STREAK_*`, up to +25% on coin payouts for showing up seven days running).
@@ -74,30 +79,30 @@ balance consequence and one more thing to get wrong.
 #  /work — safe, steady income + a career ladder
 # ══════════════════════════════════════════════════════════════════════════════
 
-WORK_PAY_MIN = 100
-WORK_PAY_MAX = 200
+WORK_PAY_MIN = 200
+WORK_PAY_MAX = 360
 
-WORK_COOLDOWN_DEFAULT = 1200  # 20 minutes
+WORK_COOLDOWN_DEFAULT = 10_800  # 3 hours
 WORK_COOLDOWN_MAX = 86_400
 
 # Lifetime shift count → (title, flat pay bonus). The highest threshold a
 # member's shift count meets or exceeds wins (see helpers.career_info).
 #
-# The bonuses scaled with the base pay (roughly 1.6x) so a promotion is worth
-# the same *share* of a paycheck it always was. The thresholds did not: shifts
-# now come three times as fast, so leaving them alone is what stops the whole
-# ladder being climbed in an afternoon.
+# The bonuses scale with the base pay, so a promotion is always worth the same
+# *share* of a paycheck. The thresholds don't move with the interval: at four
+# shifts a day the top of the ladder is a genuinely long haul, which is what a
+# lifetime title should be.
 CAREER_LADDER: list[tuple[int, str, int]] = [
     (0, "🍵 Intern", 0),
-    (10, "📋 Junior Associate", 8),
-    (25, "🗂️ Associate", 16),
-    (50, "📊 Senior Associate", 24),
-    (100, "🧑‍💼 Manager", 32),
-    (200, "📈 Senior Manager", 40),
-    (400, "🏢 Director", 48),
-    (750, "🎩 Vice President", 56),
-    (1500, "👑 Executive", 64),
-    (3000, "🏆 Legend of the Office", 72),
+    (10, "📋 Junior Associate", 16),
+    (25, "🗂️ Associate", 31),
+    (50, "📊 Senior Associate", 47),
+    (100, "🧑‍💼 Manager", 62),
+    (200, "📈 Senior Manager", 78),
+    (400, "🏢 Director", 93),
+    (750, "🎩 Vice President", 109),
+    (1500, "👑 Executive", 124),
+    (3000, "🏆 Legend of the Office", 140),
 ]
 
 WORK_SCENES: list[str] = [
@@ -117,7 +122,7 @@ WORK_SCENES: list[str] = [
 #  /mine — ore mining, pickaxe ladder, occasional cave-in
 # ══════════════════════════════════════════════════════════════════════════════
 
-MINE_COOLDOWN_DEFAULT = 720  # 12 minutes
+MINE_COOLDOWN_DEFAULT = 10_800  # 3 hours
 MINE_COOLDOWN_MAX = 86_400
 
 # 8% of digs yield nothing at all (a cave-in), independent of ore rarity.
@@ -125,32 +130,32 @@ MINE_CAVE_IN_CHANCE = 0.08
 
 # A small independent chance of a bonus treasure_key on top of the ore roll.
 #
-# Deliberately low relative to the chest rate below. A key is worthless on its
-# own — it only ever unlocks a treasure_chest, and /explore is the sole chest
-# source. Mining claims 120x a day against explore's 32, so even a modest rate
-# here dominates the key supply: at the original 0.05 it minted keys players
-# banked and could never spend. The roll is per *dig*, not per ore, so the vein
+# Sized against the chest rate below. A key is worthless on its own — it only
+# ever unlocks a treasure_chest, and /explore is the sole chest source — so the
+# two supplies have to track each other, which is asserted in
+# tests/test_activities_helpers.py from the live intervals rather than from
+# these percentages (mining claims twice as often as exploring, and comparing
+# the raw chances hides that). The roll is per *dig*, not per ore, so the vein
 # table below doesn't multiply it.
-MINE_TREASURE_KEY_CHANCE = 0.02
+MINE_TREASURE_KEY_CHANCE = 0.05
 
-# How much ore one successful dig yields. A flat one-per-dig made every
-# non-cave-in dig identical; a vein gives the same tap something to hope for,
-# and carries most of mining's income increase without touching ore *values*
-# (which /inventory sell and every crafting recipe are priced against).
-# Must sum to 1.0. EV ≈ 1.96 ore per successful dig.
+# How much ore one successful dig yields. At a three-hour interval a dig is a
+# session's worth of mining rather than a swing of a pickaxe, so it comes back
+# with a seam: a spread rather than a fixed number, so the same tap has
+# something to hope for. Must sum to 1.0. EV ≈ 6.85 ore per successful dig.
 MINE_VEIN_ODDS: list[tuple[int, float]] = [
-    (1, 0.40),
-    (2, 0.32),
-    (3, 0.20),
-    (4, 0.08),
+    (4, 0.35),
+    (6, 0.30),
+    (9, 0.25),
+    (14, 0.10),
 ]
 
 ORES: dict[str, dict] = {
-    "stone": {"name": "Stone", "emoji": "🪨", "value": 5},
-    "coal": {"name": "Coal", "emoji": "⚫", "value": 12},
-    "iron_ore": {"name": "Iron Ore", "emoji": "⚙️", "value": 25},
-    "gold_ore": {"name": "Gold Ore", "emoji": "🟡", "value": 60},
-    "diamond": {"name": "Diamond", "emoji": "💎", "value": 200},
+    "stone": {"name": "Stone", "emoji": "🪨", "value": 8},
+    "coal": {"name": "Coal", "emoji": "⚫", "value": 18},
+    "iron_ore": {"name": "Iron Ore", "emoji": "⚙️", "value": 38},
+    "gold_ore": {"name": "Gold Ore", "emoji": "🟡", "value": 90},
+    "diamond": {"name": "Diamond", "emoji": "💎", "value": 300},
 }
 
 # Base ore odds at pickaxe luck 0. Must sum to 1.0. Luck shifts mass from
@@ -185,13 +190,13 @@ PICKAXES: list[dict] = [
 #  /hunt — medium-risk foraging with an injury chance
 # ══════════════════════════════════════════════════════════════════════════════
 
-HUNT_COOLDOWN_DEFAULT = 900  # 15 minutes
+HUNT_COOLDOWN_DEFAULT = 14_400  # 4 hours
 HUNT_COOLDOWN_MAX = 86_400
 
 HUNT_CATCHES: dict[str, dict] = {
-    "pelt": {"name": "Animal Pelt", "emoji": "🦫", "value": 20},
-    "meat": {"name": "Wild Meat", "emoji": "🥩", "value": 15},
-    "golden_antler": {"name": "Golden Antler", "emoji": "🏆", "value": 300},
+    "pelt": {"name": "Animal Pelt", "emoji": "🦫", "value": 30},
+    "meat": {"name": "Wild Meat", "emoji": "🥩", "value": 22},
+    "golden_antler": {"name": "Golden Antler", "emoji": "🏆", "value": 450},
 }
 
 # Must sum to 1.0.
@@ -202,29 +207,31 @@ HUNT_ODDS: list[tuple[str, float]] = [
 ]
 
 HUNT_INJURY_CHANCE = 0.12
-HUNT_INJURY_FINE_MAX = 80  # coin fine rolled in [0, this], never below 0
+HUNT_INJURY_FINE_MAX = 120  # coin fine rolled in [0, this], never below 0
 HUNT_PADLOCK_CHANCE = 0.06  # independent chance of finding a defensive padlock
 
 # How much a single hunt brings back — mining's vein table, for the same
 # reason. Must sum to 1.0. EV ≈ 1.75 catches per hunt.
 HUNT_BAG_ODDS: list[tuple[int, float]] = [
-    (1, 0.45),
-    (2, 0.35),
-    (3, 0.20),
+    (4, 0.40),
+    (6, 0.35),
+    (9, 0.25),
 ]
 
 # ══════════════════════════════════════════════════════════════════════════════
 #  /explore — long shot, high variance
 # ══════════════════════════════════════════════════════════════════════════════
 
-EXPLORE_COOLDOWN_DEFAULT = 2700  # 45 minutes
+EXPLORE_COOLDOWN_DEFAULT = 21_600  # 6 hours
 EXPLORE_COOLDOWN_MAX = 172_800
 
 # Explore is the loop's lottery ticket, so its purses carry the variance the
 # other four deliberately don't. The gap between the two matters more than
 # either number: a big find has to feel like a different event, not a good roll.
-EXPLORE_COINS_SMALL = (200, 600)
-EXPLORE_COINS_BIG = (1000, 2200)
+# On a six-hour interval you get three or four of these a day, so a big one
+# landing is a story rather than a Tuesday.
+EXPLORE_COINS_SMALL = (450, 1100)
+EXPLORE_COINS_BIG = (2400, 5200)
 
 # Must sum to 1.0. Walked in order by helpers.pick_explore_outcome.
 #
@@ -257,7 +264,7 @@ EXPLORE_FLAVOR: dict[str, str] = {
 #  /rob — PvP risk
 # ══════════════════════════════════════════════════════════════════════════════
 
-ROB_COOLDOWN_DEFAULT = 7200  # 2 hours
+ROB_COOLDOWN_DEFAULT = 14_400  # 4 hours
 ROB_COOLDOWN_MAX = 172_800
 
 ROB_MIN_ROBBER_BALANCE = 250
@@ -281,13 +288,18 @@ ROB_FINE = 200  # coins the robber pays on a failed attempt (a pure sink)
 # change the *shape* of a session, never its rate: three banked shifts pay
 # exactly what three shifts an hour apart would have.
 #
-# Sized so a member who checks in twice a day loses nothing to the cap on the
-# fast activities, and so no single visit is longer than a handful of taps.
+# Every cap is half a day of that activity's interval, which is the number that
+# matters: it is what a member loses by turning up twice a day instead of
+# constantly, and at twelve hours the answer is nothing. Raising an interval
+# without raising its cap would quietly reintroduce the problem this whole
+# rebalance exists to fix, so tests/test_activities_helpers.py checks the two
+# against each other.
+#
 # /rob is the one activity that deliberately banks nothing — a stored-up run of
 # robberies is a different (and much less welcome) experience for the person on
 # the receiving end, and the cooldown there is a protection, not a pacer.
 ACTIVITY_MAX_CHARGES: dict[str, int] = {
-    "work": 3,
+    "work": 4,
     "mine": 4,
     "hunt": 3,
     "explore": 2,

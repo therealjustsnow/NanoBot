@@ -58,11 +58,11 @@ was kept, and anything you'd already claimed stayed claimed.
 1. `/daily` — free coins, once every 24 hours. Come back daily for a streak bonus.
 2. `/fish` — cast a line. You can cast again every **20 seconds**.
 3. `/fish sell` — turn your catch into coins (pick "Everything in your bag").
-4. `/work` — a safe paycheck, once an hour.
+4. `/adventure` — see everything that's waiting and hit **Collect all**.
 5. `/profile` — see everything you've built so far.
 
-Then keep going: `/adventure` shows every activity and whether you're off
-cooldown right now.
+Then come back later today, or tomorrow. Everything banks up for twelve hours,
+so there is nothing to keep on top of.
 
 ---
 
@@ -380,19 +380,31 @@ itself, so that's the same card under a name slash can reach.
 
 | Command | Comes back | Banks | Risk | Reward |
 |---|---|---|---|---|
-| `/work` | 20 min | 3 | none | 100–200 coins + a 10-step career ladder |
-| `/mine` | 12 min | 4 | 8% cave-in (nothing) | A vein of 1–4 ore, rare bonus treasure key |
-| `/adventure hunt` | 15 min | 3 | 12% injury fine | A bag of 1–3 pelts/meat, rare 🏆 Golden Antler, rare padlock |
-| `/adventure explore` | 45 min | 2 | wasted trip | Nothing → coins → keys/chests/charms → a big find |
-| `/rob <member>` | 2 hours | 1 | 200 coin fine | 10–20% of their wallet (capped 1,000) |
+| `/work` | 3 hours | 4 (12h) | none | 200–360 coins + a 10-step career ladder |
+| `/mine` | 3 hours | 4 (12h) | 8% cave-in (nothing) | A vein of 4–14 ore, rare bonus treasure key |
+| `/adventure hunt` | 4 hours | 3 (12h) | 12% injury fine | A bag of 4–9 pelts/meat, rare 🏆 Golden Antler, rare padlock |
+| `/adventure explore` | 6 hours | 2 (12h) | wasted trip | Nothing → coins → keys/chests/charms → a big find |
+| `/rob <member>` | 4 hours | 1 | 200 coin fine | 10–20% of their wallet (capped 1,000) |
 
 *(These lengths are the same in every server.)*
 
-**You don't have to be there the moment it's ready.** Everything except `/rob`
-banks up: `/mine` comes back every 12 minutes and holds up to 4, so an hour
-away means four digs waiting, not three you missed. Once the bucket is full it
-stops filling, so there's no point saving for a week — but there's also no
-reason to set an alarm for a 12-minute cooldown, which is the whole idea.
+**This is built for checking in twice a day, not every twenty minutes.**
+
+Everything except `/rob` banks up for **twelve hours**. Come back at lunch and
+again in the evening and you will have lost nothing at all — the clock ran the
+whole time you were away, and it was all still sitting there. There is no alarm
+to set and no optimal schedule; showing up when you feel like it *is* the
+optimal schedule.
+
+Playing more often doesn't earn you more from these — you just collect the same
+total in smaller pieces. If you want a loop that rewards sitting down with it,
+that's fishing.
+
+**📥 Collect all** does the whole lot in one press. A full set of buckets is
+about thirteen banked runs, and tapping thirteen buttons is nobody's idea of a
+good time — one press runs them all and shows you the total. The individual
+buttons are still there if you only want to do the one thing, and
+`/adventure collect` works if the buttons have expired.
 
 **One cooldown, everywhere.** These aren't per server. Doing `/work` in one
 server puts it on cooldown in every server you share with the bot, so there's
@@ -673,9 +685,8 @@ Your personal rank on `/balance`, `/fish stats` and `/casino stats` is your
 
 ## 💡 Tips
 
-- **Open `/adventure` and clear the board.** Activities bank up while you're
-  away, so one visit is usually several taps — and the buttons mean you never
-  have to type the commands.
+- **Open `/adventure` and hit Collect all.** Everything banks for twelve hours,
+  so two visits a day loses you nothing and one press collects the lot.
 - **Run something every day.** Even one activity keeps your streak alive, and
   the streak is worth up to +25% on every coin reward.
 - **Set a rhythm.** `/daily` once a day, `/adventure` when you're around, cast
@@ -690,7 +701,7 @@ Your personal rank on `/balance`, `/fish stats` and `/casino stats` is your
 - **The house wins on average.** The casino is entertainment, not income; the
   streak bonus is the only edge you control.
 - **Don't rob broke people.** Minimum balances are enforced, and a padlocked
-  target just wastes your 2-hour cooldown.
+  target just wastes your 4-hour cooldown.
 - **Open `/profile` now and then.** Cosmetics you've earned only unlock when
   you look at your own card.
 - **Check `/progress weekly` on Mondays.** The objectives are picked for you

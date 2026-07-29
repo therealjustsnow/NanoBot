@@ -38,7 +38,14 @@ OLD_PICKAXE_PRICES = [0, 500, 2_000, 8_000, 25_000]
 
 # Intended time-to-afford ratio (new economy / old economy) per rod tier: the
 # first two tiers arrive sooner, the middle holds, the last two take longer.
-INTENDED_ROD_PACING = [0.5, 0.667, 1.0, 1.333, 2.0]
+#
+# The final entry was 2.0 until prices were re-cut against *days of ordinary
+# play* rather than hours of grinding — at 450,000 the last rod was a five-month
+# wall for anyone not fishing constantly, which is a different way of being
+# unreachable than "an endgame". The shape is unchanged: the ladder still
+# accelerates, the last tier still takes longest. See the casual-days tests
+# below, which are now the real contract.
+INTENDED_ROD_PACING = [0.5, 0.667, 1.0, 1.333, 1.69]
 
 
 def coins_per_cast(luck: float, spot: str = DEFAULT_SPOT) -> float:
@@ -152,36 +159,120 @@ def test_the_adventure_loop_agrees_with_its_own_balance_model():
     assert prod(0.0) == pytest.approx(adventure_coins_per_hour())
 
 
-def test_adventure_is_a_real_second_route_to_the_shop():
-    """The rebalance's actual claim, in one number.
+# ══════════════════════════════════════════════════════════════════════════════
+#  The player this economy is priced for
+# ══════════════════════════════════════════════════════════════════════════════
+# Nobody runs a command every twenty minutes for sixteen hours. People open
+# Discord a couple of times a day, do a handful of things, and leave — so a
+# price curve built on hours of uninterrupted play describes a player who does
+# not exist, and every "x days to afford" figure derived from it is fiction.
+#
+# These pin the model to a realistic day. CASUAL is the reference player the
+# whole economy is balanced around; GRINDER is someone who also sits and fishes
+# for a solid hour. The gap between them is a deliberate, bounded number rather
+# than an accident of which faucet happened to get tuned last.
+CASUAL_VISITS_PER_DAY = 2
+CASUAL_CASTS_PER_DAY = 30  # a few minutes of fishing, not an hour
+GRINDER_CASTS_PER_DAY = 3600 // CAST_COOLDOWN  # one solid hour
 
-    Before it, the whole loop paid ~220 coins/hour against fishing's ~5,100 —
-    a twentieth — which is why a member who preferred adventuring to fishing
-    could never afford anything in the shop. Multiplying the payouts would have
-    made an activity better per *action* than a cast; the fix was to hand the
-    loop more actions (shorter intervals, banked charges, veins and bags), and
-    this is the bound on how far that went.
+
+def adventure_banked_after(hours: float) -> float:
+    """Coins waiting after `hours` away, capped per activity."""
+    from cogs.activities.constants import (
+        ACTIVITY_DEFAULT_COOLDOWNS as CD,
+        ACTIVITY_MAX_CHARGES as MC,
+    )
+    from cogs.activities.helpers import activity_coins_per_run
+
+    return sum(
+        min(MC[a], int(hours * 3600 // CD[a])) * activity_coins_per_run(a) for a in MC
+    )
+
+
+def casual_coins_per_day() -> float:
+    from cogs.economy.constants import REWARD_DEFAULTS
+
+    gap = 24 / CASUAL_VISITS_PER_DAY
+    return (
+        CASUAL_VISITS_PER_DAY * adventure_banked_after(gap)
+        + CASUAL_CASTS_PER_DAY * coins_per_cast(0.0)
+        + REWARD_DEFAULTS["daily"]
+    )
+
+
+def grinder_coins_per_day() -> float:
+    from cogs.economy.constants import REWARD_DEFAULTS
+
+    return (
+        adventure_coins_per_hour() * 24  # the clock runs either way
+        + GRINDER_CASTS_PER_DAY * coins_per_cast(0.0)
+        + REWARD_DEFAULTS["daily"]
+    )
+
+
+def test_two_visits_a_day_collect_what_the_clock_generated():
+    """The heart of the re-pace. Charge caps used to hold two hours, so being
+    away for a working day paid the same as being away for lunch and a member
+    who checked in twice collected about a tenth of the nominal rate. Caps now
+    cover half a day, which is the actual gap between real visits."""
+    generated = adventure_coins_per_hour() * 24
+    collected = CASUAL_VISITS_PER_DAY * adventure_banked_after(
+        24 / CASUAL_VISITS_PER_DAY
+    )
+    assert collected >= 0.95 * generated
+
+
+def test_grinding_beats_a_couple_of_visits_by_about_half():
+    """The chosen shape: playing more is worth something, but not so much that
+    an ordinary player is playing a different, worse game. Above ~2x the
+    message to anyone with a life is 'you're doing it wrong'."""
+    ratio = grinder_coins_per_day() / casual_coins_per_day()
+    assert 1.2 < ratio < 2.0, f"grinding pays {ratio:.2f}x a couple of visits"
+
+
+@pytest.mark.parametrize(
+    "label,price,lo,hi",
+    [
+        # (what it is, price, min days, max days) at the casual rate.
+        ("first rod", RODS[1]["price"], 0, 1),
+        ("mid rod", RODS[3]["price"], 1, 7),
+        ("late rod", RODS[4]["price"], 7, 25),
+        ("final rod", RODS[5]["price"], 30, 70),
+        ("first spot charter", SPOTS[SPOT_ORDER[1]]["price"], 0, 3),
+        ("mid spot charter", SPOTS["reef"]["price"], 2, 12),
+        ("deepest charter", SPOTS[SPOT_ORDER[-1]]["price"], 30, 80),
+        ("first prestige", PRESTIGE_COST_BASE, 1, 6),
+    ],
+)
+def test_every_goal_is_a_sane_number_of_ordinary_days(label, price, lo, hi):
+    """The price curve, read the way a player experiences it.
+
+    Each rung is asserted as *days of ordinary play* rather than as a number of
+    coins, because the number of coins means nothing on its own — that is how
+    the endgame quietly became a five-month wall while every per-hour figure
+    still looked healthy.
     """
-    from cogs.economy.helpers import coins_per_hour
+    days = price / casual_coins_per_day()
+    assert lo <= days <= hi, f"{label} is {days:.1f} casual days ({price:,} coins)"
 
-    assert adventure_coins_per_hour() > 4 * 220  # ~5x the loop it replaced
+
+def test_the_price_curve_still_ascends_in_days():
+    """Each rung takes longer to reach than the one before it."""
+    days = [r["price"] / casual_coins_per_day() for r in RODS[1:]]
+    assert days == sorted(days)
 
 
 def test_fishing_is_still_the_right_denominator_for_the_yardstick():
-    """The yardstick quotes fishing time, and only fishing.
+    """`/shop` quotes fishing time because fishing is the one faucet that pays
+    for attention — the adventure loop pays for *showing up*, which is a
+    different thing and can't be expressed as "how long would this take".
 
-    Adventure is a quarter of it now rather than a twentieth, which is the
-    point — but fishing is still the fastest way to earn by a clear margin, so
-    "how long would you have to fish for this" remains both the honest floor and
-    the easy one to explain. If this ever inverts, /shop's estimate is quoting
-    the wrong faucet and cogs/economy/helpers.py needs revisiting, not this
-    assertion relaxing.
+    The estimate stays a floor: it is what an hour of solid casting earns, and
+    the /shop footer says so.
     """
-    from cogs.economy.constants import REWARD_DEFAULTS
     from cogs.economy.helpers import coins_per_hour
 
-    daily_hourly = REWARD_DEFAULTS["daily"] / 24
-    assert coins_per_hour(0.0) > 3 * (adventure_coins_per_hour() + daily_hourly)
+    assert coins_per_hour(0.0) > adventure_coins_per_hour()
 
 
 # ── Fishing spots: a paid step up, not a free one ────────────────────────────
@@ -254,16 +345,24 @@ def test_the_shop_yardstick_ignores_spots_on_purpose():
     assert real_at_the_trench < quoted
 
 
-def test_no_single_activity_out_earns_a_cast():
-    """Per action the loop was always generous — a shift paid 100 against a
-    cast's 28. Keeping the *rate* fix from turning into a payout fix is what
-    stops an angler being the mug: an activity's run may beat a cast, but not
-    by so much that casting looks foolish."""
-    from cogs.activities.constants import ACTIVITY_MAX_CHARGES
-    from cogs.activities.helpers import activity_coins_per_run
+def test_no_activity_out_generates_fishing_per_unit_of_time():
+    """The honest comparison between the two loops.
 
-    for activity in ACTIVITY_MAX_CHARGES:
-        assert activity_coins_per_run(activity) < 10 * coins_per_cast(0.0), activity
+    Comparing *per action* stopped meaning anything once a run became six hours
+    of banked progress rather than a swing of a pickaxe — of course an explore
+    pays more than one cast. What has to stay true is that fishing, the faucet
+    that pays for attention, out-earns any single activity's clock, or the
+    angler is the mug.
+    """
+    from cogs.activities.constants import ACTIVITY_DEFAULT_COOLDOWNS as CD
+    from cogs.activities.helpers import activity_coins_per_run
+    from cogs.economy.helpers import coins_per_hour
+
+    for activity, cooldown in CD.items():
+        if activity not in ("work", "mine", "hunt", "explore"):
+            continue
+        per_hour = activity_coins_per_run(activity) * 3600 / cooldown
+        assert per_hour < coins_per_hour(0.0), activity
 
 
 # ── The faucet itself ────────────────────────────────────────────────────────

@@ -15,6 +15,7 @@ from discord.ext import test as dpytest
 
 import utils.db as db
 from cogs.activities import (
+    ACTIVITY_DEFAULT_COOLDOWNS,
     ACTIVITY_MAX_CHARGES,
     ENCOUNTER_OUTCOMES,
     STREAK_BONUS_PER_DAY,
@@ -376,7 +377,13 @@ async def test_a_continued_streak_multiplies_coin_rewards(bot, monkeypatch):
     guild, author = config().guilds[0], config().members[0]
     monkeypatch.setattr(activities.random, "random", lambda: 0.5)
     # Yesterday's run, so today's continues the streak to day 2.
-    await db.try_claim_activity(author.id, "work", time.time(), 1200, 3)
+    await db.try_claim_activity(
+        author.id,
+        "work",
+        time.time(),
+        ACTIVITY_DEFAULT_COOLDOWNS["work"],
+        ACTIVITY_MAX_CHARGES["work"],
+    )
     await db.try_claim_adventure_streak(author.id, int(time.time() // 86_400) - 1, 1)
 
     await dpytest.message("!work", member=author)
@@ -417,3 +424,133 @@ async def test_the_dashboard_shows_what_the_streak_is_worth(bot, monkeypatch):
     fields = {f.name: f.value for f in dpytest.get_message().embeds[0].fields}
 
     assert "1-day streak" in fields["Daily streak"]
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+#  Collect all
+# ══════════════════════════════════════════════════════════════════════════════
+@pytest.mark.cogs("cogs.activities")
+async def test_collect_all_empties_every_bucket_in_one_press(bot, monkeypatch):
+    """The point of a half-day cap is that turning up twice loses nothing — but
+    that arrived as thirteen taps, which is its own kind of chore."""
+    from cogs.activities import cog as activities
+
+    guild, author = config().guilds[0], config().members[0]
+    monkeypatch.setattr(activities.random, "random", lambda: 0.5)
+    cog, view = await _dashboard(bot, author, guild)
+    interaction = FakeInteraction(author, guild)
+
+    await view.collect(interaction)
+
+    stats = await db.get_activity_stats(author.id)
+    for activity in BUTTON_ACTIVITIES:
+        column = "work_shifts" if activity == "work" else f"{activity}_count"
+        assert stats[column] == ACTIVITY_MAX_CHARGES[activity], activity
+
+    embed = interaction.followup.sent[0]["embed"]
+    banked = sum(ACTIVITY_MAX_CHARGES[a] for a in BUTTON_ACTIVITIES)
+    assert f"**{banked}**" in embed.description
+    assert await db.get_balance(author.id) > 0
+
+
+@pytest.mark.cogs("cogs.activities")
+async def test_collecting_twice_claims_nothing_the_second_time(bot, monkeypatch):
+    from cogs.activities import cog as activities
+
+    guild, author = config().guilds[0], config().members[0]
+    monkeypatch.setattr(activities.random, "random", lambda: 0.5)
+    cog = bot.get_cog("Activities")
+
+    await cog.collect_all(guild, author)
+    balance = await db.get_balance(author.id)
+    run = await cog.collect_all(guild, author)
+
+    assert run.claimed is False
+    assert "Nothing To Collect" in run.embed.title
+    assert await db.get_balance(author.id) == balance
+
+
+@pytest.mark.cogs("cogs.activities")
+async def test_collect_all_reports_what_actually_landed(bot, monkeypatch):
+    """Totals are balance/inventory deltas, so the summary can't drift from the
+    payouts — it includes the streak, a fine, and a cave-in that paid nothing."""
+    from cogs.activities import cog as activities
+
+    guild, author = config().guilds[0], config().members[0]
+    monkeypatch.setattr(activities.random, "random", lambda: 0.5)
+    cog = bot.get_cog("Activities")
+
+    before = await db.get_balance(author.id)
+    run = await cog.collect_all(guild, author)
+    after = await db.get_balance(author.id)
+
+    assert f"{after - before:,}" in run.embed.description
+    assert "🎒" in run.embed.description  # mining and hunting paid in items
+
+
+@pytest.mark.cogs("cogs.activities")
+async def test_collect_all_skips_a_disabled_activity(bot, monkeypatch):
+    from cogs.activities import cog as activities
+
+    guild, author = config().guilds[0], config().members[0]
+    monkeypatch.setattr(activities.random, "random", lambda: 0.5)
+    await db.set_activities_config(guild.id, work_enabled=False)
+    cog = bot.get_cog("Activities")
+
+    await cog.collect_all(guild, author)
+
+    stats = await db.get_activity_stats(author.id)
+    assert stats["work_shifts"] == 0
+    assert stats["mine_count"] == ACTIVITY_MAX_CHARGES["mine"]
+
+
+@pytest.mark.cogs("cogs.activities")
+async def test_at_most_one_encounter_survives_a_collect(bot, monkeypatch):
+    """Encounters fire per run, so a full bucket would otherwise stack a dozen
+    two-button choices onto one message."""
+    from cogs.activities import cog as activities
+
+    guild, author = config().guilds[0], config().members[0]
+    # Every run fires an encounter.
+    monkeypatch.setattr(activities.random, "random", lambda: 0.0)
+    cog = bot.get_cog("Activities")
+
+    run = await cog.collect_all(guild, author)
+
+    assert isinstance(run.view, EncounterView)
+
+
+@pytest.mark.cogs("cogs.activities")
+async def test_the_collect_button_counts_what_is_banked(bot, monkeypatch):
+    from cogs.activities import cog as activities
+    from cogs.activities.views import _CollectButton
+
+    guild, author = config().guilds[0], config().members[0]
+    monkeypatch.setattr(activities.random, "random", lambda: 0.5)
+    cog, view = await _dashboard(bot, author, guild)
+
+    button = next(c for c in view.children if isinstance(c, _CollectButton))
+    banked = sum(ACTIVITY_MAX_CHARGES[a] for a in BUTTON_ACTIVITIES)
+    assert f"({banked})" in button.label
+    assert button.disabled is False
+
+    await cog.collect_all(guild, author)
+    _embed, state = await cog.adventure_dashboard(guild, author)
+    drained = next(
+        c
+        for c in AdventureView(cog, author.id, state).children
+        if isinstance(c, _CollectButton)
+    )
+    assert drained.disabled is True
+
+
+@pytest.mark.cogs("cogs.activities")
+async def test_collect_is_reachable_as_a_command_too(bot, monkeypatch):
+    """Buttons expire; the command doesn't."""
+    from cogs.activities import cog as activities
+
+    author = config().members[0]
+    monkeypatch.setattr(activities.random, "random", lambda: 0.5)
+
+    await dpytest.message("!adventure collect", member=author)
+    assert "Collected" in dpytest.get_message().embeds[0].title

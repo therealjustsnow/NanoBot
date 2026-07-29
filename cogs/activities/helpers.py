@@ -407,15 +407,47 @@ def activity_coins_per_run(activity: str, luck: float = 0.0) -> float:
 
 
 def adventure_coins_per_hour(luck: float = 0.0) -> float:
-    """Expected coins/hour with every activity claimed at its full rate.
+    """What the loop generates per hour, whether or not anyone is collecting.
 
-    A ceiling, not a forecast — nobody claims five activities around the clock,
-    the same way nobody fishes for an uninterrupted hour. It is comparable to
-    cogs.economy.helpers.coins_per_hour precisely because both are ceilings.
+    Charges mean the clock runs while a member is away, so this is a
+    *generation* rate rather than a claim rate — which is why it's the honest
+    basis for `adventure_coins_per_day` below, and why it is no longer directly
+    comparable to fishing's per-hour figure (fishing generates nothing while
+    you're not casting).
     """
     return sum(
         activity_coins_per_run(activity, luck)
         * (3600 / ACTIVITY_DEFAULT_COOLDOWNS[activity])
         for activity in ACTIVITY_DEFAULT_COOLDOWNS
         if activity in ACTIVITY_MAX_CHARGES
+    )
+
+
+def adventure_coins_per_day(luck: float = 0.0) -> float:
+    """The number the whole balance model is written against.
+
+    Not a ceiling for once: with every cap covering half a day, a member who
+    turns up twice collects all of it, so this is what an ordinary player
+    actually earns from the loop rather than what a hypothetical constant one
+    would. `/shop`'s time-to-earn and every ladder price are sized against it
+    (see tests/test_economy_balance.py).
+    """
+    return adventure_coins_per_hour(luck) * 24
+
+
+def coins_banked_after(hours: float, luck: float = 0.0) -> float:
+    """Coins waiting to be collected after `hours` away, capped per activity.
+
+    The function that shows what the old caps were doing: at a two-hour cap,
+    this stopped rising after two hours, so a day away was worth the same as a
+    lunch break. Every cap is now half a day, so it keeps rising until a real
+    person would have checked in.
+    """
+    return sum(
+        min(
+            max_charges(activity),
+            int(hours * 3600 // ACTIVITY_DEFAULT_COOLDOWNS[activity]),
+        )
+        * activity_coins_per_run(activity, luck)
+        for activity in ACTIVITY_MAX_CHARGES
     )

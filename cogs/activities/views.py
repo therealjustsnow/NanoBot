@@ -83,6 +83,30 @@ class _ActivityButton(discord.ui.Button):
         await self.view.press(interaction, self.activity)
 
 
+class _CollectButton(discord.ui.Button):
+    """Empty every bucket in one press.
+
+    With caps sized to half a day, a member who turns up twice a day arrives to
+    a dozen banked runs — and a dozen taps is its own kind of chore. This is
+    the button for people who came to collect rather than to play; the
+    individual ones stay for anyone who wants to run just the one thing.
+    """
+
+    def __init__(self, banked: int):
+        super().__init__(
+            label=f"Collect all ({banked})" if banked else "Collect all",
+            emoji="📥",
+            style=(
+                discord.ButtonStyle.primary if banked else discord.ButtonStyle.secondary
+            ),
+            disabled=not banked,
+            row=1,
+        )
+
+    async def callback(self, interaction: discord.Interaction):
+        await self.view.collect(interaction)
+
+
 class _RefreshButton(discord.ui.Button):
     """Repaint the dashboard without running anything.
 
@@ -131,6 +155,12 @@ class AdventureView(discord.ui.View):
                     state["enabled"][activity],
                 )
             )
+        banked = sum(
+            state["charges"][a]["ready"]
+            for a in BUTTON_ACTIVITIES
+            if state["enabled"][a]
+        )
+        self.add_item(_CollectButton(banked))
         self.add_item(_RefreshButton())
 
     async def interaction_check(self, interaction: discord.Interaction) -> bool:
@@ -153,6 +183,16 @@ class AdventureView(discord.ui.View):
     async def refresh(self, interaction: discord.Interaction):
         await interaction.response.defer()
         await self._repaint(interaction)
+
+    async def collect(self, interaction: discord.Interaction):
+        await interaction.response.defer()
+        run = await self.cog.collect_all(interaction.guild, interaction.user)
+        await self._repaint(interaction)
+        message = await interaction.followup.send(
+            embed=run.embed, view=run.view, ephemeral=not run.claimed, wait=True
+        )
+        if run.view is not None:
+            run.view.message = message
 
     async def press(self, interaction: discord.Interaction, activity: str):
         await interaction.response.defer()

@@ -118,7 +118,7 @@ SPOTS: dict[str, dict] = {
         "emoji": "🕳️",
         "blurb": "No light, no bottom. Things down here have no business existing.",
         "level": 35,
-        "price": 600_000,
+        "price": 450_000,
         "hazard": 0.15,
         "weights": {
             "junk": 1.90,

@@ -218,7 +218,10 @@ async def test_inventory_sell_autocomplete_offers_bulk_rows(bot):
     choices = await cog._sell_ac(interaction, "")
     values = [c.value for c in choices]
     assert values[0] == "all"
-    assert "400 coins" in choices[0].name  # 4×25 + 300, credited in one go
+    assert (
+        f"{4 * item_catalog.get('iron_ore').value + item_catalog.get('golden_antler').value:,} coins"
+        in choices[0].name
+    )  # 4×25 + 300, credited in one go
     assert "cat:material" in values and "cat:treasure" in values
     assert "treasure_key" not in values
     assert values.index("cat:material") < values.index("iron_ore")
@@ -259,7 +262,9 @@ async def test_inventory_sell_accepts_the_bulk_values_it_suggests(bot):
     assert "Sell these?" in dpytest.get_message().embeds[0].title
     await cog._pending_sell[author.id]._on_confirm(_FakeInteraction(author.id))
     assert await db.get_item_qty(author.id, "iron_ore") == 0
-    assert await db.get_balance(author.id) == 350
+    assert await db.get_balance(author.id) == (
+        2 * item_catalog.get("iron_ore").value + item_catalog.get("golden_antler").value
+    )
 
 
 # ── /shop ─────────────────────────────────────────────────────────────────────

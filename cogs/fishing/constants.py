@@ -433,7 +433,7 @@ RODS: list[dict] = [
     {"name": "Fiberglass Rod", "emoji": "🎣", "price": 5_000, "luck": 0.30},
     {"name": "Carbon Rod", "emoji": "🎣", "price": 24_000, "luck": 0.45},
     {"name": "Golden Rod", "emoji": "✨", "price": 100_000, "luck": 0.60},
-    {"name": "Mythic Trident", "emoji": "🔱", "price": 450_000, "luck": 0.75},
+    {"name": "Mythic Trident", "emoji": "🔱", "price": 380_000, "luck": 0.75},
 ]
 
 # ── Fishing XP & levels ────────────────────────────────────────────────────────

@@ -140,7 +140,7 @@ from .helpers import (
     roll_work_pay,
     streak_multiplier,
 )
-from .views import AdventureView, EncounterView
+from .views import BUTTON_ACTIVITIES, AdventureView, EncounterView
 
 log = logging.getLogger("NanoBot.activities")
 
@@ -314,6 +314,104 @@ class Activities(commands.Cog):
             )
 
         return ActivityRun(*self._maybe_encounter(embed, member, guild, activity))
+
+    async def collect_all(
+        self, guild: discord.Guild, member: discord.abc.User
+    ) -> ActivityRun:
+        """Run every banked charge across every activity, and report the lot.
+
+        The point of the big charge caps is that a member who turns up twice a
+        day loses nothing — but "nothing lost" turned into thirteen separate
+        button presses, which is its own way of disrespecting someone's time.
+        This is the one press that empties the buckets.
+
+        Each run still goes through `run_activity`, so every claim is the same
+        atomic one and a charge that isn't really there is refused rather than
+        paid. Totals are measured as balance and inventory *deltas* around the
+        batch rather than reported by each resolver: that way the summary
+        describes what actually landed, including the streak multiplier, an
+        injury fine, or a cave-in that paid nothing.
+
+        At most one encounter survives a collect. They fire per run, so a full
+        bucket would otherwise stack a pile of two-button choices on one
+        message; the first is kept and the rest are dropped unrolled.
+        """
+        before_coins = await db.get_balance(member.id)
+        before_items = {
+            row["item_key"]: row["qty"] for row in await db.get_inventory(member.id)
+        }
+
+        ran: dict[str, int] = {}
+        view: Optional[discord.ui.View] = None
+        for activity in BUTTON_ACTIVITIES:
+            # Bounded by the cap as well as by the claim, so a bug in the
+            # bucket arithmetic can't turn this into an infinite payout loop.
+            for _ in range(max_charges(activity)):
+                run = await self.run_activity(guild, member, activity)
+                if not run.claimed:
+                    break
+                ran[activity] = ran.get(activity, 0) + 1
+                if view is None and run.view is not None:
+                    view = run.view
+
+        if not ran:
+            cfg = await self._cfg(guild.id)
+            stats = await db.get_activity_stats(member.id)
+            soonest = min(
+                (
+                    self._charges(cfg, stats, a)["next_in"]
+                    for a in BUTTON_ACTIVITIES
+                    if cfg[f"{a}_enabled"]
+                ),
+                default=0,
+            )
+            return ActivityRun(
+                h.warn(
+                    (
+                        f"Nothing banked yet — the next one lands in "
+                        f"**{h.fmt_duration(soonest)}**."
+                        if soonest
+                        else "Every activity is switched off in this server."
+                    ),
+                    "🧭 Nothing To Collect",
+                ),
+                claimed=False,
+            )
+
+        econ = await db.get_econ_config(guild.id)
+        after_coins = await db.get_balance(member.id)
+        after_items = {
+            row["item_key"]: row["qty"] for row in await db.get_inventory(member.id)
+        }
+        gained = {
+            key: qty - before_items.get(key, 0)
+            for key, qty in after_items.items()
+            if qty > before_items.get(key, 0)
+        }
+
+        total_runs = sum(ran.values())
+        desc = [
+            f"You worked through **{total_runs}** banked "
+            f"{'run' if total_runs == 1 else 'runs'}.",
+            " · ".join(
+                f"{ACTIVITY_INFO[a]['emoji']} {a.title()} ×{n}" for a, n in ran.items()
+            ),
+        ]
+        delta = after_coins - before_coins
+        if delta:
+            verb = "Earned" if delta > 0 else "Net"
+            desc.append(f"\n🪙 {verb} {self._money(econ, abs(delta))}")
+        if gained:
+            desc.append(
+                "🎒 "
+                + ", ".join(
+                    f"{item_catalogue.display(k)} ×{q}" for k, q in gained.items()
+                )
+            )
+        desc.append(f"\nBalance: {self._money(econ, after_coins)}")
+        embed = h.ok("\n".join(desc), "🧭 Collected")
+        embed.set_footer(text="Sell what you found with /inventory sell")
+        return ActivityRun(embed, view)
 
     async def _touch_streak(self, user_id: int, stats: dict) -> tuple[int, bool]:
         """Advance the adventure daily streak, once per day.
@@ -766,6 +864,14 @@ class Activities(commands.Cog):
             text="Sell what you find with /inventory · badges on /progress"
         )
         return embed, state
+
+    # ── /adventure collect — the whole bucket, one command ───────────────────
+    @adventure.command(
+        name="collect",
+        description="Run everything you have banked, in one go.",
+    )
+    async def adventure_collect(self, ctx: commands.Context):
+        await self._send_run(ctx, await self.collect_all(ctx.guild, ctx.author))
 
     # ── /adventure hunt — medium risk ────────────────────────────────────────
     @adventure.command(
