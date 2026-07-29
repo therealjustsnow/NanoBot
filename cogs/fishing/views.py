@@ -127,9 +127,11 @@ class FishingView(_FishingBase):
     )
     async def shop(self, interaction: discord.Interaction, _button: discord.ui.Button):
         await interaction.response.defer()
-        screen, stock = await self.cog.shop_screen(interaction.guild, interaction.user)
+        screen, stock, gear = await self.cog.shop_state(
+            interaction.guild, interaction.user
+        )
         await self.show(
-            interaction, screen, TackleShopView(self.cog, self.invoker_id, stock)
+            interaction, screen, TackleShopView(self.cog, self.invoker_id, stock, gear)
         )
 
     @discord.ui.button(
@@ -218,6 +220,21 @@ class TravelView(_FishingBase):
         self.add_item(_BackButton())
 
 
+async def _repaint_shop(interaction: discord.Interaction, view, note: str):
+    """Redraw the shelf under a result, and hand the message to a fresh view.
+
+    Buying and arming both move something the shelf is displaying — the balance,
+    and what's live — so each one repaints rather than leaving a member reading
+    a card that has stopped being true.
+    """
+    shelf, stock, gear = await view.cog.shop_state(interaction.guild, interaction.user)
+    shelf.embed.add_field(name="​", value=note, inline=False)
+    refreshed = TackleShopView(view.cog, view.invoker_id, stock, gear)
+    refreshed.message = view.message
+    await interaction.edit_original_response(embed=shelf.embed, view=refreshed)
+    view.stop()
+
+
 class _BuyButton(discord.ui.Button):
     """Buy one of something from the tackle shop."""
 
@@ -243,30 +260,78 @@ class _BuyButton(discord.ui.Button):
         if not screen.ok:
             return await interaction.followup.send(embed=screen.embed, ephemeral=True)
         # Repaint the shelf: a purchase moved the balance, so what's affordable
-        # may have changed under the member's finger.
-        shelf, stock = await view.cog.shop_screen(interaction.guild, interaction.user)
-        shelf.embed.add_field(name="​", value=screen.embed.description, inline=False)
-        refreshed = TackleShopView(view.cog, view.invoker_id, stock)
-        refreshed.message = view.message
-        await interaction.edit_original_response(embed=shelf.embed, view=refreshed)
-        view.stop()
+        # may have changed under the member's finger — and the thing just bought
+        # is now armable from the menu below it.
+        await _repaint_shop(interaction, view, screen.embed.description)
+
+
+class _ArmSelect(discord.ui.Select):
+    """Arm what you own, without leaving the shop.
+
+    Bait that has been bought and not armed does nothing, and arming it meant
+    another cog's command (`/inventory use glowgrub`) — so a member could buy
+    the best bait in the shop and fish with none. Multi-value because a loadout
+    is usually bait *and* a charm, and one command each is the friction the
+    button row exists to remove.
+    """
+
+    def __init__(self, gear: list[dict]):
+        options = [
+            discord.SelectOption(
+                label=f"{row['item'].name} ×{row['qty']:,}"[:100],
+                value=row["item"].key,
+                emoji=row["item"].emoji or None,
+                description=("already armed — tops it up" if row["armed"] else None),
+            )
+            for row in gear[:25]
+        ]
+        super().__init__(
+            placeholder="⚡ Arm bait or tackle…",
+            min_values=1,
+            max_values=len(options) or 1,
+            options=options,
+            row=3,
+        )
+
+    async def callback(self, interaction: discord.Interaction):
+        await interaction.response.defer()
+        view = self.view
+        screen = await view.cog.arm_gear(
+            interaction.guild, interaction.user, list(self.values)
+        )
+        if not screen.ok:
+            return await interaction.followup.send(embed=screen.embed, ephemeral=True)
+        await _repaint_shop(interaction, view, screen.embed.description)
 
 
 class TackleShopView(_FishingBase):
-    """Bait, tackle and consumables, one tap each.
+    """Bait, tackle and consumables, one tap each — and a menu to arm them.
 
-    Only the first row's worth is shown as buttons — Discord allows 25
+    Only the first three rows' worth is shown as buy buttons — Discord allows 25
     components and the catalogue is short, but a wall of buttons is its own
     kind of unusable. `/fish buy <item> <qty>` is still there for bulk, which
     is what a button can't do.
+
+    The arm menu only appears when there's something to arm, so a shop opened
+    on an empty inventory is the same shelf it always was.
     """
 
-    def __init__(self, cog: "Fishing", invoker_id: int, stock: list[dict]):
+    def __init__(
+        self,
+        cog: "Fishing",
+        invoker_id: int,
+        stock: list[dict],
+        gear: Optional[list[dict]] = None,
+    ):
         super().__init__(cog, invoker_id)
-        for entry in stock[:20]:
+        # Rows 0-2 for the shelf; the select claims row 3 and Back row 4, so the
+        # buy buttons are capped at what fits above them.
+        for entry in stock[:15]:
             self.add_item(
                 _BuyButton(
                     entry["key"], entry["label"], entry["emoji"], entry["affordable"]
                 )
             )
+        if gear:
+            self.add_item(_ArmSelect(gear))
         self.add_item(_BackButton())

@@ -7,9 +7,68 @@ import pytest
 from discord.ext import commands
 from discord.ext import test as dpytest
 
+import types
+
 import utils.db as db
 from utils import cosmetics, globalxp, profile_card
 from tests.conftest import config
+
+
+def views():
+    """The view module the *live* cog is using — loading a cog replaces it in
+    sys.modules, so classes are resolved at call time (see
+    tests/test_fishing_views.py for the full story)."""
+    import cogs.identity.views as module
+
+    return module
+
+
+class _FakeResponse:
+    def __init__(self):
+        self.sent = None
+        self.deferred = False
+
+    async def send_message(self, **kwargs):
+        self.sent = kwargs
+
+    async def defer(self, **kwargs):
+        self.deferred = True
+
+
+class _FakeMessage:
+    def __init__(self):
+        self.edits = []
+
+    async def edit(self, **kwargs):
+        self.edits.append(kwargs)
+
+
+class _FakeInteraction:
+    """Duck-typed discord.Interaction for the cosmetic picker's select —
+    dpytest can't dispatch components."""
+
+    def __init__(self, user_id: int):
+        self.user = types.SimpleNamespace(id=user_id)
+        self.response = _FakeResponse()
+        self.edited = None
+
+    async def edit_original_response(self, **kwargs):
+        self.edited = kwargs
+        return _FakeMessage()
+
+
+class _FakeCtx:
+    """Just enough Context for the picker: dpytest doesn't surface the view a
+    reply carried, and the view is the thing under test."""
+
+    def __init__(self, member, guild):
+        self.author = member
+        self.guild = guild
+        self.replied = None
+
+    async def reply(self, **kwargs):
+        self.replied = kwargs
+        return _FakeMessage()
 
 
 @pytest.mark.cogs("cogs.identity")
@@ -119,6 +178,134 @@ async def test_equip_requires_owning_it_then_shows_on_the_card(bot):
     await dpytest.message("!profile equip Aurora", member=author)
     dpytest.get_message()
     assert (await db.get_equipped(author.id))["banner"] == ["banner_aurora"]
+
+
+@pytest.mark.cogs("cogs.identity")
+async def test_equip_dresses_a_whole_card_from_one_list(bot):
+    """Six slots meant six commands, and filling the badge showcase alone was
+    six more. A comma-separated list does the lot — and two badges picked
+    together must *both* land, which is what carrying the loadout through the
+    loop in memory is for."""
+    author = config().members[0]
+    badges = [d.key for d in cosmetics.in_slot("badge")[:2]]
+    for key in ("banner_ember", *badges):
+        await db.unlock_cosmetic(author.id, key)
+    cog = bot.get_cog("Identity")
+
+    names = ["Ember"] + [cosmetics.get(k).name for k in badges]
+    embed, changed = await cog.run_equip(author.id, names)
+
+    assert changed == 2  # one banner slot, one badge slot
+    assert "Equipped" in embed.title
+    equipped = await db.get_equipped(author.id)
+    assert equipped["banner"] == ["banner_ember"]
+    assert equipped["badge"] == badges
+
+
+@pytest.mark.cogs("cogs.identity")
+async def test_a_locked_pick_in_a_list_does_not_block_the_rest(bot):
+    author = config().members[0]
+    await db.unlock_cosmetic(author.id, "banner_ember")
+    cog = bot.get_cog("Identity")
+
+    embed, changed = await cog.run_equip(author.id, ["Aurora", "Ember"])
+
+    assert changed == 1
+    assert "🔒" in embed.description
+    assert (await db.get_equipped(author.id))["banner"] == ["banner_ember"]
+
+
+@pytest.mark.cogs("cogs.identity")
+async def test_a_single_pick_keeps_its_own_wording(bot):
+    """The one-pick refusals read as answers to a question, so they aren't
+    reduced to a line in a report."""
+    author = config().members[0]
+    cog = bot.get_cog("Identity")
+
+    embed, changed = await cog.run_equip(author.id, ["Ember"])
+    assert changed == 0 and "Locked" in embed.title
+
+    embed, changed = await cog.run_equip(author.id, ["not a real cosmetic"])
+    assert changed == 0 and "no cosmetic called" in embed.description
+
+
+@pytest.mark.cogs("cogs.identity")
+async def test_bare_equip_opens_a_picker_of_what_is_wearable(bot):
+    author, guild = config().members[0], config().guilds[0]
+    await db.unlock_cosmetic(author.id, "banner_ember")
+    cog = bot.get_cog("Identity")
+    ctx = _FakeCtx(author, guild)
+
+    await cog._cosmetic_picker(ctx, "equip")
+
+    view = ctx.replied["view"]
+    assert type(view).__name__ == "CosmeticPickerView"
+    assert "banner_ember" in {o.value for o in view.select.options}
+    # A locked cosmetic is not offered: a select row that refuses on press is a
+    # dead row, and the autocomplete is where unlock lines belong.
+    assert "banner_aurora" not in {o.value for o in view.select.options}
+    assert await db.get_equipped(author.id) == {}
+
+
+@pytest.mark.cogs("cogs.identity")
+async def test_the_picker_equips_everything_selected_in_one_press(bot):
+    author, guild = config().members[0], config().guilds[0]
+    badges = [d.key for d in cosmetics.in_slot("badge")[:2]]
+    for key in ("banner_ember", *badges):
+        await db.unlock_cosmetic(author.id, key)
+    cog = bot.get_cog("Identity")
+    ctx = _FakeCtx(author, guild)
+    await cog._cosmetic_picker(ctx, "equip")
+    view = ctx.replied["view"]
+    view.select._values = ["banner_ember", *badges]
+    interaction = _FakeInteraction(author.id)
+
+    await view._on_select(interaction)
+
+    equipped = await db.get_equipped(author.id)
+    assert equipped["banner"] == ["banner_ember"] and equipped["badge"] == badges
+    assert "Equipped" in interaction.edited["embed"].title
+    # The menu re-reads, so what's now worn is off the list.
+    assert "banner_ember" not in {o.value for o in view.select.options}
+
+
+@pytest.mark.cogs("cogs.identity")
+async def test_the_picker_is_invoker_only(bot):
+    author, other = config().members[0], config().members[1]
+    await db.unlock_cosmetic(author.id, "banner_ember")
+    cog = bot.get_cog("Identity")
+    ctx = _FakeCtx(author, config().guilds[0])
+    await cog._cosmetic_picker(ctx, "equip")
+    view = ctx.replied["view"]
+
+    assert await view.interaction_check(_FakeInteraction(author.id)) is True
+    theirs = _FakeInteraction(other.id)
+    assert await view.interaction_check(theirs) is False
+    assert theirs.response.sent["ephemeral"] is True
+
+
+@pytest.mark.cogs("cogs.identity")
+async def test_unequip_takes_several_off_and_still_clears_a_slot(bot):
+    author = config().members[0]
+    badges = [d.key for d in cosmetics.in_slot("badge")[:2]]
+    for key in ("banner_ember", *badges):
+        await db.unlock_cosmetic(author.id, key)
+    await db.set_equipped(author.id, "banner", ["banner_ember"])
+    await db.set_equipped(author.id, "badge", badges)
+    cog = bot.get_cog("Identity")
+
+    embed, changed = await cog.run_unequip(
+        author.id, [cosmetics.get(badges[0]).name, "Ember"]
+    )
+
+    assert changed == 2 and "Taken Off" in embed.title
+    equipped = await db.get_equipped(author.id)
+    assert equipped.get("banner", []) == [] and equipped["badge"] == [badges[1]]
+
+    # The slot-name shortcut still clears a whole showcase.
+    embed, changed = await cog.run_unequip(author.id, ["badge"])
+    assert changed == 1
+    assert (await db.get_equipped(author.id)).get("badge", []) == []
 
 
 @pytest.mark.cogs("cogs.identity")

@@ -422,6 +422,100 @@ async def test_buying_what_you_cannot_afford_changes_nothing(bot):
 
 
 # ══════════════════════════════════════════════════════════════════════════════
+#  Arming what you just bought
+# ══════════════════════════════════════════════════════════════════════════════
+@pytest.mark.cogs("cogs.fishing")
+async def test_the_shop_offers_no_arm_menu_until_you_own_something(bot):
+    guild, author = config().guilds[0], config().members[0]
+    cog = bot.get_cog("Fishing")
+
+    _screen, stock, gear = await cog.shop_state(guild, author)
+    assert gear == []
+    assert not any(
+        isinstance(c, views()._ArmSelect)
+        for c in views().TackleShopView(cog, author.id, stock, gear).children
+    )
+
+    await db.add_item(author.id, "bait_worm", 2)
+    _screen, stock, gear = await cog.shop_state(guild, author)
+    view = views().TackleShopView(cog, author.id, stock, gear)
+    select = next(c for c in view.children if isinstance(c, views()._ArmSelect))
+    assert [o.value for o in select.options] == ["bait_worm"]
+
+
+@pytest.mark.cogs("cogs.fishing", "cogs.activities")
+async def test_the_arm_menu_only_offers_what_a_cast_actually_reads(bot):
+    """The shelf arms bait, tackle and luck — not a rob shield. That belongs to
+    /inventory use, and a padlock armed from a boat is nonsense."""
+    author = config().members[0]
+    cog = bot.get_cog("Fishing")
+    await db.add_item(author.id, "bait_worm", 1)
+    await db.add_item(author.id, "lucky_charm", 1)
+    await db.add_item(author.id, "padlock", 1)
+    await db.add_item(author.id, "raw_meat", 1)  # sellable, not usable
+
+    keys = {row["item"].key for row in await cog.gear_stock(author)}
+
+    assert keys == {"bait_worm", "lucky_charm"}
+
+
+@pytest.mark.cogs("cogs.fishing")
+async def test_arming_from_the_shop_writes_the_effect_and_repaints(bot):
+    """The gap this closes: bought bait does nothing until it's armed, and the
+    only way to arm it was another cog's command."""
+    guild, author = config().guilds[0], config().members[0]
+    cog = bot.get_cog("Fishing")
+    await db.add_item(author.id, "bait_worm", 1)
+    await db.add_item(author.id, "lucky_charm", 1)
+    _screen, stock, gear = await cog.shop_state(guild, author)
+    view = views().TackleShopView(cog, author.id, stock, gear)
+    select = next(c for c in view.children if isinstance(c, views()._ArmSelect))
+    select._values = ["bait_worm", "lucky_charm"]
+    interaction = FakeInteraction(author, guild)
+
+    await select.callback(interaction)
+
+    effects = await db.get_active_effects(author.id)
+    assert {"fish_bait", "luck"} <= set(effects)
+    assert await db.get_item_qty(author.id, "bait_worm") == 0
+    # The shelf is repainted, and it now says what's live.
+    embed = interaction.edited["embed"]
+    assert isinstance(interaction.edited["view"], views().TackleShopView)
+    assert any("Armed" in f.name for f in embed.fields)
+
+
+@pytest.mark.cogs("cogs.fishing")
+async def test_arming_something_you_have_run_out_of_answers_privately(bot):
+    """A refusal never overwrites the shelf — the same rule as a cast refusal."""
+    guild, author = config().guilds[0], config().members[0]
+    cog = bot.get_cog("Fishing")
+    await db.add_item(author.id, "bait_worm", 1)
+    _screen, stock, gear = await cog.shop_state(guild, author)
+    view = views().TackleShopView(cog, author.id, stock, gear)
+    select = next(c for c in view.children if isinstance(c, views()._ArmSelect))
+    select._values = ["bait_worm"]
+    await db.try_consume_item(author.id, "bait_worm", 1)  # spent elsewhere
+    interaction = FakeInteraction(author, guild)
+
+    await select.callback(interaction)
+
+    assert interaction.edited is None
+    assert interaction.followup.sent[0]["ephemeral"] is True
+    assert await db.get_active_effects(author.id) == {}
+
+
+@pytest.mark.cogs("cogs.fishing")
+async def test_buying_bait_points_at_the_arm_menu(bot):
+    author = config().members[0]
+    cog = bot.get_cog("Fishing")
+    await db.add_coins(author.id, 1_000)
+
+    screen = await cog.buy_one(config().guilds[0], author, "bait_worm")
+
+    assert "⚡" in screen.embed.description
+
+
+# ══════════════════════════════════════════════════════════════════════════════
 #  Traps
 # ══════════════════════════════════════════════════════════════════════════════
 @pytest.mark.cogs("cogs.fishing")

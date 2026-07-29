@@ -34,13 +34,21 @@ wherever it appears, and locked cosmetics stay in the equip list carrying their
 unlock line — the picker answers "how do I get that one?" instead of coming
 back empty on a fresh account.
 
+A loadout is six slots and the badge showcase holds six of its own, so one
+cosmetic per command meant a dozen commands to dress a card. `equip`/`unequip`
+take a comma-separated list (`helpers.split_targets`), and run bare they open the
+`CosmeticPickerView` multi-select in cogs/identity/views.py — which lists only
+what a press would actually *do*, since a select row that refuses is a dead row.
+
 ──────────────────────────────────────────────────────
 Commands
 ──────────────────────────────────────────────────────
   /profile card [member]        → the profile card image (bare `n!profile`)
   /profile cosmetics [slot]     → what you own, and how to unlock the rest
-  /profile equip <cosmetic>     → wear a banner/border/nameplate/badge
-  /profile unequip <cosmetic>   → take one off (or clear a slot)
+  /profile equip [cosmetic]     → wear a banner/border/nameplate/badge; takes
+                                  several, comma-separated, and opens a
+                                  multi-select picker when left empty
+  /profile unequip [cosmetic]   → take one (or several) off, or clear a slot
   /profile preview <cosmetic>   → try one on your card without owning it
   /profile badges [member]      → the badge gallery
   /profile rep [member]         → give someone rep (once a day), or see yours
@@ -115,10 +123,21 @@ from .helpers import (
     resolve_loadout,
     unlock_context,
 )
+from .views import CosmeticPickerView
 
 log = logging.getLogger("NanoBot.identity")
 
 ACCENT = 0x5865F2
+
+# How many cosmetics one equip/unequip may move. A full loadout is six slots
+# and the badge showcase holds six, so this covers dressing a card from bare in
+# one go with room to spare — it exists so a pasted list can't turn into a
+# hundred writes.
+MAX_EQUIP_TARGETS = 12
+
+# The tap-to-dress picker's lifetime. Nothing is owed by a press (a cosmetic is
+# already owned before it can be worn), so an expiry costs one re-run.
+EQUIP_PICKER_TIMEOUT = 180.0
 
 
 class Identity(commands.Cog):
@@ -489,53 +508,118 @@ class Identity(commands.Cog):
         return q in d.name.lower() or q in d.key.lower() or q in d.slot.lower()
 
     # ── /profile equip ───────────────────────────────────────────────────────
-    @profile.command(name="equip", description="Wear a cosmetic on your card.")
-    @app_commands.describe(cosmetic="Pick one — locked ones show how to unlock")
-    async def profile_equip(self, ctx: commands.Context, *, cosmetic: str):
-        d = cosmetics.find(cosmetic)
+    @profile.command(name="equip", description="Wear cosmetics on your card.")
+    @app_commands.describe(
+        cosmetic="Pick one — or several, separated by commas. Locked ones show "
+        "how to unlock"
+    )
+    async def profile_equip(
+        self, ctx: commands.Context, *, cosmetic: Optional[str] = None
+    ):
+        """Wear one cosmetic, several, or open the picker and tap a few.
+
+        A loadout is six slots, so dressing a card was up to six commands — and
+        filling the badge showcase alone was six on its own. `cosmetic` takes a
+        comma-separated list, and left empty it opens a multi-select of
+        everything wearable right now.
+        """
+        targets = h.split_targets(cosmetic or "", MAX_EQUIP_TARGETS)
+        if not targets:
+            return await self._cosmetic_picker(ctx, "equip")
+        embed, changed = await self.run_equip(ctx.author.id, targets)
+        await ctx.reply(embed=embed, ephemeral=not changed)
+
+    async def run_equip(
+        self, user_id: int, targets: list[str]
+    ) -> tuple[discord.Embed, int]:
+        """Equip every named cosmetic, and say what landed.
+
+        The loadout is carried through the loop in memory and written once per
+        slot it actually changed: two badges picked together must both land, and
+        a second write per badge would be the same row twice. A refusal is per
+        line — one locked pick can't stop the rest going on.
+        """
+        owned = await db.get_unlocked_cosmetics(user_id)
+        equipped = await db.get_equipped(user_id)
+        lines: list[str] = []
+        singles: list[discord.Embed] = []
+        changed: set[str] = set()
+        for target in targets:
+            slot, line, embed = self._equip_one(target, owned, equipped)
+            lines.append(line)
+            singles.append(embed)
+            if slot:
+                changed.add(slot)
+        for slot in changed:
+            await db.set_equipped(user_id, slot, equipped[slot])
+        if len(targets) == 1:
+            # One pick keeps its own wording — a locked or full answer is read as
+            # the reply to a question, not as a one-line report.
+            return singles[0], len(changed)
+        embed = (h.ok if changed else h.warn)(
+            "\n".join(lines),
+            "🎨 Equipped" if changed else "🎨 Nothing Equipped",
+        )
+        if changed:
+            embed.set_footer(text="See it with /profile")
+        return embed, len(changed)
+
+    def _equip_one(
+        self, target: str, owned: set | dict, equipped: dict[str, list[str]]
+    ) -> tuple[Optional[str], str, discord.Embed]:
+        """Work out one pick against the loadout in hand.
+
+        Pure apart from updating `equipped` in place, which is what lets a
+        multi-pick fill a badge showcase two at a time and still write each slot
+        once. Returns (slot changed or None, summary line, standalone embed).
+        """
+        d = cosmetics.find(target)
         if d is None:
-            return await ctx.reply(
-                embed=h.err(
-                    f"There's no cosmetic called **{cosmetic}**. "
-                    "See `/profile cosmetics`."
-                ),
-                ephemeral=True,
+            missing = f"There's no cosmetic called **{target}**."
+            return (
+                None,
+                f"❔ {missing}",
+                h.err(f"{missing} See `/profile cosmetics`."),
             )
-        owned = await db.get_unlocked_cosmetics(ctx.author.id)
         if d.key not in owned and (d.unlock or {}).get("kind") != "default":
-            return await ctx.reply(
-                embed=h.warn(
-                    f"You haven't unlocked **{d.name}** yet — "
-                    f"{cosmetics.describe_unlock(d)}.",
-                    "🔒 Locked",
+            unlock = cosmetics.describe_unlock(d)
+            return (
+                None,
+                f"🔒 **{d.name}** — {unlock}.",
+                h.warn(
+                    f"You haven't unlocked **{d.name}** yet — {unlock}.", "🔒 Locked"
                 ),
-                ephemeral=True,
             )
-        equipped = await db.get_equipped(ctx.author.id)
         new_keys, outcome = equip_result(d.slot, equipped.get(d.slot, []), d.key)
+        label = cosmetics.SLOTS[d.slot].label.lower()
         if outcome == "already":
-            return await ctx.reply(
-                embed=h.info(f"**{d.name}** is already equipped."), ephemeral=True
+            return (
+                None,
+                f"▫️ **{d.name}** is already on.",
+                h.info(f"**{d.name}** is already equipped."),
             )
         if outcome == "full":
             worn = ", ".join(
                 cosmetics.get(k).name for k in new_keys if cosmetics.get(k)
             )
-            return await ctx.reply(
-                embed=h.warn(
-                    f"Your {cosmetics.SLOTS[d.slot].label.lower()} are full "
-                    f"({worn}). Take one off with `/profile unequip` first.",
+            return (
+                None,
+                f"🈵 Your {label} are full ({worn}) — take one off first.",
+                h.warn(
+                    f"Your {label} are full ({worn}). Take one off with "
+                    "`/profile unequip` first.",
                     "Slot Full",
                 ),
-                ephemeral=True,
             )
-        await db.set_equipped(ctx.author.id, d.slot, new_keys)
-        await ctx.reply(
-            embed=h.ok(
+        equipped[d.slot] = new_keys
+        return (
+            d.slot,
+            f"✅ {rarity_marker(d.rarity)} **{d.name}** ({label})",
+            h.ok(
                 f"Equipped {rarity_marker(d.rarity)} **{d.name}**. "
                 "Check it with `/profile`.",
                 "🎨 Equipped",
-            )
+            ),
         )
 
     @profile_equip.autocomplete("cosmetic")
@@ -582,29 +666,144 @@ class Identity(commands.Cog):
         )[:25]
 
     # ── /profile unequip ─────────────────────────────────────────────────────
-    @profile.command(name="unequip", description="Take a cosmetic off your card.")
-    @app_commands.describe(cosmetic="Pick what to take off (or clear a whole slot)")
-    async def profile_unequip(self, ctx: commands.Context, *, cosmetic: str):
-        equipped = await db.get_equipped(ctx.author.id)
-        wanted = (cosmetic or "").strip().lower()
-        if wanted in cosmetics.SLOTS:  # "badge" clears the whole showcase
-            await db.set_equipped(ctx.author.id, wanted, [])
-            return await ctx.reply(
-                embed=h.ok(f"Cleared your {cosmetics.SLOTS[wanted].label.lower()}.")
+    @profile.command(name="unequip", description="Take cosmetics off your card.")
+    @app_commands.describe(
+        cosmetic="Pick what to take off, several separated by commas, or a whole slot"
+    )
+    async def profile_unequip(
+        self, ctx: commands.Context, *, cosmetic: Optional[str] = None
+    ):
+        """Take one off, several off, or open the picker of what's on."""
+        targets = h.split_targets(cosmetic or "", MAX_EQUIP_TARGETS)
+        if not targets:
+            return await self._cosmetic_picker(ctx, "unequip")
+        embed, changed = await self.run_unequip(ctx.author.id, targets)
+        await ctx.reply(embed=embed, ephemeral=not changed)
+
+    async def run_unequip(
+        self, user_id: int, targets: list[str]
+    ) -> tuple[discord.Embed, int]:
+        """Take every named cosmetic off, and say what came off.
+
+        A slot name ("badge") still clears the whole showcase, which is the one
+        shortcut worth keeping now that a multi-pick can do the same thing the
+        long way.
+        """
+        equipped = await db.get_equipped(user_id)
+        lines: list[str] = []
+        singles: list[discord.Embed] = []
+        changed: set[str] = set()
+        for target in targets:
+            wanted = target.strip().lower()
+            if wanted in cosmetics.SLOTS:
+                label = cosmetics.SLOTS[wanted].label.lower()
+                equipped[wanted] = []
+                changed.add(wanted)
+                lines.append(f"🧹 Cleared your {label}.")
+                singles.append(h.ok(f"Cleared your {label}."))
+                continue
+            d = cosmetics.find(target)
+            if d is None:
+                missing = f"There's no cosmetic called **{target}**."
+                lines.append(f"❔ {missing}")
+                singles.append(h.err(missing))
+                continue
+            keys = [k for k in equipped.get(d.slot, []) if k != d.key]
+            if len(keys) == len(equipped.get(d.slot, [])):
+                lines.append(f"▫️ **{d.name}** isn't on.")
+                singles.append(h.info(f"**{d.name}** isn't equipped."))
+                continue
+            equipped[d.slot] = keys
+            changed.add(d.slot)
+            lines.append(f"✅ Took off **{d.name}**.")
+            singles.append(h.ok(f"Took off **{d.name}**."))
+        for slot in changed:
+            await db.set_equipped(user_id, slot, equipped[slot])
+        if len(targets) == 1:
+            return singles[0], len(changed)
+        return (h.ok if changed else h.warn)(
+            "\n".join(lines),
+            "🎨 Taken Off" if changed else "🎨 Nothing Changed",
+        ), len(changed)
+
+    # ── the tap-to-dress picker ──────────────────────────────────────────────
+    async def _cosmetic_picker(self, ctx: commands.Context, mode: str):
+        """What a bare `/profile equip` or `/profile unequip` opens.
+
+        The autocomplete hands over one cosmetic at a time, which is the right
+        shape for a name and the wrong one for a loadout: six slots meant six
+        commands. This is the same list as a multi-select, so a whole card gets
+        dressed in one press.
+        """
+        rows = await self.picker_rows(ctx.author.id, mode)
+        if not rows:
+            empty = (
+                "You've nothing unlocked to wear yet — earn cosmetics by playing, "
+                "or buy one with `/shop profile`."
+                if mode == "equip"
+                else "Your card is bare — nothing to take off."
             )
-        d = cosmetics.find(cosmetic)
-        if d is None:
-            return await ctx.reply(
-                embed=h.err(f"There's no cosmetic called **{cosmetic}**."),
-                ephemeral=True,
+            return await ctx.reply(embed=h.info(empty, "🎨 Cosmetics"), ephemeral=True)
+        view = CosmeticPickerView(
+            self,
+            user_id=ctx.author.id,
+            mode=mode,
+            rows=rows,
+            timeout=EQUIP_PICKER_TIMEOUT,
+        )
+        view.message = await ctx.reply(embed=self._picker_embed(mode, rows), view=view)
+
+    async def picker_rows(self, user_id: int, mode: str) -> list[dict]:
+        """The rows a picker offers: wearable-now to equip, worn to unequip.
+
+        Locked cosmetics are deliberately absent here even though the *typing*
+        picker lists them — a select is a set of things to do, and an option that
+        refuses on press is a dead row. The autocomplete stays the place that
+        answers "how do I get that one?".
+        """
+        owned = await db.get_unlocked_cosmetics(user_id)
+        equipped = await db.get_equipped(user_id)
+        worn = {key for keys in equipped.values() for key in keys}
+        rows: list[tuple[str, dict]] = []
+        for d in sorted(
+            cosmetics.COSMETICS.values(), key=lambda c: (c.slot, c.sort, c.name)
+        ):
+            default = (d.unlock or {}).get("kind") == "default"
+            if mode == "unequip":
+                if d.key not in worn:
+                    continue
+            elif d.key in worn or not (d.key in owned or default):
+                continue
+            rows.append(
+                (
+                    d.slot,
+                    {
+                        "key": d.key,
+                        "label": f"{cosmetics.SLOTS[d.slot].label}: {d.name}",
+                        "description": (d.description or "")[:100] or None,
+                        "emoji": None,
+                    },
+                )
             )
-        keys = [k for k in equipped.get(d.slot, []) if k != d.key]
-        if len(keys) == len(equipped.get(d.slot, [])):
-            return await ctx.reply(
-                embed=h.info(f"**{d.name}** isn't equipped."), ephemeral=True
+        # Interleaved across slots for the same reason the autocomplete is: the
+        # badge list alone is longer than the 25 rows Discord will show.
+        return interleave_by_slot(rows)[:25]
+
+    def _picker_embed(self, mode: str, rows: list[dict]) -> discord.Embed:
+        """The card above the picker: what's on offer, and what one press does."""
+        body = "\n".join(f"▫️ {row['label']}" for row in rows)
+        if mode == "equip":
+            return h.embed(
+                "🎨 Dress Your Card",
+                "Pick everything you want on — banners and plates swap, badges "
+                "fill up to six.\n\n" + body[:3500],
+                ACCENT,
             )
-        await db.set_equipped(ctx.author.id, d.slot, keys)
-        await ctx.reply(embed=h.ok(f"Took off **{d.name}**."))
+        return h.embed(
+            "🎨 Take Cosmetics Off",
+            "Pick everything to remove.\n\n" + body[:3500],
+            ACCENT,
+        )
 
     @profile_unequip.autocomplete("cosmetic")
     async def _unequip_ac(self, interaction: discord.Interaction, current: str):

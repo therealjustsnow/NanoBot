@@ -51,10 +51,24 @@ class _FakeMessage:
 
 
 class _FakeFollowup:
+    """A webhook followup, including the one way it is fussier than a channel.
+
+    `view` here is MISSING-or-a-View: discord.py's Webhook.send type-checks it
+    and raises on None, unlike Messageable.send which documents None as the
+    default. A fake that quietly accepted None let a press ship that claimed the
+    charge and then raised instead of reporting the run, so the check is part of
+    the fake rather than a comment on it.
+    """
+
     def __init__(self):
         self.sent = []
 
     async def send(self, **kwargs):
+        if "view" in kwargs and kwargs["view"] is None:
+            raise TypeError(
+                "expected view parameter to be of type View or LayoutView, "
+                "not NoneType"
+            )
         self.sent.append(kwargs)
         return _FakeMessage()
 
@@ -121,6 +135,30 @@ async def test_a_button_press_runs_the_activity_and_repaints_the_card(bot, monke
     assert interaction.edited is not None and interaction.edited["view"] is view
     assert len(interaction.followup.sent) == 1
     assert "💼" in interaction.followup.sent[0]["embed"].title
+
+
+@pytest.mark.cogs("cogs.activities")
+@pytest.mark.parametrize("activity,marker", [("work", "💼"), ("mine", "⛏️")])
+async def test_a_run_without_an_encounter_still_reports_itself(
+    bot, monkeypatch, activity, marker
+):
+    """The ordinary case: most runs open no encounter, so most presses have no
+    view to attach — and that is exactly the shape that used to raise instead of
+    reporting, leaving the member paid but told nothing."""
+    from cogs.activities import cog as activities
+
+    guild, author = config().guilds[0], config().members[0]
+    # Never rolls an encounter (0.9 is far above ENCOUNTER_CHANCE).
+    monkeypatch.setattr(activities.random, "random", lambda: 0.9)
+    _cog, view = await _dashboard(bot, author, guild)
+    interaction = FakeInteraction(author, guild)
+
+    await view.press(interaction, activity)
+
+    assert len(interaction.followup.sent) == 1
+    sent = interaction.followup.sent[0]
+    assert marker in sent["embed"].title
+    assert "view" not in sent  # not `view=None` — a followup rejects that
 
 
 @pytest.mark.cogs("cogs.activities")

@@ -50,6 +50,20 @@ BUTTON_LABELS: dict[str, str] = {
 }
 
 
+def _view_kwargs(view: Optional[discord.ui.View]) -> dict:
+    """`view=` for a followup send, omitted entirely when there is no view.
+
+    Every other send path in the bot takes `view=None` happily — `Context.send`
+    and `Messageable.send` both default it to None — so handing a run's optional
+    view straight to `followup.send` read as correct and was not. A webhook
+    followup type-checks the argument and raises `TypeError` on None, which is
+    the bug that made a dashboard press claim the charge, run the activity, and
+    then show the member nothing at all: the raise landed *after* the payout,
+    on the one message that was supposed to report it.
+    """
+    return {} if view is None else {"view": view}
+
+
 class _ActivityButton(discord.ui.Button):
     """One tap-to-run activity on the dashboard.
 
@@ -189,7 +203,10 @@ class AdventureView(discord.ui.View):
         run = await self.cog.collect_all(interaction.guild, interaction.user)
         await self._repaint(interaction)
         message = await interaction.followup.send(
-            embed=run.embed, view=run.view, ephemeral=not run.claimed, wait=True
+            embed=run.embed,
+            ephemeral=not run.claimed,
+            wait=True,
+            **_view_kwargs(run.view),
         )
         if run.view is not None:
             run.view.message = message
@@ -200,8 +217,13 @@ class AdventureView(discord.ui.View):
         # Repaint first: the card is what the member is looking at, and it now
         # holds one fewer charge whether the run paid out or was refused.
         await self._repaint(interaction)
+        # A refusal goes out privately: the card underneath already says what
+        # happened, and a public "not yet" under a dashboard is noise.
         message = await interaction.followup.send(
-            embed=run.embed, view=run.view, wait=True
+            embed=run.embed,
+            ephemeral=not run.claimed,
+            wait=True,
+            **_view_kwargs(run.view),
         )
         if run.view is not None:
             run.view.message = message

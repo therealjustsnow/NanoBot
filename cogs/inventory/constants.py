@@ -1,5 +1,10 @@
 """cogs/inventory/constants.py — inventory cog constants."""
 
+# The stacking ceilings live in utils/consumables.py now that the tackle shop
+# arms items too, and are re-exported here because this is where the inventory
+# has always read them from.
+from utils.consumables import EFFECT_MAX_DURATION, EFFECT_MAX_USES  # noqa: F401
+
 # Coin range a treasure chest pays when opened with a key.
 CHEST_COINS_MIN = 250
 CHEST_COINS_MAX = 750
@@ -20,10 +25,7 @@ CATEGORY_SELL_PREFIX = "cat:"
 # expires — long enough to read the list, short enough not to linger.
 SELL_CONFIRM_TIMEOUT = 60.0
 
-# Bulk-using effect items multiplies the granted duration/charges by qty, so
-# without a separate ceiling one command could bank a near-permanent buff
-# (e.g. 1000 lucky charms = 500 hours of luck, or a years-long rob shield).
-# A single use of an item whose base duration/uses already exceeds the cap
-# still works — the cap only limits *stacking*.
-EFFECT_MAX_DURATION = 86400  # granted seconds per use command (24h)
-EFFECT_MAX_USES = 50  # granted charges per use command
+# A multi-item use is one press from the gear picker, so the reply stops being
+# "here's your buff" and becomes a list. Long enough to read, short enough that
+# nobody scrolls a phone through it.
+USE_PICKER_TIMEOUT = 120.0
