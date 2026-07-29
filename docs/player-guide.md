@@ -226,11 +226,15 @@ The biggest earner in the game, and the most hands-on.
 
 ```
 /fish              cast your line          (every 20 seconds)
+/fish hub          your dashboard — and the buttons for everything below
 /fish bag          what you're carrying
 /fish sell [fish]  sell one species, or everything
+/fish travel       the map: charter and move between fishing spots
+/fish shop         bait and tackle
+/fish trap         set a fish trap, or pull one that's ready
 /fish rod          your rod + the next upgrade
 /fish upgrade      buy the next rod
-/fish buy <item>   the bait shop
+/fish buy <item>   buy bait or tackle directly
 /fish bait         what bait you own and what's armed
 /fish quest        today's quest
 /fish events       what's boosting the water right now
@@ -239,23 +243,77 @@ The biggest earner in the game, and the most hands-on.
 /fish top / global leaderboards
 ```
 
+### You don't have to type any of that
+
+Every cast comes back with buttons:
+
+**🎣 Cast · 💰 Sell all · 🎒 Bag · 🗺️ Travel · 🛒 Shop · 🪤 Trap**
+
+Tap 🎣 and the same message becomes your next catch. A whole session is one
+message and your thumb. `/fish hub` opens the same buttons over a dashboard
+showing your spot, rod, level, bag, streak and today's quest.
+
+Bare `/fish` still casts, so nothing you already do has changed. If you press
+Cast too early you're told privately — your last catch stays on screen.
+
 ### What's new
 
-- **The cast cooldown is now a flat 20 seconds for everyone**, everywhere. It
-  used to be a per-server setting; since your fishing progress is one account,
-  one cooldown is the only thing that made sense — and it can't be dodged by
-  hopping servers.
-- `/fish sell` now shows a **pick list of what's actually in your bag**,
-  including a "sell everything" option.
-- `/fish buy` shows the bait shop as a list with prices, marked ✅ if you can
-  afford it.
+- **Fishing spots.** Five places to fish, each with species found nowhere else.
+  See below.
+- **Tackle.** A 🕸️ Cast Net pulls three fish from one cast; a 🪤 Fish Trap
+  fishes for you while you're away.
+- **The cast cooldown is a flat 20 seconds for everyone**, everywhere. Since
+  your fishing progress is one account, one cooldown is the only thing that
+  made sense — and it can't be dodged by hopping servers.
+- `/fish sell` shows a **pick list of what's actually in your bag**, including
+  a "sell everything" option.
 - `/fish top` can show **this server or every server** (`scope` option).
+
+### 🗺️ Where you fish
+
+`/fish travel` opens the map. Each spot has fish you can catch nowhere else,
+bends the odds its own way, and — past the first — carries a chance your line
+snaps and you lose the catch.
+
+| Spot | Needs | Charter | Snag risk | Only here |
+|---|---|---|---|---|
+| 🪷 Old Pond | — | free | none | your starting water |
+| 🏞️ River Bend | level 5 | 6,000 | 3% | 🦐 Crayfish, 🐍 River Eel, 🐟 Sturgeon |
+| 🪸 Coral Reef | level 12 | 35,000 | 6% | 🐠 Clownfish, 🐴 Seahorse, 🐢 Sea Turtle, 🛸 Manta Ray |
+| 🌊 The Deep | level 22 | 140,000 | 10% | 🔦 Lanternfish, 🪱 Gulper Eel, 🦑 Colossal Squid, 🦈 Frilled Shark |
+| 🕳️ Abyssal Trench | level 35 | 600,000 | 15% | 🐚 Hadal Snailfish, 👻 Abyssal Ray, 🐉 Leviathan, 🔮 Void Pearl |
+
+**A charter is bought once and yours forever**, in every server — after that,
+travelling back and forth is free. Nothing is ever taken away: every fish you
+could catch at the Old Pond is still catchable everywhere else.
+
+The deeper spots are a **trade, not a straight upgrade**. The Deep and the
+Trench hand you far more junk than the pond does; they're worth it because of
+what else is down there. Expect to lose a line now and then — a snag costs you
+that catch and the one bait charge that cast used, never the rest of your bait.
+
+### 🪤 Tackle
+
+| Item | Price | What it does |
+|---|---|---|
+| 🕸️ Cast Net | 500 | Your next 3 casts pull **three fish each** |
+| 🪤 Fish Trap | 250 | Set it and walk away; a full basket in 2 hours |
+
+Neither makes you money on paper — like bait, they cost more than they return.
+What you're buying is **time**: the 20-second cooldown is what actually limits
+fishing, and a net beats it while a trap ignores it completely.
+
+A trap is set where you're standing and pays out from *that* water, so a trap
+left at the Trench is worth a lot more than one in the pond. `/fish trap` sets
+one, tells you how long is left, and pulls it when it's ready.
 
 ### Rarities
 
 Seven tiers: 🗑️ Junk → ⚪ Common → 🟢 Uncommon → 🔵 Rare → 🟣 Epic →
-🟠 Legendary → 💰 Treasure. Thirty species in total (`/fish dex` tracks which
-ones you've caught — selling never erases your dex).
+🟠 Legendary → 💰 Treasure. Forty-four species in total, fourteen of which live
+at one spot only (`/fish dex` tracks which ones you've caught — selling never
+erases your dex, and a species you caught once stays in it even if you never go
+back).
 
 Heavier specimens of the same species are worth more. Your heaviest non-junk
 catch is remembered as your personal best. Treasure isn't a fish: it pays
@@ -296,6 +354,8 @@ next one with `/fish upgrade`.
 | 🟢 Glowgrub | 300 | +25% luck, 5 casts |
 | 🧲 Treasure Magnet | 500 | +35% luck, 3 casts |
 | ⭐ XP Potion | 200 | XP multiplier, timed |
+
+(Nets and traps are on the same shelf — see 🪤 Tackle above.)
 
 Buying bait doesn't arm it — **use `/inventory use <bait>`** before casting.
 `/fish bait` shows what you own and what's currently armed.

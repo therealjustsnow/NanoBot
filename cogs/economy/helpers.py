@@ -1,7 +1,8 @@
 """Pure economy helpers (no Discord deps) — covered by tests/test_economy_helpers.py."""
 
-from cogs.fishing.constants import CAST_COOLDOWN, FISH, FISH_BY_RARITY
+from cogs.fishing.constants import CAST_COOLDOWN, FISH
 from cogs.fishing.helpers import rarity_odds
+from cogs.fishing.spots import DEFAULT_SPOT, fish_pool, spot_odds
 
 from .constants import (
     COIN_MAX,
@@ -50,29 +51,44 @@ def _scaled_price(base: int, daily_amount: int) -> int:
 # same precedent as cogs/progression reading the fishing/activities ladders.
 # tests/test_economy_balance.py recomputes this independently and asserts the
 # two agree, so the yardstick can't drift away from the balance model.
-def coins_per_cast(luck: float = 0.0) -> float:
+def coins_per_cast(luck: float = 0.0, spot: str = DEFAULT_SPOT) -> float:
     """Expected coins from one cast at `luck`, straight off the drop tables.
 
     Weight scaling averages out (0.6x-1.4x around the base value) and treasure
     pays its value in coins, so the base value is the right expectation.
+
+    `spot` matters because a fishing spot changes both halves of the sum: it
+    bends the rarity table and it adds species to the pool that tier averages
+    over. It defaults to the starter spot, which is what the yardstick below
+    quotes — see the note there on why that's the honest number.
     """
     return sum(
         chance
         * (
-            sum(FISH[key]["value"] for key in FISH_BY_RARITY[rarity])
-            / len(FISH_BY_RARITY[rarity])
+            sum(FISH[key]["value"] for key in fish_pool(rarity, spot))
+            / len(fish_pool(rarity, spot))
         )
-        for rarity, chance in rarity_odds(luck)
+        for rarity, chance in spot_odds(rarity_odds(luck), spot)
+        if fish_pool(rarity, spot)
     )
 
 
-def coins_per_hour(luck: float = 0.0) -> float:
+def coins_per_hour(luck: float = 0.0, spot: str = DEFAULT_SPOT) -> float:
     """Expected coins from an hour of uninterrupted casting at `luck`."""
-    return coins_per_cast(luck) * (3600 / CAST_COOLDOWN)
+    return coins_per_cast(luck, spot) * (3600 / CAST_COOLDOWN)
 
 
 def seconds_to_afford(price: int, luck: float = 0.0) -> int:
-    """Roughly how long earning `price` takes, in seconds. 0 for a free item."""
+    """Roughly how long earning `price` takes, in seconds. 0 for a free item.
+
+    Quoted at the **starter spot**, at zero luck, on purpose. This number is
+    shown to a mod pricing a shop reward, and the useful reading is "how long
+    would this take someone who has nothing" — a figure that doesn't move when
+    a member charters the Trench. Every improvement an angler buys (rod, level,
+    bait, spot) makes the real answer shorter than the quote, which is the
+    right direction for an estimate to be wrong in, and the /shop footer says
+    it's a floor.
+    """
     if price <= 0:
         return 0
     rate = coins_per_hour(luck)

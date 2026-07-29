@@ -21,10 +21,11 @@ from cogs.casino.constants import DEFAULT_MAX_BET, DEFAULT_MIN_BET
 from cogs.fishing.constants import (
     CAST_COOLDOWN,
     FISH,
-    FISH_BY_RARITY,
+    RARITY_ODDS,
     RODS,
 )
 from cogs.fishing.helpers import rarity_odds
+from cogs.fishing.spots import DEFAULT_SPOT, SPOTS, SPOT_ORDER, fish_pool, spot_odds
 from cogs.progression.constants import PRESTIGE_COST_BASE, PRESTIGE_MAX
 from cogs.progression.helpers import prestige_requirement
 from utils import items
@@ -40,19 +41,21 @@ OLD_PICKAXE_PRICES = [0, 500, 2_000, 8_000, 25_000]
 INTENDED_ROD_PACING = [0.5, 0.667, 1.0, 1.333, 2.0]
 
 
-def coins_per_cast(luck: float) -> float:
+def coins_per_cast(luck: float, spot: str = DEFAULT_SPOT) -> float:
     """Expected coins from one cast at `luck`, straight off the drop tables.
 
     Weight scaling averages out (0.6x–1.4x around the base value) and treasure
     pays its value in coins, so the base value is the right expectation.
+
+    A spot changes both the rarity table and which species each tier averages
+    over, so both are applied here — independently of the production helper, so
+    the two can be asserted against each other.
     """
+    pools = {r: fish_pool(r, spot) for r, _p in RARITY_ODDS}
     return sum(
-        chance
-        * (
-            sum(FISH[k]["value"] for k in FISH_BY_RARITY[rarity])
-            / len(FISH_BY_RARITY[rarity])
-        )
-        for rarity, chance in rarity_odds(luck)
+        chance * (sum(FISH[k]["value"] for k in pools[rarity]) / len(pools[rarity]))
+        for rarity, chance in spot_odds(rarity_odds(luck), spot)
+        if pools[rarity]
     )
 
 
@@ -179,6 +182,76 @@ def test_fishing_is_still_the_right_denominator_for_the_yardstick():
 
     daily_hourly = REWARD_DEFAULTS["daily"] / 24
     assert coins_per_hour(0.0) > 3 * (adventure_coins_per_hour() + daily_hourly)
+
+
+# ── Fishing spots: a paid step up, not a free one ────────────────────────────
+def effective_per_cast(spot: str, luck: float = 0.0) -> float:
+    """Coins per cast at a spot, net of its snag rate.
+
+    A hazard costs the whole catch, so it scales the expectation directly —
+    which is the only reason the rich spots aren't strictly better.
+    """
+    return coins_per_cast(luck, spot) * (1 - SPOTS[spot]["hazard"])
+
+
+def test_every_spot_is_a_step_up_once_the_snags_are_paid_for():
+    """A charter has to be worth buying. If a spot's snag rate ate its odds
+    shift, the honest thing would be to price it at zero, not to sell it."""
+    rates = [effective_per_cast(spot, 0.45) for spot in SPOT_ORDER]
+    assert rates == sorted(rates)
+    assert rates[0] < rates[-1]
+
+
+def test_the_hazard_is_a_real_cost_not_a_rounding_error():
+    """The snag has to bite, or the risk half of the risk/reward is decoration."""
+    for spot in SPOT_ORDER[1:]:
+        raw = coins_per_cast(0.45, spot)
+        assert effective_per_cast(spot, 0.45) < raw
+    assert SPOTS[SPOT_ORDER[0]]["hazard"] == 0  # the starter spot never snags
+
+
+def test_the_deepest_water_does_not_out_earn_the_pond_by_more_than_3x():
+    """The bound on the whole feature. Spots are meant to be a progression, not
+    a second economy: past ~3x, the starter spot stops being somewhere anyone
+    would fish and every shop price quoted against it becomes a fiction."""
+    assert effective_per_cast(SPOT_ORDER[-1], 0.45) < 3 * coins_per_cast(0.45)
+
+
+@pytest.mark.parametrize("spot", [s for s in SPOT_ORDER if SPOTS[s]["price"]])
+def test_a_charter_pays_itself_back_over_hours_not_minutes(spot):
+    """The charter is the sink that keeps spots from being pure inflation.
+
+    Measured in casts at mid-game luck against staying put: under a thousand
+    and the sink is decorative, over twenty thousand and nobody would ever buy
+    it. Both ends are asserted so a price edit in either direction is caught.
+    """
+    gain = effective_per_cast(spot, 0.45) - coins_per_cast(0.45)
+    assert gain > 0
+    casts = SPOTS[spot]["price"] / gain
+    assert 1_000 < casts < 20_000, f"{spot} pays back in {casts:,.0f} casts"
+
+
+def test_charter_prices_and_level_gates_both_ascend():
+    prices = [SPOTS[s]["price"] for s in SPOT_ORDER]
+    levels = [SPOTS[s]["level"] for s in SPOT_ORDER]
+    hazards = [SPOTS[s]["hazard"] for s in SPOT_ORDER]
+    assert prices == sorted(prices)
+    assert levels == sorted(levels)
+    assert hazards == sorted(hazards)  # more reward, more risk, in step
+    assert prices[0] == 0 and levels[0] == 0
+
+
+def test_the_shop_yardstick_ignores_spots_on_purpose():
+    """`/shop` quotes the starter spot so its estimate describes someone with
+    nothing. A member who charters better water finds everything *cheaper* than
+    quoted, which is the right direction for a floor to be wrong in."""
+    from cogs.economy.helpers import seconds_to_afford
+
+    quoted = seconds_to_afford(10_000)
+    real_at_the_trench = (
+        10_000 / effective_per_cast(SPOT_ORDER[-1], 0.0) * CAST_COOLDOWN
+    )
+    assert real_at_the_trench < quoted
 
 
 def test_no_single_activity_out_earns_a_cast():

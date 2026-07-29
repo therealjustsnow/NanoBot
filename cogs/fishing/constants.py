@@ -265,6 +265,142 @@ FISH: dict[str, dict] = {
         "weight": (5.0, 20.0),
         "value": 150,
     },
+    # ══════════════════════════════════════════════════════════════════════════
+    #  Spot-exclusive species
+    # ══════════════════════════════════════════════════════════════════════════
+    # A species with a `spot` is only in the pool at that spot — see
+    # spots.SPOT_POOLS and helpers.pick_fish. Everything above has no `spot` and
+    # is therefore catchable everywhere, which is what keeps the Old Pond a real
+    # place to fish rather than a waiting room.
+    #
+    # These are why you travel. A rarity shift alone is a number going up; a
+    # species you have never seen is a reason to go and look, and it shows up
+    # permanently in your dex. Values sit slightly above the general species of
+    # the same tier, because reaching them costs a charter and a hazard risk.
+    # ── River Bend ──
+    "crayfish": {
+        "name": "Crayfish",
+        "emoji": "🦐",
+        "rarity": "common",
+        "weight": (0.05, 0.4),
+        "value": 11,
+        "spot": "river",
+    },
+    "river_eel": {
+        "name": "River Eel",
+        "emoji": "🐍",
+        "rarity": "uncommon",
+        "weight": (0.5, 6.0),
+        "value": 30,
+        "spot": "river",
+    },
+    "sturgeon": {
+        "name": "Sturgeon",
+        "emoji": "🐟",
+        "rarity": "rare",
+        "weight": (15.0, 180.0),
+        "value": 85,
+        "spot": "river",
+    },
+    # ── Coral Reef ──
+    "clownfish": {
+        "name": "Clownfish",
+        "emoji": "🐠",
+        "rarity": "common",
+        "weight": (0.02, 0.25),
+        "value": 12,
+        "spot": "reef",
+    },
+    "seahorse": {
+        "name": "Seahorse",
+        "emoji": "🐴",
+        "rarity": "uncommon",
+        "weight": (0.01, 0.3),
+        "value": 34,
+        "spot": "reef",
+    },
+    "sea_turtle": {
+        "name": "Sea Turtle",
+        "emoji": "🐢",
+        "rarity": "rare",
+        "weight": (20.0, 300.0),
+        "value": 95,
+        "spot": "reef",
+    },
+    "manta_ray": {
+        "name": "Manta Ray",
+        "emoji": "🛸",
+        "rarity": "epic",
+        "weight": (200.0, 1600.0),
+        "value": 210,
+        "spot": "reef",
+    },
+    # ── The Deep ──
+    "lanternfish": {
+        "name": "Lanternfish",
+        "emoji": "🔦",
+        "rarity": "uncommon",
+        "weight": (0.01, 0.2),
+        "value": 38,
+        "spot": "deep",
+    },
+    "gulper_eel": {
+        "name": "Gulper Eel",
+        "emoji": "🪱",
+        "rarity": "rare",
+        "weight": (1.0, 25.0),
+        "value": 100,
+        "spot": "deep",
+    },
+    "colossal_squid": {
+        "name": "Colossal Squid",
+        "emoji": "🦑",
+        "rarity": "epic",
+        "weight": (150.0, 700.0),
+        "value": 250,
+        "spot": "deep",
+    },
+    "frilled_shark": {
+        "name": "Frilled Shark",
+        "emoji": "🦈",
+        "rarity": "legendary",
+        "weight": (30.0, 200.0),
+        "value": 760,
+        "spot": "deep",
+    },
+    # ── Abyssal Trench ──
+    "hadal_snailfish": {
+        "name": "Hadal Snailfish",
+        "emoji": "🐚",
+        "rarity": "rare",
+        "weight": (0.05, 0.5),
+        "value": 115,
+        "spot": "abyss",
+    },
+    "abyssal_ray": {
+        "name": "Abyssal Ray",
+        "emoji": "👻",
+        "rarity": "epic",
+        "weight": (40.0, 300.0),
+        "value": 280,
+        "spot": "abyss",
+    },
+    "leviathan": {
+        "name": "Leviathan",
+        "emoji": "🐉",
+        "rarity": "legendary",
+        "weight": (2000.0, 12000.0),
+        "value": 1250,
+        "spot": "abyss",
+    },
+    "void_pearl": {
+        "name": "Void Pearl",
+        "emoji": "🔮",
+        "rarity": "treasure",
+        "weight": (0.1, 0.4),
+        "value": 420,
+        "spot": "abyss",
+    },
 }
 
 # Catalogue keys grouped by rarity, in FISH insertion order (pick_fish indexes
@@ -325,9 +461,28 @@ LEVEL_LUCK_CAP = 0.15
 # helpers.rarity_odds, which independently clamps to the same range.
 MAX_LUCK = 1.0
 
+# ── Tackle ───────────────────────────────────────────────────────────────────
+# A Cast Net turns one cast into this many fish. The value is beating the
+# 20-second cooldown, not the fish — see the note in items.py.
+NET_CATCHES = 3
+
+# A Fish Trap soaks for this long, then pays out this many fish rolled at the
+# spot it was set in. Two hours is chosen so a trap set on the way out is ready
+# when someone next opens Discord, and so it can't be cycled faster than the
+# casts it stands in for.
+TRAP_SOAK = 7200
+TRAP_CATCHES = 10
+
 # ── Daily streak ─────────────────────────────────────────────────────────────
 STREAK_COIN_PER_DAY = 10
 STREAK_COIN_CAP = 100
+
+# ── Views ────────────────────────────────────────────────────────────────────
+# How long the buttons under a cast (or on the /fish hub card) stay live. Long
+# enough to keep tapping through a session, short enough that an abandoned card
+# isn't offering a Cast button an hour later. Nothing is owed by a press, so an
+# expiry costs a member one re-run of /fish.
+FISHING_VIEW_TIMEOUT = 300
 
 # ── Daily quest pool ─────────────────────────────────────────────────────────
 # Three quest shapes, picked + sized deterministically by helpers.generate_quest.

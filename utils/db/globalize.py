@@ -160,7 +160,15 @@ async def globalize_economy(conn):
             best_weight REAL NOT NULL DEFAULT 0,
             xp          INTEGER NOT NULL DEFAULT 0,
             streak_days INTEGER NOT NULL DEFAULT 0,
-            last_day    INTEGER NOT NULL DEFAULT 0
+            last_day    INTEGER NOT NULL DEFAULT 0,
+            -- Added after this migration (the fishing spot an angler is
+            -- standing at), and listed here for the same reason as
+            -- activities_stats' co-op columns: this rebuild REPLACES the
+            -- table, so without it a database migrating for the first time
+            -- comes out missing what _ensure_columns just added. Not in the
+            -- INSERT below — the source table predates it, so everyone lands
+            -- at the starter spot, which is what '' resolves to.
+            spot        TEXT NOT NULL DEFAULT ''
         )
         """,
         """
