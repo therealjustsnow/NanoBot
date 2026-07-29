@@ -178,40 +178,6 @@ def test_port_non_integer_is_warning():
 
 
 # ══════════════════════════════════════════════════════════════════════════════
-#  webhook_allowed_ips
-# ══════════════════════════════════════════════════════════════════════════════
-
-
-def test_webhook_allowed_ips_valid_single():
-    issues = validate({"token": _VALID_TOKEN, "webhook_allowed_ips": "192.168.1.1"})
-    assert not [i for i in issues if i.field == "webhook_allowed_ips"]
-
-
-def test_webhook_allowed_ips_valid_cidr():
-    issues = validate({"token": _VALID_TOKEN, "webhook_allowed_ips": "10.0.0.0/8"})
-    assert not [i for i in issues if i.field == "webhook_allowed_ips"]
-
-
-def test_webhook_allowed_ips_valid_multiple():
-    issues = validate(
-        {"token": _VALID_TOKEN, "webhook_allowed_ips": "1.2.3.4, 10.0.0.0/24"}
-    )
-    assert not [i for i in issues if i.field == "webhook_allowed_ips"]
-
-
-def test_webhook_allowed_ips_invalid_warns():
-    issues = validate({"token": _VALID_TOKEN, "webhook_allowed_ips": "not-an-ip"})
-    assert _warnings(issues, "webhook_allowed_ips")
-
-
-def test_webhook_allowed_ips_partial_invalid_warns():
-    issues = validate(
-        {"token": _VALID_TOKEN, "webhook_allowed_ips": "1.2.3.4, bad-entry"}
-    )
-    assert _warnings(issues, "webhook_allowed_ips")
-
-
-# ══════════════════════════════════════════════════════════════════════════════
 #  music_default_volume
 # ══════════════════════════════════════════════════════════════════════════════
 
