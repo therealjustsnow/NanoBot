@@ -10,6 +10,8 @@ The webhook plumbing isn't exercised here (tests/test_db.py covers the vote
 rows); `_grant_vote_rewards` is called directly, which is the whole payout.
 """
 
+import time
+
 import pytest
 
 import utils.db as db
@@ -24,6 +26,30 @@ from cogs.votes import (
 )
 from utils import helpers as h
 from utils import items as item_catalogue
+
+
+async def settle_todays_quest(user_id: int):
+    """Claim today's fishing quest up front so a sale can't also pay it out.
+
+    Selling bumps the daily quest, and the quest is seeded on `(user_id, day)`
+    — so whether a sale happens to *complete* one depends on the member id the
+    test framework generated and the date the suite ran. That is exactly the
+    kind of test that passes locally and fails in CI, which is what it did.
+    Claiming it first makes the sale's payout the only thing being measured.
+    """
+    from cogs.fishing.helpers import generate_quest
+
+    today = int(time.time() // 86400)
+    quest = generate_quest(user_id, today)
+    await db.get_or_create_quest(user_id, today, quest["quest_key"], quest["target"])
+    # The claim only lands on a *completed* quest, so fill it first — this is
+    # the same pair of accessors the cog uses, not a hand-written UPDATE.
+    await db.bump_quest_progress(user_id, today, quest["target"])
+    claimed = await db.try_claim_quest_reward(user_id, today)
+    # Assert the neutralisation actually took: if this ever stops working the
+    # tests below go back to flaking on a third of member ids, and a silent
+    # no-op here is exactly how that would come back.
+    assert claimed, "today's quest should now be claimed, so a sale can't pay it"
 
 
 # ── The pure half ────────────────────────────────────────────────────────────
@@ -140,6 +166,7 @@ async def test_the_boost_reaches_a_fishing_sale(bot):
     guild = bot.guilds[0]
     author = guild.members[0]
     cog = bot.get_cog("Fishing")
+    await settle_todays_quest(author.id)
     await db.record_catch(author.id, "salmon", 5.0, 100, track_best=True)
     await db.grant_effect(author.id, "coin_boost", 2.0, duration=3600)
 

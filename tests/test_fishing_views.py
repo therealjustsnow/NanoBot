@@ -87,6 +87,28 @@ def _press(view, cls, **match):
     raise AssertionError(f"no {cls.__name__} matching {match}")
 
 
+async def settle_todays_quest(user_id: int):
+    """Claim today's quest up front so a sale can't also pay it out.
+
+    The quest is seeded on `(user_id, day)`, so whether a sale completes one
+    depends on the member id dpytest generated and the date the suite ran —
+    a coin-flip between local and CI. See tests/test_vote_rewards.py.
+    """
+    from cogs.fishing.helpers import generate_quest
+
+    today = int(time.time() // 86400)
+    quest = generate_quest(user_id, today)
+    await db.get_or_create_quest(user_id, today, quest["quest_key"], quest["target"])
+    # The claim only lands on a *completed* quest, so fill it first — this is
+    # the same pair of accessors the cog uses, not a hand-written UPDATE.
+    await db.bump_quest_progress(user_id, today, quest["target"])
+    claimed = await db.try_claim_quest_reward(user_id, today)
+    # Assert the neutralisation actually took: if this ever stops working the
+    # tests below go back to flaking on a third of member ids, and a silent
+    # no-op here is exactly how that would come back.
+    assert claimed, "today's quest should now be claimed, so a sale can't pay it"
+
+
 async def _ready_to_cast(user_id):
     """Clear the cast cooldown so a test can cast again immediately."""
     await db._conn().execute(
@@ -177,6 +199,7 @@ async def test_a_cast_on_cooldown_never_overwrites_the_catch(bot):
 async def test_the_sell_button_sells_the_bag(bot):
     guild, author = config().guilds[0], config().members[0]
     cog = bot.get_cog("Fishing")
+    await settle_todays_quest(author.id)
     await db.record_catch(author.id, "salmon", 5.0, 60, track_best=True)
     view = views().FishingView(cog, author.id)
     interaction = FakeInteraction(author, guild)
