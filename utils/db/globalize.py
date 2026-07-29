@@ -160,7 +160,15 @@ async def globalize_economy(conn):
             best_weight REAL NOT NULL DEFAULT 0,
             xp          INTEGER NOT NULL DEFAULT 0,
             streak_days INTEGER NOT NULL DEFAULT 0,
-            last_day    INTEGER NOT NULL DEFAULT 0
+            last_day    INTEGER NOT NULL DEFAULT 0,
+            -- Added after this migration (the fishing spot an angler is
+            -- standing at), and listed here for the same reason as
+            -- activities_stats' co-op columns: this rebuild REPLACES the
+            -- table, so without it a database migrating for the first time
+            -- comes out missing what _ensure_columns just added. Not in the
+            -- INSERT below — the source table predates it, so everyone lands
+            -- at the starter spot, which is what '' resolves to.
+            spot        TEXT NOT NULL DEFAULT ''
         )
         """,
         """
@@ -328,17 +336,20 @@ async def globalize_economy(conn):
             explore_count   INTEGER NOT NULL DEFAULT 0,
             last_rob        REAL NOT NULL DEFAULT 0,
             rob_count       INTEGER NOT NULL DEFAULT 0,
-            -- Added later than this migration (the /squad + /raid claim), and
-            -- listed here rather than only in _ensure_columns because this
-            -- rebuild REPLACES the table: without them a database migrating
-            -- for the first time would come out of migration 1 missing the
-            -- columns _ensure_columns had already added. They are not in the
-            -- INSERT below — the source table predates them, so every row
-            -- starts at the defaults, i.e. nobody's first co-op is blocked.
+            -- Added later than this migration (the /squad + /raid claim, then
+            -- the adventure daily streak), and listed here rather than only in
+            -- _ensure_columns because this rebuild REPLACES the table: without
+            -- them a database migrating for the first time would come out of
+            -- migration 1 missing the columns _ensure_columns had already
+            -- added. They are not in the INSERT below — the source table
+            -- predates them, so every row starts at the defaults, i.e. nobody's
+            -- first co-op is blocked and everyone's streak starts at day one.
             last_coop       REAL NOT NULL DEFAULT 0,
             coop_count      INTEGER NOT NULL DEFAULT 0,
             last_raid       REAL NOT NULL DEFAULT 0,
-            raid_count      INTEGER NOT NULL DEFAULT 0
+            raid_count      INTEGER NOT NULL DEFAULT 0,
+            streak_days     INTEGER NOT NULL DEFAULT 0,
+            last_day        INTEGER NOT NULL DEFAULT 0
         )
         """,
         """

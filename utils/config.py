@@ -11,8 +11,7 @@ Sections:
     [bot]      token, default_prefix, owner_id, error_channel_id,
                idle_status_message, health_check_port, health_check_host
     [logging]  log_level, log_http, log_events_jsonl, db_slow_query_ms
-    [votes]    top.gg / DBL / discord.bots.gg tokens, webhook port/host/secret,
-               webhook_allowed_ips
+    [votes]    top.gg / DBL / discord.bots.gg tokens, webhook port/host/secret
     [groq]     groq_api_key
     [scraper]  fml_pages_per_scrape, wyr_requests_per_scrape,
                nekos_per_endpoint, nekosia_per_tag, revalidate_age,
@@ -29,7 +28,6 @@ Usage:
 from __future__ import annotations
 
 import configparser
-import ipaddress
 import json
 import os
 from dataclasses import dataclass, field as dc_field
@@ -206,27 +204,6 @@ def _v_log_level(v) -> list[ConfigIssue]:
     return []
 
 
-def _v_allowed_ips(v) -> list[ConfigIssue]:
-    if not v:
-        return []
-    issues: list[ConfigIssue] = []
-    for entry in str(v).split(","):
-        entry = entry.strip()
-        if not entry:
-            continue
-        try:
-            ipaddress.ip_network(entry, strict=False)
-        except ValueError:
-            issues.append(
-                ConfigIssue(
-                    "webhook_allowed_ips",
-                    f"'{entry}' is not a valid IP address or CIDR range",
-                    False,
-                )
-            )
-    return issues
-
-
 _WYR_SYSTEM_DEFAULT = (
     "You generate Would You Rather questions for a Discord bot. "
     "Return ONLY a JSON array of strings. Each string must start with "
@@ -381,14 +358,6 @@ FIELDS: tuple[Field, ...] = (
         None,
         "Secret used by bot lists to verify webhooks",
         sensitive=True,
-    ),
-    Field(
-        "webhook_allowed_ips",
-        "votes",
-        "str",
-        None,
-        "Comma-separated IPs or CIDR ranges allowed to POST vote webhooks (blank = allow all)",
-        validator=_v_allowed_ips,
     ),
     # ── [groq] ──
     Field(

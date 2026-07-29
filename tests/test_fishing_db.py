@@ -348,3 +348,103 @@ async def test_global_stat_key_is_whitelisted():
         await db.get_global_rank("nonsense", A)
     with pytest.raises(ValueError):
         await db.count_global_leaderboard("nonsense")
+
+
+# ── Spots: the charter and where you're standing ─────────────────────────────
+async def test_a_fresh_angler_has_no_charters_and_no_spot():
+    """An empty `spot` is the starter spot — cogs.fishing.spots.resolve_spot
+    turns it into one, so nothing has to be written before a first cast."""
+    assert await db.get_unlocked_spots(A) == set()
+    assert (await db.get_fisher(A))["spot"] == ""
+
+
+async def test_unlock_spot_is_once_only():
+    assert await db.unlock_spot(A, "reef", 1000.0) is True
+    # A racing second charter must fail, so the caller knows to refund.
+    assert await db.unlock_spot(A, "reef", 1001.0) is False
+    assert await db.get_unlocked_spots(A) == {"reef"}
+
+
+async def test_charters_accumulate_and_do_not_leak_between_anglers():
+    await db.unlock_spot(A, "river", 1000.0)
+    await db.unlock_spot(A, "reef", 1000.0)
+    assert await db.get_unlocked_spots(A) == {"river", "reef"}
+    assert await db.get_unlocked_spots(B) == set()
+
+
+async def test_set_spot_roundtrips_from_a_fresh_row():
+    await db.set_spot(A, "deep")
+    assert (await db.get_fisher(A))["spot"] == "deep"
+    await db.set_spot(A, "pond")
+    assert (await db.get_fisher(A))["spot"] == "pond"
+
+
+async def test_moving_spot_leaves_the_rest_of_the_angler_alone():
+    """The spot column shares a row with the rod, the XP and the cast stamp —
+    travelling must not reset any of them."""
+    await db.set_rod_level(A, 2, expected=0)
+    await db.add_fishing_xp(A, 500)
+    await db.try_claim_cast(A, 5000.0, 20)
+
+    await db.set_spot(A, "reef")
+
+    fisher = await db.get_fisher(A)
+    assert fisher["spot"] == "reef"
+    assert fisher["rod_level"] == 2
+    assert fisher["xp"] == 500
+    assert fisher["last_cast"] == 5000.0
+
+
+async def test_a_charter_follows_the_user_not_the_guild():
+    """It was bought with a global wallet, so there is no guild in the table
+    at all — this is the assertion that keeps it that way."""
+    await db.unlock_spot(A, "abyss", 1000.0)
+    async with db._conn().execute("PRAGMA table_info(fishing_spot_unlocks)") as cur:
+        columns = {row["name"] for row in await cur.fetchall()}
+    assert "guild_id" not in columns
+    assert columns == {"user_id", "spot", "unlocked_at"}
+
+
+# ── Traps ────────────────────────────────────────────────────────────────────
+async def test_setting_and_reading_a_trap():
+    assert await db.get_trap(A) is None
+    assert await db.set_trap(A, "reef", 1000.0) is True
+    assert await db.get_trap(A) == {"spot": "reef", "set_at": 1000.0}
+
+
+async def test_only_one_trap_at_a_time():
+    """The primary key is the rule, not a read-then-write the caller could
+    lose — the item is consumed on the strength of this returning True."""
+    assert await db.set_trap(A, "pond", 1000.0) is True
+    assert await db.set_trap(A, "abyss", 1001.0) is False
+    assert (await db.get_trap(A))["spot"] == "pond"
+
+
+async def test_a_trap_cannot_be_pulled_early():
+    await db.set_trap(A, "pond", 1000.0)
+    assert await db.claim_trap(A, 1000.0 + 100, 7200) is None
+    # Still in the water, unchanged.
+    assert await db.get_trap(A) == {"spot": "pond", "set_at": 1000.0}
+
+
+async def test_a_soaked_trap_pays_out_exactly_once():
+    """The DELETE is the claim, so a button press racing the command can't
+    collect the same trap twice."""
+    await db.set_trap(A, "deep", 1000.0)
+    pulled = await db.claim_trap(A, 1000.0 + 7200, 7200)
+    assert pulled == {"spot": "deep", "set_at": 1000.0}
+    assert await db.claim_trap(A, 1000.0 + 7200, 7200) is None
+    assert await db.get_trap(A) is None
+
+
+async def test_pulling_frees_the_slot_for_a_new_trap():
+    await db.set_trap(A, "pond", 1000.0)
+    await db.claim_trap(A, 1000.0 + 7200, 7200)
+    assert await db.set_trap(A, "reef", 9000.0) is True
+
+
+async def test_traps_do_not_leak_between_anglers():
+    await db.set_trap(A, "reef", 1000.0)
+    assert await db.get_trap(B) is None
+    assert await db.claim_trap(B, 1000.0 + 7200, 7200) is None
+    assert await db.get_trap(A) is not None

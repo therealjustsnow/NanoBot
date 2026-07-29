@@ -11,6 +11,8 @@ from discord.ext import test as dpytest
 
 import utils.db as db
 from cogs.activities import (
+    ACTIVITY_DEFAULT_COOLDOWNS,
+    ACTIVITY_MAX_CHARGES,
     EXPLORE_COINS_SMALL,
     EXPLORE_OUTCOMES,
     PICKAXES,
@@ -18,6 +20,8 @@ from cogs.activities import (
     WORK_COOLDOWN_DEFAULT,
     pick_ore,
     rob_steal_amount,
+    roll_hunt_bag,
+    roll_vein,
     roll_work_pay,
 )
 from tests.conftest import config, grant_perms
@@ -33,26 +37,44 @@ def _roll_for_outcome(target: str) -> float:
     raise ValueError(target)
 
 
+def _rolls(*values, then: float = 0.99):
+    """Script the rolls a test cares about; answer everything after with `then`.
+
+    Every run ends with two encounter rolls (does one fire, and which), so a
+    test scripting only its own rolls would run the iterator dry and surface as
+    "coroutine raised StopIteration". The default clears ENCOUNTER_CHANCE, so
+    unless a test asks for one, no encounter fires.
+    """
+    seq = iter(values)
+    return lambda: next(seq, then)
+
+
 # ══════════════════════════════════════════════════════════════════════════════
 #  /work
 # ══════════════════════════════════════════════════════════════════════════════
 @pytest.mark.cogs("cogs.activities")
-async def test_work_pays_and_blocks_second_shift(bot, monkeypatch):
+async def test_work_pays_every_banked_shift_then_blocks(bot, monkeypatch):
+    """The engagement fix, end to end: a member who's been away doesn't get one
+    shift and a wait, they get the whole bucket in a row — and then a wait."""
     from cogs.activities import cog as activities
 
-    guild = config().guilds[0]
     author = config().members[0]
     monkeypatch.setattr(activities.random, "random", lambda: 0.5)
-
-    await dpytest.message("!work", member=author)
-    sent = dpytest.get_message()
-    assert sent.embeds
     expected_pay = roll_work_pay(0.5, 0)
-    assert await db.get_balance(author.id) == expected_pay
+
+    for shift in range(1, ACTIVITY_MAX_CHARGES["work"] + 1):
+        await dpytest.message("!work", member=author)
+        sent = dpytest.get_message()
+        assert sent.embeds
+        assert await db.get_balance(author.id) == expected_pay * shift
 
     await dpytest.message("!work", member=author)
     sent = dpytest.get_message()
     assert "Not Yet" in sent.embeds[0].title
+    # The refusal paid nothing and burned nothing.
+    assert (
+        await db.get_balance(author.id) == expected_pay * ACTIVITY_MAX_CHARGES["work"]
+    )
 
 
 @pytest.mark.cogs("cogs.activities")
@@ -70,24 +92,28 @@ async def test_work_disabled(bot):
 #  /mine
 # ══════════════════════════════════════════════════════════════════════════════
 @pytest.mark.cogs("cogs.activities")
-async def test_mine_dig_adds_ore_and_blocks_second_dig(bot, monkeypatch):
+async def test_mine_dig_yields_a_vein_and_banks_charges(bot, monkeypatch):
     from cogs.activities import cog as activities
 
-    guild = config().guilds[0]
     author = config().members[0]
-    # 0.5: no cave-in (>=0.08), no bonus key (>=0.02); deterministic ore pick.
+    # 0.5: no cave-in (>=0.08), no bonus key (>=0.02); deterministic vein size
+    # and ore pick.
     monkeypatch.setattr(activities.random, "random", lambda: 0.5)
     expected_key = pick_ore(0.5, 0.0)
+    per_dig = roll_vein(0.5)
+    assert per_dig > 1, "0.5 should land on a multi-ore vein for this test"
 
-    await dpytest.message("!mine", member=author)
-    sent = dpytest.get_message()
-    assert "Dig" in sent.embeds[0].title
-    assert await db.get_item_qty(author.id, expected_key) == 1
+    digs = ACTIVITY_MAX_CHARGES["mine"]
+    for dig in range(1, digs + 1):
+        await dpytest.message("!mine", member=author)
+        sent = dpytest.get_message()
+        assert "Dig" in sent.embeds[0].title
+        assert await db.get_item_qty(author.id, expected_key) == per_dig * dig
 
     await dpytest.message("!mine dig", member=author)
     sent = dpytest.get_message()
     assert "Not Yet" in sent.embeds[0].title
-    assert await db.get_item_qty(author.id, expected_key) == 1
+    assert await db.get_item_qty(author.id, expected_key) == per_dig * digs
 
 
 @pytest.mark.cogs("cogs.activities")
@@ -145,18 +171,20 @@ async def test_mine_upgrade_insufficient_funds(bot):
 #  /hunt
 # ══════════════════════════════════════════════════════════════════════════════
 @pytest.mark.cogs("cogs.activities")
-async def test_hunt_catch_only(bot, monkeypatch):
+async def test_hunt_brings_back_a_bag(bot, monkeypatch):
     from cogs.activities import cog as activities
 
-    guild = config().guilds[0]
     author = config().members[0]
-    # 0.5 for every roll: pelt (< .57 cumulative), no injury (>= .12), no padlock (>= .06).
+    # 0.5 for every roll: a multi-catch bag, pelt each time (< .57 cumulative),
+    # no injury (>= .12), no padlock (>= .06), no encounter (>= .08).
     monkeypatch.setattr(activities.random, "random", lambda: 0.5)
+    expected = roll_hunt_bag(0.5)
+    assert expected > 1, "0.5 should land on a multi-catch bag for this test"
 
     await dpytest.message("!adventure hunt", member=author)
     sent = dpytest.get_message()
     assert sent.embeds
-    assert await db.get_item_qty(author.id, "pelt") == 1
+    assert await db.get_item_qty(author.id, "pelt") == expected
     assert await db.get_item_qty(author.id, "padlock") == 0
     assert await db.get_balance(author.id) == 0
 
@@ -164,27 +192,34 @@ async def test_hunt_catch_only(bot, monkeypatch):
 @pytest.mark.cogs("cogs.activities")
 async def test_hunt_injury_deducts_fine(bot, monkeypatch):
     from cogs.activities import cog as activities
+    from cogs.activities.constants import HUNT_INJURY_FINE_MAX
 
-    guild = config().guilds[0]
     author = config().members[0]
-    await db.add_coins(author.id, 100)
-    rolls = iter([0.5, 0.05, 0.4, 0.9])  # catch, injury(<.12), fine roll, no padlock
-    monkeypatch.setattr(activities.random, "random", lambda: next(rolls))
+    await db.add_coins(author.id, 500)
+    # The bag is rolled first and each catch in it after that, so the injury
+    # roll's position depends on the bag size — derive it rather than counting.
+    catches = roll_hunt_bag(0.1)
+    monkeypatch.setattr(
+        activities.random,
+        "random",
+        _rolls(0.1, *([0.5] * catches), 0.05, 0.4, 0.9),
+    )
 
     await dpytest.message("!adventure hunt", member=author)
     sent = dpytest.get_message()
     assert "tumble" in sent.embeds[0].description
-    assert await db.get_balance(author.id) == 100 - round(0.4 * 50)
+    assert await db.get_balance(author.id) == 500 - round(0.4 * HUNT_INJURY_FINE_MAX)
 
 
 @pytest.mark.cogs("cogs.activities")
 async def test_hunt_padlock_found(bot, monkeypatch):
     from cogs.activities import cog as activities
 
-    guild = config().guilds[0]
     author = config().members[0]
-    rolls = iter([0.5, 0.9, 0.02])  # catch, no injury (>=.12), padlock (<.06)
-    monkeypatch.setattr(activities.random, "random", lambda: next(rolls))
+    catches = roll_hunt_bag(0.1)
+    monkeypatch.setattr(
+        activities.random, "random", _rolls(0.1, *([0.5] * catches), 0.9, 0.02)
+    )
 
     await dpytest.message("!adventure hunt", member=author)
     assert await db.get_item_qty(author.id, "padlock") == 1
@@ -227,8 +262,7 @@ async def test_explore_coins_small(bot, monkeypatch):
     guild = config().guilds[0]
     author = config().members[0]
     outcome_roll = _roll_for_outcome("coins_small")
-    rolls = iter([outcome_roll, 0.5])
-    monkeypatch.setattr(activities.random, "random", lambda: next(rolls))
+    monkeypatch.setattr(activities.random, "random", _rolls(outcome_roll, 0.5))
 
     await dpytest.message("!adventure explore", member=author)
     expected = round(
@@ -411,26 +445,59 @@ async def test_adventure_bare_shows_member_overview(bot):
     assert "Progression" in names
     progression = next(f.value for f in embed.fields if f.name == "Progression")
     assert "💼" in progression and "tier 1/" in progression
-    # Nothing claimed yet, so everything is ready and the headline says so.
+    # Nothing claimed yet, so every bucket is full and the headline counts
+    # *runs*, not activities — a card saying "5 ready" over 13 banked runs
+    # would badly undersell what a member can do right now.
     assert all(
         "Ready now" in f.value for f in embed.fields if f.name in activity_fields
     )
-    assert "5" in embed.description and "ready right now" in embed.description
+    banked = sum(ACTIVITY_MAX_CHARGES[a] for a in ACTIVITY_MAX_CHARGES)
+    assert f"**{banked}** run" in embed.description
+    assert (
+        "Daily streak" in names
+        and "No streak" in dict((f.name, f.value) for f in embed.fields)["Daily streak"]
+    )
     # Lifetime counts are on the card so progress is visible without /mine stats.
     assert all(
         "Done **0×**" in f.value for f in embed.fields if f.name in activity_fields
     )
 
-    # A used activity reports its remaining cooldown; a disabled one says so.
-    await db.try_claim_activity(author.id, "work", time.time(), 3600)
+    # An activity drained to empty reports its wait; a disabled one says so.
+    now = time.time()
+    for _ in range(ACTIVITY_MAX_CHARGES["work"]):
+        await db.try_claim_activity(
+            author.id, "work", now, WORK_COOLDOWN_DEFAULT, ACTIVITY_MAX_CHARGES["work"]
+        )
     await db.set_activities_config(guild.id, rob_enabled=False)
     await dpytest.message("!adventure", member=author)
     embed = dpytest.get_message().embeds[0]
     fields = {f.name: f.value for f in embed.fields}
     assert "Ready in" in fields["💼 /work"]
     assert "Disabled" in fields["🥷 /rob"]
-    # The headline drops the two that are no longer available.
-    assert "3" in embed.description and "ready right now" in embed.description
+    # The headline drops work's charges and rob's single one.
+    remaining = banked - ACTIVITY_MAX_CHARGES["work"] - ACTIVITY_MAX_CHARGES["rob"]
+    assert f"**{remaining}** run" in embed.description
+
+
+@pytest.mark.cogs("cogs.activities")
+async def test_a_partly_spent_bucket_still_shows_what_is_left(bot):
+    """The half-way state the old card had no way to express: one dig gone, and
+    three still sitting there."""
+    guild = config().guilds[0]
+    author = config().members[0]
+    await db.try_claim_activity(
+        author.id,
+        "mine",
+        time.time(),
+        ACTIVITY_DEFAULT_COOLDOWNS["mine"],
+        ACTIVITY_MAX_CHARGES["mine"],
+    )
+
+    await dpytest.message("!adventure", member=author)
+    embed = dpytest.get_message().embeds[0]
+    mine = {f.name: f.value for f in embed.fields}["⛏️ /mine"]
+    assert f"Ready now ×{ACTIVITY_MAX_CHARGES['mine'] - 1}" in mine
+    assert f"up to {ACTIVITY_MAX_CHARGES['mine']} banked" in mine
 
 
 @pytest.mark.cogs("cogs.activities")

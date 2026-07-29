@@ -10,6 +10,57 @@ STREAK_WINDOW = 172_800  # claim within 48h of the last to keep the streak
 # second reply instead of telling the user they already claimed.
 DAILY_DUP_WINDOW = 10
 
+# ── What /daily actually pays ────────────────────────────────────────────────
+# A fixed number is a fixed number: once you have claimed it twice you know
+# exactly what tomorrow holds, and there is no reason to be curious about it.
+# The whole appeal of a daily is the small chance today is the good one, so the
+# payout is rolled from a weighted band table instead.
+#
+# Bands are **multiples of the owner's `daily` setting**, not coin amounts, so
+# `!econ daily 200` doubles the whole spread and the shape stays intact. The
+# distribution is deliberately bottom-heavy — most days are ordinary, which is
+# what makes the rare one worth showing up for. Expected value works out at
+# ~2.0x the base setting (so ~200 coins at the default 100), and the top band
+# is a 1-in-100 story rather than something to plan around.
+#
+# Must sum to 1.0. Walked in order by helpers.roll_daily.
+DAILY_BANDS: list[dict] = [
+    {
+        "key": "ordinary",
+        "weight": 0.70,
+        "range": (1.0, 2.0),
+        "label": "A quiet day's takings.",
+    },
+    {
+        "key": "good",
+        "weight": 0.22,
+        "range": (2.0, 3.5),
+        "emoji": "✨",
+        "label": "A good haul today!",
+    },
+    {
+        "key": "great",
+        "weight": 0.07,
+        "range": (3.5, 5.0),
+        "emoji": "🌟",
+        "label": "**What a day!** Everything went your way.",
+    },
+    {
+        "key": "jackpot",
+        "weight": 0.01,
+        "range": (5.0, 10.0),
+        "emoji": "💰",
+        "label": "**JACKPOT!** You will not see one of these for a while.",
+    },
+]
+
+# How many consecutive days the streak bonus keeps paying for. The bonus is a
+# flat per-day amount the owner sets, so without a ceiling a year-long streak
+# would quietly become the biggest faucet in the bot — this caps it at a
+# fortnight, which is long enough to be worth protecting and short enough that
+# it can't run away.
+DAILY_STREAK_CAP_DAYS = 14
+
 # Gamble odds: win chance under 0.5 gives the "house" a slight edge so coins
 # aren't trivially farmed. A win pays the bet back plus (multiplier - 1)x.
 GAMBLE_WIN_CHANCE = 0.45
@@ -35,8 +86,8 @@ COIN_MAX = 1_000_000_000
 # purchase is a pure *sink*, destroying coins in exchange for that guild's own
 # role or mod-fulfilled perk, so pricing it badly can't hurt anyone outside it.
 REWARD_DEFAULTS: dict[str, int] = {
-    "daily": 100,  # /daily base payout
-    "streak_bonus": 0,  # extra coins per consecutive day, off by default
+    "daily": 100,  # /daily base — the payout is rolled off this (DAILY_BANDS)
+    "streak_bonus": 25,  # extra coins per consecutive day, capped at a fortnight
     "coop": 50,  # /squad, per confirmed member (0 disables /squad)
     "raid": 100,  # /raid, per participant     (0 disables /raid)
     "level_coin": 0,  # level-up payout x new level, off by default
@@ -44,8 +95,8 @@ REWARD_DEFAULTS: dict[str, int] = {
 
 # One-line explanations for `!econ`'s listing, in display order.
 REWARD_LABELS: dict[str, str] = {
-    "daily": "/daily base payout",
-    "streak_bonus": "extra coins per consecutive /daily day",
+    "daily": "/daily base — the roll pays 1x-10x this",
+    "streak_bonus": f"extra /daily coins per streak day (capped at {DAILY_STREAK_CAP_DAYS})",
     "coop": "/squad reward, per confirmed member (0 disables it)",
     "raid": "/raid reward, per participant (0 disables it)",
     "level_coin": "level-up payout, multiplied by the new level (0 = off)",

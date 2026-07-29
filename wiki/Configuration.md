@@ -43,7 +43,6 @@ An old `config.json` is auto-migrated to `config.ini` on first start (the legacy
 | `vote_webhook_port` | `5000` | Local port the vote webhook listens on. |
 | `vote_webhook_host` | `0.0.0.0` | Bind address for the vote webhook. 0.0.0.0 = all interfaces; 127.0.0.1 = host-local (e.g. behind a reverse proxy). |
 | `vote_webhook_secret` | *(blank)* | Shared secret used by bot lists to authenticate webhooks. |
-| `webhook_allowed_ips` | *(blank)* | Comma-separated IPs or CIDR ranges allowed to POST vote webhooks. Blank = allow all. |
 
 ## `[groq]`
 

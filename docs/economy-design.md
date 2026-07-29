@@ -54,6 +54,13 @@ Rules that keep the layers decoupled:
     luck bonus.
   - `fish_xp` — timed XP multiplier for fishing.
   - `rob_shield` — timed; blocks `/rob` against the holder.
+  - `fish_net` — charge-based; one charge per cast pulls several fish at once.
+  - `coin_boost` — timed; multiplies coins **earned** (activity payouts,
+    fishing sales). Granted by voting. Deliberately does not touch coins that
+    merely *move* — a `/pay`, a `/rob` theft, a casino payout — because
+    multiplying those would mint the difference out of nothing rather than
+    rewarding an activity, and never scales a cost or a fine upward
+    (`utils.helpers.apply_coin_boost` floors at the unboosted amount).
   An effect is timed (`expires_at`) or charge-based (`uses_left`), never
   both; re-granting replaces (freshest consumable wins, no stacking).
 - **Events are data.** `economy_events` rows are `(guild_id, event_key,
@@ -63,19 +70,72 @@ Rules that keep the layers decoupled:
 
 ## Risk/reward profiles
 
-| Activity | Cooldown | Profile |
-|---|---|---|
-| `/work` | 1h | Safe, low variance; career-ladder progression |
-| `/mine` | 30m | Materials into inventory; pickaxe tiers as coin sink; small failure chance |
-| `/hunt` | 45m | Materials + rare trophy; injury fine risk; drops `/rob` defense |
-| `/explore` | 3h | High variance; treasure keys/chests/charms |
-| `/rob` | 4h | PvP; capped steal, fine on failure, item counterplay (`rob_shield`) |
-| `/fish` | ~20s | High-frequency core loop: XP, streaks, quests, events, bait |
-| `/casino …` | none | Pure risk; house edge 3–8%, progressive jackpot as long-shot |
-| `/daily`, `/squad`, `/raid` | 24h/social | Existing social/co-op faucets, unchanged |
+| Activity | Interval | Banks | Profile |
+|---|---|---|---|
+| `/work` | 3h | 4 (12h) | Safe, low variance; career-ladder progression |
+| `/mine` | 3h | 4 (12h) | Materials into inventory (a 4–14 ore vein); pickaxe tiers as coin sink; small failure chance |
+| `/hunt` | 4h | 3 (12h) | Materials + rare trophy (a 4–9 bag); injury fine risk; drops `/rob` defense |
+| `/explore` | 6h | 2 (12h) | High variance; treasure keys/chests/charms |
+| `/rob` | 4h | 1 | PvP; capped steal, fine on failure, item counterplay (`rob_shield`) |
+| `/fish` | ~20s | — | High-frequency core loop: XP, streaks, quests, events, bait, spots |
+| `/casino …` | none | — | Pure risk; house edge 3–8%, progressive jackpot as long-shot |
+| `/daily`, `/squad`, `/raid` | 24h/social | — | Existing social/co-op faucets, unchanged |
 
 Sinks offsetting the new faucets: bait/consumable purchases, rod + pickaxe
 ladders, casino house edge, rob fines, shop items.
+
+### Paced for two visits a day
+
+The single most important number in this document is not a price, it is a
+description of a player: **someone who opens Discord a couple of times a day,
+does a handful of things, and leaves.** Every earlier version of this economy
+was implicitly balanced for somebody who was always there, and that produced
+figures nobody ever saw — a per-hour income rate that required sixteen hours of
+attention, and charge caps holding two hours so that a working day away paid
+the same as a lunch break.
+
+Two levers, deliberately separated:
+
+* the **interval** governs what an engaged player finds waiting, so it should
+  be short enough that there is usually something to do;
+* the **cap** governs what a casual player *loses*, so it should cover the gap
+  between real visits — half a day.
+
+Sized that way the two converge: a member who turns up twice collects
+essentially everything the clock generated, and one who checks in hourly
+collects the same total in smaller pieces. Playing more is no longer how you
+earn — it is how you spend your time, and the reward for it is fishing.
+
+Everything downstream follows from that. Prices are asserted in **days of
+ordinary play** rather than coins or grind-hours (tests/test_economy_balance.py),
+and the casual/grinder gap is a bounded number (~1.5x) rather than whatever
+falls out of the last thing that got tuned.
+
+### Attention, not multipliers
+
+The adventure activities and fishing are gated on different things, and getting
+that wrong is how the loop ended up paying a twentieth of what fishing did.
+Fishing is gated on **attention**: a 20s cast means ~180 actions in an hour you
+actually spend on it. The activities are gated on the **clock**: however long
+you sit there, an hour only ever contained a handful of runs. Per action they
+were never underpaid — a shift paid 100 against a cast's 28 — so raising the
+payouts would have made an activity strictly better than a cast while leaving
+the loop just as thin.
+
+The lever that works on a clock-gated activity is the number of actions a
+member actually collects: **charges** that bank runs while they're away (a
+token bucket on the existing `last_*` column — see
+`utils.db.activities.try_claim_activity`) with caps covering half a day, and
+yields with a spread (veins, bags) so one tap has a range rather than a
+constant. That takes the loop to ~7,500 coins/day fully collected by two
+visits, without changing which faucet rewards attention and therefore without
+changing which one `/shop`'s time-to-earn quotes.
+
+Two multipliers sit on top and are deliberately *earned*, not idle: encounters
+(a two-button choice on ~8% of runs) and the adventure daily streak (+5%/day,
+capped +25%, on coin payouts only). Neither is counted in the hourly figure,
+because folding them in would describe a player who never misses a day as the
+baseline.
 
 ## Concurrency invariants (the patterns every accessor follows)
 
