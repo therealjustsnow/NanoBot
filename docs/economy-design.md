@@ -54,6 +54,13 @@ Rules that keep the layers decoupled:
     luck bonus.
   - `fish_xp` — timed XP multiplier for fishing.
   - `rob_shield` — timed; blocks `/rob` against the holder.
+  - `fish_net` — charge-based; one charge per cast pulls several fish at once.
+  - `coin_boost` — timed; multiplies coins **earned** (activity payouts,
+    fishing sales). Granted by voting. Deliberately does not touch coins that
+    merely *move* — a `/pay`, a `/rob` theft, a casino payout — because
+    multiplying those would mint the difference out of nothing rather than
+    rewarding an activity, and never scales a cost or a fine upward
+    (`utils.helpers.apply_coin_boost` floors at the unboosted amount).
   An effect is timed (`expires_at`) or charge-based (`uses_left`), never
   both; re-granting replaces (freshest consumable wins, no stacking).
 - **Events are data.** `economy_events` rows are `(guild_id, event_key,

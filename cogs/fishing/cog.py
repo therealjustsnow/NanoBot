@@ -314,17 +314,19 @@ class Fishing(commands.Cog):
             if await db.consume_effect_use(member.id, "fish_bait"):
                 bait_luck = effects["fish_bait"]["magnitude"]
         xp_effect_mult = effects.get("fish_xp", {}).get("magnitude") or 1.0
+        # A timed coin multiplier (voting, consumables) rides alongside the
+        # guild-wide frenzy event — both scale what a catch is worth.
+        value_mult = h.coin_boost_multiplier(effects)
         catches = 1
         if "fish_net" in effects and await db.consume_effect_use(member.id, "fish_net"):
             catches = max(1, int(effects["fish_net"]["magnitude"] or NET_CATCHES))
         event_luck = 0.0
-        value_mult = 1.0
         xp_event_mult = 1.0
         for ev in events:
             if ev["event_key"] == "lucky_waters":
                 event_luck = max(event_luck, ev["magnitude"])
             elif ev["event_key"] == "frenzy":
-                value_mult = max(value_mult, ev["magnitude"])
+                value_mult = max(value_mult, float(ev["magnitude"]))
             elif ev["event_key"] == "double_xp":
                 xp_event_mult = max(xp_event_mult, ev["magnitude"])
 
@@ -719,9 +721,13 @@ class Fishing(commands.Cog):
         econ = await db.get_econ_config(guild.id)
         # The lock covers the DB work only — replying inside it would hold this
         # member's economy lock for a whole Discord round trip.
+        # The boost applies to the sale, which is where fishing coins actually
+        # land — the bag's values were fixed at catch time.
+        boost = await db.get_active_effects(member.id)
         async with self._lock(member.id):
             count, total = await db.sell_catches(member.id, key)
             if count:
+                total = h.apply_coin_boost(total, boost)
                 new_bal = await db.add_coins(member.id, total)
                 await db.add_fishing_earned(member.id, total)
                 await globalxp.award(member.id, "fish_sell")

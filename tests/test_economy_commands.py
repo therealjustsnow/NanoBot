@@ -2,11 +2,15 @@
 Command-level tests for cogs/economy/ under dpytest (parse → check → DB → reply).
 """
 
+import time
+
 import pytest
 from discord.ext import commands
 from discord.ext import test as dpytest
 
 import utils.db as db
+from cogs.economy import DAILY_BANDS, daily_streak_bonus
+from cogs.economy.constants import REWARD_DEFAULTS
 from cogs.economy import _DEFAULT_SHOP_ITEMS
 from cogs.economy.helpers import seconds_to_afford
 from utils import wallet_card
@@ -36,20 +40,62 @@ async def test_balance_works_for_a_brand_new_account(bot):
 
 
 @pytest.mark.cogs("cogs.economy")
-async def test_daily_grants_then_blocks(bot):
-    guild = config().guilds[0]
+async def test_daily_grants_then_blocks(bot, monkeypatch):
+    """The payout is a roll now, so pin it — the claim/cooldown contract is
+    what this test is about, not the amount."""
+    from cogs.economy import cog as economy
+
     author = config().members[0]
+    monkeypatch.setattr(economy.random, "random", lambda: 0.0)  # lowest band, floor
 
     await dpytest.message("!daily", member=author)
     dpytest.get_message()
-    assert await db.get_balance(author.id) == 100  # default daily
+    base = REWARD_DEFAULTS["daily"]
+    assert await db.get_balance(author.id) == base
 
     # An immediate second claim is the double-fire case (one user action
     # delivered twice). Balance is unchanged AND the contradictory "already
     # claimed" reply is swallowed, so the user sees exactly one message.
     await dpytest.message("!daily", member=author)
     assert dpytest.verify().message().nothing()
-    assert await db.get_balance(author.id) == 100
+    assert await db.get_balance(author.id) == base
+
+
+@pytest.mark.cogs("cogs.economy")
+async def test_a_big_daily_roll_says_why(bot, monkeypatch):
+    """The whole reason the payout is random: the good day has to *read* as a
+    good day, not just be a larger number."""
+    from cogs.economy import cog as economy
+
+    author = config().members[0]
+    monkeypatch.setattr(economy.random, "random", lambda: 0.999)  # top band
+
+    await dpytest.message("!daily", member=author)
+    embed = dpytest.get_message().embeds[0]
+
+    assert DAILY_BANDS[-1]["emoji"] in embed.title
+    assert await db.get_balance(author.id) > REWARD_DEFAULTS["daily"] * 4
+
+
+@pytest.mark.cogs("cogs.economy")
+async def test_the_daily_streak_pays_and_shows_its_working(bot, monkeypatch):
+    from cogs.economy import cog as economy
+    from cogs.economy.constants import DAILY_COOLDOWN
+
+    author = config().members[0]
+    monkeypatch.setattr(economy.random, "random", lambda: 0.0)
+    # Yesterday's claim: inside the streak window, past the cooldown.
+    await db.set_daily_state(author.id, time.time() - DAILY_COOLDOWN - 60, 3)
+
+    await dpytest.message("!daily", member=author)
+    embed = dpytest.get_message().embeds[0]
+
+    assert "4-day streak" in embed.description
+    assert "streak bonus" in embed.description
+    expected = REWARD_DEFAULTS["daily"] + daily_streak_bonus(
+        4, REWARD_DEFAULTS["streak_bonus"]
+    )
+    assert await db.get_balance(author.id) == expected
 
 
 @pytest.mark.cogs("cogs.economy")

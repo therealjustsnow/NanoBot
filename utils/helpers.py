@@ -381,6 +381,31 @@ def user_log(user) -> str:
 
 
 # ── Shared economy utilities ───────────────────────────────────────────────────
+# ── Timed coin multipliers ───────────────────────────────────────────────────
+# `coin_boost` is part of the shared effect vocabulary (docs/economy-design.md):
+# a timed multiplier on coins *earned*, granted by voting and by consumables.
+# It deliberately does not touch coins that merely move — a /pay transfer, a
+# /rob theft or a casino payout — because multiplying those would mint the
+# difference out of nothing rather than rewarding an activity.
+COIN_BOOST_KEY = "coin_boost"
+
+
+def coin_boost_multiplier(effects: dict) -> float:
+    """The active coin multiplier from a member's effects. 1.0 when none.
+
+    Takes the already-fetched effects dict rather than hitting the database, so
+    a payout site that has one (every one of them does) pays nothing extra for
+    honouring the boost.
+    """
+    magnitude = (effects or {}).get(COIN_BOOST_KEY, {}).get("magnitude") or 1.0
+    return max(1.0, float(magnitude))
+
+
+def apply_coin_boost(amount: int, effects: dict) -> int:
+    """Scale a coin *reward* by any active boost, never downward."""
+    return max(amount, round(amount * coin_boost_multiplier(effects)))
+
+
 def fmt_coins(amount: int, name: str, emoji: str) -> str:
     """Render a coin amount, e.g. '🪙 1,234 NanoCoins'.
 

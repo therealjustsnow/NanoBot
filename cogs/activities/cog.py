@@ -292,6 +292,9 @@ class Activities(commands.Cog):
         stats = await db.get_activity_stats(member.id)
         streak, streak_started = await self._touch_streak(member.id, stats)
         econ = await db.get_econ_config(guild.id)
+        # A timed coin multiplier (voting, consumables) — read once and handed
+        # to the resolvers, so honouring it costs no extra query.
+        boost = await db.get_active_effects(member.id)
 
         resolver = {
             "work": self._resolve_work,
@@ -299,7 +302,7 @@ class Activities(commands.Cog):
             "hunt": self._resolve_hunt,
             "explore": self._resolve_explore,
         }[activity]
-        embed = await resolver(member, cfg, econ, stats, streak)
+        embed = await resolver(member, cfg, econ, stats, streak, boost)
 
         if streak_started and streak > 1:
             bonus = streak_multiplier(streak) - 1
@@ -480,6 +483,10 @@ class Activities(commands.Cog):
 
         lines = [outcome["text"]]
         coins = outcome_coins(outcome, amount_roll)
+        if coins > 0:
+            # Only the reward half is boosted — an option that charges for
+            # itself must not get more expensive because you voted.
+            coins = h.apply_coin_boost(coins, await db.get_active_effects(member.id))
         if coins:
             new_balance = await db.add_coins(member.id, coins)
             verb = "You earned" if coins > 0 else "It cost you"
@@ -530,13 +537,15 @@ class Activities(commands.Cog):
         )
 
     async def _resolve_work(
-        self, member, cfg: dict, econ: dict, stats: dict, streak: int
+        self, member, cfg: dict, econ: dict, stats: dict, streak: int, boost: dict
     ) -> discord.Embed:
         info = career_info(stats["work_shifts"])
         # `stats` is read after the claim, so work_shifts already counts this
         # shift — the tier before it is the one a shift earlier.
         promoted = info["tier"] > career_info(max(0, stats["work_shifts"] - 1))["tier"]
-        pay = apply_streak(roll_work_pay(random.random(), info["bonus"]), streak)
+        pay = h.apply_coin_boost(
+            apply_streak(roll_work_pay(random.random(), info["bonus"]), streak), boost
+        )
         scene = pick_work_scene(random.random())
         new_bal = await db.add_coins(member.id, pay)
 
@@ -593,7 +602,7 @@ class Activities(commands.Cog):
         )
 
     async def _resolve_dig(
-        self, member, cfg: dict, econ: dict, stats: dict, streak: int
+        self, member, cfg: dict, econ: dict, stats: dict, streak: int, boost: dict
     ) -> discord.Embed:
         if roll_cave_in(random.random()):
             embed = h.warn(
@@ -884,7 +893,7 @@ class Activities(commands.Cog):
         )
 
     async def _resolve_hunt(
-        self, member, cfg: dict, econ: dict, stats: dict, streak: int
+        self, member, cfg: dict, econ: dict, stats: dict, streak: int, boost: dict
     ) -> discord.Embed:
         # Each catch in the bag is rolled on its own, so a good hunt can turn up
         # a trophy alongside the pelts rather than three of the same thing.
@@ -931,7 +940,7 @@ class Activities(commands.Cog):
         )
 
     async def _resolve_explore(
-        self, member, cfg: dict, econ: dict, stats: dict, streak: int
+        self, member, cfg: dict, econ: dict, stats: dict, streak: int, boost: dict
     ) -> discord.Embed:
         outcome = pick_explore_outcome(random.random())
         flavor = EXPLORE_FLAVOR[outcome]
@@ -942,9 +951,8 @@ class Activities(commands.Cog):
             lo, hi = (
                 EXPLORE_COINS_SMALL if outcome == "coins_small" else EXPLORE_COINS_BIG
             )
-            amount = apply_streak(
-                roll_coin_amount(random.random(), lo, hi),
-                streak,
+            amount = h.apply_coin_boost(
+                apply_streak(roll_coin_amount(random.random(), lo, hi), streak), boost
             )
             new_bal = await db.add_coins(member.id, amount)
             title = "🧭 Big Find!" if outcome == "coins_big" else "🧭 Explore"

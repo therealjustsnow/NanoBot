@@ -55,7 +55,7 @@ was kept, and anything you'd already claimed stayed claimed.
 
 ## 🚀 Start here (your first five minutes)
 
-1. `/daily` — free coins, once every 24 hours. Come back daily for a streak bonus.
+1. `/daily` — free coins, once every 24 hours. **The amount is a roll** — most days are ordinary, some are great, and roughly one in a hundred is a jackpot. Claiming on consecutive days adds a streak bonus on top.
 2. `/fish` — cast a line. You can cast again every **20 seconds**.
 3. `/fish sell` — turn your catch into coins (pick "Everything in your bag").
 4. `/adventure` — see everything that's waiting and hit **Collect all**.
@@ -657,6 +657,31 @@ takes to earn** ("~25m to earn"), measured in solid fishing time. It's a floor,
 not a promise: nobody fishes non-stop, so the real wait is longer. Mods see the
 same figure when they add an item, which is how they pick a price that matches
 the effort they had in mind.
+
+---
+
+## 🗳️ Voting
+
+`/vote` gives you links to top.gg and discordbotlist.com. It takes about thirty
+seconds, you can vote on each site once every 12 hours, and it genuinely helps
+more people find the bot.
+
+**Every vote pays you:**
+
+| | |
+|---|---|
+| 🪙 Coins | **250**, rising to **400** as you build a vote streak |
+| 📈 Coin boost | **+25%** on everything you earn, for **6 hours** |
+| 🍀 Luck boost | **+10%** for **6 hours** — better fish, better ore, better heists |
+| ⏰ Reminders | **50** slots instead of 25 |
+| 🎁 Milestone | Every **5th** vote drops a 🎁 Treasure Chest |
+
+The two boosts are timed, and voting again refreshes them rather than stacking
+them — so there's no point saving votes up. The coin boost applies to coins you
+**earn** (activities, selling fish), not to coins that just move around, so
+nobody can vote their way to a bigger `/pay` or a luckier casino night.
+
+NanoBot will DM you when your cooldown resets. `/vote notify off` stops that.
 
 ---
 

@@ -4,10 +4,14 @@ from cogs.fishing.constants import CAST_COOLDOWN, FISH
 from cogs.fishing.helpers import rarity_odds
 from cogs.fishing.spots import DEFAULT_SPOT, fish_pool, spot_odds
 
+from utils.helpers import weighted_pick
+
 from .constants import (
     COIN_MAX,
+    DAILY_BANDS,
     DAILY_COOLDOWN,
     DAILY_DUP_WINDOW,
+    DAILY_STREAK_CAP_DAYS,
     GAMBLE_MULTIPLIER,
     GAMBLE_WIN_CHANCE,
     STREAK_WINDOW,
@@ -109,13 +113,56 @@ def fmt_coins(amount: int, name: str, emoji: str) -> str:
     return _h.fmt_coins(amount, name, emoji)
 
 
+def pick_daily_band(roll: float) -> dict:
+    """Which payout band today's claim landed in, from a roll in [0, 1)."""
+    key = weighted_pick([(band["key"], band["weight"]) for band in DAILY_BANDS], roll)
+    return next(band for band in DAILY_BANDS if band["key"] == key)
+
+
+def roll_daily(base: int, band_roll: float, amount_roll: float) -> dict:
+    """Roll one daily payout: a band, then an amount inside it.
+
+    Two explicit rolls (the resolve_gamble pattern) — which band, then where in
+    it — so a test can pin the exciting one without also pinning the amount.
+    Returns the band along with the coins so the reply can say *why* it was a
+    good day rather than just showing a bigger number.
+    """
+    band = pick_daily_band(band_roll)
+    low, high = band["range"]
+    return {
+        "band": band,
+        "coins": max(1, round(base * (low + amount_roll * (high - low)))),
+    }
+
+
+def daily_streak_bonus(streak: int, bonus: int) -> int:
+    """Extra coins for a streak, capped at DAILY_STREAK_CAP_DAYS.
+
+    The cap is what keeps a flat per-day bonus from becoming the biggest faucet
+    in the bot: a year-long streak pays the same as a fortnight-long one.
+    """
+    days = min(max(0, streak - 1), DAILY_STREAK_CAP_DAYS)
+    return max(0, bonus) * days
+
+
 def compute_daily(
-    now: float, last_daily: float, streak: int, base: int, bonus: int
+    now: float,
+    last_daily: float,
+    streak: int,
+    base: int,
+    bonus: int,
+    band_roll: float = 0.5,
+    amount_roll: float = 0.5,
 ) -> dict:
     """Decide a daily claim.
 
     Returns {"ok": False, "retry_after": secs} if still on cooldown, else
-    {"ok": True, "total": coins, "streak": new_streak}.
+    {"ok": True, "total": coins, "streak": new_streak, "band": …,
+     "base_coins": …, "streak_bonus": …} — the parts are kept separate so the
+    reply can show what came from the roll and what came from turning up.
+
+    The rolls default to the middle of the range so an existing caller that
+    doesn't pass them still gets a sane, deterministic amount.
     """
     elapsed = now - last_daily
     if last_daily and elapsed < DAILY_COOLDOWN:
@@ -128,8 +175,16 @@ def compute_daily(
         new_streak = streak + 1
     else:
         new_streak = 1
-    total = base + bonus * (new_streak - 1)
-    return {"ok": True, "total": total, "streak": new_streak}
+    rolled = roll_daily(base, band_roll, amount_roll)
+    streak_coins = daily_streak_bonus(new_streak, bonus)
+    return {
+        "ok": True,
+        "total": rolled["coins"] + streak_coins,
+        "base_coins": rolled["coins"],
+        "streak_bonus": streak_coins,
+        "band": rolled["band"],
+        "streak": new_streak,
+    }
 
 
 def resolve_gamble(

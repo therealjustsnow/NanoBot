@@ -104,6 +104,7 @@ from .constants import (
     COIN_MAX,
     COOP_CONFIRM_TIMEOUT,
     DAILY_COOLDOWN,
+    DAILY_STREAK_CAP_DAYS,
     RAID_TIMEOUT,
     REWARD_DEFAULTS,
     _DEFAULT_SHOP_ITEMS,
@@ -448,6 +449,8 @@ class Economy(commands.Cog):
                 streak,
                 cfg["daily_amount"],
                 cfg["streak_bonus"],
+                random.random(),
+                random.random(),
             )
             if not res["ok"]:
                 if res.get("duplicate"):
@@ -470,11 +473,22 @@ class Economy(commands.Cog):
             # Account-wide XP: one flat award per claim, the same in every
             # server no matter what this guild pays in coins.
             await globalxp.award(ctx.author.id, "daily")
-        desc = f"You claimed {self._money(cfg, res['total'])}!"
+        band = res["band"]
+        desc = f"{band['label']}\nYou claimed {self._money(cfg, res['total'])}!"
+        if res["streak_bonus"]:
+            # Split out, because "you got more because you kept the streak" is
+            # the part worth coming back for and a single total hides it.
+            desc += (
+                f"\n└ {self._money(cfg, res['base_coins'])} rolled "
+                f"+ {self._money(cfg, res['streak_bonus'])} streak bonus"
+            )
         if res["streak"] > 1:
+            capped = res["streak"] - 1 >= DAILY_STREAK_CAP_DAYS
             desc += f"\n🔥 **{res['streak']}-day streak**"
+            desc += " (bonus maxed)" if capped else " — keep it going!"
         desc += f"\nBalance: {self._money(cfg, new_bal)}"
-        await ctx.reply(embed=h.ok(desc, "🪙 Daily Reward"))
+        title = f"{band.get('emoji', '🪙')} Daily Reward"
+        await ctx.reply(embed=h.ok(desc, title))
 
     # ══════════════════════════════════════════════════════════════════════════
     #  /pay  — flat
