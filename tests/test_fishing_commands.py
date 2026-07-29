@@ -2,12 +2,18 @@
 Command-level tests for cogs/fishing/ under dpytest (parse → check → DB → reply).
 """
 
+import time
+import types
+
 import pytest
 from discord.ext import commands
 from discord.ext import test as dpytest
 
 import utils.db as db
 from cogs.fishing import FISH, RODS
+from cogs.fishing.constants import NET_CATCHES, TRAP_SOAK
+from cogs.fishing.items import FISH_TRAP
+from cogs.fishing.spots import DEFAULT_SPOT, SPOTS, SPOT_ORDER
 from tests.conftest import config, grant_perms
 
 
@@ -317,3 +323,184 @@ async def test_stats_shows_level_field(bot):
     sent = dpytest.get_message()
     embed = sent.embeds[0]
     assert any(f.name == "Level" for f in embed.fields)
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+#  The hub, the map, the shop and traps
+# ══════════════════════════════════════════════════════════════════════════════
+@pytest.mark.cogs("cogs.fishing")
+async def test_bare_fish_still_casts(bot):
+    """Guarded on purpose. /fish is the most-typed command in the bot, and the
+    dashboard lives at /fish hub precisely so this could stay a cast."""
+    author = config().members[0]
+    await dpytest.message("!fish", member=author)
+    dpytest.get_message()
+    assert (await db.get_fisher(author.id))["casts"] == 1
+
+
+@pytest.mark.cogs("cogs.fishing")
+async def test_hub_shows_the_angler_at_a_glance(bot):
+    author = config().members[0]
+    await dpytest.message("!fish hub", member=author)
+    embed = dpytest.get_message().embeds[0]
+
+    assert "Fishing" in embed.title
+    assert "Old Pond" in embed.description  # where you start
+    names = {f.name for f in embed.fields}
+    assert {"Angler", "Bag", "Streak", "Today's quest"} <= names
+
+
+@pytest.mark.cogs("cogs.fishing")
+async def test_hub_reports_a_soaking_trap(bot):
+    author = config().members[0]
+    await db.set_trap(author.id, "reef", time.time())
+
+    await dpytest.message("!fish hub", member=author)
+    fields = {f.name: f.value for f in dpytest.get_message().embeds[0].fields}
+
+    assert "Trap" in fields
+    assert "Coral Reef" in fields["Trap"]
+
+
+@pytest.mark.cogs("cogs.fishing")
+async def test_travel_lists_every_spot_with_what_it_takes(bot):
+    author = config().members[0]
+    await dpytest.message("!fish travel", member=author)
+    embed = dpytest.get_message().embeds[0]
+
+    names = {f.name for f in embed.fields}
+    for spot in SPOT_ORDER:
+        info = SPOTS[spot]
+        assert f"{info['emoji']} {info['name']}" in names
+    # A locked spot says what it needs rather than just refusing later.
+    fields = {f.name: f.value for f in embed.fields}
+    deepest = SPOTS[SPOT_ORDER[-1]]
+    assert "🔒" in fields[f"{deepest['emoji']} {deepest['name']}"]
+
+
+@pytest.mark.cogs("cogs.fishing")
+async def test_travel_by_name_charters_and_moves(bot):
+    author = config().members[0]
+    target = SPOT_ORDER[1]
+    await db.add_fishing_xp(author.id, 100_000)
+    await db.add_coins(author.id, SPOTS[target]["price"])
+
+    await dpytest.message(f"!fish travel {SPOTS[target]['name']}", member=author)
+    embed = dpytest.get_message().embeds[0]
+
+    assert "New Waters" in embed.title
+    assert (await db.get_fisher(author.id))["spot"] == target
+    assert await db.get_balance(author.id) == 0
+
+
+@pytest.mark.cogs("cogs.fishing")
+async def test_travelling_nowhere_is_refused(bot):
+    author = config().members[0]
+    await dpytest.message("!fish travel atlantis", member=author)
+    assert "nowhere called" in dpytest.get_message().embeds[0].description
+
+
+@pytest.mark.cogs("cogs.fishing")
+async def test_the_travel_picker_shows_live_state(bot):
+    guild, author = config().guilds[0], config().members[0]
+    cog = bot.get_cog("Fishing")
+    interaction = types.SimpleNamespace(guild_id=guild.id, guild=guild, user=author)
+
+    choices = await cog._fish_travel_ac(interaction, "")
+    assert [c.value for c in choices] == list(SPOT_ORDER)
+    by_value = {c.value: c.name for c in choices}
+    assert "📍 here" in by_value[DEFAULT_SPOT]
+    assert "🔒" in by_value[SPOT_ORDER[-1]]
+
+    # Typing narrows it.
+    assert [c.value for c in await cog._fish_travel_ac(interaction, "reef")] == ["reef"]
+
+
+@pytest.mark.cogs("cogs.fishing")
+async def test_the_shop_lists_bait_and_tackle(bot):
+    author = config().members[0]
+    await dpytest.message("!fish shop", member=author)
+    desc = dpytest.get_message().embeds[0].description
+
+    assert "Worm" in desc
+    assert "Cast Net" in desc
+    assert "Fish Trap" in desc
+
+
+@pytest.mark.cogs("cogs.fishing")
+async def test_buying_a_trap_points_at_fish_trap_not_inventory_use(bot):
+    """A trap is set at a spot rather than armed as an effect, so sending the
+    buyer to /inventory use would send them somewhere that can't help."""
+    author = config().members[0]
+    await db.add_coins(author.id, 1_000)
+
+    await dpytest.message("!fish buy trap", member=author)
+    desc = dpytest.get_message().embeds[0].description
+
+    assert "/fish trap" in desc
+    assert "/inventory use" not in desc
+    assert await db.get_item_qty(author.id, FISH_TRAP) == 1
+
+
+@pytest.mark.cogs("cogs.fishing")
+async def test_trap_command_sets_then_reports_then_pulls(bot):
+    author = config().members[0]
+    await db.add_item(author.id, FISH_TRAP, 1)
+
+    await dpytest.message("!fish trap", member=author)
+    assert "Set" in dpytest.get_message().embeds[0].title
+
+    await dpytest.message("!fish trap", member=author)
+    assert "Soaking" in dpytest.get_message().embeds[0].title
+
+    # Wind it back so it's ready.
+    await db._conn().execute(
+        "UPDATE fishing_traps SET set_at=? WHERE user_id=?",
+        (time.time() - TRAP_SOAK - 1, str(author.id)),
+    )
+    await dpytest.message("!fish trap", member=author)
+    assert "Basket" in dpytest.get_message().embeds[0].title
+    assert await db.get_trap(author.id) is None
+
+
+@pytest.mark.cogs("cogs.fishing")
+async def test_a_net_pulls_several_fish_from_one_cast(bot, monkeypatch):
+    """What the net actually sells is beating the cooldown, so the thing to
+    check is that one claim produced more than one fish."""
+    from cogs.fishing import cog as fishing
+
+    author = config().members[0]
+    await db.grant_effect(author.id, "fish_net", NET_CATCHES, uses=1)
+    # 0.5 everywhere: no snag at the pond, a mid-table rarity, no event.
+    monkeypatch.setattr(fishing.random, "random", lambda: 0.5)
+
+    await dpytest.message("!fish", member=author)
+    dpytest.get_message()
+
+    caught = sum(row["qty"] for row in await db.get_bag(author.id))
+    assert caught == NET_CATCHES
+    # And the charge is spent, so the next cast is a single again.
+    assert "fish_net" not in await db.get_active_effects(author.id)
+
+
+@pytest.mark.cogs("cogs.fishing")
+async def test_a_snag_costs_the_catch_and_only_one_bait_charge(bot, monkeypatch):
+    """The rule the hazard was designed around: a bad roll takes the fish and
+    the charge already spent on that cast — never the rest of the stack."""
+    from cogs.fishing import cog as fishing
+
+    guild, author = config().guilds[0], config().members[0]
+    cog = bot.get_cog("Fishing")
+    await db.add_fishing_xp(author.id, 100_000)
+    await db.add_coins(author.id, SPOTS["deep"]["price"])
+    await cog.travel_to(guild, author, "deep")
+    await db.grant_effect(author.id, "fish_bait", 0.25, uses=5)
+    monkeypatch.setattr(fishing.random, "random", lambda: 0.0)  # always snags
+
+    await dpytest.message("!fish", member=author)
+    embed = dpytest.get_message().embeds[0]
+
+    assert "Snapped" in embed.title
+    assert await db.get_bag(author.id) == []
+    effects = await db.get_active_effects(author.id)
+    assert effects["fish_bait"]["uses_left"] == 4  # one charge, no more

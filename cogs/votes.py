@@ -6,7 +6,8 @@ Features:
   - Posts server count to all sites every 12 hours
   - Receives vote webhooks via an aiohttp HTTP server
   - DMs the user when their vote cooldown resets (opt-out with /vote notify off)
-  - Extra reminder slots for voters (50 vs 25)
+  - Vote rewards: coins (streak-scaled), a timed coin boost, a timed luck
+    boost, extra reminder slots (50 vs 25), and a milestone chest
   - /vote command — links, status, and streak
 
 discord.bots.gg is stats-only — it has no voting or vote-webhook API, so only
@@ -46,6 +47,7 @@ from discord.ext import commands, tasks
 
 from utils import db
 from utils import helpers as h
+from utils import items as item_catalogue
 
 log = logging.getLogger("NanoBot.votes")
 
@@ -67,6 +69,42 @@ _COOLDOWNS = {
 VOTER_REMINDER_MAX = 50
 DEFAULT_REMINDER_MAX = 25
 
+# ══════════════════════════════════════════════════════════════════════════════
+#  What a vote is actually worth
+# ══════════════════════════════════════════════════════════════════════════════
+# Voting used to pay in reminder slots, which is a reward for a feature most
+# voters don't use — you were being thanked in a currency you had no use for.
+# A vote costs a real thirty seconds on someone else's website, so it should
+# pay in the things the bot is actually about: coins, and a window where
+# everything you do pays better.
+#
+# All three rewards are **global**, like the wallet they land in, and all three
+# are sized against a ~8,000-coin day (see cogs/activities/constants.py): the
+# full package is a nice thank-you rather than a way to skip the game. Two
+# sites on 12-hour cooldowns cap it at four votes a day (~1,600 coins at a
+# maxed streak, under a fifth of a day's play), and the realistic case of one
+# or two votes is nearer 8%.
+VOTE_COINS = 250
+
+# Votes in a row multiply the coins, capped — the same shape as every other
+# streak in the bot, and for the same reason: an uncapped per-day bonus quietly
+# becomes the biggest faucet there is.
+VOTE_STREAK_BONUS = 0.10  # +10% per consecutive vote
+VOTE_STREAK_CAP = 0.6  # ...up to +60%
+
+# The timed buffs, both written into the shared `user_effects` vocabulary
+# (docs/economy-design.md) so nothing here needs its own storage:
+#   coin_boost — every coin you *earn* is worth more (activities, fishing sales)
+#   luck       — better fish, better ore, better odds on a robbery
+VOTE_BOOST_HOURS = 6
+VOTE_COIN_BOOST = 1.25
+VOTE_LUCK = 0.10
+
+# Every Nth vote also drops something to open. A milestone rather than a
+# per-vote item, so it stays a small event instead of inventory clutter.
+VOTE_MILESTONE_EVERY = 5
+VOTE_MILESTONE_ITEM = "treasure_chest"
+
 _SITE_NAMES = {
     "topgg": "top.gg",
     "dbl": "discordbotlist.com",
@@ -76,6 +114,16 @@ _SITE_NAMES = {
 # ── Helpers ────────────────────────────────────────────────────────────────────
 def _now() -> float:
     return time.time()
+
+
+def vote_coins(streak: int, base: int = VOTE_COINS) -> int:
+    """Coins for one vote, scaled by the consecutive-vote streak and capped.
+
+    Pure and roll-free — a vote reward has nothing to gamble on, and the point
+    of the streak is that it is predictable enough to be worth protecting.
+    """
+    bonus = min(VOTE_STREAK_CAP, max(0, streak - 1) * VOTE_STREAK_BONUS)
+    return max(1, round(base * (1 + bonus)))
 
 
 def _cooldown_remaining(voted_at: float, site: str) -> float:
@@ -408,10 +456,11 @@ class Votes(commands.Cog):
         return aiohttp.web.Response(status=200)
 
     async def _process_vote(self, user_id: int, site: str):
-        """Record the vote, thank the user by DM, log it."""
+        """Record the vote, pay for it, thank the user by DM, log it."""
         record = await db.record_vote(user_id, site)
         streak = record["streak"]
         site_name = _SITE_NAMES[site]
+        reward = await self._grant_vote_rewards(user_id, streak)
 
         user = self.bot.get_user(user_id)
         if user is None:
@@ -428,11 +477,9 @@ class Votes(commands.Cog):
                     description=(
                         f"{streak_line}"
                         f"You voted for NanoBot on **{site_name}**.\n\n"
-                        f"**Your reward:** {VOTER_REMINDER_MAX} reminder slots "
-                        f"(up from {DEFAULT_REMINDER_MAX}) for the next "
-                        f"{_fmt_cooldown(_COOLDOWNS[site])}.\n\n"
-                        f"I'll ping you when you can vote again. "
-                        f"Use `/vote notify` to turn that off."
+                        + "\n".join(reward["lines"])
+                        + "\n\nI'll ping you when you can vote again. "
+                        "Use `/vote notify` to turn that off."
                     ),
                     color=h.GREEN,
                 )
@@ -442,7 +489,43 @@ class Votes(commands.Cog):
             except Exception as exc:
                 log.warning(f"Failed to DM vote thanks to {user_id}: {exc}")
 
-        log.info(f"Vote processed: user={user_id} site={site} streak={streak}")
+        log.info(
+            f"Vote processed: user={user_id} site={site} streak={streak} "
+            f"coins={reward['coins']}"
+        )
+
+    async def _grant_vote_rewards(self, user_id: int, streak: int) -> dict:
+        """Pay for one vote. Returns {"coins": int, "lines": [str]}.
+
+        Separate from the DM on purpose: the rewards must land whether or not
+        the member has DMs open, and a thank-you that failed to send is not a
+        reason to withhold the coins.
+        """
+        coins = vote_coins(streak)
+        balance = await db.add_coins(user_id, coins)
+        await db.grant_effect(
+            user_id, "coin_boost", VOTE_COIN_BOOST, duration=VOTE_BOOST_HOURS * 3600
+        )
+        await db.grant_effect(
+            user_id, "luck", VOTE_LUCK, duration=VOTE_BOOST_HOURS * 3600
+        )
+        lines = [
+            f"🪙 **{coins:,}** coins — balance now **{balance:,}**",
+            f"📈 **+{VOTE_COIN_BOOST - 1:.0%} coins** from everything you earn, "
+            f"for **{VOTE_BOOST_HOURS}h**",
+            f"🍀 **+{VOTE_LUCK:.0%} luck** — better fish, better ore, better "
+            f"heists — for **{VOTE_BOOST_HOURS}h**",
+            f"⏰ **{VOTER_REMINDER_MAX}** reminder slots "
+            f"(up from {DEFAULT_REMINDER_MAX})",
+        ]
+        if streak and streak % VOTE_MILESTONE_EVERY == 0:
+            await db.add_item(user_id, VOTE_MILESTONE_ITEM, 1)
+            lines.append(
+                f"🎁 **{streak}-vote milestone:** "
+                f"{item_catalogue.display(VOTE_MILESTONE_ITEM)} — open it with "
+                f"`/inventory use`"
+            )
+        return {"coins": coins, "lines": lines}
 
     # ── Stat posting loop ──────────────────────────────────────────────────────
     @tasks.loop(minutes=720)
@@ -562,7 +645,7 @@ class Votes(commands.Cog):
             "category": "🗳️ Voting",
             "short": "Vote for NanoBot and see your voting status",
             "usage": "vote [notify [on|off]]",
-            "desc": "Shows vote links for top.gg (12h cooldown) and discordbotlist.com (12h cooldown), your current cooldown countdown on each site, and your vote streak.\nVoter perk: active voters get 50 reminder slots instead of 25.\nNanoBot will DM you when your cooldown resets. Turn pings off with /vote notify off.",
+            "desc": "Shows vote links for top.gg (12h cooldown) and discordbotlist.com (12h cooldown), your current cooldown countdown on each site, and your vote streak.\nEvery vote pays coins, a 6-hour coin boost and a 6-hour luck boost, plus 50 reminder slots instead of 25 — and every 5th vote drops a treasure chest.\nNanoBot will DM you when your cooldown resets. Turn pings off with /vote notify off.",
             "args": [
                 (
                     "notify on/off",
@@ -663,8 +746,24 @@ class Votes(commands.Cog):
 
         e = h.embed(title="🗳️ Vote for NanoBot", color=h.BLUE)
         e.description = (
-            "Voting helps more people discover NanoBot.\n"
-            "As a thank you, voters get **50 reminder slots** instead of 25.\n\u200b"
+            "Voting helps more people discover NanoBot — it takes about thirty "
+            "seconds and you can do it twice a day.\n\u200b"
+        )
+        e.add_field(
+            name="🎁 What you get, every time",
+            value=(
+                f"🪙 **{VOTE_COINS:,}+** coins (more with a streak, up to "
+                f"**{vote_coins(999):,}**)\n"
+                f"📈 **+{VOTE_COIN_BOOST - 1:.0%} coins** from everything you "
+                f"earn for **{VOTE_BOOST_HOURS}h**\n"
+                f"🍀 **+{VOTE_LUCK:.0%} luck** for **{VOTE_BOOST_HOURS}h** — "
+                f"better fish, better ore, better heists\n"
+                f"⏰ **{VOTER_REMINDER_MAX}** reminder slots instead of "
+                f"{DEFAULT_REMINDER_MAX}\n"
+                f"🎁 Every **{VOTE_MILESTONE_EVERY}th** vote: a "
+                f"{item_catalogue.display(VOTE_MILESTONE_ITEM)}\n\u200b"
+            ),
+            inline=False,
         )
 
         e.add_field(
@@ -688,7 +787,7 @@ class Votes(commands.Cog):
         e.add_field(
             name="\u200b",
             value=(
-                f"**Your status:** {'🟢 Active voter — 50 reminder slots!' if is_voter else '⚪ Not an active voter — 25 reminder slots'}\n"
+                f"**Your status:** {'🟢 Active voter — perks running' if is_voter else '⚪ Not an active voter'}\n"
                 f"Cooldown pings: use `/vote notify off` to silence them."
             ),
             inline=False,

@@ -9,11 +9,12 @@ load_extension("cogs.activities") works via setup().
 from . import constants as _constants
 from . import helpers as _helpers
 from . import items as _items  # noqa: F401 - side-effect: registers item defs
+from . import views as _views
 from . import cog as _cog
 
 # _cog is last so its Activities/setup win; every helper/constant name is
 # lifted too, keeping the flat `from cogs.activities import career_info` API.
-for _mod in (_constants, _helpers, _items, _cog):
+for _mod in (_constants, _helpers, _items, _views, _cog):
     for _name in dir(_mod):
         if not _name.startswith("__"):
             globals().setdefault(_name, getattr(_mod, _name))

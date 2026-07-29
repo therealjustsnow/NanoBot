@@ -43,9 +43,19 @@ class ItemDef:
 
 ITEMS: dict[str, ItemDef] = {}
 
-CATEGORY_ORDER = ("bait", "consumable", "material", "treasure", "key", "event", "misc")
+CATEGORY_ORDER = (
+    "bait",
+    "tackle",
+    "consumable",
+    "material",
+    "treasure",
+    "key",
+    "event",
+    "misc",
+)
 CATEGORY_LABELS = {
     "bait": "🪱 Bait",
+    "tackle": "🎣 Tackle",
     "consumable": "🧪 Consumables",
     "material": "⛏️ Materials",
     "treasure": "💎 Treasure",

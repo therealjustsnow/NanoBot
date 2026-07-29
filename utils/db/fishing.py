@@ -69,6 +69,11 @@ async def _ensure_fishing_tables():
             "xp": "INTEGER NOT NULL DEFAULT 0",
             "streak_days": "INTEGER NOT NULL DEFAULT 0",
             "last_day": "INTEGER NOT NULL DEFAULT 0",
+            # Where the angler is standing. Empty means the starter spot —
+            # cogs.fishing.spots.resolve_spot turns anything unrecognised
+            # (including a spot dropped from a later registry) back into it, so
+            # this column can never stop someone fishing.
+            "spot": "TEXT NOT NULL DEFAULT ''",
         },
     )
     # Every other GLOBAL_STATS column needs its own index too (after the
@@ -122,6 +127,29 @@ async def _ensure_fishing_tables():
             PRIMARY KEY (user_id, day)
         )
     """)
+    # Chartered fishing spots. One row per (user, spot) — the cosmetic_unlocks
+    # shape, and user-keyed for the same reason: the charter was bought with a
+    # global wallet, so it can't be a per-server thing. The starter spot is
+    # never stored (it isn't bought), so an angler who has never travelled has
+    # no rows at all.
+    await _conn().execute("""
+        CREATE TABLE IF NOT EXISTS fishing_spot_unlocks (
+            user_id     TEXT NOT NULL,
+            spot        TEXT NOT NULL,
+            unlocked_at REAL NOT NULL DEFAULT 0,
+            PRIMARY KEY (user_id, spot)
+        )
+    """)
+    # A set trap, at most one per angler. `set_at` is when it went in the
+    # water; the collect is a conditional DELETE on it having been long enough,
+    # so the row itself is the claim (nothing else can pay out twice).
+    await _conn().execute("""
+        CREATE TABLE IF NOT EXISTS fishing_traps (
+            user_id TEXT PRIMARY KEY,
+            spot    TEXT NOT NULL DEFAULT '',
+            set_at  REAL NOT NULL DEFAULT 0
+        )
+    """)
     await _commit()
 
 
@@ -164,13 +192,14 @@ def _fisher_row(row) -> dict:
         "xp": row["xp"],
         "streak_days": row["streak_days"],
         "last_day": row["last_day"],
+        "spot": row["spot"],
     }
 
 
 async def get_fisher(user_id: int) -> dict:
     async with _conn().execute(
         "SELECT rod_level, last_cast, casts, caught, earned, best_key, best_weight, "
-        "xp, streak_days, last_day FROM fishing_stats WHERE user_id=?",
+        "xp, streak_days, last_day, spot FROM fishing_stats WHERE user_id=?",
         (str(user_id),),
     ) as cur:
         row = await cur.fetchone()
@@ -187,7 +216,90 @@ async def get_fisher(user_id: int) -> dict:
         "xp": 0,
         "streak_days": 0,
         "last_day": 0,
+        "spot": "",
     }
+
+
+# ── Spots ──────────────────────────────────────────────────────────────────────
+async def get_unlocked_spots(user_id: int) -> set[str]:
+    """Every spot this angler has chartered. The starter spot is never in here
+    — it was never bought; callers treat it as always open."""
+    async with _conn().execute(
+        "SELECT spot FROM fishing_spot_unlocks WHERE user_id=?", (str(user_id),)
+    ) as cur:
+        return {row["spot"] for row in await cur.fetchall()}
+
+
+async def unlock_spot(user_id: int, spot: str, now: float) -> bool:
+    """Record a chartered spot. False if it was already chartered.
+
+    INSERT OR IGNORE with rowcount as the arbiter, so two simultaneous
+    purchases can't both land — the loser is told to take its coins back. Same
+    once-only shape as try_award_achievement.
+    """
+    cur = await _conn().execute(
+        "INSERT OR IGNORE INTO fishing_spot_unlocks (user_id, spot, unlocked_at) "
+        "VALUES (?,?,?)",
+        (str(user_id), str(spot), float(now)),
+    )
+    await _commit()
+    return cur.rowcount > 0
+
+
+async def set_spot(user_id: int, spot: str) -> None:
+    """Move an angler to a spot. Travel is free, so there is nothing to race."""
+    await _conn().execute(
+        "INSERT INTO fishing_stats (user_id, spot) VALUES (?,?) "
+        "ON CONFLICT(user_id) DO UPDATE SET spot=excluded.spot",
+        (str(user_id), str(spot)),
+    )
+    await _commit()
+
+
+# ── Traps ──────────────────────────────────────────────────────────────────────
+async def get_trap(user_id: int) -> dict | None:
+    """The trap this angler has in the water, or None."""
+    async with _conn().execute(
+        "SELECT spot, set_at FROM fishing_traps WHERE user_id=?", (str(user_id),)
+    ) as cur:
+        row = await cur.fetchone()
+    return {"spot": row["spot"], "set_at": row["set_at"]} if row else None
+
+
+async def set_trap(user_id: int, spot: str, now: float) -> bool:
+    """Put a trap in the water. False when one is already set.
+
+    INSERT OR IGNORE against the primary key is the one-trap-at-a-time rule —
+    enforced by the schema rather than by a read-then-write the caller could
+    lose, since the item is consumed on the strength of this returning True.
+    """
+    cur = await _conn().execute(
+        "INSERT OR IGNORE INTO fishing_traps (user_id, spot, set_at) VALUES (?,?,?)",
+        (str(user_id), str(spot), float(now)),
+    )
+    await _commit()
+    return cur.rowcount > 0
+
+
+async def claim_trap(user_id: int, now: float, soak: int) -> dict | None:
+    """Pull a trap that has soaked long enough. None if it isn't ready.
+
+    The DELETE *is* the claim: its rowcount is the sole arbiter, so a button
+    press racing a command can't collect the same trap twice. The row is read
+    first only to learn which spot to roll against — if the DELETE then loses,
+    that read is discarded.
+    """
+    trap = await get_trap(user_id)
+    if trap is None:
+        return None
+    cur = await _conn().execute(
+        "DELETE FROM fishing_traps WHERE user_id=? AND ? - set_at >= ?",
+        (str(user_id), float(now), int(soak)),
+    )
+    await _commit()
+    if cur.rowcount <= 0:
+        return None
+    return trap
 
 
 async def try_claim_cast(user_id: int, now: float, cooldown: int) -> int:

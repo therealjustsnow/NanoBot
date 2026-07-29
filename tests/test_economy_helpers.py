@@ -2,8 +2,14 @@
 Tests for the pure economy helpers in cogs/economy/ (no Discord deps).
 """
 
+import math
+
+import pytest
+
 from cogs.economy import (
     COIN_MAX,
+    DAILY_BANDS,
+    DAILY_STREAK_CAP_DAYS,
     DAILY_COOLDOWN,
     STREAK_WINDOW,
     Economy,
@@ -11,6 +17,9 @@ from cogs.economy import (
     _rank_title,
     _scaled_price,
     compute_daily,
+    daily_streak_bonus,
+    pick_daily_band,
+    roll_daily,
     fmt_coins,
     resolve_gamble,
 )
@@ -70,8 +79,22 @@ def test_fmt_coins_singular_plural_and_commas():
 
 
 def test_daily_first_claim():
-    res = compute_daily(now=1000.0, last_daily=0, streak=0, base=100, bonus=10)
-    assert res == {"ok": True, "total": 100, "streak": 1}
+    # band_roll 0.0 pins the lowest band, amount_roll 0.0 its floor — so the
+    # smallest a daily can ever pay is exactly the base.
+    res = compute_daily(
+        now=1000.0,
+        last_daily=0,
+        streak=0,
+        base=100,
+        bonus=10,
+        band_roll=0.0,
+        amount_roll=0.0,
+    )
+    assert res["ok"] is True
+    assert res["streak"] == 1
+    assert res["total"] == 100
+    assert res["streak_bonus"] == 0
+    assert res["band"]["key"] == DAILY_BANDS[0]["key"]
 
 
 def test_daily_on_cooldown():
@@ -102,19 +125,106 @@ def test_daily_keeps_streak_inside_window():
     now = 1_000_000.0
     # Claimed 25h ago: past cooldown, still within the 48h streak window.
     last = now - (DAILY_COOLDOWN + 3600)
-    res = compute_daily(now=now, last_daily=last, streak=3, base=100, bonus=10)
+    res = compute_daily(
+        now=now,
+        last_daily=last,
+        streak=3,
+        base=100,
+        bonus=10,
+        band_roll=0.0,
+        amount_roll=0.0,
+    )
     assert res["ok"] is True
     assert res["streak"] == 4
     assert res["total"] == 100 + 10 * 3
+    assert res["base_coins"] == 100 and res["streak_bonus"] == 30
 
 
 def test_daily_resets_streak_after_window():
     now = 1_000_000.0
     last = now - (STREAK_WINDOW + 1)  # missed the window
-    res = compute_daily(now=now, last_daily=last, streak=5, base=100, bonus=10)
+    res = compute_daily(
+        now=now,
+        last_daily=last,
+        streak=5,
+        base=100,
+        bonus=10,
+        band_roll=0.0,
+        amount_roll=0.0,
+    )
     assert res["ok"] is True
     assert res["streak"] == 1
     assert res["total"] == 100
+
+
+# ── The daily roll ───────────────────────────────────────────────────────────
+def test_daily_bands_are_well_formed():
+    assert math.isclose(sum(b["weight"] for b in DAILY_BANDS), 1.0)
+    for band in DAILY_BANDS:
+        low, high = band["range"]
+        assert 0 < low < high, band["key"]
+        assert band["label"], band["key"]
+    # Bottom-heavy on purpose: most days are ordinary, which is the only thing
+    # that makes the rare one worth turning up for.
+    assert DAILY_BANDS[0]["weight"] > 0.5
+    # And ascending, so a later band is always the better news.
+    lows = [b["range"][0] for b in DAILY_BANDS]
+    assert lows == sorted(lows)
+
+
+def test_daily_roll_walks_the_band_table():
+    assert pick_daily_band(0.0)["key"] == DAILY_BANDS[0]["key"]
+    assert pick_daily_band(0.999999)["key"] == DAILY_BANDS[-1]["key"]
+
+
+def test_daily_roll_stays_inside_its_band():
+    for band_roll in (0.0, 0.5, 0.9, 0.999999):
+        band = pick_daily_band(band_roll)
+        low, high = band["range"]
+        for amount_roll in (0.0, 0.5, 0.999999):
+            rolled = roll_daily(100, band_roll, amount_roll)
+            assert 100 * low <= rolled["coins"] <= 100 * high
+            assert rolled["band"]["key"] == band["key"]
+
+
+def test_daily_roll_scales_with_the_owners_setting():
+    """One knob still governs the whole spread — !econ daily 200 doubles it."""
+    for band_roll in (0.0, 0.5, 0.999999):
+        single = roll_daily(100, band_roll, 0.5)["coins"]
+        double = roll_daily(200, band_roll, 0.5)["coins"]
+        assert double == pytest.approx(single * 2, abs=1)
+
+
+def test_a_daily_is_never_worthless():
+    assert roll_daily(0, 0.0, 0.0)["coins"] >= 1
+
+
+def test_the_streak_bonus_is_capped():
+    """A flat per-day bonus with no ceiling would quietly become the biggest
+    faucet in the bot; a year-long streak pays a fortnight's worth."""
+    assert daily_streak_bonus(1, 25) == 0  # day one isn't a streak yet
+    assert daily_streak_bonus(2, 25) == 25
+    assert (
+        daily_streak_bonus(DAILY_STREAK_CAP_DAYS + 1, 25) == 25 * DAILY_STREAK_CAP_DAYS
+    )
+    assert daily_streak_bonus(365, 25) == daily_streak_bonus(
+        DAILY_STREAK_CAP_DAYS + 1, 25
+    )
+    assert daily_streak_bonus(10, 0) == 0  # an owner can still switch it off
+
+
+def test_the_daily_is_worth_showing_up_for_but_not_a_faucet():
+    """Sized against a ~8,000 coin day: enough to notice, nowhere near enough
+    to replace playing."""
+    from cogs.economy.constants import REWARD_DEFAULTS
+
+    base = REWARD_DEFAULTS["daily"]
+    ev = sum(b["weight"] * base * sum(b["range"]) / 2 for b in DAILY_BANDS)
+    assert 150 < ev < 350
+    biggest = base * DAILY_BANDS[-1]["range"][1] + daily_streak_bonus(
+        999, REWARD_DEFAULTS["streak_bonus"]
+    )
+    assert biggest < 2_000
 
 
 def test_gamble_win_doubles_bet():
