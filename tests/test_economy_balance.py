@@ -416,16 +416,95 @@ def test_first_upgrade_stays_within_a_first_session():
     assert hours_to_afford(RODS[1]["price"], 0.0, CAST_COOLDOWN) < 0.25
 
 
-# ── Pickaxe ladder mirrors the rod curve ─────────────────────────────────────
-def test_pickaxes_scale_with_the_rods():
-    """Mining income didn't change, but coins are fungible — fishing pays for
-    these, so they ride the same curve rather than staying 3x cheap."""
-    ratios = [
-        PICKAXES[t]["price"] / OLD_PICKAXE_PRICES[t] for t in range(1, len(PICKAXES))
-    ]
-    assert ratios == sorted(ratios)
-    assert ratios[0] == pytest.approx(1.5)
-    assert ratios[-1] >= 4
+# ── Pickaxe ladder: priced against mining, not against the rods ──────────────
+# The pickaxe prices used to be the rod prices, on the reasoning that coins are
+# fungible so fishing pays for both. Being *able to afford* something is not the
+# same as it being worth *buying*: a rod raises the value of a cast and a player
+# makes ~180 an hour, while a pickaxe raises the value of a dig and the interval
+# makes 8 a day. The old ladder's top two tiers took 84 and 350 days of mining to
+# break even, and nothing failed — fishing charters had a payback test from the
+# day they shipped and this ladder had none. These are that guard.
+def mine_days_to_repay(tier: int) -> float:
+    """Days of ordinary mining for a tier to pay for itself, recomputed here.
+
+    A second implementation of cogs.activities.helpers.pickaxe_payback_days, for
+    the reason `adventure_coins_per_hour` is duplicated above: the production one
+    is what the ladder's own comments are written against, so asserting the two
+    agree is what stops an odds-table tweak silently repricing the ladder.
+    """
+    from cogs.activities.constants import (
+        ACTIVITY_DEFAULT_COOLDOWNS as CD,
+        MINE_CAVE_IN_CHANCE,
+        MINE_VEIN_ODDS,
+        ORES,
+    )
+    from cogs.activities.helpers import mine_odds
+
+    def per_day(t: int) -> float:
+        pick = PICKAXES[t]
+        ore = sum(p * ORES[k]["value"] for k, p in mine_odds(pick["luck"]))
+        vein = sum(p * n for n, p in MINE_VEIN_ODDS) + pick["vein"]
+        run = (1 - MINE_CAVE_IN_CHANCE) * vein * ore
+        return run * 24 * 3600 / CD["mine"]
+
+    return PICKAXES[tier]["price"] / (per_day(tier) - per_day(tier - 1))
+
+
+def test_the_pickaxe_ladder_agrees_with_its_own_payback_model():
+    from cogs.activities.helpers import pickaxe_payback_days
+
+    for tier in range(1, len(PICKAXES)):
+        assert pickaxe_payback_days(tier) == pytest.approx(mine_days_to_repay(tier))
+
+
+@pytest.mark.parametrize("tier", range(1, len(PICKAXES)))
+def test_every_pickaxe_pays_itself_back_inside_a_month_of_mining(tier):
+    """The bound the old ladder broke. A tier nobody can recoup is not a sink,
+    it's a trap: the coins are gone and the thing you bought never returns them.
+    A month is generous — it is still the longest commitment in the loop — and
+    the floor stops a tier being so cheap the choice is meaningless."""
+    days = mine_days_to_repay(tier)
+    assert 1 < days < 31, f"{PICKAXES[tier]['name']} repays in {days:.1f} days"
+
+
+def test_the_pickaxe_ladder_ascends_in_payback_not_just_in_price():
+    """Each rung is a longer commitment than the last. Price alone doesn't show
+    this — the old ladder's prices ascended fine while the paybacks blew up."""
+    days = [mine_days_to_repay(t) for t in range(1, len(PICKAXES))]
+    assert days == sorted(days)
+    assert [p["price"] for p in PICKAXES] == sorted(p["price"] for p in PICKAXES)
+
+
+def test_pickaxes_got_cheaper_because_they_were_priced_off_the_wrong_faucet():
+    """Explicitly a *reduction*, so nobody restores the old numbers by reflex.
+    The ladder is smaller in coins than the rods' on purpose: a sink can only be
+    as large as the thing it improves, and mining's throughput is fixed."""
+    assert PICKAXES[-1]["price"] < OLD_PICKAXE_PRICES[-1]
+    assert sum(p["price"] for p in PICKAXES) < sum(OLD_PICKAXE_PRICES)
+    assert PICKAXES[-1]["price"] < RODS[-1]["price"]
+
+
+def test_a_full_pickaxe_ladder_does_not_out_earn_bare_hands_by_more_than_3x():
+    """The same bound the fishing spots hold to, for the same reason: past ~3x,
+    the state everyone starts in stops being a game anyone would play. This is
+    what caps the `vein` bonuses, and so what caps the price they justify."""
+    from cogs.activities.helpers import activity_coins_per_run
+
+    top = PICKAXES[-1]
+    kitted = activity_coins_per_run("mine", top["luck"], top["vein"])
+    assert kitted < 3 * activity_coins_per_run("mine")
+
+
+def test_mining_stays_behind_fishing_even_fully_kitted():
+    """A pickaxe may not turn the idle loop into the attention faucet's equal —
+    that inversion is what `/shop`'s whole yardstick rests on."""
+    from cogs.activities.constants import ACTIVITY_DEFAULT_COOLDOWNS as CD
+    from cogs.activities.helpers import activity_coins_per_run
+    from cogs.economy.helpers import coins_per_hour
+
+    top = PICKAXES[-1]
+    per_hour = activity_coins_per_run("mine", top["luck"], top["vein"]) * 3600
+    assert per_hour / CD["mine"] < coins_per_hour(0.0)
 
 
 # ── Per-use prices are cooldown-neutral and were left alone ──────────────────

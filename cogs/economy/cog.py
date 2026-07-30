@@ -106,9 +106,11 @@ from .constants import (
     DAILY_COOLDOWN,
     DAILY_STREAK_CAP_DAYS,
     RAID_TIMEOUT,
+    REFUND_DM_INTERVAL,
     REWARD_DEFAULTS,
     _DEFAULT_SHOP_ITEMS,
 )
+from .refunds import REFUND_BATCHES
 from cogs.activities.helpers import effective_cooldown
 
 # Pure helpers borrowed from the identity/progression packages so the wallet
@@ -160,6 +162,10 @@ class Economy(commands.Cog):
         self._render_lock = asyncio.Semaphore(2)
         # Serializes a cosmetic purchase's debit-then-unlock per member.
         self._shop_locks = h.KeyedLocks()
+        # The price-refund sweep + its DM run, as one tracked background task so
+        # a re-fired on_ready (gateway re-identify) replaces it rather than
+        # running a second copy alongside the first.
+        self._refund_tasks: dict[str, asyncio.Task] = {}
 
     async def cog_load(self):
         # restore_schedules only fires from on_ready, so a hot-reload after the
@@ -171,10 +177,15 @@ class Economy(commands.Cog):
             self.bot.loop.create_task(self.on_restore_schedules())
 
     def cog_unload(self):
-        for task in (*self._raid_tasks.values(), *self._squad_tasks.values()):
+        for task in (
+            *self._raid_tasks.values(),
+            *self._squad_tasks.values(),
+            *self._refund_tasks.values(),
+        ):
             task.cancel()
         self._raid_tasks.clear()
         self._squad_tasks.clear()
+        self._refund_tasks.clear()
 
     def _daily_lock(self, user_id: int):
         # Returns an async context manager; existing `async with` call sites
@@ -1193,9 +1204,162 @@ class Economy(commands.Cog):
         self._raids.pop(raid_id, None)
         await db.delete_raid(raid_id)
 
+    # ══════════════════════════════════════════════════════════════════════════
+    #  Price refunds
+    # ══════════════════════════════════════════════════════════════════════════
+    async def sweep_price_refunds(self) -> dict[str, tuple[int, int]]:
+        """Pay out every repricing batch that hasn't been paid out yet.
+
+        Runs once per batch, ever. That is not an optimisation: a member who
+        buys the tier tomorrow pays the new price and is owed nothing, so the
+        closed batch is what bounds who is eligible. A crash part-way leaves the
+        batch open and the run repeats — the per-user ledger makes that safe,
+        and the ledger row is written *before* the coins so a failure can only
+        ever under-pay.
+
+        Returns {batch key: (members paid, coins paid)} for the caller to log.
+        """
+        results: dict[str, tuple[int, int]] = {}
+        for batch in REFUND_BATCHES:
+            if await db.batch_swept(batch.key):
+                continue
+            # Owners are gathered per ladder and merged, since one member can be
+            # owed for a pickaxe, a rod and a charter in the same batch.
+            owed: dict[int, tuple[int, list[str]]] = {}
+
+            def add(user_id: int, **kwargs):
+                total, detail = batch.owed(**kwargs)
+                if total <= 0:
+                    return
+                prev_total, prev_detail = owed.get(user_id, (0, []))
+                owed[user_id] = (prev_total + total, prev_detail + detail)
+
+            kinds = batch.kinds()
+            if "pickaxe" in kinds:
+                for user_id, level in await db.all_pickaxe_owners():
+                    add(user_id, pickaxe_level=level)
+            if "rod" in kinds:
+                for user_id, level in await db.all_rod_owners():
+                    add(user_id, rod_level=level)
+            if "spot" in kinds:
+                for user_id, spots in (await db.all_spot_unlocks()).items():
+                    add(user_id, spots=spots)
+
+            members = coins = 0
+            for user_id, (amount, detail) in owed.items():
+                if not await db.try_record_refund(
+                    user_id, batch.key, amount, "\n".join(detail)
+                ):
+                    continue  # already paid on an earlier, interrupted sweep
+                await db.add_coins(user_id, amount)
+                members += 1
+                coins += amount
+            await db.close_batch(batch.key, users=members, coins=coins)
+            results[batch.key] = (members, coins)
+            log.info(
+                "price refund %s: paid %s members %s coins",
+                batch.key,
+                f"{members:,}",
+                f"{coins:,}",
+            )
+        return results
+
+    async def deliver_refund_notices(self) -> int:
+        """DM everyone who has been credited but not yet told.
+
+        Deliberately separate from the credit: a closed DM must not cost anyone
+        their coins, so delivery is retried on later starts and a member who
+        never opens their DMs simply keeps the money. Same split as the global
+        level-up announcement.
+        """
+        sent = 0
+        for notice in await db.pending_refund_notices():
+            user = self.bot.get_user(notice["user_id"])
+            if user is None:
+                try:
+                    user = await self.bot.fetch_user(notice["user_id"])
+                except discord.HTTPException:
+                    continue  # gone or unreachable — try again next start
+            batch = next((b for b in REFUND_BATCHES if b.key == notice["batch"]), None)
+            embed = h.ok(
+                (batch.summary if batch else "Some prices came down.")
+                + f"\n\nYou've been refunded **{notice['amount']:,}** coins — "
+                "the difference is already in your wallet.\n\n"
+                "Thanks for playing. 💛",
+                "🪙 Price refund",
+            )
+            if notice["detail"]:
+                embed.add_field(
+                    name="What changed", value=notice["detail"], inline=False
+                )
+            try:
+                await user.send(embed=embed)
+            except discord.HTTPException:
+                # Closed DMs, blocked, or a transient failure. The row stays
+                # pending; the coins were never at stake.
+                continue
+            await db.mark_refund_notified(notice["user_id"], notice["batch"])
+            sent += 1
+            # A refund batch can touch every member at once, and DMs are the
+            # most aggressively rate-limited route there is. This is startup
+            # work nobody is waiting on, so it goes at a walking pace.
+            await asyncio.sleep(REFUND_DM_INTERVAL)
+        return sent
+
+    # A refund pays out on its own at startup, so this is a window rather than a
+    # switch: what a batch would cost before it runs, and what it did after.
+    # Prefix-only and owner-only for the same reason /coin grant is — it reads
+    # across every wallet on the bot.
+    @coin.command(
+        name="refunds",
+        description="Show what each price-refund batch paid out (bot owner).",
+        with_app_command=False,
+    )
+    @commands.is_owner()
+    async def coin_refunds(self, ctx: commands.Context):
+        econ = await db.get_econ_config(ctx.guild.id if ctx.guild else 0)
+        lines = []
+        for batch in REFUND_BATCHES:
+            if await db.batch_swept(batch.key):
+                row = await db.refund_batch_totals(batch.key)
+                lines.append(
+                    f"✅ **{batch.key}** — paid {row['users']:,} member(s) "
+                    f"{self._money(econ, row['coins'])}"
+                )
+            else:
+                lines.append(
+                    f"⏳ **{batch.key}** — not paid out yet "
+                    f"({len(batch.items)} item(s); runs on the next start)"
+                )
+        pending = len(await db.pending_refund_notices(limit=1000))
+        if pending:
+            lines.append(f"\n📬 {pending:,} refund DM(s) still to send.")
+        await ctx.reply(
+            embed=h.embed(
+                "🪙 Price refunds", "\n".join(lines) or "Nothing to show.", h.BLUE
+            )
+        )
+
+    async def _run_refunds(self):
+        """Sweep then announce, as one background job off the restore path."""
+        try:
+            await self.sweep_price_refunds()
+            await self.deliver_refund_notices()
+        except asyncio.CancelledError:
+            raise
+        except Exception:
+            # A refund must never take the bot down with it. The batch is only
+            # closed once its members are paid, so an exception mid-sweep means
+            # the next start picks up where this one stopped.
+            log.exception("price refund sweep failed")
+
     @commands.Cog.listener()
     async def on_restore_schedules(self):
         """Rebuild open raid boards + pending squad confirms after a restart."""
+        # Refunds ride the same once-per-process dispatch, but as a background
+        # task: it can be thousands of DMs and nothing else should wait on it.
+        h.spawn_tracked(self._refund_tasks, "refunds", self._run_refunds())
+
         for row in await db.get_open_raids():
             raid_id = row["raid_id"]
             if raid_id in self._raids:

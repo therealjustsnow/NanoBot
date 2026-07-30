@@ -54,6 +54,10 @@ _DOMAIN_ORDER = (
     # amounts) — no guild id, no user id, so it stands apart from every domain
     # above.
     "settings",
+    # The price-refund ledger. Reads the tiers other domains own (fishing rods
+    # and charters, activities' pickaxes) but owns no ladder itself, so it is
+    # imported after all of them.
+    "refunds",
     # No tables of its own — the retention/WAL/VACUUM janitor for every other
     # domain's tables, driven by main.py's daily maintenance loop.
     "maintenance",

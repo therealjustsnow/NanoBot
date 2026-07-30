@@ -194,3 +194,10 @@ _RANK_TITLES = [
     (10, "⭐ Trusted"),
     (25, "🤝 Contributor"),
 ]
+
+# Seconds between price-refund DMs. A repricing can owe every member of every
+# server at once, and DMs are the most aggressively rate-limited route Discord
+# has — a burst gets the bot limited for everything else it wants to say. This
+# is startup work nobody is waiting on, so it goes at a walking pace: the
+# refund itself is already in the wallet before the first DM is sent.
+REFUND_DM_INTERVAL = 1.5

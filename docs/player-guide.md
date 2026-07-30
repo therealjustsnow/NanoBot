@@ -218,6 +218,12 @@ selling items, achievements, and level-ups (if your server enables that).
 **Where they go:** rods, pickaxes, bait, the shop, `/pay`, the casino,
 prestige. Spending is what keeps prices meaningful.
 
+**If a price ever drops:** you get the difference back. When we rebalance
+something you already own — a pickaxe tier, a rod, a fishing charter — the coins
+are put straight into your wallet and you'll get a DM saying what changed and
+how much came back. You never need to ask, and prices going *up* never costs you
+anything you've already bought.
+
 ---
 
 ## 🎣 Fishing
@@ -438,18 +444,20 @@ way to 🏆 Legend of the Office), and each promotion pays a bit more.
 
 **`/mine`** yields 🪨 Stone → ⚫ Coal → ⚙️ Iron → 🟡 Gold → 💎 Diamond. Each ore
 in a vein is rolled separately, so a fat seam can turn up a diamond next to the
-gravel. Better pickaxes shift the odds toward the good stuff:
+gravel. Better pickaxes shift the odds toward the good stuff, and the top three
+break extra ore out of every seam on top of that:
 
-| Tier | Pickaxe | Price |
-|---|---|---|
-| 1 | ✊ Bare Hands | free |
-| 2 | ⛏️ Stone Pickaxe | 750 |
-| 3 | ⛏️ Iron Pickaxe | 4,000 |
-| 4 | ⛏️ Steel Pickaxe | 24,000 |
-| 5 | ⛏️ Obsidian Pickaxe | 100,000 |
+| Tier | Pickaxe | Price | Luck | Extra ore |
+|---|---|---|---|---|
+| 1 | ✊ Bare Hands | free | — | — |
+| 2 | ⛏️ Stone Pickaxe | 750 | 15% | — |
+| 3 | ⛏️ Iron Pickaxe | 3,000 | 30% | +1 |
+| 4 | ⛏️ Steel Pickaxe | 7,500 | 45% | +2 |
+| 5 | ⛏️ Obsidian Pickaxe | 24,000 | 60% | +4 |
 
-`/mine stats` shows your tier, your dig count, and exactly what the next
-pickaxe costs. `/mine upgrade` buys it.
+Every one of them pays for itself: the cheapest inside a few days of ordinary
+mining, the Obsidian inside about three weeks. `/mine stats` shows your tier,
+your dig count, and exactly what the next pickaxe costs. `/mine upgrade` buys it.
 
 **`/rob`** is the only player-vs-player command. You need at least 250 coins,
 your target needs 500, and a 🔒 Padlock (found while hunting, used from your
