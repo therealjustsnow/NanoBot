@@ -561,7 +561,7 @@ calculated from what you've already done, whenever you look.
 |---|---|
 | `/progress` | Achievements, points, weekly status, prestige |
 | `/progress achievements [member]` | What you've earned and what's next |
-| `/progress badges [member]` | A wall of your badges |
+| `/progress badges [member]` | Your trophy case, as a picture (also `trophies`, `case`) |
 | `/progress weekly` | This week's 3 objectives (auto-claims completed ones) |
 | `/progress title <name>` | Pick which earned title shows on your profile |
 | `/progress prestige` | Requirements and your rank |
@@ -569,6 +569,13 @@ calculated from what you've already done, whenever you look.
 **Achievements (40).** Milestones across fishing, wealth, the casino and
 activities. Each pays once — coins, an item, or a **title** — and because
 achievements are global you can never re-earn one by joining another server.
+
+**The trophy case.** `/progress badges` draws every achievement as a trophy on
+a shelf. What one is worth decides the trophy: a medal for the small ones, then
+a cup, a grand cup, and a star for the 75-point milestones — and its colour trim
+says where it came from (blue fishing, gold wealth, pink casino, green
+activities). Ones you haven't earned yet stand there as empty outlines, so the
+case is also the list of what's left to chase.
 
 **Titles.** Some achievements grant a title. `/progress title` lists the ones
 you've earned (and a "none" option). It shows on your `/profile`.

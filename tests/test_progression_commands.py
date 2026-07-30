@@ -7,6 +7,7 @@ import pytest
 from discord.ext import test as dpytest
 
 import utils.db as db
+from utils import trophy_card
 from cogs.progression.definitions import WeeklyObjectiveDef
 from cogs.progression.helpers import prestige_requirement
 from tests.conftest import config
@@ -113,26 +114,46 @@ async def test_achievements_for_another_member_does_not_evaluate_them(bot):
     assert await db.get_balance(other.id) == 1_000
 
 
-# ── /progress badges ─────────────────────────────────────────────────────────────
+# ── /progress badges (the trophy case) ───────────────────────────────────────────
 @pytest.mark.cogs("cogs.progression")
-async def test_badges_empty_state(bot):
+async def test_badges_renders_a_case_on_a_fresh_account(bot):
+    """A brand-new account gets a full case of locked trophies rather than a
+    "nothing here" line — the case *is* the list of what's still out there."""
     author = config().members[0]
     await dpytest.message("!progress badges", member=author)
     sent = dpytest.get_message()
-    assert "hasn't earned any badges" in sent.embeds[0].description
+    assert sent.attachments, "the trophy case should come back as an image"
+    assert sent.attachments[0].filename.endswith(f".{trophy_card.IMAGE_EXT}")
 
 
 @pytest.mark.cogs("cogs.progression")
-async def test_badges_shows_earned_emoji(bot):
-    guild = config().guilds[0]
+async def test_badges_case_carries_the_earned_trophies(bot):
     author = config().members[0]
     await db.try_award_achievement(author.id, "balance_1k")
 
-    await dpytest.message("!progress badges", member=author)
-    sent = dpytest.get_message()
+    cog = bot.get_cog("Progression")
+    data = await cog._case_data(author)
+    items = {i["name"]: i for group in data["groups"] for i in group["items"]}
     from cogs.progression.definitions import ACHIEVEMENTS_BY_KEY
 
-    assert ACHIEVEMENTS_BY_KEY["balance_1k"].emoji in sent.embeds[0].description
+    assert items[ACHIEVEMENTS_BY_KEY["balance_1k"].name]["earned"] is True
+    assert sum(1 for i in items.values() if i["earned"]) == 1
+    assert len(items) == len(ACHIEVEMENTS_BY_KEY)
+
+
+@pytest.mark.cogs("cogs.progression")
+async def test_badges_for_another_member_does_not_evaluate_them(bot):
+    """Same rule the other views follow: looking someone up must not award
+    them anything."""
+    viewer = config().members[0]
+    other = config().members[1]
+    await db.add_coins(other.id, 1_000)
+
+    await dpytest.message(f"!progress badges {other.mention}", member=viewer)
+    dpytest.get_message()
+
+    assert await db.get_earned_achievements(other.id) == {}
+    assert await db.get_balance(other.id) == 1_000
 
 
 # ── /progress weekly ──────────────────────────────────────────────────────────────

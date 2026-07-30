@@ -17,7 +17,9 @@ from .constants import (
     PRESTIGE_POINTS_BASE,
     PRESTIGE_TITLES,
     PRESTIGE_WEEKLY_BONUS_PER_RANK,
+    TROPHY_TIER_POINTS,
 )
+from .definitions import CATEGORY_ACCENTS
 
 
 # ── Period keys (weekly today; a season is just a longer-lived period key) ──────
@@ -129,6 +131,49 @@ def can_prestige(rank: int, points: int, balance: int) -> tuple[bool, str]:
     if balance < cost:
         return False, f"Needs **{cost:,}** coins (you have {balance:,})."
     return True, ""
+
+
+# ── Trophy case ──────────────────────────────────────────────────────────────────
+def trophy_tier(points: int) -> int:
+    """Which trophy an achievement worth `points` stands as (0-3).
+
+    The renderer knows nothing about achievements, so the mapping from what
+    something is worth to how impressive it looks lives here, next to the
+    registry it reads.
+    """
+    return sum(1 for threshold in TROPHY_TIER_POINTS if points >= threshold)
+
+
+def category_accent(category: str) -> str:
+    return CATEGORY_ACCENTS.get(category, "#5865F2")
+
+
+def trophy_groups(achievements, earned_keys) -> list[dict]:
+    """The registry as the shelves of a trophy case, in registry order.
+
+    Pure: takes the defs and the set of keys already earned, hands back the
+    plain dicts `utils.trophy_card` draws. Locked achievements are included —
+    a case is as much the list of what is still out there as a record of what
+    isn't, and it means a brand-new account gets a full case rather than an
+    empty box. The category label drops its emoji: the card's font has no
+    colour emoji, and a category renders as a heading rather than a chat line.
+    """
+    earned = set(earned_keys or ())
+    groups: dict[str, dict] = {}
+    for a in achievements:
+        group = groups.setdefault(
+            a.category,
+            {"label": a.category.split(" ", 1)[-1], "items": []},
+        )
+        group["items"].append(
+            {
+                "name": a.name,
+                "tier": trophy_tier(a.points),
+                "accent": category_accent(a.category),
+                "earned": a.key in earned,
+            }
+        )
+    return list(groups.values())
 
 
 # ── Display ──────────────────────────────────────────────────────────────────────

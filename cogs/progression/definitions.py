@@ -55,6 +55,17 @@ CAT_WEALTH = "🪙 Wealth"
 CAT_CASINO = "🎰 Casino"
 CAT_ACTIVITIES = "⛏️ Activities"
 
+# The colour each category's trophies are trimmed with in the /progress badges
+# case. A drawn trophy carries its tier in its shape and its category in this
+# accent, which is what lets one image answer both "how far along am I" and
+# "where did I earn it". Unlisted categories fall back to the bot's blurple.
+CATEGORY_ACCENTS = {
+    CAT_FISHING: "#3BA7FF",
+    CAT_WEALTH: "#FFCE45",
+    CAT_CASINO: "#FF5C8A",
+    CAT_ACTIVITIES: "#7CE38B",
+}
+
 # ══════════════════════════════════════════════════════════════════════════════
 #  Achievements
 # ══════════════════════════════════════════════════════════════════════════════
