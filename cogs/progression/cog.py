@@ -40,11 +40,14 @@ claim logic, no schema change needed.
 `/progress badges` renders the whole registry as a **trophy case** image
 (utils/trophy_card.py) rather than a row of emoji: an achievement's emoji is a
 colour emoji, which the card font can't draw, and once every trophy is drawn
-anyway its shape can carry what the emoji never did — the trophy's form and
-metal come from what the achievement is worth (helpers.trophy_tier) and its
-trim from the category it came from (helpers.category_accent). Locked
-achievements are drawn as ghosts of the trophy that goes there, so the case is
-also the "what's left" list and a brand-new account gets a full case.
+anyway it can work the way a real trophy does. The **figure** on top says what
+it was won for, picked by what the achievement measures (helpers.trophy_topper
+over definitions.STAT_TOPPERS — two thresholds of one stat are the same feat at
+different sizes, so they share a figure); the **stand** under it says what it
+cost (helpers.trophy_tier); the **plate** carries the category's colour
+(helpers.category_accent). Locked achievements are drawn as ghosts of the
+trophy that goes there, so the case is also the "what's left" list and a
+brand-new account gets a full case.
 
 Prestige is a deliberately non-destructive endgame sink: nothing is reset or
 lost on prestiging. Advancing costs both achievement points (gates progress

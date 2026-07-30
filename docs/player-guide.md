@@ -571,11 +571,16 @@ activities. Each pays once — coins, an item, or a **title** — and because
 achievements are global you can never re-earn one by joining another server.
 
 **The trophy case.** `/progress badges` draws every achievement as a trophy on
-a shelf. What one is worth decides the trophy: a medal for the small ones, then
-a cup, a grand cup, and a star for the 75-point milestones — and its colour trim
-says where it came from (blue fishing, gold wealth, pink casino, green
-activities). Ones you haven't earned yet stand there as empty outlines, so the
-case is also the list of what's left to chase.
+a shelf, and each one is made for what it's for: a fish for catches, a balance
+scale for your heaviest, a flame for a streak, an open book for the dex, a
+stack of coins for what you're holding, a die for games played, a bell for a
+big win, a hard hat for shifts, a pickaxe for mining, antlers for hunts, a
+compass for exploring. What it's worth decides the trophy it stands on — a
+plain block, then a column, then a stepped plinth, then a laurel wreath, in
+bronze, silver, gold and prismatic, each taller than the last, so the big ones
+tower. The plate on the base carries its category's colour (blue fishing, gold
+wealth, pink casino, green activities). Ones you haven't earned yet stand there
+as empty outlines, so the case is also the list of what's left to chase.
 
 **Titles.** Some achievements grant a title. `/progress title` lists the ones
 you've earned (and a "none" option). It shows on your `/profile`.

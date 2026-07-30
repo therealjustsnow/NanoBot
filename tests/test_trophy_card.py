@@ -15,8 +15,13 @@ import pytest
 from PIL import Image, ImageStat
 
 from cogs.progression.constants import TROPHY_TIER_LABELS, TROPHY_TIER_POINTS
-from cogs.progression.definitions import ACHIEVEMENTS, CATEGORY_ACCENTS
-from cogs.progression.helpers import category_accent, trophy_groups, trophy_tier
+from cogs.progression.definitions import ACHIEVEMENTS, CATEGORY_ACCENTS, STAT_TOPPERS
+from cogs.progression.helpers import (
+    category_accent,
+    trophy_groups,
+    trophy_tier,
+    trophy_topper,
+)
 from utils import cosmetics, profile_card, trophy_card
 
 FULL = {
@@ -106,17 +111,48 @@ def test_the_case_grows_a_shelf_at_a_time():
 
 
 def test_every_tier_draws_something_and_a_locked_one_is_dimmer():
-    """The shape ladder is the point of drawing trophies at all, so each tier
-    has to render — and a locked trophy must read as a ghost of the earned one
-    rather than as the same object."""
-    for tier in range(len(trophy_card.TIER_FORMS)):
-        earned = trophy_card.trophy_image(tier, "#3BA7FF", True)
-        locked = trophy_card.trophy_image(tier, "#3BA7FF", False)
+    """Every stand has to render — and a locked trophy must read as a ghost of
+    the earned one rather than as the same object."""
+    for tier in range(len(trophy_card.TIER_STANDS)):
+        earned = trophy_card.trophy_image("fish", tier, "#3BA7FF", True)
+        locked = trophy_card.trophy_image("fish", tier, "#3BA7FF", False)
         assert earned.size == locked.size == (trophy_card.ART_W, trophy_card.ART_H)
         assert earned.getbbox() is not None, "an earned trophy drew nothing"
         assert locked.getbbox() is not None, "a locked trophy drew nothing"
         # Same silhouette, far less ink.
         assert _ink(locked) < _ink(earned) / 2
+
+
+def test_a_bigger_tier_stands_taller():
+    """The height ladder is how the case reads at arm's length, so it has to
+    ascend — and the top tier has to fill its cell, or the shelves gap."""
+    assert list(trophy_card.TIER_SCALE) == sorted(trophy_card.TIER_SCALE)
+    assert len(trophy_card.TIER_SCALE) == len(trophy_card.TIER_STANDS)
+    assert trophy_card.TIER_SCALE[-1] == 1.0
+    assert trophy_card.TIER_SCALE[0] < 1.0
+
+
+def test_every_figure_draws_something_of_its_own():
+    """A topper that silently fell back to the star (a typo'd registry entry,
+    a function that draws nothing) would be invisible in review but would make
+    two different achievements identical on the card."""
+    seen = {}
+    for name, fn in trophy_card.TOPPERS.items():
+        img = trophy_card.trophy_image(name, 1, "#3BA7FF", True)
+        assert img.getbbox() is not None, f"{name} drew nothing"
+        assert callable(fn)
+        raw = img.tobytes()
+        assert raw not in seen, f"{name} draws exactly what {seen.get(raw)} draws"
+        seen[raw] = name
+
+
+def test_an_unknown_figure_falls_back_to_the_star():
+    """A stat that hasn't been drawn a figure yet must still render a trophy."""
+    unknown = trophy_card.trophy_image("no such figure", 1, "#3BA7FF", True)
+    assert (
+        unknown.tobytes()
+        == trophy_card.trophy_image("star", 1, "#3BA7FF", True).tobytes()
+    )
 
 
 def _ink(img: Image.Image) -> float:
@@ -127,8 +163,10 @@ def _ink(img: Image.Image) -> float:
 def test_an_out_of_range_tier_never_raises():
     """Tiers come from a points table that can be re-tuned; a value past the
     end of the ladder must clamp rather than take the whole card down."""
-    assert trophy_card.trophy_image(99, "#FFFFFF", True).getbbox() is not None
-    assert trophy_card.trophy_image(-3, "not a colour", True).getbbox() is not None
+    assert trophy_card.trophy_image("fish", 99, "#FFFFFF", True).getbbox() is not None
+    assert (
+        trophy_card.trophy_image("fish", -3, "not a colour", True).getbbox() is not None
+    )
 
 
 # ── The progression side ─────────────────────────────────────────────────────
@@ -140,12 +178,36 @@ def test_trophy_tier_climbs_with_points():
     assert trophy_tier(10_000) == len(TROPHY_TIER_POINTS)
 
 
-def test_every_tier_has_a_trophy_to_draw():
-    """One legend row and one silhouette per tier — a points table with more
-    tiers than the card can draw would silently render them all as stars."""
+def test_every_tier_has_a_stand_to_draw():
+    """One legend row, one stand and one metal per tier — a points table with
+    more tiers than the card can draw would silently flatten them together."""
     assert len(TROPHY_TIER_LABELS) == len(TROPHY_TIER_POINTS) + 1
-    assert len(trophy_card.TIER_FORMS) == len(TROPHY_TIER_LABELS)
-    assert len(trophy_card.TIER_METALS) == len(trophy_card.TIER_FORMS)
+    assert len(trophy_card.TIER_STANDS) == len(TROPHY_TIER_LABELS)
+    assert len(trophy_card.TIER_METALS) == len(trophy_card.TIER_STANDS)
+
+
+def test_every_achievement_gets_a_figure_the_card_can_draw():
+    """The whole point of the figures is that a trophy says what it is for, so
+    an achievement measuring something nobody drew is a real gap — and a
+    registry naming a figure the card doesn't have would silently star it."""
+    measured = {a.stat for a in ACHIEVEMENTS}
+    assert measured <= set(STAT_TOPPERS), sorted(measured - set(STAT_TOPPERS))
+    assert set(STAT_TOPPERS.values()) <= set(trophy_card.TOPPERS)
+    for stat in measured:
+        assert trophy_topper(stat) != "star", f"{stat} still has no figure"
+
+
+def test_two_thresholds_of_one_stat_share_a_figure_and_differ_by_stand():
+    """Ten fish and a thousand fish are the same feat at different sizes: same
+    figure, bigger trophy. That is the whole reason the mapping is per stat."""
+    items = {
+        item["name"]: item
+        for group in trophy_groups(ACHIEVEMENTS, [])
+        for item in group["items"]
+    }
+    small, large = items["Bait & Switch"], items["Master Angler"]
+    assert small["topper"] == large["topper"] == "fish"
+    assert large["tier"] > small["tier"]
 
 
 def test_every_category_has_its_own_accent():

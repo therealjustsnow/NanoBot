@@ -19,7 +19,7 @@ from .constants import (
     PRESTIGE_WEEKLY_BONUS_PER_RANK,
     TROPHY_TIER_POINTS,
 )
-from .definitions import CATEGORY_ACCENTS
+from .definitions import CATEGORY_ACCENTS, STAT_TOPPERS
 
 
 # ── Period keys (weekly today; a season is just a longer-lived period key) ──────
@@ -148,6 +148,16 @@ def category_accent(category: str) -> str:
     return CATEGORY_ACCENTS.get(category, "#5865F2")
 
 
+def trophy_topper(stat: str) -> str:
+    """Which figure stands on the trophy for an achievement measuring `stat`.
+
+    The subject, not the size: a fishing-catch trophy carries a fish whether it
+    was ten fish or a thousand. Anything unmapped falls back to a plain star, so
+    a new stat renders sensibly before anyone gets round to drawing it one.
+    """
+    return STAT_TOPPERS.get(stat, "star")
+
+
 def trophy_groups(achievements, earned_keys) -> list[dict]:
     """The registry as the shelves of a trophy case, in registry order.
 
@@ -169,6 +179,7 @@ def trophy_groups(achievements, earned_keys) -> list[dict]:
             {
                 "name": a.name,
                 "tier": trophy_tier(a.points),
+                "topper": trophy_topper(a.stat),
                 "accent": category_accent(a.category),
                 "earned": a.key in earned,
             }

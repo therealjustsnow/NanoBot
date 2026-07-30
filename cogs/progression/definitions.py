@@ -56,14 +56,42 @@ CAT_CASINO = "🎰 Casino"
 CAT_ACTIVITIES = "⛏️ Activities"
 
 # The colour each category's trophies are trimmed with in the /progress badges
-# case. A drawn trophy carries its tier in its shape and its category in this
-# accent, which is what lets one image answer both "how far along am I" and
-# "where did I earn it". Unlisted categories fall back to the bot's blurple.
+# case — the engraved plate on the plinth. The trophy's stand carries what it
+# was worth and its figure carries what it was for, which is what lets one image
+# answer both "how far along am I" and "where did I earn it". Unlisted
+# categories fall back to the bot's blurple.
 CATEGORY_ACCENTS = {
     CAT_FISHING: "#3BA7FF",
     CAT_WEALTH: "#FFCE45",
     CAT_CASINO: "#FF5C8A",
     CAT_ACTIVITIES: "#7CE38B",
+}
+
+# What stands on top of the trophy, per *stat* rather than per achievement: a
+# real trophy tells you what it was won for before you read the plate, and what
+# an achievement measures is exactly that. Two thresholds of the same stat are
+# the same feat at different sizes, so they share a figure and differ by stand —
+# which is also why this maps the 16 stats rather than the 40 achievements.
+# Values are keys in `utils.trophy_card.TOPPERS`; a stat with no entry gets the
+# fallback star, and tests/test_trophy_card.py fails if one is missing or names
+# a figure the card can't draw.
+STAT_TOPPERS = {
+    "fish_caught": "fish",  # the catch itself
+    "fish_earned": "fish_coin",  # fish that turned into money
+    "fish_best_weight": "scale",  # the heaviest one you landed
+    "fish_streak": "flame",  # a streak that's still going
+    "fish_dex_size": "book",  # the dex — a collection, not a haul
+    "balance": "coins",  # money held
+    "contribution": "shield",  # service to the server
+    "casino_games": "die",  # every game played, win or lose
+    "casino_biggest_win": "bell",  # the one big win
+    "casino_best_streak": "cards",  # a run of hands
+    "work_shifts": "hardhat",
+    "mine_count": "pickaxe",
+    "hunt_count": "antlers",
+    "explore_count": "compass",
+    "rob_count": "mask",
+    "pickaxe_level": "anvil",  # the tool ladder, not the trips
 }
 
 # ══════════════════════════════════════════════════════════════════════════════
