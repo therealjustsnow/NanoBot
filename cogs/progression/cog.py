@@ -37,6 +37,18 @@ column is really just a *period key* — a future "season" mode is a longer-
 lived period key (e.g. "2026-summer") slotted into the exact same column and
 claim logic, no schema change needed.
 
+`/progress badges` renders the whole registry as a **trophy case** image
+(utils/trophy_card.py) rather than a row of emoji: an achievement's emoji is a
+colour emoji, which the card font can't draw, and once every trophy is drawn
+anyway it can work the way a real trophy does. The **figure** on top says what
+it was won for and which rung of it: definitions.STAT_TOPPERS holds a ladder of
+figures per stat in threshold order, and helpers.trophy_groups walks it, so the
+ten-fish trophy carries a minnow and the thousand-fish one a marlin. The
+**stand** under it says what it cost (helpers.trophy_tier) and the **plate**
+carries the category's colour (helpers.category_accent). Locked achievements are drawn as ghosts of the
+trophy that goes there, so the case is also the "what's left" list and a
+brand-new account gets a full case.
+
 Prestige is a deliberately non-destructive endgame sink: nothing is reset or
 lost on prestiging. Advancing costs both achievement points (gates progress
 behind actually playing the other features) and a steep, scaling coin price
@@ -59,7 +71,7 @@ Commands
   /progress                        → your profile: achievements/points, badges,
                                       prestige rank, this week's objective status
   /progress achievements [member]  → earned achievements + what's next, by category
-  /progress badges [member]        → a compact wall of earned achievement badges
+  /progress badges [member]        → the trophy case image (aliases: trophies, case)
   /progress weekly                 → this week's 3 objectives (auto-claims completed ones)
   /progress title <name>           → pick which earned title is shown on your profile
   /progress prestige                → prestige requirements + your current rank
@@ -67,21 +79,28 @@ Commands
 """
 
 import asyncio
+import io
 import logging
 from typing import Optional
 
 import discord
 from discord.ext import commands
 
+# Pure, Discord-free helper shared with the profile and wallet cards — the same
+# borrow cogs/economy makes for exactly this function. No cog is imported.
+from cogs.identity.helpers import resolve_loadout
+from utils import cosmetics
 from utils import db
 from utils import globalxp
 from utils import helpers as h
 from utils import items as item_catalog
+from utils import trophy_card
 
 from . import stats as stats_mod
 from .constants import (
     PRESTIGE_MAX,
     PRESTIGE_WEEKLY_BONUS_PER_RANK,
+    TROPHY_TIER_LABELS,
     WEEKLY_OBJECTIVE_COUNT,
 )
 from .definitions import ACHIEVEMENTS, ACHIEVEMENTS_BY_KEY, WEEKLY_POOL
@@ -97,6 +116,7 @@ from .helpers import (
     prestige_title,
     render_bar,
     total_points,
+    trophy_groups,
 )
 
 log = logging.getLogger("NanoBot.progression")
@@ -111,6 +131,10 @@ class Progression(commands.Cog):
         # Serializes the prestige confirm read-check-debit-advance flow per
         # member (the /daily lock pattern) so a double-click can't double-charge.
         self._locks = h.KeyedLocks()
+        # Trophy cases are drawn in a worker thread; the semaphore keeps a busy
+        # server from turning the card into the bot's CPU budget (the /profile
+        # card's pattern).
+        self._render_lock = asyncio.Semaphore(2)
 
     def _lock(self, user_id: int):
         # Returns an async context manager; existing `async with self._lock(...)`
@@ -369,29 +393,83 @@ class Progression(commands.Cog):
 
     # ── /progress badges ─────────────────────────────────────────────────────
     @progress.command(
-        name="badges", description="A compact wall of your earned achievement badges."
+        name="badges",
+        aliases=["trophies", "case"],
+        description="Your trophy case: every achievement, earned and still to earn.",
     )
+    @discord.app_commands.describe(member="Whose trophy case to show (defaults to you)")
     async def progress_badges(
         self, ctx: commands.Context, member: Optional[discord.Member] = None
     ):
         member = member or ctx.author
         if member.bot:
             return await ctx.reply(
-                embed=h.err("Bots don't earn badges."), ephemeral=True
+                embed=h.err("Bots don't earn trophies."), ephemeral=True
             )
+        # A render is CPU work plus an avatar fetch, so say we're working first
+        # (slash: defer, prefix: typing). Best-effort — a failed defer must
+        # never cost the card.
+        try:
+            await ctx.defer()
+        except Exception:
+            pass
+
+        user_id = member.id
+        newly = []
+        if member.id == ctx.author.id:
+            # Same rule as the other views: only ever evaluate the viewer's own
+            # stats, so looking someone up never silently awards them anything.
+            newly = await self._evaluate_achievements(user_id)
+        data = await self._case_data(member)
+        async with self._render_lock:
+            image = await asyncio.to_thread(trophy_card.render_trophy_case, data)
+        file = discord.File(
+            fp=io.BytesIO(image),
+            filename=f"trophies-{member.id}.{trophy_card.IMAGE_EXT}",
+        )
+        content = None
+        if newly:
+            content = "🎉 New: " + ", ".join(f"**{a.name}**" for a, _notes in newly[:4])
+        await ctx.reply(content=content, file=file)
+
+    async def _case_data(self, member: discord.Member) -> dict:
+        """Everything the trophy case draws, for one member."""
         user_id = member.id
         earned = await db.get_earned_achievements(user_id)
-        if not earned:
-            return await ctx.reply(
-                embed=h.info(
-                    f"{member.display_name} hasn't earned any badges yet.", "🏅 Badges"
-                )
-            )
-        wall = " ".join(
-            ACHIEVEMENTS_BY_KEY[k].emoji for k in earned if k in ACHIEVEMENTS_BY_KEY
+        progression = await db.get_progression(user_id)
+        loadout = resolve_loadout(
+            await db.get_equipped(user_id),
+            await db.get_unlocked_cosmetics(user_id),
+            slots=("banner", "border"),
         )
-        embed = h.embed(f"🏅 {member.display_name}'s Badges", wall[:4000], h.BLUE)
-        await ctx.reply(embed=embed)
+
+        def worn(slot: str):
+            keys = loadout.get(slot) or []
+            return cosmetics.get(keys[0]) if keys else None
+
+        return {
+            "name": member.display_name,
+            "avatar": await self._avatar_bytes(member),
+            "title": await self._profile_title(user_id, earned, progression)
+            or prestige_title(progression["prestige"]),
+            "prestige": progression["prestige"],
+            "points": total_points(earned.keys(), ACHIEVEMENTS_BY_KEY),
+            "groups": trophy_groups(ACHIEVEMENTS, earned.keys()),
+            "legend": list(zip(range(len(TROPHY_TIER_LABELS)), TROPHY_TIER_LABELS)),
+            "banner": worn("banner"),
+            "border": worn("border"),
+            "footer": "/progress achievements for what's next",
+        }
+
+    async def _avatar_bytes(self, member: discord.abc.User) -> Optional[bytes]:
+        """The member's avatar as image bytes, or None (the card then draws an
+        initial tile). A CDN hiccup must never fail the whole command."""
+        try:
+            asset = member.display_avatar.replace(size=256, static_format="png")
+            return await asyncio.wait_for(asset.read(), timeout=5)
+        except Exception:
+            log.debug("avatar fetch failed for %s", member.id, exc_info=True)
+            return None
 
     # ── /progress weekly ─────────────────────────────────────────────────────
     @progress.command(

@@ -17,7 +17,9 @@ from .constants import (
     PRESTIGE_POINTS_BASE,
     PRESTIGE_TITLES,
     PRESTIGE_WEEKLY_BONUS_PER_RANK,
+    TROPHY_TIER_POINTS,
 )
+from .definitions import CATEGORY_ACCENTS, STAT_TOPPERS
 
 
 # ── Period keys (weekly today; a season is just a longer-lived period key) ──────
@@ -129,6 +131,75 @@ def can_prestige(rank: int, points: int, balance: int) -> tuple[bool, str]:
     if balance < cost:
         return False, f"Needs **{cost:,}** coins (you have {balance:,})."
     return True, ""
+
+
+# ── Trophy case ──────────────────────────────────────────────────────────────────
+def trophy_tier(points: int) -> int:
+    """Which trophy an achievement worth `points` stands as (0-3).
+
+    The renderer knows nothing about achievements, so the mapping from what
+    something is worth to how impressive it looks lives here, next to the
+    registry it reads.
+    """
+    return sum(1 for threshold in TROPHY_TIER_POINTS if points >= threshold)
+
+
+def category_accent(category: str) -> str:
+    return CATEGORY_ACCENTS.get(category, "#5865F2")
+
+
+def trophy_topper(stat: str, step: int = 0) -> str:
+    """Which figure stands on the trophy for rung `step` of `stat`'s ladder.
+
+    The subject *and* which rung of it: catching ten fish and catching a
+    thousand are not one story told twice, so the first carries a minnow and
+    the last a marlin. `step` is the achievement's position among the ones
+    measuring that stat, ordered by threshold (see `trophy_groups`).
+
+    Nothing here can fail to render: an unmapped stat falls back to a plain
+    star, and a rung past the end of a ladder reuses its last figure — so
+    adding an achievement is a drawing decision, never a crash.
+    """
+    ladder = STAT_TOPPERS.get(stat)
+    if not ladder:
+        return "star"
+    return ladder[min(max(0, int(step)), len(ladder) - 1)]
+
+
+def trophy_groups(achievements, earned_keys) -> list[dict]:
+    """The registry as the shelves of a trophy case, in registry order.
+
+    Pure: takes the defs and the set of keys already earned, hands back the
+    plain dicts `utils.trophy_card` draws. Locked achievements are included —
+    a case is as much the list of what is still out there as a record of what
+    isn't, and it means a brand-new account gets a full case rather than an
+    empty box. The category label drops its emoji: the card's font has no
+    colour emoji, and a category renders as a heading rather than a chat line.
+    """
+    earned = set(earned_keys or ())
+    # Which rung of its own stat each achievement is: the figure ladders are
+    # ordered by threshold, and the registry is written in that order but isn't
+    # guaranteed to stay that way, so derive it rather than trusting it.
+    rungs: dict[str, list[str]] = {}
+    for a in sorted(achievements, key=lambda a: (a.stat, a.threshold)):
+        rungs.setdefault(a.stat, []).append(a.key)
+
+    groups: dict[str, dict] = {}
+    for a in achievements:
+        group = groups.setdefault(
+            a.category,
+            {"label": a.category.split(" ", 1)[-1], "items": []},
+        )
+        group["items"].append(
+            {
+                "name": a.name,
+                "tier": trophy_tier(a.points),
+                "topper": trophy_topper(a.stat, rungs[a.stat].index(a.key)),
+                "accent": category_accent(a.category),
+                "earned": a.key in earned,
+            }
+        )
+    return list(groups.values())
 
 
 # ── Display ──────────────────────────────────────────────────────────────────────

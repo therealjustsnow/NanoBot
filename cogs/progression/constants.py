@@ -34,3 +34,12 @@ WEEKLY_OBJECTIVE_COUNT = 3
 
 # ── Display ──────────────────────────────────────────────────────────────────────
 BAR_WIDTH = 12
+
+# ── Trophy case (/progress badges) ───────────────────────────────────────────────
+# What an achievement is worth decides which trophy stands in the case: the
+# shape ladder is medal → cup → grand cup → star, so a case can be read across
+# the room without reading a single plaque. Thresholds are the *lower* bound of
+# tiers 1-3; anything below the first is tier 0.
+TROPHY_TIER_POINTS = (25, 50, 75)
+# The legend printed under the case, so the ladder explains itself once.
+TROPHY_TIER_LABELS = ("10+", "25+", "50+", "75+ pts")

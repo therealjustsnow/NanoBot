@@ -55,6 +55,52 @@ CAT_WEALTH = "🪙 Wealth"
 CAT_CASINO = "🎰 Casino"
 CAT_ACTIVITIES = "⛏️ Activities"
 
+# The colour each category's trophies are trimmed with in the /progress badges
+# case — the engraved plate on the plinth. The trophy's stand carries what it
+# was worth and its figure carries what it was for, which is what lets one image
+# answer both "how far along am I" and "where did I earn it". Unlisted
+# categories fall back to the bot's blurple.
+CATEGORY_ACCENTS = {
+    CAT_FISHING: "#3BA7FF",
+    CAT_WEALTH: "#FFCE45",
+    CAT_CASINO: "#FF5C8A",
+    CAT_ACTIVITIES: "#7CE38B",
+}
+
+# What stands on top of the trophy: a real trophy tells you what it was won for
+# before you read the plate, and what an achievement measures is exactly that.
+#
+# One *ladder* per stat, in threshold order, because "catch 10 fish" and "catch
+# 1,000 fish" are not the same story told twice — the trophy should say which
+# one you did. So the ten-fish trophy carries a minnow and the thousand-fish one
+# carries a marlin; a week's streak is a calendar and a month's is the tide.
+# Keyed by stat rather than by achievement key so the ladder reads as a
+# progression rather than 40 unrelated picks, and so a rung added to an existing
+# stat is one obvious decision: what does *that* one look like?
+#
+# Values are keys in `utils.trophy_card.TOPPERS`. A stat with no entry gets the
+# fallback star and a rung past the end of its ladder reuses the last figure, so
+# nothing ever fails to render; tests/test_trophy_card.py fails the build if a
+# ladder is short, repeats itself, or names a figure the card can't draw.
+STAT_TOPPERS = {
+    "fish_caught": ("minnow", "fish", "marlin"),
+    "fish_earned": ("fish_coin", "money_bag", "chest"),
+    "fish_best_weight": ("weight", "scale", "whale"),
+    "fish_streak": ("flame", "calendar", "tide"),
+    "fish_dex_size": ("jar", "book", "plaque"),
+    "balance": ("piggy", "coins", "top_hat"),
+    "contribution": ("shield", "pillar"),
+    "casino_games": ("chip", "die", "roulette"),
+    "casino_biggest_win": ("bell", "lucky7"),
+    "casino_best_streak": ("cards", "crown"),
+    "work_shifts": ("hardhat", "ladder", "watch"),
+    "mine_count": ("pickaxe", "gem"),
+    "hunt_count": ("paw", "antlers"),
+    "explore_count": ("compass", "globe"),
+    "rob_count": ("mask", "key"),
+    "pickaxe_level": ("anvil", "hammer"),
+}
+
 # ══════════════════════════════════════════════════════════════════════════════
 #  Achievements
 # ══════════════════════════════════════════════════════════════════════════════
