@@ -571,16 +571,18 @@ activities. Each pays once — coins, an item, or a **title** — and because
 achievements are global you can never re-earn one by joining another server.
 
 **The trophy case.** `/progress badges` draws every achievement as a trophy on
-a shelf, and each one is made for what it's for: a fish for catches, a balance
-scale for your heaviest, a flame for a streak, an open book for the dex, a
-stack of coins for what you're holding, a die for games played, a bell for a
-big win, a hard hat for shifts, a pickaxe for mining, antlers for hunts, a
-compass for exploring. What it's worth decides the trophy it stands on — a
-plain block, then a column, then a stepped plinth, then a laurel wreath, in
-bronze, silver, gold and prismatic, each taller than the last, so the big ones
-tower. The plate on the base carries its category's colour (blue fishing, gold
-wealth, pink casino, green activities). Ones you haven't earned yet stand there
-as empty outlines, so the case is also the list of what's left to chase.
+a shelf, and every one of them is made for the exact thing you did — right down
+to which milestone it was. Catch 10 fish and you get a minnow; 100 gets you a
+proper fish; 1,000 gets you a marlin. A 3-day streak is a flame, a week is a
+calendar, a month is the tide. Your first 1,000 coins is a piggy bank, 100,000
+is a top hat. Hunting starts at a paw print and ends at a stag; exploring goes
+compass then globe; the casino runs chip, die, roulette wheel. What the
+achievement is worth decides what it stands on — a plain block, then a column,
+then a stepped plinth, then a laurel wreath, in bronze, silver, gold and
+prismatic, each taller than the last, so the big ones tower over the shelf. The
+plate on the base carries its category's colour (blue fishing, gold wealth,
+pink casino, green activities). Ones you haven't earned yet stand there as
+empty outlines, so the case is also the list of what's left to chase.
 
 **Titles.** Some achievements grant a title. `/progress title` lists the ones
 you've earned (and a "none" option). It shows on your `/profile`.

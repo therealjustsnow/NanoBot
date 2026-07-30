@@ -189,25 +189,65 @@ def test_every_tier_has_a_stand_to_draw():
 def test_every_achievement_gets_a_figure_the_card_can_draw():
     """The whole point of the figures is that a trophy says what it is for, so
     an achievement measuring something nobody drew is a real gap — and a
-    registry naming a figure the card doesn't have would silently star it."""
+    ladder naming a figure the card doesn't have would silently star it."""
     measured = {a.stat for a in ACHIEVEMENTS}
     assert measured <= set(STAT_TOPPERS), sorted(measured - set(STAT_TOPPERS))
-    assert set(STAT_TOPPERS.values()) <= set(trophy_card.TOPPERS)
+    every_figure = {figure for ladder in STAT_TOPPERS.values() for figure in ladder}
+    assert every_figure <= set(trophy_card.TOPPERS), sorted(
+        every_figure - set(trophy_card.TOPPERS)
+    )
     for stat in measured:
         assert trophy_topper(stat) != "star", f"{stat} still has no figure"
 
 
-def test_two_thresholds_of_one_stat_share_a_figure_and_differ_by_stand():
-    """Ten fish and a thousand fish are the same feat at different sizes: same
-    figure, bigger trophy. That is the whole reason the mapping is per stat."""
+def test_every_rung_of_every_ladder_is_drawn_and_drawn_once():
+    """A ladder shorter than its stat would quietly reuse the last figure, so a
+    new achievement would arrive wearing the old one's trophy — and a ladder
+    that repeats a figure gives two rungs the same trophy, which is the exact
+    thing per-rung figures exist to stop."""
+    rungs: dict[str, int] = {}
+    for a in ACHIEVEMENTS:
+        rungs[a.stat] = rungs.get(a.stat, 0) + 1
+    for stat, count in rungs.items():
+        ladder = STAT_TOPPERS[stat]
+        assert (
+            len(ladder) == count
+        ), f"{stat} has {count} rungs and {len(ladder)} figures"
+        assert len(set(ladder)) == len(ladder), f"{stat} repeats a figure: {ladder}"
+
+
+def test_two_thresholds_of_one_stat_get_different_trophies():
+    """Ten fish and a thousand fish are not one story told twice: the small one
+    carries a minnow and the big one a marlin, on a bigger stand."""
     items = {
         item["name"]: item
         for group in trophy_groups(ACHIEVEMENTS, [])
         for item in group["items"]
     }
     small, large = items["Bait & Switch"], items["Master Angler"]
-    assert small["topper"] == large["topper"] == "fish"
+    assert (small["topper"], large["topper"]) == ("minnow", "marlin")
     assert large["tier"] > small["tier"]
+
+
+def test_a_ladder_is_walked_in_threshold_order_not_registry_order():
+    """`trophy_groups` derives the rung from the thresholds, so shuffling the
+    registry can't hand the thousand-fish trophy a minnow."""
+    shuffled = sorted(ACHIEVEMENTS, key=lambda a: -a.threshold)
+    items = {
+        item["name"]: item
+        for group in trophy_groups(shuffled, [])
+        for item in group["items"]
+    }
+    assert items["Bait & Switch"]["topper"] == "minnow"
+    assert items["Master Angler"]["topper"] == "marlin"
+
+
+def test_a_rung_past_the_end_of_a_ladder_reuses_its_last_figure():
+    """Safety net under the CI guard above: an achievement added before its
+    figure is drawn must still render a trophy."""
+    ladder = STAT_TOPPERS["fish_caught"]
+    assert trophy_topper("fish_caught", len(ladder) + 5) == ladder[-1]
+    assert trophy_topper("no such stat", 2) == "star"
 
 
 def test_every_category_has_its_own_accent():

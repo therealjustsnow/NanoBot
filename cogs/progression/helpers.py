@@ -148,14 +148,22 @@ def category_accent(category: str) -> str:
     return CATEGORY_ACCENTS.get(category, "#5865F2")
 
 
-def trophy_topper(stat: str) -> str:
-    """Which figure stands on the trophy for an achievement measuring `stat`.
+def trophy_topper(stat: str, step: int = 0) -> str:
+    """Which figure stands on the trophy for rung `step` of `stat`'s ladder.
 
-    The subject, not the size: a fishing-catch trophy carries a fish whether it
-    was ten fish or a thousand. Anything unmapped falls back to a plain star, so
-    a new stat renders sensibly before anyone gets round to drawing it one.
+    The subject *and* which rung of it: catching ten fish and catching a
+    thousand are not one story told twice, so the first carries a minnow and
+    the last a marlin. `step` is the achievement's position among the ones
+    measuring that stat, ordered by threshold (see `trophy_groups`).
+
+    Nothing here can fail to render: an unmapped stat falls back to a plain
+    star, and a rung past the end of a ladder reuses its last figure — so
+    adding an achievement is a drawing decision, never a crash.
     """
-    return STAT_TOPPERS.get(stat, "star")
+    ladder = STAT_TOPPERS.get(stat)
+    if not ladder:
+        return "star"
+    return ladder[min(max(0, int(step)), len(ladder) - 1)]
 
 
 def trophy_groups(achievements, earned_keys) -> list[dict]:
@@ -169,6 +177,13 @@ def trophy_groups(achievements, earned_keys) -> list[dict]:
     colour emoji, and a category renders as a heading rather than a chat line.
     """
     earned = set(earned_keys or ())
+    # Which rung of its own stat each achievement is: the figure ladders are
+    # ordered by threshold, and the registry is written in that order but isn't
+    # guaranteed to stay that way, so derive it rather than trusting it.
+    rungs: dict[str, list[str]] = {}
+    for a in sorted(achievements, key=lambda a: (a.stat, a.threshold)):
+        rungs.setdefault(a.stat, []).append(a.key)
+
     groups: dict[str, dict] = {}
     for a in achievements:
         group = groups.setdefault(
@@ -179,7 +194,7 @@ def trophy_groups(achievements, earned_keys) -> list[dict]:
             {
                 "name": a.name,
                 "tier": trophy_tier(a.points),
-                "topper": trophy_topper(a.stat),
+                "topper": trophy_topper(a.stat, rungs[a.stat].index(a.key)),
                 "accent": category_accent(a.category),
                 "earned": a.key in earned,
             }

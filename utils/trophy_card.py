@@ -14,7 +14,9 @@ trophies do, which is that you can tell what one was won for from across the
 room:
 
   * the **figure** on top is the subject — a fish, a pair of antlers, a die, a
-    hard hat — chosen by what the achievement measures (`TOPPERS`);
+    hard hat — chosen by what the achievement measures, and by *which rung of
+    it*: the caller walks a ladder of figures per stat, so ten fish is a minnow
+    and a thousand is a marlin (`TOPPERS`);
   * the **stand** under it is what it cost — a plain block, then a column, then
     a stepped plinth, then a laurel wreath (`TIER_STANDS`) — in bronze, silver,
     gold or prismatic (`TIER_METALS`), and drawn taller with each tier
@@ -534,6 +536,524 @@ def _topper_anvil(mask, box) -> None:
     )
 
 
+def _topper_minnow(mask, box) -> None:
+    """A little fish — the first ten, and the smallest thing in the case."""
+    x0, y0, w, h, cx, cy = _box(box)
+    _fish_shape(
+        ImageDraw.Draw(mask),
+        (cx - 0.32 * w, cy - 0.26 * h, cx + 0.32 * w, cy + 0.26 * h),
+    )
+
+
+def _topper_marlin(mask, box) -> None:
+    """A billfish — the one you mount on the wall."""
+    draw = ImageDraw.Draw(mask)
+    x0, y0, w, h, cx, cy = _box(box)
+    draw.polygon(  # the bill
+        [
+            (x0, cy + 0.02 * h),
+            (x0 + 0.32 * w, cy - 0.06 * h),
+            (x0 + 0.32 * w, cy + 0.08 * h),
+        ],
+        fill=255,
+    )
+    draw.ellipse((x0 + 0.26 * w, cy - 0.18 * h, x0 + 0.80 * w, cy + 0.20 * h), fill=255)
+    draw.polygon(  # the sail
+        [
+            (x0 + 0.36 * w, cy - 0.12 * h),
+            (x0 + 0.50 * w, cy - 0.46 * h),
+            (x0 + 0.64 * w, cy - 0.42 * h),
+            (x0 + 0.70 * w, cy - 0.08 * h),
+        ],
+        fill=255,
+    )
+    draw.polygon(  # a forked tail, not the minnow's flat one
+        [
+            (x0 + 0.70 * w, cy),
+            (x0 + w, cy - 0.34 * h),
+            (x0 + 0.88 * w, cy),
+            (x0 + w, cy + 0.34 * h),
+        ],
+        fill=255,
+    )
+
+
+def _topper_money_bag(mask, box) -> None:
+    """A bag of takings — the middle rung of anything that pays."""
+    draw = ImageDraw.Draw(mask)
+    x0, y0, w, h, cx, _cy = _box(box)
+    draw.polygon(  # the gathered neck
+        [
+            (cx - 0.20 * w, y0 + 0.04 * h),
+            (cx + 0.20 * w, y0 + 0.04 * h),
+            (cx + 0.13 * w, y0 + 0.30 * h),
+            (cx - 0.13 * w, y0 + 0.30 * h),
+        ],
+        fill=255,
+    )
+    draw.ellipse((x0 + 0.06 * w, y0 + 0.24 * h, x0 + 0.94 * w, y0 + h), fill=255)
+    draw.rectangle(  # the tie
+        (cx - 0.22 * w, y0 + 0.28 * h, cx + 0.22 * w, y0 + 0.38 * h), fill=0
+    )
+    draw.ellipse(  # a coin stamped on the side
+        (cx - 0.16 * w, y0 + 0.52 * h, cx + 0.16 * w, y0 + 0.84 * h),
+        outline=0,
+        width=int(max(1, h * 0.035)),
+    )
+
+
+def _topper_chest(mask, box) -> None:
+    """A treasure chest — the top of a money ladder."""
+    draw = ImageDraw.Draw(mask)
+    x0, y0, w, h, cx, _cy = _box(box)
+    draw.pieslice(
+        (x0 + 0.04 * w, y0 + 0.10 * h, x0 + 0.96 * w, y0 + 0.76 * h), 180, 360, fill=255
+    )
+    draw.rectangle(
+        (x0 + 0.04 * w, y0 + 0.42 * h, x0 + 0.96 * w, y0 + 0.92 * h), fill=255
+    )
+    draw.rectangle(  # the band between lid and body
+        (x0 + 0.04 * w, y0 + 0.44 * h, x0 + 0.96 * w, y0 + 0.52 * h), fill=0
+    )
+    draw.rectangle(  # the clasp
+        (cx - 0.08 * w, y0 + 0.40 * h, cx + 0.08 * w, y0 + 0.64 * h), fill=255
+    )
+    draw.ellipse((cx - 0.03 * w, y0 + 0.50 * h, cx + 0.03 * w, y0 + 0.58 * h), fill=0)
+    draw.rectangle((x0, y0 + 0.90 * h, x0 + w, y0 + h), fill=255)
+
+
+def _topper_weight(mask, box) -> None:
+    """A hanging weight — the first honest fish anyone lands."""
+    draw = ImageDraw.Draw(mask)
+    x0, y0, w, h, cx, _cy = _box(box)
+    draw.ellipse(
+        (cx - 0.16 * w, y0, cx + 0.16 * w, y0 + 0.28 * h),
+        outline=255,
+        width=int(max(2, h * 0.07)),
+    )
+    draw.polygon(
+        [
+            (x0 + 0.22 * w, y0 + 0.30 * h),
+            (x0 + 0.78 * w, y0 + 0.30 * h),
+            (x0 + 0.94 * w, y0 + h),
+            (x0 + 0.06 * w, y0 + h),
+        ],
+        fill=255,
+    )
+    draw.line(  # a band across it, so it reads cast rather than flat
+        (x0 + 0.14 * w, y0 + 0.72 * h, x0 + 0.86 * w, y0 + 0.72 * h),
+        fill=0,
+        width=int(max(1, h * 0.05)),
+    )
+
+
+def _topper_whale(mask, box) -> None:
+    """The leviathan — the biggest thing anybody has pulled out of the water."""
+    draw = ImageDraw.Draw(mask)
+    x0, y0, w, h, cx, cy = _box(box)
+    draw.ellipse((x0 + 0.02 * w, cy - 0.22 * h, x0 + 0.78 * w, cy + 0.30 * h), fill=255)
+    draw.polygon(  # flukes
+        [
+            (x0 + 0.68 * w, cy + 0.04 * h),
+            (x0 + w, cy - 0.30 * h),
+            (x0 + 0.96 * w, cy + 0.10 * h),
+            (x0 + w, cy + 0.38 * h),
+        ],
+        fill=255,
+    )
+    draw.polygon(  # a pectoral fin
+        [
+            (x0 + 0.30 * w, cy + 0.18 * h),
+            (x0 + 0.54 * w, cy + 0.20 * h),
+            (x0 + 0.36 * w, cy + 0.44 * h),
+        ],
+        fill=255,
+    )
+    for i, dx in enumerate((-0.06, 0.02, 0.10)):  # the spout
+        draw.ellipse(
+            (
+                x0 + (0.22 + dx) * w,
+                cy - (0.46 + abs(dx) * 1.4) * h,
+                x0 + (0.30 + dx) * w,
+                cy - (0.34 + abs(dx) * 1.4) * h,
+            ),
+            fill=255,
+        )
+
+
+def _topper_calendar(mask, box) -> None:
+    """A calendar — a week of showing up, rather than a night of it."""
+    draw = ImageDraw.Draw(mask)
+    x0, y0, w, h, cx, _cy = _box(box)
+    for side in (-1, 1):  # the two rings
+        draw.rectangle(
+            (
+                cx + side * 0.30 * w - 0.04 * w,
+                y0,
+                cx + side * 0.30 * w + 0.04 * w,
+                y0 + 0.18 * h,
+            ),
+            fill=255,
+        )
+    draw.rounded_rectangle(
+        (x0 + 0.04 * w, y0 + 0.12 * h, x0 + 0.96 * w, y0 + h), 0.06 * h, fill=255
+    )
+    draw.line(
+        (x0 + 0.04 * w, y0 + 0.34 * h, x0 + 0.96 * w, y0 + 0.34 * h),
+        fill=0,
+        width=int(max(1, h * 0.05)),
+    )
+    for row in range(2):  # the days
+        for col in range(3):
+            px = x0 + (0.26 + col * 0.24) * w
+            py = y0 + (0.50 + row * 0.24) * h
+            draw.ellipse(
+                (px - 0.05 * w, py - 0.05 * h, px + 0.05 * w, py + 0.05 * h), fill=0
+            )
+
+
+def _topper_tide(mask, box) -> None:
+    """A moon over the tide — a month of first casts."""
+    draw = ImageDraw.Draw(mask)
+    x0, y0, w, h, cx, _cy = _box(box)
+    draw.ellipse((cx - 0.24 * w, y0, cx + 0.24 * w, y0 + 0.42 * h), fill=255)
+    draw.ellipse(  # bitten into a crescent
+        (cx - 0.06 * w, y0 - 0.04 * h, cx + 0.42 * w, y0 + 0.38 * h), fill=0
+    )
+    for i, top in enumerate((0.52, 0.76)):  # two rolling waves
+        draw.chord(
+            (x0, y0 + top * h, x0 + 0.62 * w, y0 + (top + 0.26) * h), 180, 360, fill=255
+        )
+        draw.chord(
+            (x0 + 0.38 * w, y0 + top * h, x0 + w, y0 + (top + 0.26) * h),
+            180,
+            360,
+            fill=255,
+        )
+        draw.rectangle(
+            (x0, y0 + (top + 0.13) * h, x0 + w, y0 + (top + 0.18) * h), fill=255
+        )
+
+
+def _topper_jar(mask, box) -> None:
+    """A specimen jar — the start of a collection."""
+    draw = ImageDraw.Draw(mask)
+    x0, y0, w, h, cx, _cy = _box(box)
+    draw.rounded_rectangle(
+        (cx - 0.24 * w, y0, cx + 0.24 * w, y0 + 0.14 * h), 0.03 * h, fill=255
+    )
+    draw.rounded_rectangle(
+        (x0 + 0.14 * w, y0 + 0.14 * h, x0 + 0.86 * w, y0 + h), 0.10 * h, fill=255
+    )
+    _fish_shape(
+        draw, (x0 + 0.22 * w, y0 + 0.42 * h, x0 + 0.78 * w, y0 + 0.86 * h), fill=0
+    )
+
+
+def _topper_plaque(mask, box) -> None:
+    """A mounted catch on a board — the finished collection."""
+    draw = ImageDraw.Draw(mask)
+    x0, y0, w, h, cx, cy = _box(box)
+    draw.rounded_rectangle(
+        (x0 + 0.02 * w, y0 + 0.06 * h, x0 + 0.98 * w, y0 + 0.94 * h), 0.10 * h, fill=255
+    )
+    draw.rounded_rectangle(
+        (x0 + 0.09 * w, y0 + 0.15 * h, x0 + 0.91 * w, y0 + 0.85 * h),
+        0.07 * h,
+        outline=0,
+        width=int(max(1, h * 0.035)),
+    )
+    _fish_shape(
+        draw, (x0 + 0.14 * w, cy - 0.26 * h, x0 + 0.86 * w, cy + 0.26 * h), fill=0
+    )
+
+
+def _topper_piggy(mask, box) -> None:
+    """A piggy bank — the first thousand anyone saves."""
+    draw = ImageDraw.Draw(mask)
+    x0, y0, w, h, cx, cy = _box(box)
+    draw.ellipse((x0 + 0.04 * w, cy - 0.26 * h, x0 + 0.80 * w, cy + 0.26 * h), fill=255)
+    draw.polygon(  # an ear
+        [
+            (x0 + 0.44 * w, cy - 0.22 * h),
+            (x0 + 0.64 * w, cy - 0.22 * h),
+            (x0 + 0.50 * w, cy - 0.48 * h),
+        ],
+        fill=255,
+    )
+    draw.ellipse(  # the snout, big enough to read as one
+        (x0 + 0.68 * w, cy - 0.14 * h, x0 + w, cy + 0.16 * h), fill=255
+    )
+    for dx in (0.78, 0.90):  # nostrils
+        draw.ellipse(
+            (x0 + dx * w, cy - 0.06 * h, x0 + (dx + 0.06) * w, cy + 0.06 * h), fill=0
+        )
+    for dx in (0.16, 0.48):  # trotters
+        draw.rectangle(
+            (x0 + dx * w, cy + 0.18 * h, x0 + (dx + 0.14) * w, cy + 0.46 * h), fill=255
+        )
+    draw.rectangle(  # the coin slot
+        (x0 + 0.16 * w, cy - 0.30 * h, x0 + 0.40 * w, cy - 0.22 * h), fill=0
+    )
+
+
+def _topper_top_hat(mask, box) -> None:
+    """A tycoon's hat — a hundred thousand coins, held."""
+    draw = ImageDraw.Draw(mask)
+    x0, y0, w, h, cx, _cy = _box(box)
+    draw.rectangle(
+        (cx - 0.28 * w, y0 + 0.04 * h, cx + 0.28 * w, y0 + 0.74 * h), fill=255
+    )
+    draw.ellipse((cx - 0.28 * w, y0, cx + 0.28 * w, y0 + 0.14 * h), fill=255)
+    draw.ellipse((x0, y0 + 0.62 * h, x0 + w, y0 + 0.94 * h), fill=255)
+    draw.rectangle(  # the band
+        (cx - 0.28 * w, y0 + 0.52 * h, cx + 0.28 * w, y0 + 0.66 * h), fill=0
+    )
+
+
+def _topper_pillar(mask, box) -> None:
+    """A column — a pillar of the guild, literally."""
+    draw = ImageDraw.Draw(mask)
+    x0, y0, w, h, cx, _cy = _box(box)
+    draw.rectangle((x0 + 0.10 * w, y0, x0 + 0.90 * w, y0 + 0.14 * h), fill=255)
+    draw.rectangle(
+        (x0 + 0.22 * w, y0 + 0.14 * h, x0 + 0.78 * w, y0 + 0.84 * h), fill=255
+    )
+    draw.rectangle((x0 + 0.06 * w, y0 + 0.84 * h, x0 + 0.94 * w, y0 + h), fill=255)
+    for dx in (0.36, 0.50, 0.64):  # flutes
+        draw.line(
+            (x0 + dx * w, y0 + 0.20 * h, x0 + dx * w, y0 + 0.78 * h),
+            fill=0,
+            width=int(max(1, w * 0.03)),
+        )
+
+
+def _topper_chip(mask, box) -> None:
+    """A single casino chip — ten hands in."""
+    draw = ImageDraw.Draw(mask)
+    _x0, _y0, w, h, cx, cy = _box(box)
+    r = min(w, h) * 0.46
+    draw.ellipse((cx - r, cy - r, cx + r, cy + r), fill=255)
+    for i in range(8):  # the edge spots
+        angle = math.pi / 4 * i
+        px, py = cx + r * 0.82 * math.cos(angle), cy + r * 0.82 * math.sin(angle)
+        draw.ellipse(
+            (px - r * 0.16, py - r * 0.16, px + r * 0.16, py + r * 0.16), fill=0
+        )
+    draw.ellipse(
+        (cx - r * 0.44, cy - r * 0.44, cx + r * 0.44, cy + r * 0.44),
+        outline=0,
+        width=int(max(1, r * 0.16)),
+    )
+
+
+def _topper_roulette(mask, box) -> None:
+    """A roulette wheel — a thousand games deep."""
+    draw = ImageDraw.Draw(mask)
+    _x0, _y0, w, h, cx, cy = _box(box)
+    r = min(w, h) * 0.48
+    draw.ellipse((cx - r, cy - r, cx + r, cy + r), fill=255)
+    draw.ellipse(
+        (cx - r * 0.80, cy - r * 0.80, cx + r * 0.80, cy + r * 0.80),
+        outline=0,
+        width=int(max(1, r * 0.10)),
+    )
+    for i in range(8):  # the pockets
+        angle = math.pi / 4 * i
+        draw.line(
+            (
+                cx + r * 0.30 * math.cos(angle),
+                cy + r * 0.30 * math.sin(angle),
+                cx + r * 0.74 * math.cos(angle),
+                cy + r * 0.74 * math.sin(angle),
+            ),
+            fill=0,
+            width=int(max(1, r * 0.12)),
+        )
+    draw.ellipse(  # the ball, resting in a pocket
+        (cx + r * 0.40, cy - r * 0.62, cx + r * 0.66, cy - r * 0.36), fill=0
+    )
+
+
+def _topper_lucky7(mask, box) -> None:
+    """A seven — the payout everybody is actually chasing."""
+    draw = ImageDraw.Draw(mask)
+    x0, y0, w, h, _cx, _cy = _box(box)
+    draw.polygon(
+        [
+            (x0 + 0.10 * w, y0 + 0.04 * h),
+            (x0 + 0.90 * w, y0 + 0.04 * h),
+            (x0 + 0.90 * w, y0 + 0.24 * h),
+            (x0 + 0.52 * w, y0 + h),
+            (x0 + 0.24 * w, y0 + h),
+            (x0 + 0.62 * w, y0 + 0.28 * h),
+            (x0 + 0.10 * w, y0 + 0.28 * h),
+        ],
+        fill=255,
+    )
+
+
+def _topper_crown(mask, box) -> None:
+    """A crown — ten wins in a row, and nobody could touch you."""
+    draw = ImageDraw.Draw(mask)
+    x0, y0, w, h, _cx, _cy = _box(box)
+    draw.polygon(
+        [
+            (x0 + 0.04 * w, y0 + 0.16 * h),
+            (x0 + 0.28 * w, y0 + 0.52 * h),
+            (x0 + 0.50 * w, y0 + 0.06 * h),
+            (x0 + 0.72 * w, y0 + 0.52 * h),
+            (x0 + 0.96 * w, y0 + 0.16 * h),
+            (x0 + 0.88 * w, y0 + 0.80 * h),
+            (x0 + 0.12 * w, y0 + 0.80 * h),
+        ],
+        fill=255,
+    )
+    draw.rounded_rectangle(
+        (x0 + 0.08 * w, y0 + 0.80 * h, x0 + 0.92 * w, y0 + h), 0.03 * h, fill=255
+    )
+    for dx in (0.04, 0.50, 0.96):  # jewels on the points
+        draw.ellipse(
+            (
+                x0 + dx * w - 0.08 * w,
+                y0 + (0.16 if dx != 0.50 else 0.06) * h - 0.08 * h,
+                x0 + dx * w + 0.08 * w,
+                y0 + (0.16 if dx != 0.50 else 0.06) * h + 0.08 * h,
+            ),
+            fill=255,
+        )
+
+
+def _topper_ladder(mask, box) -> None:
+    """A ladder — the career one, climbed a hundred shifts at a time."""
+    draw = ImageDraw.Draw(mask)
+    x0, y0, w, h, _cx, _cy = _box(box)
+    rail = int(max(2, w * 0.09))
+    for dx in (0.20, 0.80):
+        draw.line((x0 + dx * w, y0, x0 + dx * w, y0 + h), fill=255, width=rail)
+    for i in range(4):
+        y = y0 + (0.14 + i * 0.24) * h
+        draw.line((x0 + 0.20 * w, y, x0 + 0.80 * w, y), fill=255, width=rail)
+
+
+def _topper_watch(mask, box) -> None:
+    """A gold watch — five hundred shifts, and the traditional reward for it."""
+    draw = ImageDraw.Draw(mask)
+    _x0, y0, w, h, cx, cy = _box(box)
+    r = min(w, h) * 0.42
+    draw.ellipse(
+        (cx - r * 0.22, y0, cx + r * 0.22, y0 + 0.16 * h),
+        outline=255,
+        width=int(max(2, h * 0.05)),
+    )
+    draw.rectangle(
+        (cx - r * 0.10, y0 + 0.10 * h, cx + r * 0.10, y0 + 0.22 * h), fill=255
+    )
+    face_y = y0 + h - r - 0.02 * h
+    draw.ellipse((cx - r, face_y - r, cx + r, face_y + r), fill=255)
+    draw.ellipse(
+        (cx - r * 0.78, face_y - r * 0.78, cx + r * 0.78, face_y + r * 0.78),
+        outline=0,
+        width=int(max(1, r * 0.12)),
+    )
+    hands = int(max(1, r * 0.14))
+    draw.line((cx, face_y, cx, face_y - r * 0.56), fill=0, width=hands)
+    draw.line((cx, face_y, cx + r * 0.42, face_y + r * 0.20), fill=0, width=hands)
+
+
+def _topper_gem(mask, box) -> None:
+    """A cut gem — what the deep seams and the last pickaxe are both about."""
+    draw = ImageDraw.Draw(mask)
+    x0, y0, w, h, cx, _cy = _box(box)
+    draw.polygon(
+        [
+            (x0 + 0.22 * w, y0 + 0.06 * h),
+            (x0 + 0.78 * w, y0 + 0.06 * h),
+            (x0 + w, y0 + 0.40 * h),
+            (cx, y0 + h),
+            (x0, y0 + 0.40 * h),
+        ],
+        fill=255,
+    )
+    for a, b in (  # facets
+        ((0.22, 0.06), (0.34, 0.40)),
+        ((0.78, 0.06), (0.66, 0.40)),
+        ((0.0, 0.40), (1.0, 0.40)),
+        ((0.34, 0.40), (0.5, 1.0)),
+        ((0.66, 0.40), (0.5, 1.0)),
+    ):
+        draw.line(
+            (x0 + a[0] * w, y0 + a[1] * h, x0 + b[0] * w, y0 + b[1] * h),
+            fill=0,
+            width=int(max(1, h * 0.025)),
+        )
+
+
+def _topper_paw(mask, box) -> None:
+    """A print in the mud — a tracker, not yet a predator."""
+    draw = ImageDraw.Draw(mask)
+    x0, y0, w, h, cx, _cy = _box(box)
+    draw.ellipse((x0 + 0.16 * w, y0 + 0.44 * h, x0 + 0.84 * w, y0 + h), fill=255)
+    for dx, dy, size in (
+        (0.10, 0.26, 0.15),
+        (0.34, 0.06, 0.15),
+        (0.66, 0.06, 0.15),
+        (0.90, 0.26, 0.15),
+    ):
+        draw.ellipse(
+            (
+                x0 + (dx - size) * w,
+                y0 + dy * h,
+                x0 + (dx + size) * w,
+                y0 + (dy + 0.30) * h,
+            ),
+            fill=255,
+        )
+
+
+def _topper_globe(mask, box) -> None:
+    """A globe — a hundred expeditions, all of them somewhere else."""
+    draw = ImageDraw.Draw(mask)
+    _x0, _y0, w, h, cx, cy = _box(box)
+    r = min(w, h) * 0.48
+    draw.ellipse((cx - r, cy - r, cx + r, cy + r), fill=255)
+    line = int(max(1, r * 0.11))
+    draw.ellipse((cx - r, cy - r, cx + r, cy + r), outline=0, width=line)
+    draw.line((cx - r, cy, cx + r, cy), fill=0, width=line)  # the equator
+    for factor in (0.36, 0.72):  # meridians
+        draw.ellipse(
+            (cx - r * factor, cy - r, cx + r * factor, cy + r), outline=0, width=line
+        )
+
+
+def _topper_key(mask, box) -> None:
+    """A skeleton key — twenty-five wallets that were not yours."""
+    draw = ImageDraw.Draw(mask)
+    x0, y0, w, h, cx, _cy = _box(box)
+    r = min(w, h) * 0.26
+    draw.ellipse(
+        (cx - r, y0, cx + r, y0 + 2 * r), outline=255, width=int(max(2, r * 0.44))
+    )
+    draw.rectangle((cx - 0.07 * w, y0 + 1.6 * r, cx + 0.07 * w, y0 + h), fill=255)
+    for dy in (0.72, 0.88):  # the bit
+        draw.rectangle(
+            (cx + 0.05 * w, y0 + dy * h, cx + 0.34 * w, y0 + (dy + 0.10) * h), fill=255
+        )
+
+
+def _topper_hammer(mask, box) -> None:
+    """A forge hammer — the best pickaxe in the game came off one."""
+    draw = ImageDraw.Draw(mask)
+    x0, y0, w, h, cx, _cy = _box(box)
+    draw.rounded_rectangle(
+        (x0 + 0.06 * w, y0 + 0.06 * h, x0 + 0.94 * w, y0 + 0.36 * h), 0.04 * h, fill=255
+    )
+    draw.rectangle(  # the eye the handle goes through
+        (cx - 0.10 * w, y0 + 0.10 * h, cx + 0.10 * w, y0 + 0.32 * h), fill=0
+    )
+    draw.rectangle((cx - 0.08 * w, y0 + 0.30 * h, cx + 0.08 * w, y0 + h), fill=255)
+
+
 def _topper_star(mask, box) -> None:
     """The fallback: a plain star, for anything with no figure of its own."""
     _x0, _y0, w, h, cx, cy = _box(box)
@@ -541,6 +1061,30 @@ def _topper_star(mask, box) -> None:
 
 
 TOPPERS = {
+    "minnow": _topper_minnow,
+    "marlin": _topper_marlin,
+    "money_bag": _topper_money_bag,
+    "chest": _topper_chest,
+    "weight": _topper_weight,
+    "whale": _topper_whale,
+    "calendar": _topper_calendar,
+    "tide": _topper_tide,
+    "jar": _topper_jar,
+    "plaque": _topper_plaque,
+    "piggy": _topper_piggy,
+    "top_hat": _topper_top_hat,
+    "pillar": _topper_pillar,
+    "chip": _topper_chip,
+    "roulette": _topper_roulette,
+    "lucky7": _topper_lucky7,
+    "crown": _topper_crown,
+    "ladder": _topper_ladder,
+    "watch": _topper_watch,
+    "gem": _topper_gem,
+    "paw": _topper_paw,
+    "globe": _topper_globe,
+    "key": _topper_key,
+    "hammer": _topper_hammer,
     "fish": _topper_fish,
     "fish_coin": _topper_fish_coin,
     "scale": _topper_scale,
