@@ -186,7 +186,9 @@ class Casino(commands.Cog):
         if hint:
             parts.append(hint)
         if parts:
-            embed.set_footer(text=" · ".join(parts))
+            # A footer renders no markdown, and the challenge hint carries a
+            # bolded coin amount from fmt_coins.
+            embed.set_footer(text=h.strip_markdown(" · ".join(parts)))
 
     # ── Daily challenges ─────────────────────────────────────────────────────
     async def _bump_challenges(
@@ -816,7 +818,9 @@ class Casino(commands.Cog):
             "payout": final_payout,
             "title": title,
             "color": color,
-            "footer": footer,
+            # Every consumer puts this in the embed's footer, which renders no
+            # markdown — the coin amounts come from fmt_coins already bolded.
+            "footer": h.strip_markdown(footer),
         }
 
     # ── /casino jackpot ──────────────────────────────────────────────────────

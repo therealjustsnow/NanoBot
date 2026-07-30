@@ -433,6 +433,19 @@ def fmt_coins(amount: int, name: str, emoji: str) -> str:
     return f"{emoji} **{amount:,}** {label}"
 
 
+# Discord renders no markdown in an embed's footer (or author name), so text
+# written for a description shows its asterisks verbatim when it lands there —
+# "You won 🪙 **50** NanoCoins!" reading as literal `**50**`. Anything assembled
+# from shared strings (fmt_coins, a challenge hint) goes through this on its way
+# to a footer.
+_MARKDOWN_RE = re.compile(r"\*\*\*|\*\*|__|~~|\*|`")
+
+
+def strip_markdown(text: str) -> str:
+    """Drop inline markdown from text bound for a footer/author line."""
+    return _MARKDOWN_RE.sub("", text or "")
+
+
 # Every economy leaderboard offers the same two views, so the option is
 # declared once: the underlying rows are global either way, "server" just
 # filters them to the guild's members.
