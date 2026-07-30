@@ -236,9 +236,17 @@ def roll_mine_treasure_key(
     return roll < chance
 
 
-def roll_vein(roll: float) -> int:
-    """How many ore a successful dig yields — a roll in [0, 1) on MINE_VEIN_ODDS."""
-    return int(weighted_pick(MINE_VEIN_ODDS, roll))
+def roll_vein(roll: float, bonus: int = 0) -> int:
+    """How many ore a successful dig yields — a roll in [0, 1) on MINE_VEIN_ODDS,
+    plus the pickaxe's flat `vein` bonus.
+
+    The bonus is what makes a pickaxe's return scale with its price: luck alone
+    shifts ore mass linearly, so it bought the same +36 coins a dig at every
+    tier while the price climbed 5-6x a rung (see the note on PICKAXES). Extra
+    ore multiplies the luck-shifted ore value instead of adding to it, which is
+    the only lever mining has — its throughput is fixed by the cooldown.
+    """
+    return int(weighted_pick(MINE_VEIN_ODDS, roll)) + max(0, bonus)
 
 
 def pickaxe_info(level: int) -> dict:
@@ -384,13 +392,20 @@ def _expected(odds: list[tuple], value_of) -> float:
     return sum(chance * value_of(key) for key, chance in odds)
 
 
-def activity_coins_per_run(activity: str, luck: float = 0.0) -> float:
-    """Expected coin value of one run of an activity, straight off the tables."""
+def activity_coins_per_run(
+    activity: str, luck: float = 0.0, vein_bonus: int = 0
+) -> float:
+    """Expected coin value of one run of an activity, straight off the tables.
+
+    `luck` and `vein_bonus` are the two things a pickaxe buys; every other
+    activity ignores both. The defaults are the luck-0 floor the docs and the
+    price curve are quoted against.
+    """
     if activity == "work":
         return (WORK_PAY_MIN + WORK_PAY_MAX) / 2
     if activity == "mine":
         ore = _expected(mine_odds(luck), lambda k: ORES[k]["value"])
-        vein = _expected(MINE_VEIN_ODDS, float)
+        vein = _expected(MINE_VEIN_ODDS, float) + max(0, vein_bonus)
         return (1 - MINE_CAVE_IN_CHANCE) * vein * ore
     if activity == "hunt":
         catch = _expected(HUNT_ODDS, lambda k: HUNT_CATCHES[k]["value"])
@@ -451,3 +466,33 @@ def coins_banked_after(hours: float, luck: float = 0.0) -> float:
         * activity_coins_per_run(activity, luck)
         for activity in ACTIVITY_MAX_CHARGES
     )
+
+
+def mine_coins_per_day(tier: int) -> float:
+    """What mining generates a day at a pickaxe tier, every charge collected.
+
+    The denominator every pickaxe price is set from. Mining's throughput is
+    fixed by its interval, so this — not the size of a member's wallet — is the
+    ceiling on what a pickaxe can ever be worth.
+    """
+    pickaxe = pickaxe_info(tier)
+    per_run = activity_coins_per_run("mine", pickaxe["luck"], pickaxe["vein"])
+    return per_run * 24 * 3600 / ACTIVITY_DEFAULT_COOLDOWNS["mine"]
+
+
+def pickaxe_payback_days(tier: int) -> float:
+    """Days of ordinary mining for the tier-`tier` pickaxe to repay its price.
+
+    The guard the ladder was missing. Fishing charters have had a payback test
+    since they shipped; pickaxes were priced off the rod curve instead, and the
+    top two took 84 and 350 days to break even without anything failing. The
+    ladder is now priced from this function (tests/test_economy_balance.py
+    asserts the figures ascend and stay finite), so a price edit that makes a
+    tier a trap fails CI.
+    """
+    if tier <= 0 or tier >= len(PICKAXES):
+        return 0.0
+    gain = mine_coins_per_day(tier) - mine_coins_per_day(tier - 1)
+    if gain <= 0:
+        return float("inf")
+    return PICKAXES[tier]["price"] / gain

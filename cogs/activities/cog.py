@@ -616,7 +616,7 @@ class Activities(commands.Cog):
         # One vein, rolled ore by ore: a seam of four diamonds is possible and
         # rare, which is the whole reason the size and the rarity are separate
         # rolls rather than one lot of N identical rocks.
-        vein = roll_vein(random.random())
+        vein = roll_vein(random.random(), pickaxe["vein"])
         haul: dict[str, int] = {}
         for _ in range(vein):
             ore_key = pick_ore(random.random(), pickaxe["luck"])
@@ -682,10 +682,19 @@ class Activities(commands.Cog):
             embed=h.ok(
                 f"You bought the {nxt['emoji']} **{nxt['name']}** for "
                 f"{self._money(econ, nxt['price'])}!\n"
-                f"Luck is now **{nxt['luck']:.0%}** — fewer rocks, more diamonds.",
+                f"Luck is now **{nxt['luck']:.0%}** — fewer rocks, more diamonds."
+                + self._vein_line(nxt, prefix="\n"),
                 "⛏️ Upgraded",
             )
         )
+
+    @staticmethod
+    def _vein_line(pickaxe: dict, prefix: str = "") -> str:
+        """The pickaxe's extra-ore perk, or nothing at the bottom two tiers."""
+        bonus = pickaxe.get("vein", 0)
+        if not bonus:
+            return ""
+        return f"{prefix}It breaks **+{bonus} extra ore** out of every seam."
 
     # ── /mine stats ──────────────────────────────────────────────────────────
     @mine.command(name="stats", description="Your pickaxe and dig stats.")
@@ -700,6 +709,7 @@ class Activities(commands.Cog):
             f"{pickaxe['emoji']} **{pickaxe['name']}** "
             f"(tier {stats['pickaxe_level'] + 1}/{len(PICKAXES)})\n"
             f"Luck: **{pickaxe['luck']:.0%}** less stone, better rare-ore odds\n"
+            f"Seam: **+{pickaxe['vein']} ore** on top of every dig\n"
             f"Digs: **{stats['mine_count']:,}**\n"
             f"{self._status_line(cfg, stats, 'mine')}"
         )
@@ -715,7 +725,13 @@ class Activities(commands.Cog):
             desc += (
                 f"\n\nNext: {nxt['emoji']} **{nxt['name']}** — "
                 f"{self._money(econ, nxt['price'])} ({afford})\n"
-                f"Luck goes to **{nxt['luck']:.0%}**. Buy it with `/mine upgrade`."
+                f"Luck goes to **{nxt['luck']:.0%}**"
+                + (
+                    f" and every seam gives **+{nxt['vein']} ore**"
+                    if nxt["vein"] > pickaxe["vein"]
+                    else ""
+                )
+                + ". Buy it with `/mine upgrade`."
             )
         else:
             desc += "\n\nYou own the best pickaxe there is. 🎉"
@@ -844,6 +860,7 @@ class Activities(commands.Cog):
             f"{pickaxe['emoji']} **{pickaxe['name']}** "
             f"(tier {stats['pickaxe_level'] + 1}/{len(PICKAXES)}) · "
             f"{pickaxe['luck']:.0%} luck"
+            + (f" · +{pickaxe['vein']} ore" if pickaxe["vein"] else "")
         )
         pick_line += (
             f"\n└ Next: **{nxt_pick['name']}** — see `/mine upgrade`"

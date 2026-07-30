@@ -163,7 +163,17 @@ def test_pickaxe_ladder_ascends():
     for a, b in zip(PICKAXES, PICKAXES[1:]):
         assert b["price"] > a["price"]
         assert b["luck"] > a["luck"]
+        assert b["vein"] >= a["vein"]
     assert PICKAXES[0]["price"] == 0
+    assert PICKAXES[0]["vein"] == 0  # bare hands roll the raw vein table
+
+
+def test_the_top_pickaxes_buy_ore_as_well_as_odds():
+    """Luck alone is linear, so it bought the same few coins a dig at every tier
+    while the price climbed 5-6x a rung. The upper tiers break extra ore so the
+    return scales with what was paid for it — see the note on PICKAXES."""
+    assert PICKAXES[-1]["vein"] > 0
+    assert PICKAXES[-1]["vein"] > PICKAXES[len(PICKAXES) // 2]["vein"]
 
 
 def test_pickaxe_info_clamps():
@@ -433,6 +443,17 @@ def test_vein_and_bag_walk_their_tables():
     assert roll_vein(0.999999) == MINE_VEIN_ODDS[-1][0]
     assert roll_hunt_bag(0.0) == HUNT_BAG_ODDS[0][0]
     assert roll_hunt_bag(0.999999) == HUNT_BAG_ODDS[-1][0]
+
+
+def test_the_pickaxe_vein_bonus_rides_on_top_of_the_table():
+    """A bonus adds to whatever the seam rolled, so the smallest vein with the
+    best pickaxe still beats the biggest with bare hands' odds at the low end."""
+    for roll in (0.0, 0.5, 0.999999):
+        assert roll_vein(roll, 4) == roll_vein(roll) + 4
+    # Defaulted and nonsense bonuses both leave the roll alone, so a stored tier
+    # that predates the key can never shrink a dig.
+    assert roll_vein(0.5, 0) == roll_vein(0.5)
+    assert roll_vein(0.5, -3) == roll_vein(0.5)
 
 
 # ── Encounters ───────────────────────────────────────────────────────────────

@@ -37,6 +37,11 @@ Balance (every activity claimed, before encounters and the daily streak):
            pure sink, so the income guardrail doesn't apply the same way — it
            never inflates the total coin supply.
 
+Those are the luck-0 figures — a member with nothing, which is what every price
+in the bot is quoted against. Mining is the one line a purchase moves: a fully
+upgraded pickaxe takes a dig from ~200 to ~544 (see PICKAXES, which is priced
+against that gain rather than against the rod ladder it used to copy).
+
 That is ~7,500 coins a day over 26 runs, of which two visits collect all of it
 in 13 taps — or one, with Collect all. Against a member who also fishes for a
 solid hour, the gap is about 1.5x rather than the 3.5x it used to be.
@@ -139,10 +144,14 @@ MINE_CAVE_IN_CHANCE = 0.08
 # table below doesn't multiply it.
 MINE_TREASURE_KEY_CHANCE = 0.05
 
-# How much ore one successful dig yields. At a three-hour interval a dig is a
-# session's worth of mining rather than a swing of a pickaxe, so it comes back
-# with a seam: a spread rather than a fixed number, so the same tap has
-# something to hope for. Must sum to 1.0. EV ≈ 6.85 ore per successful dig.
+# How much ore one successful dig yields *with bare hands*. At a three-hour
+# interval a dig is a session's worth of mining rather than a swing of a
+# pickaxe, so it comes back with a seam: a spread rather than a fixed number, so
+# the same tap has something to hope for. Must sum to 1.0. EV ≈ 6.85 ore.
+#
+# A pickaxe's `vein` bonus is added on top of whatever this rolls (see PICKAXES
+# and helpers.roll_vein), so the table itself is the luck-0 floor every balance
+# figure is quoted against.
 MINE_VEIN_ODDS: list[tuple[int, float]] = [
     (4, 0.35),
     (6, 0.30),
@@ -171,19 +180,62 @@ ORE_ODDS: list[tuple[str, float]] = [
 # Tiers luck shifts mass *into*, in table order.
 _MINE_HIGH_TIERS = ("iron_ore", "gold_ore", "diamond")
 
-# Pickaxe ladder, indexed by stored pickaxe_level. A deliberate coin sink;
-# `luck` (0..1) feeds helpers.mine_odds.
+# Pickaxe ladder, indexed by stored pickaxe_level. A deliberate coin sink.
+# `luck` (0..1) feeds helpers.mine_odds; `vein` is extra ore added to every
+# successful dig's roll (helpers.roll_vein).
 #
-# Priced off the same staged curve as the rod ladder (see cogs/fishing/
-# constants.py RODS). Mining's own income didn't change, but coins are fungible
-# and fishing is what actually pays for these — leaving the old numbers would
-# have made the whole ladder 3x cheaper in real terms.
+# Why this is NOT the rod ladder's price curve
+# ────────────────────────────────────────────
+# It used to be, copied over on the reasoning that "coins are fungible and
+# fishing is what pays for these". That confuses being able to *afford*
+# something with it being worth *buying*, and the two ladders sell returns of
+# completely different shape:
+#
+#   a rod raises the value of a *cast*, and a player chooses how many to make —
+#   ~180 an hour. Rod luck compounds against the one faucet that pays for
+#   attention, so a rod's return scales with the price you paid for it.
+#
+#   a pickaxe raises the value of a *dig*, and nobody chooses how many to make:
+#   the interval does, at 8 a day. So a pickaxe's return is bounded by mining's
+#   throughput no matter what it costs.
+#
+# On the old numbers that bound was brutal. `mine_odds` shifts ore mass linearly
+# in luck, so every tier bought exactly the same +36 coins/dig — +286 a day,
+# flat — while the price went up 5-6x a rung. Payback ran 2.6 days, then 14,
+# then 84, then 350: the top two pickaxes could not repay themselves inside a
+# year of mining. tests/test_economy_balance.py asserts every fishing charter
+# pays itself back and there was no equivalent guard here, which is exactly how
+# it drifted that far.
+#
+# The fix is both halves, because repricing alone produces a degenerate ladder —
+# priced honestly against a flat +286/day the whole thing tops out around 7,000
+# coins, under a day of ordinary play, and mining has nothing left to spend on:
+#
+#   1. the upper tiers now break more rock (`vein`), so the return *multiplies*
+#      the ore value instead of adding a constant to it — the same compounding a
+#      rod gets from casts, taken from the one lever mining has;
+#   2. prices are then set from that return, at 3 / 5 / 11 / 21 days of ordinary
+#      mining to pay themselves back — ascending, so each rung is a longer
+#      commitment than the last, and finite, so each one is a real purchase.
+#
+# The ladder ends up much cheaper in absolute coins than the rods', and that is
+# the honest answer rather than a concession: a sink can only be as large as the
+# thing it improves. Fully kitted, a dig is worth 2.7x bare hands — deliberately
+# just under the 3x bound the fishing spots hold to, for the same reason (past
+# that, the starting state stops being somewhere anyone would play). If mining
+# should carry a bigger sink than this, raise its ceiling, not its prices.
 PICKAXES: list[dict] = [
-    {"name": "Bare Hands", "emoji": "✊", "price": 0, "luck": 0.0},
-    {"name": "Stone Pickaxe", "emoji": "⛏️", "price": 750, "luck": 0.15},
-    {"name": "Iron Pickaxe", "emoji": "⛏️", "price": 4_000, "luck": 0.30},
-    {"name": "Steel Pickaxe", "emoji": "⛏️", "price": 24_000, "luck": 0.45},
-    {"name": "Obsidian Pickaxe", "emoji": "⛏️", "price": 100_000, "luck": 0.60},
+    {"name": "Bare Hands", "emoji": "✊", "price": 0, "luck": 0.0, "vein": 0},
+    {"name": "Stone Pickaxe", "emoji": "⛏️", "price": 750, "luck": 0.15, "vein": 0},
+    {"name": "Iron Pickaxe", "emoji": "⛏️", "price": 3_000, "luck": 0.30, "vein": 1},
+    {"name": "Steel Pickaxe", "emoji": "⛏️", "price": 7_500, "luck": 0.45, "vein": 2},
+    {
+        "name": "Obsidian Pickaxe",
+        "emoji": "⛏️",
+        "price": 24_000,
+        "luck": 0.60,
+        "vein": 4,
+    },
 ]
 
 # ══════════════════════════════════════════════════════════════════════════════
