@@ -218,6 +218,12 @@ selling items, achievements, and level-ups (if your server enables that).
 **Where they go:** rods, pickaxes, bait, the shop, `/pay`, the casino,
 prestige. Spending is what keeps prices meaningful.
 
+**If a price ever drops:** you get the difference back. When we rebalance
+something you already own — a pickaxe tier, a rod, a fishing charter — the coins
+are put straight into your wallet and you'll get a DM saying what changed and
+how much came back. You never need to ask, and prices going *up* never costs you
+anything you've already bought.
+
 ---
 
 ## 🎣 Fishing

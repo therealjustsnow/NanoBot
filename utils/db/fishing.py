@@ -230,6 +230,29 @@ async def get_unlocked_spots(user_id: int) -> set[str]:
         return {row["spot"] for row in await cur.fetchall()}
 
 
+async def all_rod_owners() -> list[tuple[int, int]]:
+    """Every angler who has bought at least one rod, as (user_id, level).
+
+    Only the price-refund sweep needs this; see utils/db/refunds.py for why the
+    tier owned has to stand in for a receipt.
+    """
+    async with _conn().execute(
+        "SELECT user_id, rod_level FROM fishing_stats WHERE rod_level > 0"
+    ) as cur:
+        rows = await cur.fetchall()
+    return [(int(r["user_id"]), int(r["rod_level"])) for r in rows]
+
+
+async def all_spot_unlocks() -> dict[int, set[str]]:
+    """Every chartered spot, grouped by angler — the refund sweep's third input."""
+    async with _conn().execute("SELECT user_id, spot FROM fishing_spot_unlocks") as cur:
+        rows = await cur.fetchall()
+    out: dict[int, set[str]] = {}
+    for row in rows:
+        out.setdefault(int(row["user_id"]), set()).add(row["spot"])
+    return out
+
+
 async def unlock_spot(user_id: int, spot: str, now: float) -> bool:
     """Record a chartered spot. False if it was already chartered.
 

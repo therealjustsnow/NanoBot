@@ -305,6 +305,20 @@ async def try_claim_adventure_streak(user_id: int, day: int, streak: int) -> boo
     return cur.rowcount > 0
 
 
+async def all_pickaxe_owners() -> list[tuple[int, int]]:
+    """Every miner who has bought at least one pickaxe, as (user_id, level).
+
+    Only the price-refund sweep needs this — a repricing has to reach everyone
+    who already paid, and nothing records what they paid, so the tier they own
+    is the receipt (see utils/db/refunds.py).
+    """
+    async with _conn().execute(
+        "SELECT user_id, pickaxe_level FROM activities_stats WHERE pickaxe_level > 0"
+    ) as cur:
+        rows = await cur.fetchall()
+    return [(int(r["user_id"]), int(r["pickaxe_level"])) for r in rows]
+
+
 async def set_pickaxe_level(user_id: int, new_level: int, *, expected: int) -> bool:
     """Conditionally advance the pickaxe tier (first upgrader wins a race).
 
