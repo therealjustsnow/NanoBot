@@ -47,6 +47,12 @@ pip install -r requirements.dev.txt  # superset: runtime deps (requirements.txt)
 pytest tests/ -v
 ```
 
+**Claude Code: don't default to the full suite.** Running all ~1800 tests on every turn is slow and mostly wasted — CI already runs the full suite on push. Scope the run to what the change could plausibly break:
+- Docs-only / comment-only / CLAUDE.md changes: run nothing.
+- A change to one cog/module: run that module's own test file(s) (the table below maps file → module) plus `test_no_duplicate_commands.py`/`test_slash_surface.py`/`test_command_limits.py` only if commands were added/removed/regrouped.
+- A change to shared code (`utils/`, `cogs/*/helpers.py` used bot-wide, `utils/db/_core.py`): run the full suite — blast radius is too wide to scope safely.
+- Before a push the user explicitly asks to ship, or when genuinely unsure: run the full suite once as a final check.
+
 Tests cover pure-Python utilities and the SQLite layer (in-memory), no live Discord dependency:
 - `tests/test_helpers.py` — `parse_duration`, `parse_duration_from_end`, `fmt_duration`, `parse_interval`, `fmt_interval`
 - `tests/test_config.py` — `validate()` from `utils/config.py`
