@@ -24,7 +24,6 @@ _ALL_COGS = (
     "cogs.auditlog",
     "cogs.automod",
     "cogs.roles",
-    "cogs.eli5",
     "cogs.images",
     "cogs.fun",
     "cogs.music",

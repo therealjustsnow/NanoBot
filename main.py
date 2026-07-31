@@ -142,7 +142,6 @@ _ALL_COGS = (
     "cogs.roles",
     "cogs.fun",
     "cogs.images",
-    "cogs.eli5",
     "cogs.music",
     "cogs.leveling",
     "cogs.economy",
@@ -525,7 +524,7 @@ class NanoBot(commands.Bot):
                 await self.load_extension(cog)
                 log.info(f"✅ Loaded {cog}")
             except Exception as exc:
-                # Log but don't abort — optional cogs (eli5) may be absent
+                # Log but don't abort — optional cogs may be absent
                 log.warning(f"⚠️  Could not load {cog}: {exc}")
 
         await self._sync_commands_if_changed()

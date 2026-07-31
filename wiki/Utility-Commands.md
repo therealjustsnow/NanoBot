@@ -223,15 +223,6 @@ What NanoBot is and why it exists.
 - **Permission:** None
 - **Access:** Public · Slash + prefix
 
-### `eli5`
-
-Explain a topic like I'm 5 years old.
-
-- **Usage:** `/eli5 <topic>` · `n!eli5 <topic>`
-- **Example:** `n!eli5 black holes | n!eli5 why the sky is blue`
-- **Permission:** None
-- **Access:** Public · Slash + prefix
-
 ### `help`
 
 Command reference. Use /help <command> for detail, or /help <category> to browse.

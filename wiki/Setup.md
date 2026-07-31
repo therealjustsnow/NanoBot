@@ -75,7 +75,7 @@ What is required:
 
 Features that need extra config:
 
-- `GROQ_API_KEY` or `[groq] groq_api_key` for `/eli5`.
+- `GROQ_API_KEY` or `[groq] groq_api_key` for daily WYR generation.
 - Bot-list tokens for vote webhooks and posting.
 - `[bot] owner_id` if you want explicit owner override.
 

@@ -48,7 +48,7 @@ An old `config.json` is auto-migrated to `config.ini` on first start (the legacy
 
 | Key | Default | Description |
 |---|---|---|
-| `groq_api_key` | *(blank)* | Groq API key (free at console.groq.com). Powers /eli5 and WYR generation. The GROQ_API_KEY environment variable takes priority if set. |
+| `groq_api_key` | *(blank)* | Groq API key (free at console.groq.com). Powers WYR generation. The GROQ_API_KEY environment variable takes priority if set. |
 
 ## `[scraper]`
 
