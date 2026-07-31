@@ -19,6 +19,14 @@ examples), welcome and leave messages (a designer with a live preview), logging
 role rewards, your currency and shop, and the on/off switches for fishing, the
 activities and the casino.
 
+**Order things by dragging them** — self-role panels are the one feature that
+exists here mostly *because* it's a web page. A panel's buttons are laid out in
+one dimension, and in Discord the only way to move one was to remove it and add
+it back, losing its label, emoji and style. The editor drags (Pointer Events, so
+it works on touch as well as with a mouse), moves rows with ↑/↓ for keyboard
+users, saves the whole order in one request, and re-renders the already-posted
+message so what's in the channel is never a stale version of what's here.
+
 **Diagnose** — a permission checklist per feature, so "the bot is broken" gets
 answered on the page that configures it rather than at 3am. A channel the bot
 can't post in is refused when you pick it, not discovered when the first message
@@ -75,7 +83,7 @@ web/
   http.py         one error shape, the guards, the middleware
   app.py          the Dashboard object, guild resolution, route assembly
   engine/         the economy resolved without Discord
-  api/            auth · guilds · settings · play · me
+  api/            auth · guilds · settings · roles · play · me
   static/         the front end (no build step)
 ```
 

@@ -29,6 +29,7 @@ const NAV = [
   { group: "Server", items: [
     { key: "overview", label: "Home", glyph: "🏠", path: "", tab: true },
     { key: "settings", label: "Settings", glyph: "⚙️", path: "/settings", tab: true, manager: true },
+    { key: "roles", label: "Self roles", glyph: "🎭", path: "/roles", manager: true },
   ]},
   { group: "Play", items: [
     { key: "fishing", label: "Fishing", glyph: "🎣", path: "/fishing", tab: true },
@@ -55,6 +56,7 @@ router.route("/", lazy(() => import("./views/home.js"), "home"));
 router.route("/g/:guildId", lazy(() => import("./views/overview.js"), "overview"));
 router.route("/g/:guildId/settings", lazy(() => import("./views/settings.js"), "settingsIndex"));
 router.route("/g/:guildId/settings/:feature", lazy(() => import("./views/settings.js"), "settingsPage"));
+router.route("/g/:guildId/roles", lazy(() => import("./views/roles.js"), "roles"));
 router.route("/g/:guildId/fishing", lazy(() => import("./views/fishing.js"), "fishing"));
 router.route("/g/:guildId/adventure", lazy(() => import("./views/adventure.js"), "adventure"));
 router.route("/g/:guildId/inventory", lazy(() => import("./views/inventory.js"), "inventory"));

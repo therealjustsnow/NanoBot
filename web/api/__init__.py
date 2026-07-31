@@ -5,6 +5,7 @@ The REST surface, grouped by what it is *for* rather than by HTTP verb.
     auth      sign in, sign out, who am I
     guilds    a server's overview, channels, roles, permission health
     settings  one endpoint family per configurable feature
+    roles     self-role panels, including the drag-to-reorder save
     play      the economy, played from the browser
     me        the account: profile, wallet, inventory, boards
 
@@ -18,12 +19,12 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING
 
-from . import auth, guilds, me, play, settings
+from . import auth, guilds, me, play, roles, settings
 
 if TYPE_CHECKING:
     from ..app import Dashboard
 
-_MODULES = (auth, guilds, settings, play, me)
+_MODULES = (auth, guilds, settings, roles, play, me)
 
 
 def routes(dash: "Dashboard") -> list:

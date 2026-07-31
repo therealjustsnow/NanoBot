@@ -33,8 +33,33 @@ GUILD_ID = 555
 
 # ── the stand-in gateway ──────────────────────────────────────────────────────
 class FakePermissions:
+    """Stands in for `discord.Permissions`: an int plus the named attributes.
+
+    Named flags are derived from the value rather than hard-coded, so a test
+    granting Administrator gets `manage_roles` for free, exactly as Discord's
+    own object does.
+    """
+
+    _BITS = {
+        "administrator": 1 << 3,
+        "manage_guild": 1 << 5,
+        "manage_roles": 1 << 28,
+        "manage_messages": 1 << 13,
+        "kick_members": 1 << 1,
+        "ban_members": 1 << 2,
+        "send_messages": 1 << 11,
+        "embed_links": 1 << 14,
+    }
+
     def __init__(self, value):
         self.value = value
+
+    def __getattr__(self, name):
+        bit = FakePermissions._BITS.get(name)
+        if bit is None:
+            raise AttributeError(name)
+        value = self.__dict__.get("value", 0)
+        return bool(value & (1 << 3)) or bool(value & bit)
 
 
 class FakeRole:
@@ -103,7 +128,8 @@ class FakeGuild:
         self.text_channels = [FakeChannel(10, "general")]
         self.roles = [
             FakeRole("@everyone", position=0, default=True),
-            FakeRole("member", 1),
+            FakeRole("member", 1),  # id 901 — below the bot's top role, assignable
+            FakeRole("bot", 5),  # id 905 — the bot's own, never assignable
         ]
 
     def get_member(self, uid):
@@ -175,6 +201,7 @@ async def server(monkeypatch):
         db._ensure_casino_tables,
         db._ensure_progression_tables,
         db._ensure_social_tables,
+        db._ensure_role_panels_tables,
     ):
         await setup()
 
@@ -604,6 +631,103 @@ async def test_a_malformed_body_is_a_400_not_a_500(server, http):
         cookies=admin.cookies,
     ) as r:
         assert r.status == 400
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+#  Self-role panels
+# ══════════════════════════════════════════════════════════════════════════════
+async def test_panels_are_admin_only(server, http):
+    async with await Client(http, MEMBER_ID).get(
+        f"/api/guilds/{GUILD_ID}/roles/panels"
+    ) as r:
+        assert r.status == 403
+
+
+async def test_a_panel_can_be_created_and_filled(server, http):
+    admin = Client(http, ADMIN_ID)
+    async with await admin.post(
+        f"/api/guilds/{GUILD_ID}/roles/panels",
+        {"title": "Colours", "mode": "single"},
+    ) as r:
+        assert r.status == 200
+        body = await r.json()
+    panel = body["panels"][0]
+    assert panel["title"] == "Colours"
+    assert panel["mode"] == "single"
+    assert panel["posted"] is False
+
+    async with await admin.post(
+        f"/api/guilds/{GUILD_ID}/roles/panels/{panel['id']}/entries",
+        {"role_id": 901, "label": "Red", "emoji": "🔴", "style": "danger"},
+    ) as r:
+        assert r.status == 200
+        body = await r.json()
+    entry = body["panels"][0]["entries"][0]
+    assert entry["label"] == "Red"
+    assert entry["assignable"] is True
+
+
+async def test_a_panel_refuses_a_role_the_bot_cannot_assign(server, http):
+    """A panel offering an unassignable role is a button that errors for every
+    member who presses it — refused at the one moment somebody is looking."""
+    admin = Client(http, ADMIN_ID)
+    async with await admin.post(
+        f"/api/guilds/{GUILD_ID}/roles/panels", {"title": "P"}
+    ) as r:
+        panel = (await r.json())["panels"][0]
+    async with await admin.post(
+        f"/api/guilds/{GUILD_ID}/roles/panels/{panel['id']}/entries",
+        {"role_id": 905},  # the bot's own top role, position 5
+    ) as r:
+        assert r.status == 400
+        body = await r.json()
+    assert "highest role" in body["error"]["message"]
+
+
+async def test_dragging_saves_the_whole_order(server, http):
+    admin = Client(http, ADMIN_ID)
+    async with await admin.post(
+        f"/api/guilds/{GUILD_ID}/roles/panels", {"title": "P"}
+    ) as r:
+        panel = (await r.json())["panels"][0]
+    for role_id in (901, 902, 903):
+        server.bot.guild.roles.append(FakeRole(f"r{role_id}", position=role_id - 900))
+        await (
+            await admin.post(
+                f"/api/guilds/{GUILD_ID}/roles/panels/{panel['id']}/entries",
+                {"role_id": role_id},
+            )
+        ).release()
+
+    async with await admin.patch(
+        f"/api/guilds/{GUILD_ID}/roles/panels/{panel['id']}/order",
+        {"order": ["903", "901", "902"]},
+    ) as r:
+        assert r.status == 200
+        body = await r.json()
+    assert [e["role_id"] for e in body["panels"][0]["entries"]] == ["903", "901", "902"]
+
+
+async def test_a_panel_from_another_server_is_not_reachable(server, http):
+    """Panel ids are short and global, so the guild check is load-bearing."""
+    await db.create_role_panel("elsewhere", 999999, "Theirs", None, "toggle")
+    admin = Client(http, ADMIN_ID)
+    async with await admin.patch(
+        f"/api/guilds/{GUILD_ID}/roles/panels/elsewhere", {"title": "Mine now"}
+    ) as r:
+        assert r.status == 404
+
+
+async def test_an_empty_panel_cannot_be_posted(server, http):
+    admin = Client(http, ADMIN_ID)
+    async with await admin.post(
+        f"/api/guilds/{GUILD_ID}/roles/panels", {"title": "Empty"}
+    ) as r:
+        panel = (await r.json())["panels"][0]
+    async with await admin.post(
+        f"/api/guilds/{GUILD_ID}/roles/panels/{panel['id']}/publish", {"channel_id": 10}
+    ) as r:
+        assert r.status == 409
 
 
 # ══════════════════════════════════════════════════════════════════════════════

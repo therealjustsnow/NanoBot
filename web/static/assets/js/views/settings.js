@@ -54,12 +54,23 @@ export async function settingsIndex({ guildId }) {
     h(
       "div",
       { class: "grid grid--wide" },
-      ...PAGES.map((page) =>
+      ...[
+        ...PAGES,
+        // Self roles has a page of its own rather than a settings form: it is a
+        // drag-and-drop editor, not a list of fields.
+        {
+          key: "roles",
+          label: "Self roles",
+          glyph: "🎭",
+          blurb: "Panels of buttons members tap to give themselves a role.",
+          path: `/g/${guildId}/roles`,
+        },
+      ].map((page) =>
         h(
           "a",
           {
             class: "card row",
-            href: `/g/${guildId}/settings/${page.key}`,
+            href: page.path || `/g/${guildId}/settings/${page.key}`,
             style: { textDecoration: "none", color: "inherit" },
           },
           h("span", { class: "icon-tile" }, page.glyph),
