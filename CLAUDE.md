@@ -438,7 +438,7 @@ A button that reports nothing is the same bug as no button. `interaction.followu
 
 ### Configuration
 
-`config.ini` (gitignored) at the repo root, split into six sections:
+`config.ini` (gitignored) at the repo root, split into seven sections:
 
 * **`[bot]`** — `token`, `db_encryption_key`, `default_prefix`, `owner_id`, `error_channel_id`, `idle_status_message`, `health_check_port`, `health_check_host`
 * **`[logging]`** — `log_level`, `log_http`, `log_events_jsonl`, `db_slow_query_ms`
@@ -446,6 +446,7 @@ A button that reports nothing is the same bug as no button. `interaction.followu
 * **`[groq]`** — `groq_api_key`
 * **`[scraper]`** — `fml_pages_per_scrape`, `wyr_requests_per_scrape`, `nekos_per_endpoint`, `nekosia_per_tag`, `revalidate_age`, `revalidate_batch`, `groq_wyr_system`
 * **`[music]`** — playback/queue knobs read live from `bot.config` so `!reloadconfig` applies without a cog reload: `music_cookie_file`, `music_default_volume`, `music_idle_timeout`, `music_skip_ratio`, `music_max_queue`, `music_use_opus`, `music_persist_queue`, `music_predownload`, `music_self_deafen`, `music_default_speed`, `music_search_service` (ytsearch/ytmsearch/scsearch), `music_status_message` ({title} presence template), `music_proxy`, `music_user_agent`, `music_source_address`, `music_request_throttle` (seconds between yt-dlp HTTP requests; 0 = off), `music_js_runtime_path` (deno/node/bun binary for yt-dlp JS challenges), `music_autoplay_autoskip`, `music_save_videos` + `music_cache_max_mb`/`music_cache_max_age_days` (cache caps), `music_ratelimit_cooldown`/`music_ratelimit_leave` (429 back-off), `music_apl_prune_on_error`, `music_save_history`, `music_metadata_lookup` (iTunes Search artist enrichment), `music_sponsorblock` + `music_sponsorblock_categories` (skip non-music/sponsor segments via SponsorBlock — downloads + FFmpeg-cuts the track before play; off by default, default category `music_offtopic`).
+* **`[dashboard]`** — the optional web dashboard (see "Web dashboard" below): `dashboard_port` (0 = off, the default), `dashboard_host`, `dashboard_base_url` (the origin the OAuth redirect is built from — validated as an origin with no path, and warned about over plain http), `dashboard_client_id` (blank = the bot's own application id), `dashboard_client_secret`, `dashboard_session_secret` (blank = a random one per start, which signs everyone out on every restart — warned about at boot), `dashboard_session_days`, `dashboard_play_enabled`.
 
 All keys are optional except `token` (or the `DISCORD_TOKEN` env var). An old `config.json` is auto-migrated to `config.ini` on first start (the legacy file is renamed to `config.json.bak`).
 
@@ -459,6 +460,33 @@ Live editing:
 On startup the active config is printed **last** (end of `on_ready`, once) so it isn't buried under cog-load/gateway output. It goes to stdout (not the logger) and is **unmasked** — terminal-only for the host operator; routing it through the logger would copy secrets into the rotating `logs/nanobot.log` (and expose them via `!logs`). `!config show`/`get` stay masked. Both paths share `config.summary()` / `config.mask_value()` (which take a `mask` flag).
 
 Logs rotate at 50 KB, 5 backups, written to `logs/nanobot.log`. Each line carries a short correlation id (`[abcd1234]`) shared by the start/completion/error records of one command invocation, so a single command's trace is greppable. When `log_events_jsonl` is on (default), structured command-lifecycle events (`command.start/ok/err`, `slash.start/ok/err` with `dur_ms`, user, guild) are also written to `logs/events.jsonl` (one JSON object per line, rotating). Correlation/timing helpers live in `utils/obs.py`.
+
+### Web dashboard (`web/`)
+
+Optional, off until `[dashboard] dashboard_port` is set. Mounted on the same shared `HttpServer` as `/health` and the vote webhook (`web.app.mount(bot)` from `NanoBot._start_web_server`), so one inbound allocation can carry all three; `mount()` returns None when the port is 0, and `NanoBot.close()` closes the dashboard's aiohttp `ClientSession`. Full write-up in `docs/dashboard.md`.
+
+**It is not a second bot.** Every setting it writes is a row a Discord command already writes, and every cast/dig/daily goes through the same atomic claim. The consequences of that rule shape the whole package:
+
+| Module | Holds |
+|---|---|
+| `security.py` | Signed sessions (HMAC-SHA256 over a base64url JSON payload, one `HttpOnly`/`SameSite=Lax` cookie), the derived double-submit CSRF token, and signed OAuth `state`. Stdlib-only and dict-in/dict-out, so it is unit-testable with no socket. `verify_session` returns `None` for *every* failure mode — bad signature, wrong version, expired, truncated, not JSON — so a caller that checks for None can't be handed a half-trusted payload. Signed rather than stored because this bot restarts on `!upgrade` and a server-side session table would sign everyone out each time. |
+| `permissions.py` | Pure permission logic + the `FEATURE_PERMISSIONS` map (which Discord permissions each feature needs the *bot* to hold, split `required`/`optional`, each with a `why`). Drives both the overview's permission checklist and the invite link's bit mask, so "add the bot" and "you're missing X" can't disagree. `manageable_guilds` sorts the picker so servers you can act on come first. |
+| `oauth.py` | The `identify guilds` round trip and the two API reads. The guild list is TTL-cached per user for 60s (`/users/@me/guilds` is one of Discord's strictest routes and the picker is the page people bounce off and back to); `None` means "we couldn't ask", distinct from an empty list, because conflating them turns a rate limit into "you've been removed from every server you own". |
+| `http.py` | One error shape (`{"error": {code, message, hint}}` where `message` is user-facing copy the frontend shows verbatim), the `require_session`/`require_member`/`require_manager` decorators, and the middleware stack: error → security headers (strict CSP: no inline script, no external script host) → session + CSRF. Request-scoped state uses typed `web.RequestKey`s because `HttpServer` merges every feature's routes into one app. |
+| `app.py` | The `Dashboard` object: config, guild resolution, the gate, session issue/clear, route assembly, and the SPA fallback (path normalised then prefix-checked against `web/static/`). |
+| `engine/` | The economy resolved without Discord — see below. |
+| `api/` | `auth` · `guilds` · `settings` · `play` · `me`. Handlers stay thin: parse, call an engine or a `db.` accessor, shape a reply. |
+| `static/` | The frontend: plain ES modules and one stylesheet, no build step. |
+
+**The gate is Discord's, read live off the gateway.** OAuth's `permissions` field is a snapshot from whenever the token was minted; `Dashboard.assert_manager` asks `member.guild_permissions` — the same object `/level set` asks — falling back to an HTTP `fetch_member` on a cache miss (the `SafeTextChannel` precedent). The OAuth list only decides which servers to *offer*. There is no dashboard-only role model and nothing here can grant a power someone doesn't already have.
+
+**`web/engine/` is the anti-drift layer.** The cogs' game logic already splits into pure roll-takers (`cogs/*/helpers.py`) and atomic claims (`db.try_claim_*`); what sits between them is embed-building. The engine re-orchestrates the same two halves and returns plain dicts, so cooldowns and one-time claims are *the same rows* (a browser cast calls `db.try_claim_cast`) and every roll goes through the cog's own helper (`rarity_odds`, `pick_spot_rarity`, `roll_vein`, `apply_streak` — imported, never copied). What is genuinely restated is the *order* of operations, and `tests/test_web_engine_parity.py` guards the rest by walking the AST: an engine module that defines its own `CAST_COOLDOWN`, stops calling a shared claim, imports `discord`, or builds an embed fails CI. Two deliberate differences are pinned there too — a web cast never *starts* a random fishing event (guild-wide, announced in a channel, and a browser cast has none; running events are still honoured), and `/rob` has no one-tap runner because it takes a target.
+
+**Card images are the cogs' own.** `/api/guilds/{id}/me/card/{kind}` calls `Identity._collect` / `Economy._wallet_data` / `Progression._case_data` through a duck-typed `_CardContext` carrying only the `guild`/`author` those builders read, then the real renderer. The card on the site is byte-identical to the one in chat — which matters, because the card is the thing people screenshot.
+
+**Frontend rules that are load-bearing, not stylistic.** No build step (the CSP forbids inline script and external hosts, and it keeps the served files the repository's files). `core/dom.js` sets text via `textContent`, never `innerHTML` — every string on the page is a server name, a nickname or an admin's own template. `core/api.js` is the single door: CSRF on every write, GET de-duplication, and errors surfaced with the server's own sentence. `ui.actionButton` owns one in-flight request at a time; `ui.autoSave` debounces and **rolls back on a refusal**, so the screen never shows a state the database doesn't hold. `core/router.js` uses real paths so `/g/123/fishing` is a link you can send, and drops a response that lands after you've navigated away. Mobile first for real: one column plus a bottom tab bar, widening to a side rail at 900px, 44px targets, focus rings kept, `prefers-reduced-motion` honoured wholesale, and status never carried by colour alone.
+
+Tests: `test_web_security.py` (sessions/CSRF/state), `test_web_permissions.py` (the gate + the permission map), `test_web_engine.py` (the economy against in-memory SQLite), `test_web_engine_parity.py` (the anti-drift guard), `test_web_api.py` (routes end to end against a bound server with a duck-typed bot — the auth gate, CSRF, server-side validation, refusals as 409s carrying `retry_after`, and the static route's directory guard).
 
 ### CI
 

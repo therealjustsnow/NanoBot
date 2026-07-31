@@ -124,6 +124,17 @@ NanoBot fixes that.
 - Optional HTTP health-check endpoint (`GET /health`) for containers/orchestrators
 - GitHub Actions CI: Black auto-formatting, pytest suite, branch protection
 
+**Web Dashboard** (optional, off by default — see [docs/dashboard.md](docs/dashboard.md))
+- Sign in with Discord; the gate is Manage Server, exactly as it is in Discord
+- Configure AutoMod with a plain-language rule builder, not a JSON field
+- Design welcome and leave messages against a live preview
+- A permission checklist per feature, so a missing permission is visible before
+  it breaks something at 3am
+- Play the whole economy from a phone — fishing, mining, adventuring, the
+  inventory, the shop — through the *same* cooldowns and claims Discord uses,
+  so nobody gets two of anything
+- Mobile-first, dark and light, no build step, rides the same port as `/health`
+
 ---
 
 ## Setup
@@ -217,6 +228,14 @@ groq_wyr_system = You generate Would You Rather questions for a Discord bot. ...
 | `scraper` | `revalidate_age` | No | Seconds before a cached URL is rechecked. Default `604800` (7 days) |
 | `scraper` | `revalidate_batch` | No | Max URLs HEAD-checked per 6-hour cycle. Default `1000` |
 | `scraper` | `groq_wyr_system` | No | System prompt used when Groq generates WYR questions |
+| `dashboard` | `dashboard_port` | No | Port for the web dashboard. `0` = disabled (the default) |
+| `dashboard` | `dashboard_host` | No | Bind address. Default `0.0.0.0`; use `127.0.0.1` behind a reverse proxy |
+| `dashboard` | `dashboard_base_url` | No | Public URL the dashboard is reached at, e.g. `https://nano.example.com`. The OAuth redirect is built from it |
+| `dashboard` | `dashboard_client_id` | No | OAuth2 client id. Blank = the bot's own application id |
+| `dashboard` | `dashboard_client_secret` | No | OAuth2 client secret. Required for anyone to sign in |
+| `dashboard` | `dashboard_session_secret` | No | Signs session cookies. Blank = a random one per start, which signs everyone out on every restart |
+| `dashboard` | `dashboard_session_days` | No | How long a sign-in lasts. Default `7` |
+| `dashboard` | `dashboard_play_enabled` | No | Whether the economy is playable from the browser. `false` = read-only for members. Default `true` |
 
 > Migrating from an older version? An existing `config.json` is auto-migrated to
 > `config.ini` on first start and renamed to `config.json.bak`.

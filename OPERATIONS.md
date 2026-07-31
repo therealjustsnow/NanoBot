@@ -32,6 +32,8 @@ data, `data/cache.db` for external content cache). No cloud, no external store.
 | Music live playback position | No | In-memory; the current track restarts from the beginning. |
 | External content cache (anime images, stories) | Yes, but disposable | `data/cache.db` — safe to delete; scrapers rebuild it. |
 | `last_senders` / `last_banned` (mobile last-target state) | No | In-memory only; lost on restart. |
+| Dashboard sign-ins | Yes, if `dashboard_session_secret` is set | Sessions are signed, not stored, so a restart doesn't invalidate them. Leave the secret blank and a random one is generated each start, signing everyone out on every restart (including `!upgrade`). |
+| Dashboard pending encounters | No | The single-use token for an `/adventure` encounter offered in a browser lives in memory for 10 minutes. A restart drops it, which loses that one encounter and can never double-pay. |
 | Correlation ids / `logs/events.jsonl` | N/A (logs) | Rotating, ephemeral; safe to delete. |
 
 ## Delivery guarantees
@@ -72,3 +74,12 @@ data, `data/cache.db` for external content cache). No cloud, no external store.
 - **Config errors**: fatal issues (e.g. missing token) abort startup with a clear
   message; non-fatal issues log a warning and the affected key falls back to its
   default.
+- **The dashboard never blocks startup.** `web.app.mount` is wrapped: if it
+  raises, the failure is logged and the bot carries on without a dashboard. A
+  port it can't bind is retried a few times and then given up on with a warning
+  (the shared `HttpServer`'s behaviour, same as `/health`). An unexpected
+  exception in a request becomes a generic 500 with the detail in the log —
+  never in the response body.
+- **A dashboard that isn't finished being configured still serves.** Missing
+  OAuth settings mean nobody can sign in, and the login page names the exact
+  keys and shows the redirect URL to register rather than failing blankly.
