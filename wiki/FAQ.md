@@ -24,7 +24,7 @@ Slash admin commands would appear in every user's slash menu, so owner admin con
 
 ### Do I need a Groq key for the whole bot?
 
-No. A Groq key is optional and only needed for `/eli5` and daily WYR generation described in the README and `cogs/eli5.py`.
+No. A Groq key is optional and only needed for daily WYR generation, described in the README and `cogs/fun/sources.py`.
 
 ### Can I reload config without a restart?
 

@@ -111,9 +111,6 @@ NanoBot fixes that.
 - Account-age mutes auto-unmute once the account ages out; unverified members are auto-kicked after a timeout
 - Schedules persist in SQLite and restore on restart
 
-**AI**
-- `/eli5` -- plain-English explanations via Groq (GPT-OSS 20B, free tier)
-
 **Bot Lists**
 - top.gg, discordbotlist.com, discord.bots.gg integration
 - Vote tracking with per-user history
@@ -212,7 +209,7 @@ groq_wyr_system = You generate Would You Rather questions for a Discord bot. ...
 | `votes` | `discordbotsgg_token` | No | discord.bots.gg bot token -- enables stat posting (the site has no voting or vote-webhook API) |
 | `votes` | `vote_webhook_port` | No | Port for the vote webhook HTTP server. Default `5000` |
 | `votes` | `vote_webhook_secret` | No | Shared secret for webhook verification |
-| `groq` | `groq_api_key` | No | Groq API key for `/eli5` + daily WYR generation. Free at [console.groq.com](https://console.groq.com). Also accepts `GROQ_API_KEY` env var |
+| `groq` | `groq_api_key` | No | Groq API key for daily WYR generation. Free at [console.groq.com](https://console.groq.com). Also accepts `GROQ_API_KEY` env var |
 | `scraper` | `fml_pages_per_scrape` | No | FML pages fetched per daily scrape. Default `500` |
 | `scraper` | `wyr_requests_per_scrape` | No | WYR requests per rating per daily scrape. Default `500` |
 | `scraper` | `nekos_per_endpoint` | No | nekos.best images per endpoint per daily scrape. Default `400` |
@@ -635,18 +632,6 @@ Also available as prefix: `!husbando`, `!kitsune`, `!neko`, `!waifu`.
 
 ---
 
-### 🧒 ELI5
-
-Explain any topic in plain English using Groq's free API (GPT-OSS 20B). Responses are kept short enough to read comfortably on a phone screen.
-
-| Command | Description |
-|---------|-------------|
-| `/eli5 <topic>` | Get a plain-English explanation of any topic |
-
-Requires a Groq API key in config or the `GROQ_API_KEY` environment variable. Free at [console.groq.com](https://console.groq.com) (14,400 requests/day). Per-user cooldown: 1 use per 15 seconds. The command degrades gracefully if no key is set -- it tells the user and moves on.
-
----
-
 ### 📈 Leveling
 
 Per-server message XP and levels (Mee6-style curve). **Off by default** -- enable it with `/level toggle on`. This is the *server's* progression and stays fully admin-configurable; it sits alongside the **global account level** (hard-coded, earned from normalized actions anywhere) which appears next to it on `/rank` and on `/profile` — see [`docs/identity-and-levels.md`](docs/identity-and-levels.md). Members earn XP per message (rate-limited by a per-member cooldown); reaching a level can grant a role reward and, optionally, NanoCoins.
@@ -855,7 +840,6 @@ NanoBot/
 │   │                         user / avatar / banner / roleinfo / uptime / stats
 │   ├── fun.py             ← 26 social + 33 reaction commands, ship, 8-ball (nekos.best)
 │   ├── images.py          ← husbando / kitsune / neko / waifu (nekos.best)
-│   ├── eli5.py            ← AI explanations via Groq (GPT-OSS 20B)
 │   ├── music.py           ← Voice player: yt-dlp streaming, queue, autoplay, 24/7
 │   ├── votes.py           ← Bot list integrations (top.gg, DBL, discord.bots.gg)
 │   └── debug.py           ← Owner-only debug REPL / shell

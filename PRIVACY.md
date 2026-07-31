@@ -90,7 +90,7 @@ Some features call external APIs. Here is exactly what leaves the bot:
 
 | Service | What is sent |
 |---|---|
-| Groq (AI) | Only when you use `/eli5`: the question text you typed is sent to Groq's API to generate an explanation. Subject to [Groq's privacy policy](https://groq.com/privacy-policy/). |
+| Groq (AI) | Used to generate fresh Would-You-Rather questions on a daily scrape. No Discord user data is sent — the request carries only the configured generation prompt. Subject to [Groq's privacy policy](https://groq.com/privacy-policy/). |
 | nekos.best / Nekosia | Nothing about you — the bot fetches image URLs for image/GIF commands. |
 | YouTube / yt-dlp, Spotify (page metadata), iTunes Search, SponsorBlock | Song titles/URLs requested in music commands. No Discord user data is sent. |
 | Bot lists (top.gg, Discord Bot List, discord.bots.gg) | The bot's server count. When you vote on top.gg or Discord Bot List, they send us your user ID (see Votes above). discord.bots.gg has no voting — only the server count is shared with it. |

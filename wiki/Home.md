@@ -44,4 +44,4 @@ NanoBot is a lightweight Discord moderation bot designed around fast, thumb-frie
 - Python 3.11 or newer.
 - A Discord bot token with **Server Members** and **Message Content** intents enabled.
 - Dependencies from `requirements.txt`.
-- Optional: Groq API key for `/eli5` and Would-You-Rather generation.
+- Optional: Groq API key for Would-You-Rather generation.
