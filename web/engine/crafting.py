@@ -19,7 +19,12 @@ from __future__ import annotations
 
 from typing import Optional
 
-from cogs.crafting.helpers import clamp_craft_qty, find_recipe, missing_inputs
+from cogs.crafting.helpers import (
+    clamp_craft_qty,
+    find_recipe,
+    max_craftable,
+    missing_inputs,
+)
 from cogs.crafting.recipes import RECIPES
 from utils import db
 from utils import items as item_catalog
@@ -36,7 +41,6 @@ def _recipe_payload(recipe, inventory: dict[str, int]) -> dict:
     """
     output = item_catalog.get(recipe.output_item)
     inputs = []
-    limit = None
     for key, need in recipe.inputs.items():
         have = inventory.get(key, 0)
         inputs.append(
@@ -47,7 +51,10 @@ def _recipe_payload(recipe, inventory: dict[str, int]) -> dict:
                 "short": max(0, need - have),
             }
         )
-        limit = have // need if limit is None else min(limit, have // need)
+    # Shared with the `max` quantity /craft make offers, rather than recomputed
+    # here — the number a stepper stops at and the number a command makes are
+    # the same fact about the same materials.
+    limit = max_craftable(recipe, inventory)
 
     return {
         "key": recipe.key,
@@ -59,7 +66,7 @@ def _recipe_payload(recipe, inventory: dict[str, int]) -> dict:
         },
         "inputs": inputs,
         "craftable": all(i["short"] == 0 for i in inputs),
-        "max_craftable": max(0, min(limit or 0, 100)),
+        "max_craftable": max(0, min(limit, 100)),
         # What it's worth compared with selling the parts — the reason to craft
         # something rather than sell it, said plainly.
         "input_value": sum(

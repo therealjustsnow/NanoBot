@@ -528,7 +528,7 @@ async def test_setting_a_trap_spends_the_item(bot):
 
     assert screen.ok and "Set" in screen.embed.title
     assert await db.get_item_qty(author.id, FISH_TRAP) == 0
-    assert await db.get_trap(author.id) is not None
+    assert await db.get_trap(author.id, DEFAULT_SPOT) is not None
 
 
 @pytest.mark.cogs("cogs.fishing")
@@ -539,7 +539,7 @@ async def test_no_trap_no_set(bot):
     screen = await cog.trap_screen(guild, author)
 
     assert screen.ok is False
-    assert await db.get_trap(author.id) is None
+    assert await db.get_traps(author.id) == []
 
 
 @pytest.mark.cogs("cogs.fishing")
@@ -570,7 +570,7 @@ async def test_a_soaked_trap_fills_the_bag_from_where_it_was_set(bot):
 
     assert screen.ok and "Basket" in screen.embed.title
     assert "River Bend" in screen.embed.description
-    assert await db.get_trap(author.id) is None
+    assert await db.get_traps(author.id) == []
     caught = sum(row["qty"] for row in await db.get_bag(author.id))
     treasure = "treasure" in screen.embed.description.lower()
     assert caught > 0 or treasure
@@ -586,5 +586,5 @@ async def test_the_trap_button_and_the_command_are_the_same_path(bot):
 
     await view.trap.callback(interaction)
 
-    assert await db.get_trap(author.id) is not None
+    assert await db.get_trap(author.id, DEFAULT_SPOT) is not None
     assert "Set" in interaction.edited["embed"].title

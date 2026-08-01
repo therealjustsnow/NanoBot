@@ -126,3 +126,92 @@ async def test_multi_input_shortfall_refunds_earlier_inputs(bot):
     assert "diamond" in str(sent.embeds[0].to_dict()).lower()
     assert await db.get_item_qty(author.id, "gold_ore") == 2
     assert await db.get_item_qty(author.id, "craft_gem_ring") == 0
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+#  Knowing (and taking) the max
+# ══════════════════════════════════════════════════════════════════════════════
+@pytest.mark.cogs("cogs.crafting")
+async def test_the_recipe_list_says_how_many_you_can_make(bot):
+    """The complaint the count answers: "craftable" without a number still
+    leaves you guessing at the quantity to type."""
+    author = config().members[0]
+    await db.add_item(author.id, "pelt", 12)  # 2x fur_coat, 2 pelt spare
+
+    await dpytest.message("!craft", member=author)
+    embed = dpytest.get_message().embeds[0]
+
+    assert "✅ **×2** **fur_coat**" in embed.description
+    assert any(f.name == "Shortcuts" for f in embed.fields)
+
+
+@pytest.mark.cogs("cogs.crafting")
+async def test_info_says_how_many_you_can_make(bot):
+    author = config().members[0]
+    await db.add_item(author.id, "pelt", 17)
+
+    await dpytest.message("!craft info fur_coat", member=author)
+    fields = {f.name: f.value for f in dpytest.get_message().embeds[0].fields}
+
+    assert "**3**" in fields["You can make"]
+
+
+@pytest.mark.cogs("cogs.crafting")
+async def test_info_names_the_shortfall_instead_of_reporting_zero(bot):
+    author = config().members[0]
+    await db.add_item(author.id, "pelt", 2)
+
+    await dpytest.message("!craft info fur_coat", member=author)
+    fields = {f.name: f.value for f in dpytest.get_message().embeds[0].fields}
+
+    assert "**3**" in fields["You can make"]  # 3 more pelt needed
+    assert "pelt" in fields["You can make"].lower()
+
+
+@pytest.mark.cogs("cogs.crafting")
+async def test_make_max_crafts_everything_the_materials_allow(bot):
+    author = config().members[0]
+    await db.add_item(author.id, "pelt", 17)  # 3x fur_coat, 2 pelt left over
+
+    await dpytest.message("!craft make fur_coat max", member=author)
+    sent = dpytest.get_message()
+
+    assert "Crafted" in sent.embeds[0].title
+    assert await db.get_item_qty(author.id, "craft_fur_coat") == 3
+    assert await db.get_item_qty(author.id, "pelt") == 2
+
+
+@pytest.mark.cogs("cogs.crafting")
+async def test_make_max_of_something_you_cannot_make_names_the_shortfall(bot):
+    author = config().members[0]
+    await db.add_item(author.id, "pelt", 2)
+
+    await dpytest.message("!craft make fur_coat max", member=author)
+    sent = dpytest.get_message()
+
+    assert "Nothing to Craft" in sent.embeds[0].title
+    assert "pelt" in sent.embeds[0].description.lower()
+    assert await db.get_item_qty(author.id, "pelt") == 2
+
+
+@pytest.mark.cogs("cogs.crafting")
+async def test_make_rejects_a_quantity_that_is_neither(bot):
+    """Guessing at 1 would consume materials nobody asked to spend."""
+    author = config().members[0]
+    await db.add_item(author.id, "pelt", 5)
+
+    await dpytest.message("!craft make fur_coat heaps", member=author)
+    sent = dpytest.get_message()
+
+    assert "Error" in sent.embeds[0].title
+    assert await db.get_item_qty(author.id, "pelt") == 5
+
+
+@pytest.mark.cogs("cogs.crafting")
+async def test_a_craft_says_what_is_left_for_next_time(bot):
+    author = config().members[0]
+    await db.add_item(author.id, "pelt", 12)
+
+    await dpytest.message("!craft make fur_coat", member=author)
+
+    assert "**1** more" in dpytest.get_message().embeds[0].description

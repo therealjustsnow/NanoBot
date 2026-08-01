@@ -522,25 +522,44 @@ export async function fishing({ guildId }) {
   }
 
   function trapCard() {
+    /* One trap per spot, so the card is a list: each row is a place with its
+       own soak bar. Pulling collects every ready one at once — travel is free
+       and the basket is rolled at the water it sat in either way. */
     const trap = state.trap;
+    const rows = (trap.traps || []).map((t) =>
+      h(
+        "div",
+        { class: "stack stack--tight" },
+        h("div", { class: "small" }, `${t.spot.emoji || ""} ${t.spot.name}`),
+        ui.bar(t.soaked, trap.soak, { success: t.ready }),
+        t.ready
+          ? h("div", { class: "small dim" }, "Ready to pull")
+          : h("div", { class: "cooldown muted" }, "Ready in ", ui.countdown(t.ready_in, refresh))
+      )
+    );
+    const actions = [];
+    if (trap.ready) {
+      actions.push(
+        ui.actionButton(trap.ready > 1 ? `Pull ${trap.ready} traps` : "Pull the trap", pullTrap, {
+          variant: "primary",
+          block: true,
+          glyph: "🪣",
+        })
+      );
+    } else if (trap.here && trap.owned) {
+      actions.push(ui.actionButton("Set a trap here", pullTrap, { variant: "primary", block: true }));
+    } else if (trap.here) {
+      actions.push(h("p", { class: "small dim" }, "You don't own one. The shop below sells them."));
+    }
     return ui.card(
       {},
-      ui.cardHead("Fish trap", {
+      ui.cardHead("Fish traps", {
         glyph: "🪤",
-        sub: trap.set ? `Soaking at ${trap.spot.name}` : "Fishes while you're not here",
+        sub: trap.set
+          ? `${fmt.plural(trap.traps.length, "trap")} in the water`
+          : "Fishes while you're not here — one per spot",
       }),
-      trap.set
-        ? h(
-            "div",
-            { class: "stack stack--tight" },
-            ui.bar(trap.soaked, trap.soak, { success: trap.ready }),
-            trap.ready
-              ? ui.actionButton("Pull the trap", pullTrap, { variant: "primary", block: true, glyph: "🪣" })
-              : h("div", { class: "cooldown muted" }, "Ready in ", ui.countdown(trap.ready_in, refresh))
-          )
-        : trap.owned
-          ? ui.actionButton("Set the trap here", pullTrap, { variant: "primary", block: true })
-          : h("p", { class: "small dim" }, "You don't own one. The shop below sells them.")
+      h("div", { class: "stack stack--tight" }, ...rows, ...actions)
     );
   }
 
@@ -549,7 +568,8 @@ export async function fishing({ guildId }) {
     if (result.action === "set") {
       ui.ok(`Trap set at ${result.spot.name}. Come back in ${fmt.duration(result.soak)}.`);
     } else {
-      ui.ok(`The basket holds ${fmt.plural(result.catches.length, "fish")}.`, { title: "Trap pulled" });
+      const where = result.baskets.length > 1 ? ` from ${fmt.plural(result.baskets.length, "spot")}` : "";
+      ui.ok(`The baskets hold ${fmt.plural(result.catches.length, "fish")}${where}.`, { title: "Traps pulled" });
     }
     await refresh();
   }

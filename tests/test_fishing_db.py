@@ -407,44 +407,76 @@ async def test_a_charter_follows_the_user_not_the_guild():
 
 # ── Traps ────────────────────────────────────────────────────────────────────
 async def test_setting_and_reading_a_trap():
-    assert await db.get_trap(A) is None
+    assert await db.get_trap(A, "reef") is None
     assert await db.set_trap(A, "reef", 1000.0) is True
-    assert await db.get_trap(A) == {"spot": "reef", "set_at": 1000.0}
+    assert await db.get_trap(A, "reef") == {"spot": "reef", "set_at": 1000.0}
 
 
-async def test_only_one_trap_at_a_time():
-    """The primary key is the rule, not a read-then-write the caller could
-    lose — the item is consumed on the strength of this returning True."""
+async def test_only_one_trap_per_spot():
+    """The (user, spot) primary key is the rule, not a read-then-write the
+    caller could lose — the item is consumed on the strength of this returning
+    True."""
     assert await db.set_trap(A, "pond", 1000.0) is True
-    assert await db.set_trap(A, "abyss", 1001.0) is False
-    assert (await db.get_trap(A))["spot"] == "pond"
+    assert await db.set_trap(A, "pond", 1001.0) is False
+    assert (await db.get_trap(A, "pond"))["set_at"] == 1000.0
+
+
+async def test_a_trap_in_every_spot():
+    """The whole point of re-keying: a trap belongs to the water it sits in, so
+    chartering somewhere new gives you somewhere new to leave one."""
+    for i, spot in enumerate(("pond", "reef", "deep")):
+        assert await db.set_trap(A, spot, 1000.0 + i) is True
+    assert [t["spot"] for t in await db.get_traps(A)] == ["pond", "reef", "deep"]
 
 
 async def test_a_trap_cannot_be_pulled_early():
     await db.set_trap(A, "pond", 1000.0)
-    assert await db.claim_trap(A, 1000.0 + 100, 7200) is None
+    assert await db.claim_trap(A, "pond", 1000.0 + 100, 7200) is None
     # Still in the water, unchanged.
-    assert await db.get_trap(A) == {"spot": "pond", "set_at": 1000.0}
+    assert await db.get_trap(A, "pond") == {"spot": "pond", "set_at": 1000.0}
 
 
 async def test_a_soaked_trap_pays_out_exactly_once():
     """The DELETE is the claim, so a button press racing the command can't
     collect the same trap twice."""
     await db.set_trap(A, "deep", 1000.0)
-    pulled = await db.claim_trap(A, 1000.0 + 7200, 7200)
+    pulled = await db.claim_trap(A, "deep", 1000.0 + 7200, 7200)
     assert pulled == {"spot": "deep", "set_at": 1000.0}
-    assert await db.claim_trap(A, 1000.0 + 7200, 7200) is None
-    assert await db.get_trap(A) is None
+    assert await db.claim_trap(A, "deep", 1000.0 + 7200, 7200) is None
+    assert await db.get_trap(A, "deep") is None
 
 
-async def test_pulling_frees_the_slot_for_a_new_trap():
+async def test_pulling_frees_the_spot_for_a_new_trap():
     await db.set_trap(A, "pond", 1000.0)
-    await db.claim_trap(A, 1000.0 + 7200, 7200)
-    assert await db.set_trap(A, "reef", 9000.0) is True
+    await db.claim_trap(A, "pond", 1000.0 + 7200, 7200)
+    assert await db.set_trap(A, "pond", 9000.0) is True
+
+
+async def test_claiming_ready_traps_leaves_the_soaking_ones():
+    """Collecting is per angler rather than per place — travel is free and the
+    basket is rolled at the water it sat in — but a trap that hasn't soaked
+    long enough stays put."""
+    await db.set_trap(A, "pond", 1000.0)
+    await db.set_trap(A, "reef", 1000.0)
+    await db.set_trap(A, "deep", 1000.0 + 7000)  # dropped in much later
+
+    pulled = await db.claim_ready_traps(A, 1000.0 + 7200, 7200)
+
+    assert {t["spot"] for t in pulled} == {"pond", "reef"}
+    assert [t["spot"] for t in await db.get_traps(A)] == ["deep"]
+
+
+async def test_ready_traps_pay_out_exactly_once():
+    await db.set_trap(A, "pond", 1000.0)
+    await db.set_trap(A, "reef", 1000.0)
+    assert len(await db.claim_ready_traps(A, 1000.0 + 7200, 7200)) == 2
+    assert await db.claim_ready_traps(A, 1000.0 + 7200, 7200) == []
 
 
 async def test_traps_do_not_leak_between_anglers():
     await db.set_trap(A, "reef", 1000.0)
-    assert await db.get_trap(B) is None
-    assert await db.claim_trap(B, 1000.0 + 7200, 7200) is None
-    assert await db.get_trap(A) is not None
+    assert await db.get_trap(B, "reef") is None
+    assert await db.get_traps(B) == []
+    assert await db.claim_trap(B, "reef", 1000.0 + 7200, 7200) is None
+    assert await db.claim_ready_traps(B, 1000.0 + 7200, 7200) == []
+    assert await db.get_trap(A, "reef") is not None

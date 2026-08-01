@@ -601,93 +601,119 @@ async def armed_effects(user_id: int) -> list[dict]:
 
 
 async def trap_state(user_id: int) -> dict:
-    """Whether a trap is soaking, and how much longer it needs."""
-    trap = await db.get_trap(user_id)
+    """Every trap in the water, and how much longer each one needs.
+
+    One per spot, so this is a list — `set`/`ready` summarise it for a caller
+    that only wants to know whether the button does anything.
+    """
     owned = await db.get_item_qty(user_id, FISH_TRAP)
-    if not trap:
-        return {"set": False, "owned": owned, "soak": TRAP_SOAK}
-    soaked = time.time() - trap["set_at"]
+    now = time.time()
+    traps = []
+    for row in await db.get_traps(user_id):
+        soaked = now - row["set_at"]
+        traps.append(
+            {
+                "spot": _spot_payload(row["spot"]),
+                "soaked": int(soaked),
+                "ready": soaked >= TRAP_SOAK,
+                "ready_in": max(0, int(TRAP_SOAK - soaked)),
+            }
+        )
+    fisher = await db.get_fisher(user_id)
+    here = resolve_spot(fisher["spot"])
     return {
-        "set": True,
+        "set": bool(traps),
         "owned": owned,
-        "spot": _spot_payload(trap["spot"]),
         "soak": TRAP_SOAK,
-        "soaked": int(soaked),
-        "ready": soaked >= TRAP_SOAK,
-        "ready_in": max(0, int(TRAP_SOAK - soaked)),
+        "traps": traps,
+        "ready": sum(1 for t in traps if t["ready"]),
+        "here": not any(t["spot"]["key"] == here for t in traps),
     }
 
 
 async def trap(user_id: int, guild_id: int) -> dict:
-    """Set a trap, or pull one that has soaked long enough.
+    """Pull every soaked trap, or set one in the water you're standing in.
 
     One verb for both because that is how it reads to a member: you go to the
-    trap. Which of the two happens is a property of the water, not a choice.
+    trap. Which of the two happens is a property of the water, not a choice —
+    and collecting wins, since a full basket is the payout and the next press
+    sets the trap the pull just freed.
     """
     now = time.time()
-    existing = await db.get_trap(user_id)
-    if existing:
-        pulled = await db.claim_trap(user_id, now, TRAP_SOAK)
-        if not pulled:
-            left = max(0, int(TRAP_SOAK - (now - existing["set_at"])))
-            raise PlayError(
-                f"Still soaking — give it {h.fmt_duration(left)}.",
-                code="soaking",
-                retry_after=left,
-            )
-        return await _pull_trap(user_id, guild_id, pulled["spot"])
+    pulled = await db.claim_ready_traps(user_id, now, TRAP_SOAK)
+    if pulled:
+        return await _pull_traps(user_id, guild_id, [t["spot"] for t in pulled])
 
+    fisher = await db.get_fisher(user_id)
+    spot = resolve_spot(fisher["spot"])
+    if await db.get_trap(user_id, spot) is not None:
+        soaking = await db.get_traps(user_id)
+        left = min(max(0, int(TRAP_SOAK - (now - t["set_at"]))) for t in soaking)
+        raise PlayError(
+            f"Still soaking — give it {h.fmt_duration(left)}.",
+            code="soaking",
+            retry_after=left,
+        )
     if not await db.try_consume_item(user_id, FISH_TRAP, 1):
         raise PlayError(
             "You don't own a fish trap. The tackle shop sells them.",
             code="no_trap",
         )
-    fisher = await db.get_fisher(user_id)
-    spot = resolve_spot(fisher["spot"])
     if not await db.set_trap(user_id, spot, now):
         await db.add_item(user_id, FISH_TRAP, 1)  # lost the race — hand it back
-        raise PlayError("You already have a trap in the water.", code="already_set")
+        raise PlayError(
+            "You already have a trap in the water here.", code="already_set"
+        )
     return {"action": "set", "spot": _spot_payload(spot), "soak": TRAP_SOAK}
 
 
-async def _pull_trap(user_id: int, guild_id: int, spot: str) -> dict:
-    """Roll a soaked trap's basket, at the spot it was set in."""
+async def _pull_traps(user_id: int, guild_id: int, spots: list[str]) -> dict:
+    """Roll every claimed trap's basket, each at the spot it was set in."""
     fisher = await db.get_fisher(user_id)
     parts = await _luck(user_id, guild_id, fisher)
     luck = _total_luck(parts)
+    baskets: list[dict] = []
     hauled: list[dict] = []
     coins = 0
     xp_total = 0
-    for _ in range(TRAP_CATCHES):
-        rarity = pick_spot_rarity(random.random(), rarity_odds(luck), spot)
-        key = pick_spot_fish(rarity, random.random(), spot)
-        xp_total += max(1, round(XP_PER_RARITY[rarity] * parts["xp_event_mult"]))
-        if rarity == "treasure":
-            paid = max(
-                1, int(treasure_coins(key, random.random()) * parts["value_mult"])
+    for raw_spot in spots:
+        spot = resolve_spot(raw_spot)
+        basket: list[dict] = []
+        for _ in range(TRAP_CATCHES):
+            rarity = pick_spot_rarity(random.random(), rarity_odds(luck), spot)
+            key = pick_spot_fish(rarity, random.random(), spot)
+            xp_total += max(1, round(XP_PER_RARITY[rarity] * parts["xp_event_mult"]))
+            if rarity == "treasure":
+                paid = max(
+                    1, int(treasure_coins(key, random.random()) * parts["value_mult"])
+                )
+                coins += paid
+                basket.append({**fish_payload(key), "coins": paid, "treasure": True})
+                continue
+            weight = roll_weight(key, random.random())
+            value = max(1, int(catch_value(key, weight) * parts["value_mult"]))
+            await db.record_catch(
+                user_id, key, weight, value, track_best=rarity != "junk"
             )
-            coins += paid
-            hauled.append({**fish_payload(key), "coins": paid, "treasure": True})
-            continue
-        weight = roll_weight(key, random.random())
-        value = max(1, int(catch_value(key, weight) * parts["value_mult"]))
-        await db.record_catch(user_id, key, weight, value, track_best=rarity != "junk")
-        hauled.append(
-            {
-                **fish_payload(key),
-                "weight": weight,
-                "weight_label": fmt_weight(weight),
-                "value": value,
-                "treasure": False,
-            }
-        )
+            basket.append(
+                {
+                    **fish_payload(key),
+                    "weight": weight,
+                    "weight_label": fmt_weight(weight),
+                    "value": value,
+                    "treasure": False,
+                }
+            )
+        baskets.append({"spot": _spot_payload(spot), "catches": basket})
+        hauled.extend(basket)
     if coins:
         await db.add_coins(user_id, coins)
         await db.add_fishing_earned(user_id, coins)
     new_xp = await db.add_fishing_xp(user_id, xp_total)
     return {
         "action": "pulled",
-        "spot": _spot_payload(spot),
+        "spot": baskets[0]["spot"],
+        "baskets": baskets,
         "catches": hauled,
         "coins": coins,
         "xp": xp_total,

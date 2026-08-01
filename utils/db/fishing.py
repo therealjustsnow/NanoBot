@@ -140,14 +140,17 @@ async def _ensure_fishing_tables():
             PRIMARY KEY (user_id, spot)
         )
     """)
-    # A set trap, at most one per angler. `set_at` is when it went in the
+    # Set traps — one per (angler, spot), which is what makes a trap a reason to
+    # travel rather than a thing you own one of. `set_at` is when it went in the
     # water; the collect is a conditional DELETE on it having been long enough,
-    # so the row itself is the claim (nothing else can pay out twice).
+    # so the row itself is the claim (nothing else can pay out twice). The
+    # number of spots is what bounds how many traps anyone can have soaking.
     await _conn().execute("""
         CREATE TABLE IF NOT EXISTS fishing_traps (
-            user_id TEXT PRIMARY KEY,
+            user_id TEXT NOT NULL,
             spot    TEXT NOT NULL DEFAULT '',
-            set_at  REAL NOT NULL DEFAULT 0
+            set_at  REAL NOT NULL DEFAULT 0,
+            PRIMARY KEY (user_id, spot)
         )
     """)
     await _commit()
@@ -280,21 +283,37 @@ async def set_spot(user_id: int, spot: str) -> None:
 
 
 # ── Traps ──────────────────────────────────────────────────────────────────────
-async def get_trap(user_id: int) -> dict | None:
-    """The trap this angler has in the water, or None."""
+async def get_traps(user_id: int) -> list[dict]:
+    """Every trap this angler has in the water, oldest first.
+
+    One row per spot, so this is at most as long as the spot list — the ordering
+    is by `set_at` because the oldest is the one that comes up first.
+    """
     async with _conn().execute(
-        "SELECT spot, set_at FROM fishing_traps WHERE user_id=?", (str(user_id),)
+        "SELECT spot, set_at FROM fishing_traps WHERE user_id=? ORDER BY set_at",
+        (str(user_id),),
+    ) as cur:
+        rows = await cur.fetchall()
+    return [{"spot": row["spot"], "set_at": row["set_at"]} for row in rows]
+
+
+async def get_trap(user_id: int, spot: str) -> dict | None:
+    """The trap this angler has soaking at one spot, or None."""
+    async with _conn().execute(
+        "SELECT spot, set_at FROM fishing_traps WHERE user_id=? AND spot=?",
+        (str(user_id), str(spot)),
     ) as cur:
         row = await cur.fetchone()
     return {"spot": row["spot"], "set_at": row["set_at"]} if row else None
 
 
 async def set_trap(user_id: int, spot: str, now: float) -> bool:
-    """Put a trap in the water. False when one is already set.
+    """Put a trap in the water at one spot. False when one is already there.
 
-    INSERT OR IGNORE against the primary key is the one-trap-at-a-time rule —
-    enforced by the schema rather than by a read-then-write the caller could
-    lose, since the item is consumed on the strength of this returning True.
+    INSERT OR IGNORE against the (user, spot) primary key is the one-trap-per-
+    place rule — enforced by the schema rather than by a read-then-write the
+    caller could lose, since the item is consumed on the strength of this
+    returning True.
     """
     cur = await _conn().execute(
         "INSERT OR IGNORE INTO fishing_traps (user_id, spot, set_at) VALUES (?,?,?)",
@@ -304,25 +323,43 @@ async def set_trap(user_id: int, spot: str, now: float) -> bool:
     return cur.rowcount > 0
 
 
-async def claim_trap(user_id: int, now: float, soak: int) -> dict | None:
-    """Pull a trap that has soaked long enough. None if it isn't ready.
+async def claim_trap(user_id: int, spot: str, now: float, soak: int) -> dict | None:
+    """Pull one spot's trap once it has soaked long enough. None if it isn't.
 
     The DELETE *is* the claim: its rowcount is the sole arbiter, so a button
     press racing a command can't collect the same trap twice. The row is read
-    first only to learn which spot to roll against — if the DELETE then loses,
-    that read is discarded.
+    first only to learn when it went in — if the DELETE then loses, that read is
+    discarded.
     """
-    trap = await get_trap(user_id)
+    trap = await get_trap(user_id, spot)
     if trap is None:
         return None
     cur = await _conn().execute(
-        "DELETE FROM fishing_traps WHERE user_id=? AND ? - set_at >= ?",
-        (str(user_id), float(now), int(soak)),
+        "DELETE FROM fishing_traps WHERE user_id=? AND spot=? AND ? - set_at >= ?",
+        (str(user_id), str(spot), float(now), int(soak)),
     )
     await _commit()
     if cur.rowcount <= 0:
         return None
     return trap
+
+
+async def claim_ready_traps(user_id: int, now: float, soak: int) -> list[dict]:
+    """Pull every trap that has soaked long enough, in the order they went in.
+
+    Traps are set at up to five places and travel is free, so making someone
+    visit each one to collect would be busywork rather than a decision — the
+    basket is rolled at the water it sat in either way. Each spot is claimed by
+    its own conditional DELETE, so a press racing a command pays each trap out
+    exactly once and the loser simply gets a shorter list.
+    """
+    pulled: list[dict] = []
+    for trap in await get_traps(user_id):
+        if now - trap["set_at"] < soak:
+            continue
+        if await claim_trap(user_id, trap["spot"], now, soak) is not None:
+            pulled.append(trap)
+    return pulled
 
 
 async def try_claim_cast(user_id: int, now: float, cooldown: int) -> int:
