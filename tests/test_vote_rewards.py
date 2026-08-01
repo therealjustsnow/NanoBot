@@ -15,6 +15,7 @@ import time
 import pytest
 
 import utils.db as db
+from cogs.activities.constants import ENCOUNTER_OUTCOMES
 from cogs.votes import (
     VOTE_COINS,
     VOTE_COIN_BOOST,
@@ -187,10 +188,11 @@ async def test_the_boost_never_makes_a_cost_bigger(bot):
     await db.grant_effect(author.id, "coin_boost", 2.0, duration=3600)
     before = await db.get_balance(author.id)
 
-    # trader_sand costs a flat 250 and returns nothing.
-    embed = await cog.resolve_encounter(
+    # trader_sand charges the price of the box and returns nothing.
+    step = await cog.resolve_encounter(
         guild, author, "explore_trader", "buy", 0.99, 0.5
     )
 
+    price = -ENCOUNTER_OUTCOMES["trader_sand"]["coins"][0]
     spent = before - await db.get_balance(author.id)
-    assert spent == 250, embed.description
+    assert spent == price, step.embed.description

@@ -411,6 +411,15 @@ doesn't get a button — it needs you to pick a target.
 On a phone, tap `/adventure dashboard` — Discord can't run a command group by
 itself, so that's the same card under a name slash can reach.
 
+**You don't have to go looking for it.** Every individual activity — `/work`,
+`/mine`, `/adventure hunt`, `/adventure explore` — answers with its result
+*and* a short version of the dashboard underneath, buttons included. So a
+paycheck also tells you two digs and a hunt are waiting, and you can run them
+from the same message. Press one and the result on top is replaced by the new
+one, so working through a full set of banked runs doesn't fill the channel.
+That happens on a refusal too, which is when it helps most: "work is on
+cooldown" on its own is a dead end.
+
 | Command | Comes back | Banks | Risk | Reward |
 |---|---|---|---|---|
 | `/work` | 3 hours | 4 (12h) | none | 200–360 coins + a 10-step career ladder |
@@ -457,12 +466,24 @@ currently worth.
 
 ### 🎲 Encounters
 
-Every so often a run turns into a decision instead of a result: a manager
-asking you to stay late, a seam running deeper than the props go, a stag on the
-treeline, a hooded trader with a sealed box. You get two buttons — one that
-always pays something modest, one that might pay a lot more and might not pay
-at all. Take your time; the buttons stay live for a couple of minutes. Walk
-away and you simply don't get the bonus.
+Roughly one run in seven turns into a decision instead of a result: a manager
+asking you to stay late, a till that's come up over at close, a seam running
+deeper than the props go, a stag on the treeline, three wolves with designs on
+your kill, a hooded trader with a sealed box, a stone door in a hillside.
+
+You get two or three buttons, and there's no right answer written on any of
+them — one is usually steadier, one usually swings harder, and which is
+actually better depends on how you feel about losing. Take your time; the
+buttons stay live for a couple of minutes. Walk away and you simply don't get
+the bonus, which is deliberate.
+
+**Some choices lead to another one.** Pocket the four hundred that shouldn't be
+in the till and you'll be standing there the next morning while the manager
+runs the tape back. Take the stag and you still have to get it two miles to the
+road in the dark. Follow the seam and find a pocket that keeps going — with an
+hour of lamp oil left. Each stage is its own decision and pays out on its own,
+so a chain that you leave half-answered keeps whatever the earlier stages
+already gave you.
 
 **`/work`** is the safe floor. Shifts add up to promotions (🍵 Intern all the
 way to 🏆 Legend of the Office), and each promotion pays a bit more.

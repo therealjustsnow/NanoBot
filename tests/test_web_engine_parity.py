@@ -97,6 +97,7 @@ def test_activities_engine_uses_the_cogs_own_helpers():
         "roll_encounter",
         "resolve_encounter",
         "outcome_coins",
+        "outcome_next",
         "rob_success",
         "rob_steal_amount",
     ):

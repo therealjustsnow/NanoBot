@@ -28,8 +28,11 @@ length in constants.py:
   charges     — every activity but /rob banks runs while you're away
                 (ACTIVITY_MAX_CHARGES), so an hour off comes back as three taps
                 rather than one. Same long-run rate, different shaped visit.
-  encounters  — ~8% of runs open a follow-up choice on buttons (ENCOUNTERS):
-                a safe option that always pays and a greedy one that might not.
+  encounters  — ~15% of runs open a choice on buttons (ENCOUNTERS): eleven of
+                them across the four activities, two or three options each, and
+                some outcomes open a second question rather than ending the
+                story (`next` — the till you pocketed, and the tape the next
+                morning).
   daily streak— the first run of each day stamps a streak that multiplies coin
                 payouts up to +25%, so there's a reason to come back tomorrow.
 
@@ -37,6 +40,12 @@ The dashboard is the front door to all of it: /adventure renders the card *and*
 a button per runnable activity (cogs/activities/views.py), so a member who has
 four things ready doesn't have to type four more commands to do them. Every
 button goes through `run_activity`, the same path the commands take.
+
+It is also the front door nobody found. Members typed /work, took the paycheck
+and never learned the card existed, so the loop's best feature belonged to the
+people who already knew about it. Every individual activity now replies with
+its result *and* the short form of that card, buttons included (`_send_run` →
+`RunResultView`), which makes discovering it and using it the same action.
 
 Coins ride the existing economy tables (db.add_coins et al.), and loot rides
 the shared inventory (utils/db/items.py), so earnings from any activity spend
@@ -121,6 +130,7 @@ from .helpers import (
     next_career,
     next_pickaxe,
     outcome_coins,
+    outcome_next,
     pick_explore_outcome,
     pick_hunt_catch,
     pick_ore,
@@ -140,7 +150,13 @@ from .helpers import (
     roll_work_pay,
     streak_multiplier,
 )
-from .views import BUTTON_ACTIVITIES, AdventureView, EncounterView
+from .views import (
+    BUTTON_ACTIVITIES,
+    BUTTON_LABELS,
+    AdventureView,
+    EncounterView,
+    RunResultView,
+)
 
 log = logging.getLogger("NanoBot.activities")
 
@@ -162,6 +178,24 @@ class ActivityRun:
     # refusal is only interesting to the person who asked, so on slash it goes
     # out ephemerally rather than putting "not yet" in the channel.
     claimed: bool = True
+    # The encounter this run opened, if any — the same one `view` was built
+    # for. Carried separately because a caller that hosts the choice on its own
+    # card (RunResultView) wants the key and not the view.
+    encounter_key: Optional[str] = None
+
+
+@dataclass
+class EncounterStep:
+    """One answered encounter, and whatever it opened.
+
+    `next_key` is what makes an encounter a story rather than a prompt: an
+    outcome may name a follow-up stage, and the view re-arms itself with it
+    instead of closing. None means the chain ended here, which is the common
+    case and the only one the first version of encounters had.
+    """
+
+    embed: discord.Embed
+    next_key: Optional[str] = None
 
 
 class Activities(commands.Cog):
@@ -316,7 +350,10 @@ class Activities(commands.Cog):
                 "start climbing."
             )
 
-        return ActivityRun(*self._maybe_encounter(embed, member, guild, activity))
+        embed, view, encounter_key = self._maybe_encounter(
+            embed, member, guild, activity
+        )
+        return ActivityRun(embed, view, encounter_key=encounter_key)
 
     async def collect_all(
         self, guild: discord.Guild, member: discord.abc.User
@@ -346,6 +383,7 @@ class Activities(commands.Cog):
 
         ran: dict[str, int] = {}
         view: Optional[discord.ui.View] = None
+        encounter_key: Optional[str] = None
         for activity in BUTTON_ACTIVITIES:
             # Bounded by the cap as well as by the claim, so a bug in the
             # bucket arithmetic can't turn this into an infinite payout loop.
@@ -355,7 +393,7 @@ class Activities(commands.Cog):
                     break
                 ran[activity] = ran.get(activity, 0) + 1
                 if view is None and run.view is not None:
-                    view = run.view
+                    view, encounter_key = run.view, run.encounter_key
 
         if not ran:
             cfg = await self._cfg(guild.id)
@@ -414,7 +452,7 @@ class Activities(commands.Cog):
         desc.append(f"\nBalance: {self._money(econ, after_coins)}")
         embed = h.ok("\n".join(desc), "🧭 Collected")
         embed.set_footer(text="Sell what you found with /inventory sell")
-        return ActivityRun(embed, view)
+        return ActivityRun(embed, view, encounter_key=encounter_key)
 
     async def _touch_streak(self, user_id: int, stats: dict) -> tuple[int, bool]:
         """Advance the adventure daily streak, once per day.
@@ -441,7 +479,7 @@ class Activities(commands.Cog):
         member: discord.abc.User,
         guild: discord.Guild,
         activity: str,
-    ) -> tuple[discord.Embed, Optional[discord.ui.View]]:
+    ) -> tuple[discord.Embed, Optional[discord.ui.View], Optional[str]]:
         """Roll for an encounter and, if one fires, hang it off the result.
 
         It rides the same message rather than a second one: the encounter is
@@ -450,14 +488,20 @@ class Activities(commands.Cog):
         """
         key = roll_encounter(activity, random.random(), random.random())
         if key is None:
-            return embed, None
+            return embed, None, None
+        self._prompt_encounter(embed, key)
+        return embed, EncounterView(self, member.id, guild.id, key), key
+
+    @staticmethod
+    def _prompt_encounter(embed: discord.Embed, key: str) -> discord.Embed:
+        """Put an encounter's scene and question on an embed."""
         encounter = ENCOUNTERS[key]
         embed.add_field(
             name=f"{encounter['emoji']} {encounter['title']}",
             value=encounter["prompt"],
             inline=False,
         )
-        return embed, EncounterView(self, member.id, guild.id, key)
+        return embed
 
     async def resolve_encounter(
         self,
@@ -467,19 +511,23 @@ class Activities(commands.Cog):
         option_key: str,
         outcome_roll: float,
         amount_roll: float,
-    ) -> discord.Embed:
-        """Pay out a chosen encounter option. Called only by EncounterView.
+    ) -> EncounterStep:
+        """Pay out a chosen encounter option. Called only by the views.
 
         The view's single-use guard is what stops this being called twice for
-        one encounter; nothing here re-checks, because there is no row to check
+        one stage; nothing here re-checks, because there is no row to check
         against — an encounter exists only for as long as its message does.
+
+        Returns an `EncounterStep` rather than an embed because an outcome may
+        open a follow-up: the payout above and the question below it are one
+        screen, and the view needs to know which buttons to put under it.
         """
         econ = await db.get_econ_config(guild.id)
         encounter = ENCOUNTERS.get(encounter_key)
         outcome = resolve_encounter(encounter_key, option_key, outcome_roll)
         if encounter is None or outcome is None:
             # Only reachable if the registry changed under a live message.
-            return h.warn("That encounter is over.", "🌫️ Gone")
+            return EncounterStep(h.warn("That encounter is over.", "🌫️ Gone"))
 
         lines = [outcome["text"]]
         coins = outcome_coins(outcome, amount_roll)
@@ -500,17 +548,39 @@ class Activities(commands.Cog):
             lines.append(f"You pocket {item_catalogue.display(item_key)} ×{qty}.")
 
         title = f"{encounter['emoji']} {encounter['title']}"
-        return (h.err if coins < 0 and "item" not in outcome else h.ok)(
+        embed = (h.err if coins < 0 and "item" not in outcome else h.ok)(
             "\n".join(lines), title
         )
+        # A follow-up stage is asked on the same screen the outcome is reported
+        # on: "you pocketed it" and "the manager is watching the tape" are one
+        # moment, and splitting them across two messages would lose the join.
+        next_key = outcome_next(outcome)
+        if next_key:
+            self._prompt_encounter(embed, next_key)
+        return EncounterStep(embed, next_key)
 
     async def _send_run(self, ctx: commands.Context, run: ActivityRun):
-        """Reply with a finished run, wiring up an encounter view if it opened."""
-        message = await ctx.reply(
-            embed=run.embed, view=run.view, ephemeral=not run.claimed
+        """Reply with a finished run — result on top, the dashboard under it.
+
+        The dashboard is the loop's best feature and almost nobody found it:
+        members typed `/work`, took the paycheck, and never learned there was a
+        card telling them three hunts were also ready. So every individual
+        command now answers with the short dashboard and its buttons, which
+        makes finding out and taking the shortcut the same action.
+
+        A refused run gets the card too, and that is when it earns its place
+        most: "work is on cooldown" is a dead end, while "work is on cooldown,
+        here are two digs and an explore" is an answer.
+        """
+        embed, state = await self.adventure_dashboard(
+            ctx.guild, ctx.author, compact=True
         )
-        if run.view is not None:
-            run.view.message = message
+        view = RunResultView(
+            self, ctx.author.id, state, run.embed, encounter_key=run.encounter_key
+        )
+        view.message = await ctx.reply(
+            embeds=[run.embed, embed], view=view, ephemeral=not run.claimed
+        )
 
     # ══════════════════════════════════════════════════════════════════════════
     #  /work — flat, safe
@@ -775,7 +845,10 @@ class Activities(commands.Cog):
         view.message = await ctx.reply(embed=embed, view=view)
 
     async def adventure_dashboard(
-        self, guild: discord.Guild, member: discord.abc.User
+        self,
+        guild: discord.Guild,
+        member: discord.abc.User,
+        compact: bool = False,
     ) -> tuple[discord.Embed, dict]:
         """The member-facing landing card, plus the state its buttons need.
 
@@ -785,9 +858,16 @@ class Activities(commands.Cog):
         The settings dump stays on /adventure config, and prestige/achievements
         stay on /progress — this card deliberately doesn't restate them.
 
+        `compact` is the form that rides under an individual command's result
+        (see `_send_run`): the headline, one line of live status, the streak,
+        and nothing else. It exists because the full card is eight fields, and
+        eight fields under every `/work` — twenty-six times a day — is how a
+        helpful addition turns into something people want switched off. The
+        buttons are the same either way, which is the part that matters.
+
         Returns the embed and a `{"charges": …, "enabled": …}` dict, because
-        AdventureView needs the same numbers the card just rendered and
-        recomputing them would let the two disagree.
+        the view needs the same numbers the card just rendered and recomputing
+        them would let the two disagree.
         """
         cfg = await self._cfg(guild.id)
         stats = await db.get_activity_stats(member.id)
@@ -815,13 +895,6 @@ class Activities(commands.Cog):
                 if soonest
                 else "Every activity is switched off in this server."
             )
-        embed = h.embed(
-            "🧭 Adventure",
-            f"{headline}\nTap a button to run one — no need to type another "
-            "command.",
-            h.BLUE,
-        )
-
         # ── The daily streak ─────────────────────────────────────────────────
         # Shown whether or not it's live today, because the number a member
         # wants is "what am I about to lose", not "what did I have".
@@ -840,6 +913,41 @@ class Activities(commands.Cog):
                 "🔥 **No streak** · run anything today to start one — coin "
                 f"rewards climb to +{STREAK_BONUS_CAP:.0%}"
             )
+
+        if compact:
+            # One line per activity instead of a field each, and the two
+            # progression tracks left out entirely — they belong on the card
+            # somebody opened deliberately, not under every paycheck.
+            status = " · ".join(
+                f"{ACTIVITY_INFO[a]['emoji']} {BUTTON_LABELS.get(a, a.title())} "
+                + (
+                    "❌"
+                    if not enabled[a]
+                    else (
+                        f"×{charges[a]['ready']}"
+                        if charges[a]["ready"]
+                        else h.fmt_duration(charges[a]["next_in"])
+                    )
+                )
+                for a in BUTTON_ACTIVITIES
+            )
+            embed = h.embed(
+                "🧭 Adventure",
+                f"{headline}\n{status}\n{streak_line}",
+                h.BLUE,
+            )
+            embed.set_footer(
+                text="Tap to run another — this is /adventure, and it's the "
+                "fastest way to work the whole loop."
+            )
+            return embed, state
+
+        embed = h.embed(
+            "🧭 Adventure",
+            f"{headline}\nTap a button to run one — no need to type another "
+            "command.",
+            h.BLUE,
+        )
         embed.add_field(name="Daily streak", value=streak_line, inline=False)
 
         # ── The two progression tracks these activities feed ──────────────────

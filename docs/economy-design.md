@@ -137,10 +137,13 @@ visits, without changing which faucet rewards attention and therefore without
 changing which one `/shop`'s time-to-earn quotes.
 
 Two multipliers sit on top and are deliberately *earned*, not idle: encounters
-(a two-button choice on ~8% of runs) and the adventure daily streak (+5%/day,
-capped +25%, on coin payouts only). Neither is counted in the hourly figure,
-because folding them in would describe a player who never misses a day as the
-baseline.
+(a choice, sometimes two, on ~15% of runs) and the adventure daily streak
+(+5%/day, capped +25%, on coin payouts only). Neither is counted in the hourly
+figure, because folding them in would describe a player who never misses a day
+as the baseline. What the encounter registry is worth is computed from its own
+tables by `cogs.activities.helpers.encounter_share` and held to a band by
+`tests/test_activities_helpers.py`, since a system whose whole job is
+decoration has no natural ceiling on how generous someone can make it.
 
 ## Concurrency invariants (the patterns every accessor follows)
 

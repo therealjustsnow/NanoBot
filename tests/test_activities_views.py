@@ -10,6 +10,7 @@ the same claim, the same payout, the same DB.
 
 import time
 
+import discord
 import pytest
 from discord.ext import test as dpytest
 
@@ -25,7 +26,9 @@ from cogs.activities.views import (
     BUTTON_ACTIVITIES,
     AdventureView,
     EncounterView,
+    RunResultView,
     _ActivityButton,
+    _EncounterButton,
 )
 from tests.conftest import config
 
@@ -313,9 +316,10 @@ async def test_choosing_an_option_pays_out_once(bot, monkeypatch):
     view = EncounterView(cog, author.id, guild.id, "hunt_stag")
     interaction = FakeInteraction(author, guild)
 
-    await view.choose(interaction, "track")  # 0.5 < 0.75 → stag_tracked
+    await view.choose(interaction, "track")  # the reliable option
 
-    assert await db.get_item_qty(author.id, "pelt") == 2
+    _key, pelts = ENCOUNTER_OUTCOMES["stag_tracked"]["item"]
+    assert await db.get_item_qty(author.id, "pelt") == pelts
     assert interaction.edited is not None
     assert all(child.disabled for child in view.children)
 
@@ -335,7 +339,8 @@ async def test_a_second_press_cannot_claim_the_same_encounter(bot, monkeypatch):
     second = FakeInteraction(author, guild)
     await view.choose(second, "shoot")
 
-    assert await db.get_item_qty(author.id, "pelt") == 2
+    _key, pelts = ENCOUNTER_OUTCOMES["stag_tracked"]["item"]
+    assert await db.get_item_qty(author.id, "pelt") == pelts
     assert await db.get_item_qty(author.id, "golden_antler") == 0
     assert second.response.sent["ephemeral"] is True
 
@@ -592,3 +597,213 @@ async def test_collect_is_reachable_as_a_command_too(bot, monkeypatch):
 
     await dpytest.message("!adventure collect", member=author)
     assert "Collected" in dpytest.get_message().embeds[0].title
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+#  The dashboard under an individual command
+# ══════════════════════════════════════════════════════════════════════════════
+async def _run_card(bot, member, guild, embed=None, encounter_key=None):
+    """A live RunResultView over the real compact dashboard state."""
+    cog = bot.get_cog("Activities")
+    card, state = await cog.adventure_dashboard(guild, member, compact=True)
+    result = embed if embed is not None else discord.Embed(title="💼 Result")
+    return (
+        cog,
+        RunResultView(cog, member.id, state, result, encounter_key=encounter_key),
+        card,
+    )
+
+
+@pytest.mark.cogs("cogs.activities")
+async def test_an_individual_command_replies_with_the_dashboard(bot, monkeypatch):
+    """The whole discoverability fix: almost nobody ran /adventure, so /work
+    now shows them the card they never found — buttons included."""
+    from cogs.activities import cog as activities
+
+    author = config().members[0]
+    monkeypatch.setattr(activities.random, "random", lambda: 0.9)
+
+    await dpytest.message("!work", member=author)
+    message = dpytest.get_message()
+
+    assert len(message.embeds) == 2
+    assert "💼" in message.embeds[0].title
+    assert message.embeds[1].title == "🧭 Adventure"
+    assert "/adventure" in message.embeds[1].footer.text
+
+
+@pytest.mark.cogs("cogs.activities")
+async def test_the_card_on_a_run_is_the_short_one(bot, monkeypatch):
+    """Eight fields under every paycheck, twenty-six times a day, is how a
+    helpful addition becomes something people want switched off."""
+    from cogs.activities import cog as activities
+
+    guild, author = config().guilds[0], config().members[0]
+    monkeypatch.setattr(activities.random, "random", lambda: 0.9)
+    cog = bot.get_cog("Activities")
+
+    short, _state = await cog.adventure_dashboard(guild, author, compact=True)
+    full, _state = await cog.adventure_dashboard(guild, author)
+
+    assert short.fields == []
+    assert len(full.fields) > 5
+    # It still answers the question the buttons are there for.
+    assert "Work" in short.description and "Dig" in short.description
+
+
+@pytest.mark.cogs("cogs.activities")
+async def test_a_refused_run_gets_the_card_too(bot, monkeypatch):
+    """This is where it earns its place most: "work is on cooldown" is a dead
+    end, and "…but two digs are ready" is an answer."""
+    from cogs.activities import cog as activities
+
+    author = config().members[0]
+    monkeypatch.setattr(activities.random, "random", lambda: 0.9)
+
+    for _ in range(ACTIVITY_MAX_CHARGES["work"] + 1):
+        await dpytest.message("!work", member=author)
+        message = dpytest.get_message()
+
+    assert "Not Yet" in message.embeds[0].title
+    assert message.embeds[1].title == "🧭 Adventure"
+
+
+@pytest.mark.cogs("cogs.activities")
+async def test_a_press_on_a_run_card_replaces_the_result_in_place(bot, monkeypatch):
+    """The board posts results underneath itself because it has no slot for
+    one. This card does, so three hours of /work aren't three new messages."""
+    from cogs.activities import cog as activities
+
+    guild, author = config().guilds[0], config().members[0]
+    monkeypatch.setattr(activities.random, "random", lambda: 0.9)
+    _cog, view, _card = await _run_card(bot, author, guild)
+    interaction = FakeInteraction(author, guild)
+
+    await view.press(interaction, "mine")
+
+    assert interaction.followup.sent == []
+    assert "⛏️" in interaction.edited["embeds"][0].title
+    assert interaction.edited["embeds"][1].title == "🧭 Adventure"
+
+
+@pytest.mark.cogs("cogs.activities")
+async def test_a_refusal_on_a_run_card_never_overwrites_the_result(bot, monkeypatch):
+    """Losing a good roll to a "still on cooldown" notice is worse than the
+    notice is useful — the fishing rule, applied here."""
+    from cogs.activities import cog as activities
+
+    guild, author = config().guilds[0], config().members[0]
+    monkeypatch.setattr(activities.random, "random", lambda: 0.9)
+    cog, view, _card = await _run_card(bot, author, guild)
+    for _ in range(ACTIVITY_MAX_CHARGES["work"]):
+        await cog.run_activity(guild, author, "work")
+
+    interaction = FakeInteraction(author, guild)
+    await view.press(interaction, "work")
+
+    assert "Not Yet" in interaction.followup.sent[0]["embed"].title
+    assert interaction.followup.sent[0]["ephemeral"] is True
+    assert interaction.edited["embeds"][0].title == "💼 Result"
+
+
+@pytest.mark.cogs("cogs.activities")
+async def test_the_run_card_hosts_its_own_encounter(bot, monkeypatch):
+    """A run's choice belongs under the result it came from, not on a second
+    message — so the card carries the options on a row of its own."""
+    guild, author = config().guilds[0], config().members[0]
+    _cog, view, _card = await _run_card(
+        bot, author, guild, encounter_key="work_overtime"
+    )
+
+    options = [c for c in view.children if isinstance(c, _EncounterButton)]
+    assert {c.option_key for c in options} == {"stay", "deal", "leave"}
+    assert all(c.row == 2 for c in options)
+
+
+@pytest.mark.cogs("cogs.activities")
+async def test_answering_on_the_run_card_puts_the_outcome_on_top(bot, monkeypatch):
+    from cogs.activities import views as activity_views
+
+    guild, author = config().guilds[0], config().members[0]
+    monkeypatch.setattr(activity_views.random, "random", lambda: 0.5)
+    _cog, view, _card = await _run_card(
+        bot, author, guild, encounter_key="work_overtime"
+    )
+    interaction = FakeInteraction(author, guild)
+
+    await view.choose(interaction, "leave")
+
+    assert "Late Shift" in interaction.edited["embeds"][0].title
+    assert await db.get_balance(author.id) > 0
+    # Answered, so the options come off the card entirely.
+    assert not [c for c in view.children if isinstance(c, _EncounterButton)]
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+#  Chained encounters
+# ══════════════════════════════════════════════════════════════════════════════
+@pytest.mark.cogs("cogs.activities")
+async def test_an_answer_can_open_another_question(bot, monkeypatch):
+    """The direct answer to "you only ever make one choice": pocketing the till
+    is not the end of the story, it's the start of the one about the tape."""
+    from cogs.activities import views as activity_views
+
+    guild, author = config().guilds[0], config().members[0]
+    monkeypatch.setattr(activity_views.random, "random", lambda: 0.5)
+    cog = bot.get_cog("Activities")
+    view = EncounterView(cog, author.id, guild.id, "work_till")
+    interaction = FakeInteraction(author, guild)
+
+    await view.choose(interaction, "pocket")
+
+    assert view.encounter_key == "work_till_tape"
+    # Re-armed, not settled: the member is being asked something new.
+    assert {c.option_key for c in view.children} == {"own_up", "sit_tight"}
+    assert not any(c.disabled for c in view.children)
+    assert any("Tape" in f.name for f in interaction.edited["embed"].fields)
+    lo, hi = ENCOUNTER_OUTCOMES["till_pocketed"]["coins"]
+    assert lo <= await db.get_balance(author.id) <= hi
+
+
+@pytest.mark.cogs("cogs.activities")
+async def test_each_stage_of_a_chain_pays_exactly_once(bot, monkeypatch):
+    from cogs.activities import views as activity_views
+
+    guild, author = config().guilds[0], config().members[0]
+    monkeypatch.setattr(activity_views.random, "random", lambda: 0.5)
+    cog = bot.get_cog("Activities")
+    view = EncounterView(cog, author.id, guild.id, "work_till")
+
+    await view.choose(FakeInteraction(author, guild), "pocket")
+    pocketed = await db.get_balance(author.id)
+    # 0.5 lands in tape_missed (0.55), which pays nothing and ends the chain.
+    await view.choose(FakeInteraction(author, guild), "sit_tight")
+
+    assert await db.get_balance(author.id) == pocketed
+    assert view.encounter_key is None
+    assert all(c.disabled for c in view.children)
+
+    stale = FakeInteraction(author, guild)
+    await view.choose(stale, "own_up")
+    assert stale.response.sent["ephemeral"] is True
+    assert await db.get_balance(author.id) == pocketed
+
+
+@pytest.mark.cogs("cogs.activities")
+async def test_a_chain_that_lapses_keeps_what_it_already_paid(bot, monkeypatch):
+    """Each stage was its own decision, and the answered ones were answered."""
+    from cogs.activities import views as activity_views
+
+    guild, author = config().guilds[0], config().members[0]
+    monkeypatch.setattr(activity_views.random, "random", lambda: 0.5)
+    cog = bot.get_cog("Activities")
+    view = EncounterView(cog, author.id, guild.id, "work_till")
+    view.message = _FakeMessage()
+
+    await view.choose(FakeInteraction(author, guild), "pocket")
+    pocketed = await db.get_balance(author.id)
+    await view.on_timeout()
+
+    assert pocketed > 0
+    assert await db.get_balance(author.id) == pocketed
+    assert all(c.disabled for c in view.children)

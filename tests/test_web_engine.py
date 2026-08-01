@@ -20,6 +20,7 @@ import aiosqlite
 import pytest
 
 import utils.db as db
+from cogs.activities.constants import ENCOUNTER_OUTCOMES
 from web.engine import activities as A
 from web.engine import economy as E
 from web.engine import fishing as F
@@ -334,6 +335,42 @@ async def test_encounter_pays_out_exactly_once():
     with pytest.raises(PlayError) as caught:
         await A.choose(U, encounter["token"], option)
     assert caught.value.code == "expired"
+
+
+async def test_a_chained_encounter_continues_in_the_browser(monkeypatch):
+    """A `next` stage arrives under the same key a run's encounter does, so the
+    page continues the chain through the code path it already has — and the new
+    stage carries its own token, since each stage is worth one payout."""
+    from web.engine import activities as engine
+
+    encounter = engine._open_encounter(U, G, "work_till")
+    assert {o["key"] for o in encounter["options"]} == {"report", "pocket"}
+
+    result = await engine.choose(U, encounter["token"], "pocket")
+
+    assert result["encounter"]["key"] == "work_till_tape"
+    assert result["encounter"]["token"] != encounter["token"]
+    assert result["coins"] > 0
+
+    # The stage pays once, like any other encounter.
+    await engine.choose(U, result["encounter"]["token"], "own_up")
+    with pytest.raises(PlayError):
+        await engine.choose(U, result["encounter"]["token"], "own_up")
+
+
+async def test_an_encounter_item_arrives_with_its_quantity():
+    """The registry hands over (key, qty) pairs — reading it as a bare key put
+    a tuple where an item_key belongs and credited nothing anyone owns."""
+    from web.engine import activities as engine
+
+    encounter = engine._open_encounter(U, G, "hunt_stag")
+    before = await db.get_item_qty(U, "pelt")
+
+    result = await engine.choose(U, encounter["token"], "track")
+
+    _key, qty = ENCOUNTER_OUTCOMES["stag_tracked"]["item"]
+    assert await db.get_item_qty(U, "pelt") == before + qty
+    assert result["items"][0]["qty"] == qty
 
 
 async def test_an_encounter_token_belongs_to_one_account():
