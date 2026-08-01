@@ -2,20 +2,28 @@
 <html lang="en" data-theme="dark">
 <head>
   <meta charset="utf-8">
+  <!--
+    Every asset URL below is *relative* to this base, and the base is rewritten
+    at deploy time when the app is hosted under a repository subpath
+    (see .github/workflows/pages.yml). Without it, a deep link like
+    /g/123/fishing would resolve `assets/…` against `/g/123/`, and the app would
+    404 on its own stylesheet.
+  -->
+  <base href="/">
   <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
   <meta name="color-scheme" content="dark light">
   <meta name="theme-color" content="#0c0d12" media="(prefers-color-scheme: dark)">
   <meta name="theme-color" content="#f6f7fb" media="(prefers-color-scheme: light)">
   <meta name="description" content="Configure NanoBot and play its economy from anywhere.">
   <title>NanoBot</title>
-  <link rel="stylesheet" href="/assets/css/app.css">
+  <link rel="stylesheet" href="assets/css/app.css">
   <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'><text y='26' font-size='26'>🤖</text></svg>">
   <!--
     No inline script and no external script host: the Content-Security-Policy in
     web/http.py forbids both. The app is plain ES modules, which also means no
     build step — the files served here are the files in the repository.
   -->
-  <script type="module" src="/assets/js/app.js"></script>
+  <script type="module" src="assets/js/app.js"></script>
 </head>
 <body>
   <a class="skip" href="#main">Skip to content</a>

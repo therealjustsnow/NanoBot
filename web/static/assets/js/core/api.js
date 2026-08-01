@@ -16,6 +16,8 @@
  * something is ever read from it.
  */
 
+import { apiUrl, isCrossOrigin } from "./config.js";
+
 const JSON_HEADERS = { "Content-Type": "application/json" };
 const CACHE_MS = 2500;
 
@@ -52,7 +54,16 @@ export function clearCache(prefix = "") {
 }
 
 async function request(method, path, body, { signal } = {}) {
-  const options = { method, credentials: "same-origin", signal, headers: {} };
+  // `include` rather than `same-origin` when the API is elsewhere: a
+  // separately-hosted frontend still authenticates with the session cookie, and
+  // the server answers with an explicit CORS allow-list (see web/http.py) so
+  // this is never a blanket grant.
+  const options = {
+    method,
+    credentials: isCrossOrigin() ? "include" : "same-origin",
+    signal,
+    headers: {},
+  };
   if (body !== undefined) {
     options.headers = { ...JSON_HEADERS };
     options.body = JSON.stringify(body);
@@ -61,7 +72,7 @@ async function request(method, path, body, { signal } = {}) {
 
   let response;
   try {
-    response = await fetch(path, options);
+    response = await fetch(apiUrl(path), options);
   } catch (err) {
     if (err?.name === "AbortError") throw err;
     // A network failure is not an application error and shouldn't read like

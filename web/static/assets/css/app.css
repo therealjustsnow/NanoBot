@@ -806,3 +806,196 @@ button, input, select, textarea { font: inherit; color: inherit; }
   :root { --line: var(--ink-3); --line-strong: var(--ink-2); }
   .card, .tile { border-width: 1.5px; }
 }
+
+/* ══════════════════════════════════════════════════════════════════════════
+   Casino
+   ──────────────────────────────────────────────────────────────────────────
+   Every animation here is transform/opacity only, on at most three elements,
+   and none of it computes anything: the server has already decided the outcome
+   before a reel moves. That is what lets `prefers-reduced-motion` skip the lot
+   without changing what the player sees at the end.
+   ══════════════════════════════════════════════════════════════════════════ */
+.casino-stage {
+  display: grid; place-items: center;
+  min-height: 132px; padding: var(--s-4) 0;
+}
+
+.reels { display: flex; gap: var(--s-3); }
+.reel {
+  width: 68px; height: 84px;
+  display: grid; place-items: center;
+  font-size: 2.4rem; line-height: 1;
+  border-radius: var(--r-md);
+  background: var(--surface-2); border: 1px solid var(--line-strong);
+  box-shadow: inset 0 -8px 16px -8px rgb(0 0 0 / 0.5);
+}
+.reels--spinning .reel { animation: reel-spin 220ms linear infinite; }
+@keyframes reel-spin {
+  0% { transform: translateY(-8%); opacity: 0.5; }
+  50% { opacity: 1; }
+  100% { transform: translateY(8%); opacity: 0.5; }
+}
+
+.coin {
+  width: 92px; height: 92px; display: grid; place-items: center;
+  font-size: 3.4rem; border-radius: 50%;
+  background: radial-gradient(circle at 35% 30%, #ffe9a8, #d4a017);
+  box-shadow: 0 8px 24px -8px rgb(212 160 23 / 0.7);
+}
+.coin--flipping { animation: coin-flip 380ms linear infinite; }
+@keyframes coin-flip {
+  0% { transform: rotateY(0) translateY(0); }
+  50% { transform: rotateY(180deg) translateY(-18px); }
+  100% { transform: rotateY(360deg) translateY(0); }
+}
+
+.dice-row { display: flex; gap: var(--s-3); }
+.die {
+  width: 64px; height: 64px; display: grid; place-items: center;
+  font-size: 3rem; line-height: 1;
+  color: var(--ink);
+}
+.dice-row--rolling .die { animation: die-roll 300ms ease-in-out infinite; }
+@keyframes die-roll {
+  0%, 100% { transform: rotate(-12deg) translateY(0); }
+  50% { transform: rotate(12deg) translateY(-10px); }
+}
+
+.wheel {
+  width: 118px; height: 118px; border-radius: 50%;
+  display: grid; place-items: center;
+  background: conic-gradient(#1f2937 0 10deg, #b91c1c 10deg 20deg);
+  border: 4px solid var(--line-strong);
+}
+.wheel__face {
+  width: 74px; height: 74px; border-radius: 50%;
+  display: grid; place-items: center;
+  background: var(--surface); font-size: 1.6rem; font-weight: 700;
+  font-variant-numeric: tabular-nums;
+}
+.wheel--spinning { animation: wheel-spin 700ms cubic-bezier(0.3, 0, 0.2, 1) infinite; }
+@keyframes wheel-spin { to { transform: rotate(360deg); } }
+.wheel[data-color="red"] .wheel__face { color: #ef4444; }
+.wheel[data-color="black"] .wheel__face { color: var(--ink-2); }
+.wheel[data-color="green"] .wheel__face { color: var(--success); }
+
+/* Blackjack */
+.hand { display: flex; gap: 6px; flex-wrap: wrap; }
+.playing-card {
+  min-width: 46px; height: 64px;
+  display: grid; place-items: center;
+  border-radius: var(--r-sm);
+  background: #f8fafc; color: #0f172a;
+  border: 1px solid #cbd5e1;
+  font-weight: 700; font-size: 1rem;
+  box-shadow: var(--shadow-1);
+  animation: card-deal 260ms var(--ease) backwards;
+}
+.playing-card--red { color: #dc2626; }
+.playing-card--back {
+  background: linear-gradient(135deg, var(--brand), #8b5cf6);
+  color: #fff; border-color: transparent;
+}
+@keyframes card-deal {
+  from { opacity: 0; transform: translateY(-14px) rotate(-6deg); }
+}
+
+/* ══════════════════════════════════════════════════════════════════════════
+   Crafting
+   ══════════════════════════════════════════════════════════════════════════ */
+.recipe { display: flex; flex-direction: column; gap: var(--s-3); }
+.recipe__flow {
+  display: flex; align-items: center; gap: var(--s-3);
+  flex-wrap: wrap;
+}
+.recipe__arrow { color: var(--ink-3); font-size: 1.2rem; }
+.ingredient {
+  display: flex; align-items: center; gap: 6px;
+  padding: 6px 10px; border-radius: var(--r-md);
+  background: var(--surface-2); border: 1px solid var(--line);
+  font-size: 0.84rem;
+}
+.ingredient--short { border-color: color-mix(in srgb, var(--danger) 45%, var(--line)); }
+.ingredient__count { font-variant-numeric: tabular-nums; color: var(--ink-2); }
+.ingredient--short .ingredient__count { color: var(--danger); font-weight: 650; }
+
+/* ══════════════════════════════════════════════════════════════════════════
+   Charts — SVG, sized by viewBox so they scale to any column width.
+   ══════════════════════════════════════════════════════════════════════════ */
+.chart { width: 100%; height: auto; display: block; overflow: visible; }
+.chart__line { fill: none; stroke: var(--brand); stroke-width: 2; stroke-linejoin: round; stroke-linecap: round; }
+.chart__area { fill: color-mix(in srgb, var(--brand) 18%, transparent); }
+.chart__bar { fill: var(--brand); }
+.chart__grid { stroke: var(--line); stroke-width: 1; }
+.chart__label { fill: var(--ink-3); font-size: 9px; }
+.chart-empty {
+  display: grid; place-items: center; min-height: 110px;
+  color: var(--ink-3); font-size: 0.85rem;
+}
+
+.hbar { display: flex; align-items: center; gap: var(--s-3); }
+.hbar__label { width: 92px; flex: 0 0 auto; font-size: 0.8rem; color: var(--ink-2); }
+.hbar__track { flex: 1; height: 10px; border-radius: var(--r-full); background: var(--surface-3); overflow: hidden; }
+.hbar__fill { height: 100%; border-radius: inherit; background: linear-gradient(90deg, var(--brand), #8b5cf6); }
+.hbar__value { width: 56px; text-align: right; font-variant-numeric: tabular-nums; font-size: 0.82rem; }
+
+/* ══════════════════════════════════════════════════════════════════════════
+   Progression
+   ══════════════════════════════════════════════════════════════════════════ */
+.trophy {
+  display: flex; gap: var(--s-3); align-items: flex-start;
+  padding: var(--s-3); border-radius: var(--r-md);
+  background: var(--surface-2); border: 1px solid var(--line);
+  border-left: 3px solid var(--accent, var(--line-strong));
+}
+.trophy--locked { opacity: 0.62; }
+.trophy__glyph { font-size: 1.5rem; line-height: 1.2; }
+.trophy__name { font-weight: 620; }
+
+/* ══════════════════════════════════════════════════════════════════════════
+   Cosmetics preview
+   ══════════════════════════════════════════════════════════════════════════ */
+.swatch {
+  width: 100%; aspect-ratio: 16 / 6;
+  border-radius: var(--r-md);
+  display: grid; place-items: center;
+  font-size: 1.4rem;
+  border: 1px solid var(--line);
+}
+.cosmetic {
+  display: flex; flex-direction: column; gap: var(--s-2);
+  padding: var(--s-3); border-radius: var(--r-md);
+  background: var(--surface-2); border: 1px solid var(--line);
+  cursor: pointer; text-align: left;
+}
+.cosmetic[aria-pressed="true"] { border-color: var(--brand); background: color-mix(in srgb, var(--brand) 12%, var(--surface-2)); }
+.cosmetic--locked { opacity: 0.55; cursor: default; }
+
+/* A change staged but not applied. The whole point of the wardrobe is seeing
+   it before committing, so "unsaved" has to be visible without being alarming. */
+.staged {
+  position: sticky; bottom: calc(var(--nav-h) + env(safe-area-inset-bottom) + var(--s-3));
+  z-index: 30;
+  display: flex; align-items: center; gap: var(--s-3);
+  padding: var(--s-3) var(--s-4);
+  border-radius: var(--r-lg);
+  background: var(--bg-elevated); border: 1px solid var(--brand);
+  box-shadow: var(--shadow-3);
+}
+@media (min-width: 900px) { .staged { bottom: var(--s-4); } }
+
+/* ══════════════════════════════════════════════════════════════════════════
+   Moderation — deliberately soberer than the rest of the app.
+   ══════════════════════════════════════════════════════════════════════════ */
+.danger-zone {
+  border-color: color-mix(in srgb, var(--danger) 40%, var(--line));
+  background: color-mix(in srgb, var(--danger) 5%, var(--surface));
+}
+.action-tile {
+  display: flex; flex-direction: column; gap: 4px;
+  padding: var(--s-3); border-radius: var(--r-md);
+  background: var(--surface-2); border: 1px solid var(--line);
+  text-align: left; cursor: pointer; min-height: var(--tap);
+}
+.action-tile[disabled] { opacity: 0.5; cursor: not-allowed; }
+.action-tile__name { font-weight: 620; display: flex; align-items: center; gap: 6px; }

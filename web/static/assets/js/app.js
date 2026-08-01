@@ -18,6 +18,7 @@ import * as api from "./core/api.js";
 import * as router from "./core/router.js";
 import * as store from "./core/store.js";
 import * as ui from "./core/ui.js";
+import { appPath, appUrl, loadConfig } from "./core/config.js";
 
 const root = document.getElementById("root");
 
@@ -25,25 +26,39 @@ const root = document.getElementById("root");
    One list, two renderings. `tab: true` marks the five destinations that fit a
    phone's bottom bar; the rail shows everything, grouped.
    ────────────────────────────────────────────────────────────────────────── */
-const NAV = [
+export const NAV = [
   { group: "Server", items: [
     { key: "overview", label: "Home", glyph: "🏠", path: "", tab: true },
     { key: "settings", label: "Settings", glyph: "⚙️", path: "/settings", tab: true, manager: true },
     { key: "roles", label: "Self roles", glyph: "🎭", path: "/roles", manager: true },
+    { key: "analytics", label: "Analytics", glyph: "📊", path: "/analytics", manager: true },
+    { key: "moderation", label: "Moderation", glyph: "⚖️", path: "/moderation", manager: true },
   ]},
   { group: "Play", items: [
+    // The bottom bar holds five, so the two most-played get a tab and the rest
+    // live one tap away on the Play hub — which is itself the fifth tab.
     { key: "fishing", label: "Fishing", glyph: "🎣", path: "/fishing", tab: true },
     { key: "adventure", label: "Adventure", glyph: "🧭", path: "/adventure", tab: true },
+    { key: "casino", label: "Casino", glyph: "🎰", path: "/casino" },
+    { key: "crafting", label: "Crafting", glyph: "🔨", path: "/crafting" },
     { key: "inventory", label: "Items", glyph: "🎒", path: "/inventory" },
     { key: "shop", label: "Shop", glyph: "🛒", path: "/shop" },
   ]},
   { group: "You", items: [
     { key: "profile", label: "Profile", glyph: "👤", path: "/profile", tab: true },
-    { key: "leaderboards", label: "Leaderboards", glyph: "🏆", path: "/leaderboards" },
+    { key: "progression", label: "Progress", glyph: "🏆", path: "/progression" },
+    { key: "wardrobe", label: "Wardrobe", glyph: "🎨", path: "/wardrobe" },
+    { key: "leaderboards", label: "Leaderboards", glyph: "🥇", path: "/leaderboards" },
   ]},
 ];
 
-const ALL_NAV = NAV.flatMap((section) => section.items);
+// The phone's fifth tab: everything that didn't fit, one tap away. Without it
+// the casino, crafting, the wardrobe and progression would be reachable only on
+// a wide screen, which is the exact failure mode a mobile-first product can't
+// have.
+const MORE_TAB = { key: "more", label: "More", glyph: "⋯", path: "/more", tab: true };
+
+const ALL_NAV = [...NAV.flatMap((section) => section.items), MORE_TAB];
 
 /* ── Routes ─────────────────────────────────────────────────────────────── */
 const lazy = (loader, name = "default") => async (params, ctx) => {
@@ -57,6 +72,13 @@ router.route("/g/:guildId", lazy(() => import("./views/overview.js"), "overview"
 router.route("/g/:guildId/settings", lazy(() => import("./views/settings.js"), "settingsIndex"));
 router.route("/g/:guildId/settings/:feature", lazy(() => import("./views/settings.js"), "settingsPage"));
 router.route("/g/:guildId/roles", lazy(() => import("./views/roles.js"), "roles"));
+router.route("/g/:guildId/analytics", lazy(() => import("./views/analytics.js"), "analytics"));
+router.route("/g/:guildId/moderation", lazy(() => import("./views/moderation.js"), "moderation"));
+router.route("/g/:guildId/casino", lazy(() => import("./views/casino.js"), "casino"));
+router.route("/g/:guildId/crafting", lazy(() => import("./views/crafting.js"), "crafting"));
+router.route("/g/:guildId/progression", lazy(() => import("./views/progression.js"), "progression"));
+router.route("/g/:guildId/wardrobe", lazy(() => import("./views/wardrobe.js"), "wardrobe"));
+router.route("/g/:guildId/more", lazy(() => import("./views/more.js"), "more"));
 router.route("/g/:guildId/fishing", lazy(() => import("./views/fishing.js"), "fishing"));
 router.route("/g/:guildId/adventure", lazy(() => import("./views/adventure.js"), "adventure"));
 router.route("/g/:guildId/inventory", lazy(() => import("./views/inventory.js"), "inventory"));
@@ -67,6 +89,10 @@ router.route("/g/:guildId/leaderboards", lazy(() => import("./views/leaderboards
 /* ── Boot ───────────────────────────────────────────────────────────────── */
 async function boot() {
   store.applyTheme();
+  // Where the API is, and where this copy of the app is mounted. Same-origin
+  // deployments have no config file and fall straight through to the defaults,
+  // so this costs one 404 in the case that needs nothing.
+  await loadConfig();
 
   let session;
   try {
@@ -88,17 +114,17 @@ async function boot() {
   // A session that dies mid-visit shouldn't strand the user on a page that has
   // quietly stopped working — bounce to login and say why, once.
   api.onUnauthorized(() => {
-    if (location.pathname === "/login") return;
+    if (appPath() === "/login") return;
     store.set({ user: null });
     ui.warn("Your session expired. Sign in again to carry on.");
     router.go("/login");
   });
 
-  if (!session.user && location.pathname !== "/login") {
-    history.replaceState({}, "", "/login");
+  if (!session.user && appPath() !== "/login") {
+    history.replaceState({}, "", appUrl("/login"));
   }
-  if (session.user && location.pathname === "/login") {
-    history.replaceState({}, "", "/");
+  if (session.user && appPath() === "/login") {
+    history.replaceState({}, "", appUrl("/"));
   }
 
   // Loaded once at boot rather than by whichever page happens to need it: the
@@ -214,13 +240,17 @@ function visible(item) {
 function tabBar(guildId, active) {
   if (!guildId) return [];
   const items = ALL_NAV.filter((item) => item.tab && visible(item));
+  // "More" highlights for anything that isn't itself a tab, so the bar always
+  // shows where you are rather than going blank on a sixth destination.
+  const onMore = !items.some((item) => item.key === active);
   return items.map((item) =>
     h(
       "a",
       {
         class: "tabbar__item",
         href: `/g/${guildId}${item.path}`,
-        "aria-current": item.key === active ? "page" : null,
+        "aria-current":
+          item.key === active || (item.key === "more" && onMore) ? "page" : null,
       },
       h("span", { class: "tabbar__glyph", "aria-hidden": "true" }, item.glyph),
       h("span", {}, item.label)

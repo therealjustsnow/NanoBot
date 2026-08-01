@@ -258,6 +258,75 @@ def _v_dashboard_base_url(v) -> list[ConfigIssue]:
     return []
 
 
+def _v_dashboard_frontend_url(v) -> list[ConfigIssue]:
+    """The browser app's own URL, when something other than the bot serves it.
+
+    Unlike `dashboard_base_url` this one *may* carry a path: a GitHub Pages
+    project site lives at `https://you.github.io/NanoBot`, and refusing the
+    path would refuse the deployment it exists for. What it may not do is carry
+    a query or a fragment, which would mean the redirect back from a login
+    silently dropped part of itself.
+    """
+    if not v:
+        return []
+    url = str(v).strip()
+    if not url.startswith(("http://", "https://")):
+        return [
+            ConfigIssue(
+                "dashboard_frontend_url",
+                f"'{v}' must start with http:// or https://",
+                False,
+            )
+        ]
+    if "?" in url or "#" in url:
+        return [
+            ConfigIssue(
+                "dashboard_frontend_url",
+                "Should be a URL with no query or fragment, e.g. "
+                f"https://you.github.io/NanoBot — got '{v}'",
+                False,
+            )
+        ]
+    return []
+
+
+def _v_dashboard_origins(v) -> list[ConfigIssue]:
+    if not v:
+        return []
+    issues = []
+    for part in str(v).replace(",", " ").split():
+        entry = part.strip().rstrip("/")
+        if not entry.startswith(("http://", "https://")):
+            issues.append(
+                ConfigIssue(
+                    "dashboard_allowed_origins",
+                    f"'{part}' needs a scheme — origins look like "
+                    "https://you.github.io",
+                    False,
+                )
+            )
+        elif entry.count("/") > 2:
+            issues.append(
+                ConfigIssue(
+                    "dashboard_allowed_origins",
+                    f"'{part}' has a path. An origin is scheme + host only",
+                    False,
+                )
+            )
+        elif entry.startswith("http://") and not entry.startswith(
+            ("http://localhost", "http://127.0.0.1")
+        ):
+            issues.append(
+                ConfigIssue(
+                    "dashboard_allowed_origins",
+                    f"'{part}' is plain http. A cross-origin session cookie has "
+                    "to be Secure, so browsers will drop it — use https",
+                    False,
+                )
+            )
+    return issues
+
+
 def _v_dashboard_session_secret(v) -> list[ConfigIssue]:
     if not v:
         return []  # blank = ephemeral random secret, warned about at startup
@@ -748,10 +817,20 @@ FIELDS: tuple[Field, ...] = (
         "dashboard",
         "str",
         None,
-        "Public URL the dashboard is reached at, e.g. https://nano.example.com. "
+        "Public URL this API is reached at, e.g. https://nano.example.com. "
         "Used to build the OAuth redirect URI — must match the one registered in "
         "the Discord developer portal",
         validator=_v_dashboard_base_url,
+    ),
+    Field(
+        "dashboard_frontend_url",
+        "dashboard",
+        "str",
+        None,
+        "Where the browser app is served from, if not by this bot — e.g. "
+        "https://you.github.io/NanoBot. Blank (the default) means the bot serves "
+        "it and the two are the same URL",
+        validator=_v_dashboard_frontend_url,
     ),
     Field(
         "dashboard_client_id",
@@ -786,6 +865,18 @@ FIELDS: tuple[Field, ...] = (
         "How long a dashboard login lasts before it must be renewed, in days",
         minimum=1,
         maximum=90,
+    ),
+    Field(
+        "dashboard_allowed_origins",
+        "dashboard",
+        "str",
+        None,
+        "Extra origins allowed to call the API from another host, space- or "
+        "comma-separated (e.g. https://you.github.io). Only needed when the "
+        "frontend is hosted separately — leave blank when the bot serves it. "
+        "Setting this switches the session cookie to SameSite=None; Secure, so "
+        "every origin here must be HTTPS",
+        validator=_v_dashboard_origins,
     ),
     Field(
         "dashboard_play_enabled",
@@ -923,6 +1014,52 @@ def load(path: str = CONFIG_PATH) -> dict:
         for key in parser[section]:
             flat[key] = _coerce(key, parser[section][key])
     return flat
+
+
+ENV_PREFIX = "NANOBOT_"
+
+
+def env_key(key: str) -> str:
+    """The environment variable that overrides one config key."""
+    return f"{ENV_PREFIX}{key.upper()}"
+
+
+def apply_env(cfg: dict, environ: Optional[dict] = None) -> dict:
+    """Overlay `NANOBOT_<KEY>` environment variables onto a loaded config.
+
+    This exists for hosts where a file is the awkward way to configure a
+    process — a container, a PaaS, a systemd unit with an `EnvironmentFile` —
+    and it is deliberately *only* an overlay:
+
+    * `load()` still returns exactly what is in `config.ini`, so `set_value()`
+      (which loads, edits and saves) can never write an environment value into
+      the file. Editing config from Discord and configuring by environment stay
+      separate systems that don't overwrite each other.
+    * values are coerced by the same `_coerce` the INI parser uses, so
+      `NANOBOT_DASHBOARD_PORT=8080` arrives as an int, not the string "8080".
+    * an unknown `NANOBOT_*` name is ignored rather than guessed at.
+
+    `DISCORD_TOKEN` (read by `main.py`) and `NANOBOT_DB_KEY` (read by
+    `utils/db_crypto.py`) predate this and keep their own names.
+    """
+    env = os.environ if environ is None else environ
+    out = dict(cfg)
+    for field in FIELDS:
+        raw = env.get(env_key(field.key))
+        if raw is None:
+            continue
+        out[field.key] = _coerce(field.key, raw)
+    return out
+
+
+def env_overrides(environ: Optional[dict] = None) -> list[str]:
+    """Which config keys the environment is currently overriding.
+
+    Startup logs this so "I changed config.ini and nothing happened" is one
+    line away from being answered.
+    """
+    env = os.environ if environ is None else environ
+    return [f.key for f in FIELDS if env_key(f.key) in env]
 
 
 def save(cfg: dict, path: str = CONFIG_PATH) -> None:

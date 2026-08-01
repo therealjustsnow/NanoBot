@@ -128,12 +128,18 @@ NanoBot fixes that.
 - Sign in with Discord; the gate is Manage Server, exactly as it is in Discord
 - Configure AutoMod with a plain-language rule builder, not a JSON field
 - Design welcome and leave messages against a live preview
+- Set up tickets, birthdays, the new-account gate and music without leaving the page
 - A permission checklist per feature, so a missing permission is visible before
   it breaks something at 3am
+- Moderate with the safety rails on — role hierarchy checked, a reason required,
+  every destructive action confirmed, and each one written to the audit log
 - Play the whole economy from a phone — fishing, mining, adventuring, the
-  inventory, the shop — through the *same* cooldowns and claims Discord uses,
-  so nobody gets two of anything
+  casino, crafting, the inventory, the shop — through the *same* cooldowns and
+  claims Discord uses, so nobody gets two of anything
+- Dress your profile card against a live preview of the card itself
 - Mobile-first, dark and light, no build step, rides the same port as `/health`
+- Hostable as a static site (GitHub Pages, a CDN) against a remote API with no
+  code changes — see [docs/deployment.md](docs/deployment.md)
 
 ---
 
@@ -230,15 +236,25 @@ groq_wyr_system = You generate Would You Rather questions for a Discord bot. ...
 | `scraper` | `groq_wyr_system` | No | System prompt used when Groq generates WYR questions |
 | `dashboard` | `dashboard_port` | No | Port for the web dashboard. `0` = disabled (the default) |
 | `dashboard` | `dashboard_host` | No | Bind address. Default `0.0.0.0`; use `127.0.0.1` behind a reverse proxy |
-| `dashboard` | `dashboard_base_url` | No | Public URL the dashboard is reached at, e.g. `https://nano.example.com`. The OAuth redirect is built from it |
+| `dashboard` | `dashboard_base_url` | No | Public URL this API is reached at, e.g. `https://nano.example.com`. The OAuth redirect is built from it |
+| `dashboard` | `dashboard_frontend_url` | No | Where the browser app is served from, if not by the bot (e.g. a GitHub Pages URL). Blank = the bot serves it |
 | `dashboard` | `dashboard_client_id` | No | OAuth2 client id. Blank = the bot's own application id |
 | `dashboard` | `dashboard_client_secret` | No | OAuth2 client secret. Required for anyone to sign in |
 | `dashboard` | `dashboard_session_secret` | No | Signs session cookies. Blank = a random one per start, which signs everyone out on every restart |
 | `dashboard` | `dashboard_session_days` | No | How long a sign-in lasts. Default `7` |
 | `dashboard` | `dashboard_play_enabled` | No | Whether the economy is playable from the browser. `false` = read-only for members. Default `true` |
+| `dashboard` | `dashboard_allowed_origins` | No | Origins allowed to call the API cross-origin, when the frontend is hosted elsewhere. Blank (the default) = same-origin only. See [docs/deployment.md](docs/deployment.md) |
 
 > Migrating from an older version? An existing `config.json` is auto-migrated to
 > `config.ini` on first start and renamed to `config.json.bak`.
+
+**Configuring by environment instead:** every key above can be set as
+`NANOBOT_<KEY>` (`NANOBOT_DASHBOARD_PORT`, `NANOBOT_LOG_LEVEL`, …), which is the
+easier route on a container or a PaaS. It is an overlay on top of `config.ini`,
+not a replacement: `!config set` still reads and writes the file, so the two
+never overwrite each other, and the bot reports which keys the environment is
+overriding at startup. `DISCORD_TOKEN` and `NANOBOT_DB_KEY` keep their own names.
+See [`.env.example`](.env.example).
 
 **Live editing without a restart:**
 

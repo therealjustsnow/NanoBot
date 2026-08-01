@@ -272,6 +272,60 @@ async def security_headers(
     return response
 
 
+def cors_middleware(dash) -> Any:
+    """Answer cross-origin requests from the configured allow-list, and no one else.
+
+    This exists for one deployment shape: the frontend served from somewhere
+    else (GitHub Pages, a CDN, a `python -m http.server` on a laptop) talking to
+    a NanoBot API on its own host. Same-origin hosting — the default — never
+    reaches any of this, because a same-origin request carries no `Origin` the
+    browser will police.
+
+    Three things make it safe to send credentials across:
+
+    * the allow-list is exact and configured (`dashboard_allowed_origins`),
+      never `*` and never reflected blindly — an echoing allow-list with
+      credentials on is the same thing as no allow-list at all;
+    * `Vary: Origin` so a cache can't serve one site's allowance to another;
+    * the CSRF check in `session_middleware` still runs. CORS decides who may
+      *read* the answer; it does not decide who may cause the write, and a
+      cross-origin form post never needed permission to be sent.
+
+    A preflight is answered here and goes no further: it asks about a request
+    that hasn't happened, so running it through the session and CSRF checks
+    would refuse a question rather than an action.
+    """
+
+    @web.middleware
+    async def middleware(request: web.Request, handler: Handler) -> web.StreamResponse:
+        origin = request.headers.get("Origin")
+        allowed = bool(origin) and origin in dash.allowed_origins
+
+        if request.method == "OPTIONS" and "Access-Control-Request-Method" in (
+            request.headers
+        ):
+            response: web.StreamResponse = web.Response(status=204 if allowed else 403)
+        else:
+            response = await handler(request)
+
+        if allowed:
+            headers = response.headers
+            headers["Access-Control-Allow-Origin"] = origin
+            headers["Access-Control-Allow-Credentials"] = "true"
+            headers["Access-Control-Allow-Headers"] = (
+                f"content-type, {security.CSRF_HEADER.lower()}"
+            )
+            headers["Access-Control-Allow-Methods"] = (
+                "GET, POST, PATCH, PUT, DELETE, OPTIONS"
+            )
+            headers["Access-Control-Max-Age"] = "600"
+        if origin:
+            response.headers.add("Vary", "Origin")
+        return response
+
+    return middleware
+
+
 def session_middleware(dash) -> Any:
     """Attach the verified session (if any) and enforce CSRF on writes.
 
@@ -307,6 +361,7 @@ __all__ = [
     "bad_request",
     "body_json",
     "conflict",
+    "cors_middleware",
     "dashboard",
     "error_middleware",
     "forbidden",

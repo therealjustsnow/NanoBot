@@ -17,6 +17,7 @@ from typing import Optional
 
 from cogs.economy.constants import DAILY_STREAK_CAP_DAYS, REWARD_DEFAULTS
 from cogs.economy.helpers import _rank_title, compute_daily, seconds_to_afford
+from cogs.inventory.helpers import chest_payout
 from utils import consumables, db, globalxp
 from utils import helpers as h
 from utils import items as item_catalog
@@ -145,6 +146,71 @@ async def pay(user_id: int, guild_id: int, target_id: int, amount: int) -> dict:
 # ══════════════════════════════════════════════════════════════════════════════
 #  Inventory
 # ══════════════════════════════════════════════════════════════════════════════
+# Containers: what opening one consumes besides itself. A registry rather than a
+# branch, the way the item catalogue itself is one, so a second container is an
+# entry instead of another special case. The *rule* it describes is the cog's —
+# `Inventory._open_chests` consumes a chest and a key and pays `chest_payout`.
+CONTAINERS: dict[str, dict] = {
+    "treasure_chest": {
+        "opens_with": "treasure_key",
+        "verb": "Open",
+        "pays": "coins",
+    },
+}
+
+
+_SOURCE_CACHE: dict[int, dict[str, list[str]]] = {}
+
+
+def _sources() -> dict[str, list[str]]:
+    """Where each item comes from, derived from the tables that already say so.
+
+    "How do I get more of these" is the question an inventory raises and can't
+    answer, and it is the one thing worth adding that Discord's own list doesn't
+    have. Derived rather than written down: the drop tables, the recipe registry
+    and the shop's own price field already state it, and a hand-kept list would
+    be wrong the first time a table moved.
+
+    Deliberately nothing is invented. An item no table claims gets no line at
+    all, which reads as "we're not saying" rather than as a wrong answer.
+
+    Memoised on the *size of the catalogue* rather than outright: a cog whose
+    items register after the first call would otherwise leave a permanently
+    incomplete map, which is the kind of bug that only shows up in whichever
+    load order production happens to use.
+    """
+    from cogs.activities.constants import EXPLORE_OUTCOMES, HUNT_CATCHES, ORES
+    from cogs.crafting.recipes import RECIPES
+
+    cached = _SOURCE_CACHE.get(len(item_catalog.ITEMS))
+    if cached is not None:
+        return cached
+
+    out: dict[str, list[str]] = {}
+
+    def add(item_key: str, where: str) -> None:
+        entries = out.setdefault(item_key, [])
+        if where not in entries:
+            entries.append(where)
+
+    for ore in ORES:
+        add(ore, "Mining")
+    for catch in HUNT_CATCHES:
+        add(catch, "Hunting")
+    for outcome, _weight in EXPLORE_OUTCOMES:
+        if item_catalog.get(outcome):
+            add(outcome, "Exploring")
+    for recipe in RECIPES.values():
+        add(recipe.output_item, "Crafting")
+    for item_key, spec in item_catalog.ITEMS.items():
+        if spec.price:
+            add(item_key, "The tackle shop")
+
+    _SOURCE_CACHE.clear()
+    _SOURCE_CACHE[len(item_catalog.ITEMS)] = out
+    return out
+
+
 def item_payload(key: str, qty: int = 0) -> dict:
     spec = item_catalog.get(key)
     if not spec:
@@ -157,6 +223,7 @@ def item_payload(key: str, qty: int = 0) -> dict:
             "value": 0,
             "qty": qty,
             "usable": False,
+            "container": None,
         }
     return {
         "key": key,
@@ -169,6 +236,12 @@ def item_payload(key: str, qty: int = 0) -> dict:
         "qty": qty,
         "usable": bool(spec.effect),
         "effect": dict(spec.effect) if spec.effect else None,
+        # A container is opened rather than armed, and it needs something else
+        # in the bag to open with. The page has to know that *before* the tap,
+        # because "you need a key" discovered by failing is the one thing a
+        # screen can improve on over a command.
+        "container": CONTAINERS.get(key),
+        "sources": _sources().get(key, []),
     }
 
 
@@ -228,6 +301,47 @@ async def use(user_id: int, item_key: str, qty: int = 1) -> dict:
         "qty": result.qty,
         "uses": result.uses,
         "duration": result.duration,
+    }
+
+
+async def open_container(user_id: int, item_key: str, qty: int = 1) -> dict:
+    """Open a container, consuming it and the thing it opens with.
+
+    The order is the cog's, and it is the order that matters: take the container
+    first, then the key, and **put the container back** if the key turns out not
+    to be there. Both are atomic conditional consumes, so a second tab racing
+    this one loses rather than opening the same chest twice — and the worst
+    outcome of a crash between the two is a member keeping their chest.
+    """
+    spec = CONTAINERS.get(item_key)
+    if spec is None:
+        raise PlayError("That isn't something you can open.", code="not_container")
+    key_item = spec["opens_with"]
+
+    have = await db.get_item_qty(user_id, item_key)
+    keys = await db.get_item_qty(user_id, key_item)
+    qty = min(max(1, int(qty)), have, keys)
+    if qty <= 0:
+        need = item_payload(key_item)
+        raise PlayError(
+            f"Opening this takes one {need['name']} as well, and you have " f"{keys}.",
+            code="no_key",
+            needs=key_item,
+        )
+
+    if not await db.try_consume_item(user_id, item_key, qty):
+        raise PlayError("Those just vanished — try again.", code="short")
+    if not await db.try_consume_item(user_id, key_item, qty):
+        await db.add_item(user_id, item_key, qty)
+        raise PlayError("Your keys just vanished — try again.", code="short")
+
+    coins = sum(chest_payout(random.random()) for _ in range(qty))
+    balance = await db.add_coins(user_id, coins)
+    return {
+        "item": item_payload(item_key),
+        "qty": qty,
+        "coins": coins,
+        "balance": balance,
     }
 
 

@@ -13,16 +13,30 @@
  * re-rendering an input not lose its state. Text children are set as
  * `textContent`, never `innerHTML`: every string on this page ultimately comes
  * from a server name, a member's nickname or an admin's own message template,
- * and none of those are trusted markup.
+ * and none of those are trusted markup. There is deliberately no escape hatch
+ * for raw markup either — an unused one is still the door somebody reaches for
+ * later, and this file is the only place that door could be opened.
  */
 
-/** Create an element. `props` may carry `class`, `dataset`, `style`, `on*`. */
+import { appUrl } from "./config.js";
+
+/**
+ * Create an element. `props` may carry `class`, `dataset`, `style`, `on*`.
+ *
+ * An app-absolute `href` (`/g/123/fishing`) is rewritten through the
+ * deployment's base path here rather than at every call site. Views stay
+ * written in app-relative paths — which is what they mean — and a subpath
+ * deployment still produces links that survive a middle-click, a bookmark, or
+ * JavaScript failing to load.
+ */
 export function h(tag, props = null, ...children) {
   const el = document.createElement(tag);
   if (props) {
     for (const [key, value] of Object.entries(props)) {
       if (value === null || value === undefined || value === false) continue;
-      if (key === "class" || key === "className") {
+      if (key === "href" && typeof value === "string" && value.startsWith("/") && !value.startsWith("//")) {
+        el.setAttribute("href", appUrl(value));
+      } else if (key === "class" || key === "className") {
         el.className = Array.isArray(value) ? value.filter(Boolean).join(" ") : value;
       } else if (key === "style" && typeof value === "object") {
         Object.assign(el.style, value);
@@ -30,10 +44,6 @@ export function h(tag, props = null, ...children) {
         Object.assign(el.dataset, value);
       } else if (key.startsWith("on") && typeof value === "function") {
         el.addEventListener(key.slice(2).toLowerCase(), value);
-      } else if (key === "html") {
-        // Deliberately rare and deliberately loud. Only ever used for markup
-        // this file itself produced — never for anything from the API.
-        el.innerHTML = value;
       } else if (key in el && key !== "list" && key !== "form") {
         el[key] = value;
       } else {

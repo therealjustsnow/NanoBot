@@ -55,6 +55,17 @@ class Dashboard:
         self.client_secret = str(cfg.get("dashboard_client_secret") or "")
         self.session_days = max(1, _int(cfg.get("dashboard_session_days")) or 7)
         self.play_enabled = cfg.get("dashboard_play_enabled", True) is not False
+        # Origins allowed to call the API from another host — the separately
+        # hosted frontend (GitHub Pages, say). Empty is the normal case and
+        # switches CORS off entirely.
+        self.allowed_origins = _origins(cfg.get("dashboard_allowed_origins"))
+        # Where the *browser app* lives, when it isn't this process serving it.
+        # Blank means it is, which is the normal case and why this is separate
+        # from `base_url`: the OAuth callback always lands on the API (only the
+        # API can exchange a code — it holds the client secret), and the browser
+        # is sent on to the app afterwards. Same-origin those are one URL, and
+        # conflating them is what breaks a split deployment.
+        self.frontend_url = str(cfg.get("dashboard_frontend_url") or "").rstrip("/")
 
         secret = str(cfg.get("dashboard_session_secret") or "")
         if not secret:
@@ -83,7 +94,18 @@ class Dashboard:
 
     @property
     def redirect_uri(self) -> str:
+        """Where Discord sends the browser back — always this API.
+
+        Never the frontend, even when the frontend is somewhere else: the
+        callback exchanges the code for a token, which takes the client secret,
+        which only this process has.
+        """
         return f"{self.base_url}/api/auth/callback"
+
+    @property
+    def app_url(self) -> str:
+        """The browser app's own base — the frontend if it is hosted apart."""
+        return self.frontend_url or self.base_url
 
     @property
     def oauth_client_id(self) -> str:
@@ -195,11 +217,15 @@ class Dashboard:
             token,
             max_age=self.session_days * 86400,
             httponly=True,
-            samesite="Lax",
+            # `None` is required for a cookie to survive a cross-origin fetch,
+            # and browsers only accept `SameSite=None` alongside `Secure` — so
+            # the cross-origin deployment is HTTPS-only by construction. The
+            # same-origin case stays on `Lax`, which is strictly safer.
+            samesite="None" if self.allowed_origins else "Lax",
             # Only mark Secure when the site is actually served over TLS —
             # a Secure cookie on a plain-http localhost dev instance is simply
             # never sent, which looks exactly like a broken login.
-            secure=self.base_url.startswith("https://"),
+            secure=bool(self.allowed_origins) or self.base_url.startswith("https://"),
             path="/",
         )
         return response
@@ -248,7 +274,15 @@ class Dashboard:
         return web.FileResponse(index, headers={"Cache-Control": "no-cache"})
 
     def middlewares(self) -> list:
+        """Outermost first.
+
+        CORS sits above the error handler on purpose: a preflight has to be
+        answered even when the thing it is asking about would fail, and a 500
+        without the CORS headers reads in the browser as a network error rather
+        than as the server error it is.
+        """
         return [
+            H.cors_middleware(self),
             H.error_middleware,
             H.security_headers,
             H.session_middleware(self),
@@ -257,6 +291,28 @@ class Dashboard:
 
 async def _api_not_found(request: web.Request) -> web.Response:
     raise H.not_found("No such endpoint.")
+
+
+def _origins(raw) -> set[str]:
+    """Parse the configured allow-list into normalised origins.
+
+    Anything with a path, or without a scheme, is dropped rather than guessed
+    at — a half-understood entry in a security allow-list is worse than a
+    missing one.
+    """
+    if not raw:
+        return set()
+    parts = [p.strip().rstrip("/") for p in str(raw).replace(",", " ").split()]
+    out = set()
+    for part in parts:
+        if not part.startswith(("http://", "https://")):
+            log.warning("Ignoring dashboard_allowed_origins entry %r: no scheme", part)
+            continue
+        if part.count("/") > 2:
+            log.warning("Ignoring dashboard_allowed_origins entry %r: has a path", part)
+            continue
+        out.add(part)
+    return out
 
 
 def _int(value) -> int:

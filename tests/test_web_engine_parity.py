@@ -23,8 +23,13 @@ import pathlib
 import pytest
 
 from web.engine import activities as A
+from web.engine import analytics as An
+from web.engine import casino as C
+from web.engine import crafting as Cr
 from web.engine import economy as E
 from web.engine import fishing as F
+from web.engine import identity as I
+from web.engine import progression as P
 
 ENGINE_DIR = pathlib.Path(__file__).resolve().parent.parent / "web" / "engine"
 
@@ -102,6 +107,8 @@ def test_economy_engine_uses_the_cogs_own_daily_maths():
     assert E.compute_daily.__module__ == "cogs.economy.helpers"
     assert E.seconds_to_afford.__module__ == "cogs.economy.helpers"
     assert E._rank_title.__module__ == "cogs.economy.helpers"
+    # What a chest pays is the inventory cog's roll, not a second table.
+    assert E.chest_payout.__module__ == "cogs.inventory.helpers"
 
 
 def test_constants_are_imported_not_restated():
@@ -125,6 +132,19 @@ def test_constants_are_imported_not_restated():
             "ENCOUNTERS",
         },
         E: {"DAILY_STREAK_CAP_DAYS", "REWARD_DEFAULTS"},
+        C: {
+            "SLOT_REELS",
+            "ROULETTE_SPACES",
+            "FLIP_MULTIPLIER",
+            "DICE_MULTIPLIER",
+            "STREAK_BONUS_STEP",
+            "JACKPOT_CUT",
+            "BJ_TIMEOUT",
+        },
+        Cr: {"RECIPES"},
+        P: {"ACHIEVEMENTS", "WEEKLY_POOL", "WEEKLY_OBJECTIVE_COUNT"},
+        I: {"SLOTS", "COSMETICS"},
+        An: {"ACTIVITY_COLUMNS"},
     }
     for module, names in forbidden.items():
         assigned = _assignments(module)
@@ -235,3 +255,113 @@ def test_rob_has_no_one_tap_runner():
     same reason it has no Discord button."""
     assert "rob" not in A.RUNNABLE
     assert set(A.RUNNABLE) == {"work", "mine", "hunt", "explore"}
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+#  The Phase 2 engines, held to the same rule
+#
+#  Same failure mode, higher stakes: a casino that resolves a hand its own way
+#  is a different game with the same wallet.
+# ══════════════════════════════════════════════════════════════════════════════
+def test_casino_engine_resolves_with_the_cogs_own_games():
+    """Every outcome comes from the function the `/casino` command calls."""
+    for name in (
+        "resolve_flip",
+        "resolve_dice",
+        "resolve_slots",
+        "resolve_roulette",
+        "hand_value",
+        "is_blackjack",
+        "new_shoe",
+        "dealer_should_hit",
+        "settle_blackjack",
+        "parse_roulette_space",
+        "spin_number",
+        "apply_streak_bonus",
+        "streak_bonus",
+        "generate_challenges",
+    ):
+        fn = getattr(C, name)
+        assert fn.__module__ == "cogs.casino.helpers", (
+            f"web/engine/casino.py defines its own {name} instead of importing "
+            "the one /casino uses"
+        )
+
+
+def test_crafting_engine_uses_the_cogs_own_recipe_rules():
+    for name in ("find_recipe", "missing_inputs", "clamp_craft_qty"):
+        assert getattr(Cr, name).__module__ == "cogs.crafting.helpers"
+    # The registry itself, not a copy. Compared by contents rather than by
+    # identity: reloading a cog (which the suite does, and `n!reload` does in
+    # production) rebinds the module's dict, and holding the previous object is
+    # not the drift this guards against — defining a second table is, and the
+    # forbidden-assignment check above covers that.
+    from cogs.crafting.recipes import RECIPES
+
+    assert set(Cr.RECIPES) == set(RECIPES)
+
+
+def test_progression_engine_uses_the_cogs_own_registries_and_maths():
+    for name in (
+        "can_prestige",
+        "objective_complete",
+        "objective_progress",
+        "period_key",
+        "pick_weekly_objectives",
+        "prestige_requirement",
+        "prestige_bonus_multiplier",
+        "total_points",
+        "earned_titles",
+    ):
+        assert getattr(P, name).__module__ == "cogs.progression.helpers"
+    assert P.compute_stats.__module__ == "cogs.progression.stats"
+
+
+def test_identity_engine_uses_the_cogs_own_unlock_rules():
+    """Whether a cosmetic is unlocked is one rule, in one place — otherwise the
+    web hands out something Discord says you haven't earned."""
+    for name in ("unlock_context", "newly_unlocked", "resolve_loadout"):
+        assert getattr(I, name).__module__ == "cogs.identity.helpers"
+
+
+def test_analytics_derives_the_faucets_rather_than_restating_them():
+    """The figures on the admin's chart are the same model `/shop` prices
+    against; a second copy would let the two disagree about the economy."""
+    assert An.coins_per_hour.__module__ == "cogs.economy.helpers"
+    assert An.adventure_coins_per_day.__module__ == "cogs.activities.helpers"
+
+
+@pytest.mark.parametrize(
+    "module, claim",
+    [
+        # A bet has to leave the wallet before it can be won, and a hand has to
+        # settle exactly once — both are one statement, and it is this one.
+        ("casino", "try_debit_coins"),
+        ("casino", "claim_blackjack_hand"),
+        ("casino", "record_casino_game"),
+        ("casino", "try_claim_jackpot"),
+        # Consume-then-refund: the shortfall path hands the materials back.
+        ("crafting", "try_consume_item"),
+        # INSERT OR IGNORE rowcount gates the reward, so refreshing can't re-pay.
+        ("progression", "try_award_achievement"),
+        ("progression", "try_claim_objective"),
+        ("progression", "try_advance_prestige"),
+        # A cosmetic bought on the site is charged by the same statement.
+        ("identity", "try_debit_coins"),
+        ("identity", "unlock_cosmetic"),
+    ],
+)
+def test_phase_two_engine_goes_through_the_atomic_claim(module, claim):
+    source = (ENGINE_DIR / f"{module}.py").read_text(encoding="utf-8")
+    assert claim in source, f"web/engine/{module}.py no longer calls {claim}"
+
+
+def test_analytics_only_reads():
+    """An admin opening a chart must never write to the database — an INSERT
+    here would make looking at the numbers change them."""
+    source = (ENGINE_DIR / "analytics.py").read_text(encoding="utf-8")
+    lowered = source.lower()
+    for statement in ("insert ", "update ", "delete ", "replace into"):
+        assert (
+            statement not in lowered
+        ), f"web/engine/analytics.py contains a {statement.strip()!r} statement"

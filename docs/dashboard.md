@@ -16,8 +16,10 @@ web wallet.
 **Configure** — AutoMod (a rule builder with plain-language descriptions and
 examples), welcome and leave messages (a designer with a live preview), logging
 (grouped by what the events *are*, not thirteen loose toggles), leveling and its
-role rewards, your currency and shop, and the on/off switches for fishing, the
-activities and the casino.
+role rewards, your currency and shop, the on/off switches for fishing, the
+activities and the casino, and the four setup-heavy features that used to mean a
+dozen slash commands each: support tickets, birthdays, the new-account
+gatekeeper, and music.
 
 **Order things by dragging them** — self-role panels are the one feature that
 exists here mostly *because* it's a web page. A panel's buttons are laid out in
@@ -32,9 +34,41 @@ answered on the page that configures it rather than at 3am. A channel the bot
 can't post in is refused when you pick it, not discovered when the first message
 silently fails.
 
+**Moderate, carefully** — warn, timeout, kick, ban, unban and purge, behind a
+framework rather than six buttons. Every action runs the same six checks before
+anything happens: the feature is enabled, you hold the Discord permission, the
+bot holds it too, Discord's role hierarchy allows it for *both* of you, the
+target is a legal one (not yourself, not the bot, not the owner), and a reason
+of real length has been given. Then it is confirmed — by typing the member's
+name for a ban, and by a second confirmation for a bulk purge — and written to
+the audit log naming the moderator and the dashboard as the source. Nothing here
+can do something the same person couldn't do by typing the command.
+
 **Play** — fishing (casting, the bag, the map, tackle, the dex), the adventure
-loop (work, mining, hunting, exploring, encounters, Collect all), the inventory,
-the shop, the daily, leaderboards, and the profile card.
+loop (work, mining, hunting, exploring, encounters, Collect all), all five
+casino games including a blackjack hand you can start in the browser and finish
+in Discord, crafting, the inventory, the shop, the daily, leaderboards, and the
+profile card.
+
+**Manage what you're carrying** — search, filter and sort the inventory, then
+use, sell, gift, bulk-sell behind a preview, or open a container. Two things the
+chat list can't do: an item says *where it comes from*, derived from the drop
+tables and recipes rather than written down, and a chest says it needs a key —
+and how many you have — before you tap it rather than after it refuses.
+
+**Dress the card while looking at it** — the wardrobe stages a whole loadout
+across every cosmetic slot and previews it by rendering *your actual card*
+through the same renderer Discord uses, then writes only the slots that changed.
+What a banner looks like with your name, your avatar and your stats on top is
+the entire thing being chosen, and it is the one question a text command can't
+answer.
+
+**Celebrate progress** — a progression page with both levels, prestige, titles,
+the trophy case, weekly objectives, and what you are closest to earning next.
+
+**Read the room** — an analytics page for admins over 7, 30 or 90 days, built
+only from data the database genuinely holds. Where there is no history to plot,
+it says so rather than inventing a trend line.
 
 ---
 
@@ -71,6 +105,13 @@ The dashboard mounts on the same shared HTTP server as `/health` and the vote
 webhook, so registrations that share a `(host, port)` are merged into one
 listener. A host that grants a single inbound port can run all three.
 
+Every one of these keys can also be set as `NANOBOT_<KEY>` in the environment
+(see [`.env.example`](../.env.example)), which is the easier route on a container
+or a PaaS. To host the *frontend* somewhere else entirely — GitHub Pages, a CDN,
+a laptop — while the API stays with the bot, see
+[docs/deployment.md](deployment.md); it needs no code changes, only
+`dashboard_allowed_origins` and one JSON file on the static host.
+
 ---
 
 ## How it's built
@@ -79,11 +120,13 @@ listener. A host that grants a single inbound port can run all three.
 web/
   security.py     signed sessions, CSRF, OAuth state   (pure, unit-tested)
   permissions.py  who may configure what + the permission map (pure)
+  moderation.py   the six checks every moderation action passes (pure)
   oauth.py        the Discord OAuth round trip
   http.py         one error shape, the guards, the middleware
   app.py          the Dashboard object, guild resolution, route assembly
   engine/         the economy resolved without Discord
-  api/            auth · guilds · settings · roles · play · me
+  api/            auth · guilds · settings · roles · modules
+                  play · games · me · moderation · analytics
   static/         the front end (no build step)
 ```
 
@@ -130,6 +173,30 @@ OAuth list only decides which servers to *offer*, which is a menu, not a gate.
 
 There is no dashboard-only role model, and nothing here can grant anyone a power
 they don't already have in Discord.
+
+### Moderation: the framework before the buttons
+
+Moderation is the one place where being convenient is not the goal, so
+`web/moderation.py` is a pure decision layer that every action goes through
+before anything happens, and `authorise()` runs its checks in a fixed order:
+
+1. **Feature** — is this action even offered here.
+2. **Actor permission** — the live gateway bit, not the OAuth snapshot.
+3. **Bot permission** — refused *before* the confirmation dialog, not after the
+   API call fails.
+4. **Hierarchy** — Discord's own rule, checked for the moderator and the bot
+   separately, because "I can ban them but the bot can't" is a different
+   sentence from "you can't ban them".
+5. **Target** — never yourself, never the bot, never the server owner.
+6. **Reason** — required, length-bounded, and stamped with who did it and that
+   it came from the dashboard, so the audit log reads the same as a command's.
+
+Being pure means the rules are tested without a socket or a gateway, and being a
+separate layer means a new action inherits all six by construction rather than by
+someone remembering. On top of it the UI adds friction proportional to damage: a
+plain confirmation for a warn, typed confirmation of the member's name for a ban,
+and a second confirmation for a bulk purge. Discord's own limits are enforced
+server-side too (28 days for a timeout, 100 messages for a bulk purge).
 
 ### Sessions and CSRF
 
@@ -194,8 +261,12 @@ colour alone.
   (`!econ`, `!cooldown`). They're shown read-only, with the reason, because
   hiding them makes the dashboard look incomplete and showing them without
   explaining makes it look broken.
-* **Equip cosmetics.** The wardrobe shows the whole catalogue and how to get each
-  one; equipping stays on `/profile equip`, which already handles picking several
-  at once.
+* **Invent features Discord doesn't have.** No premium tier, no web-only
+  currency, no mechanic that exists on one side only. The two deliberate
+  exceptions are both *presentational* and both listed above: dragging a role
+  panel into order, and previewing a cosmetic loadout before wearing it.
+* **Fabricate history.** Analytics plots what the database records and no more.
+  Where a number has no history behind it, the chart says so instead of drawing
+  a shape.
 * **Replace Discord.** Everything here is reachable from a command, and the
   terminology, cooldowns, prices and permissions are the same on both.

@@ -143,9 +143,17 @@ def routes(dash: "Dashboard") -> list:
         if member.bot:
             raise H.bad_request("Bots don't have cards.")
 
+        # A staged loadout from the wardrobe: render the card as it *would*
+        # look, without writing anything. Only ever honoured on your own card,
+        # and every key is re-checked against what you own — a preview is free,
+        # wearing something is not.
+        preview = None
+        if user_id == viewer_id and request.query.get("loadout"):
+            preview = await _preview_loadout(user_id, request.query["loadout"])
+
         try:
             async with _render_lock:
-                image = await _render_card(dash, kind, guild, member, viewer)
+                image = await _render_card(dash, kind, guild, member, viewer, preview)
         except H.ApiError:
             raise
         except Exception:
@@ -272,7 +280,39 @@ class _CardContext:
         self.author = author
 
 
-async def _render_card(dash: "Dashboard", kind: str, guild, member, viewer) -> bytes:
+async def _preview_loadout(user_id: int, raw: str) -> dict[str, list[str]]:
+    """Parse `slot:key+key|slot:key` into a loadout of things this account owns.
+
+    Anything unknown, unowned, in the wrong slot or past the slot's limit is
+    dropped silently: a preview should show the closest legal thing rather than
+    refuse, and the *equip* endpoint is where a bad pick is reported.
+    """
+    owned = set(await db.get_unlocked_cosmetics(user_id))
+    out: dict[str, list[str]] = {}
+    for chunk in raw.split("|")[:12]:
+        slot, _, keys = chunk.partition(":")
+        spec = cosmetics.SLOTS.get(slot)
+        if spec is None:
+            continue
+        picked = []
+        for key in keys.split("+"):
+            item = cosmetics.get(key.strip())
+            if (
+                item
+                and item.slot == slot
+                and item.key in owned
+                and item.key not in picked
+            ):
+                picked.append(item.key)
+            if len(picked) >= spec.max_equipped:
+                break
+        out[slot] = picked
+    return out
+
+
+async def _render_card(
+    dash: "Dashboard", kind: str, guild, member, viewer, preview=None
+) -> bytes:
     """Build and draw one card, through the cog that owns it."""
     cog_name, builder = {
         "profile": ("Identity", "_collect"),
@@ -290,6 +330,8 @@ async def _render_card(dash: "Dashboard", kind: str, guild, member, viewer) -> b
     ctx = _CardContext(guild, viewer)
     if kind == "profile":
         data, _notes = await cog._collect(ctx, member)
+        if preview is not None:
+            _apply_preview(data, preview)
         data["avatar"] = await cog._avatar_bytes(member)
         return await asyncio.to_thread(profile_card.render_card, data)
     if kind == "wallet":
@@ -298,3 +340,20 @@ async def _render_card(dash: "Dashboard", kind: str, guild, member, viewer) -> b
         return await asyncio.to_thread(wallet_card.render_wallet_card, data)
     data = await cog._case_data(member)
     return await asyncio.to_thread(trophy_card.render_trophy_case, data)
+
+
+def _apply_preview(data: dict, loadout: dict[str, list[str]]) -> None:
+    """Swap a staged loadout into the card data the cog just assembled.
+
+    Overriding the four cosmetic keys after `_collect` rather than teaching the
+    cog about previews: the cog's job is "what is this member wearing", and a
+    hypothetical is the dashboard's problem, not its.
+    """
+    for slot in ("banner", "border", "nameplate"):
+        if slot in loadout:
+            keys = loadout[slot]
+            data[slot] = cosmetics.get(keys[0]) if keys else None
+    if "badge" in loadout:
+        data["badges"] = [
+            spec for spec in (cosmetics.get(k) for k in loadout["badge"]) if spec
+        ]

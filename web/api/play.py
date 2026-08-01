@@ -40,19 +40,14 @@ if TYPE_CHECKING:
     from ..app import Dashboard
 
 
-def _refusal(exc: PlayError) -> H.ApiError:
-    """Turn a game refusal into the API's error shape, keeping `retry_after`.
+class _RefusalResponse(H.ApiError):
+    """A refusal, with whatever the engine attached to it.
 
     409 rather than 400: nothing about the request was malformed. The world just
-    said no, and the client's correct response is to wait, not to fix anything.
+    said no, and the client's correct response is to wait or to go and get more
+    coins, not to fix the request. `retry_after` and a craft's exact shortfall
+    ride along so the button can show a countdown or name the missing material.
     """
-    error = H.ApiError(409, exc.code, exc.message)
-    error.extra = exc.extra
-    return error
-
-
-class _RefusalResponse(H.ApiError):
-    """An ApiError that also carries the engine's structured extras."""
 
     def __init__(self, exc: PlayError) -> None:
         super().__init__(409, exc.code, exc.message)
@@ -76,7 +71,14 @@ def _playable(handler: Callable) -> Callable:
     return wrapper
 
 
-def routes(dash: "Dashboard") -> list:
+def guarded_routes(dash: "Dashboard"):
+    """The two decorators every play surface uses: `(play, read)`.
+
+    Shared rather than redefined per module so a new play route can't
+    accidentally skip the play switch or turn a refusal into a 500 — the
+    decorators *are* the contract.
+    """
+
     def play(handler):
         """Member-gated, play-enabled, refusal-aware — in that order."""
 
@@ -90,6 +92,12 @@ def routes(dash: "Dashboard") -> list:
     def read(handler):
         """A read-only view — available even when web play is switched off."""
         return H.require_member(_playable(handler))
+
+    return play, read
+
+
+def routes(dash: "Dashboard") -> list:
+    play, read = guarded_routes(dash)
 
     # ── Fishing ──────────────────────────────────────────────────────────────
     @read
@@ -239,6 +247,19 @@ def routes(dash: "Dashboard") -> list:
         )
 
     @play
+    async def inventory_open(request: web.Request) -> web.Response:
+        """Open a container. Separate from `use` because it is a separate
+        thing: arming an item writes an effect, opening one spends two items."""
+        body = await H.body_json(request)
+        return H.ok(
+            await E.open_container(
+                H.user_id_of(request),
+                str(body.get("item") or ""),
+                _qty(body.get("qty", 1)),
+            )
+        )
+
+    @play
     async def inventory_sell(request: web.Request) -> web.Response:
         body = await H.body_json(request)
         target = str(body.get("item") or "")
@@ -364,6 +385,7 @@ def routes(dash: "Dashboard") -> list:
         web.post("/api/guilds/{guild_id}/wallet/pay", pay),
         web.get("/api/guilds/{guild_id}/inventory", inventory),
         web.post("/api/guilds/{guild_id}/inventory/use", inventory_use),
+        web.post("/api/guilds/{guild_id}/inventory/open", inventory_open),
         web.post("/api/guilds/{guild_id}/inventory/sell", inventory_sell),
         web.post("/api/guilds/{guild_id}/inventory/gift", inventory_gift),
         web.get("/api/guilds/{guild_id}/shop", shop),

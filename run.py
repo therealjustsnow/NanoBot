@@ -168,11 +168,18 @@ def check_config():
         )
 
     try:
-        cfg = cfg_mod.load("config.ini")
+        cfg = cfg_mod.apply_env(cfg_mod.load("config.ini"))
     except Exception as exc:
         return err(f"config.ini could not be parsed: {exc}")
 
     ok("config.ini parsed OK")
+
+    # Validate what the bot will actually run with, and say so — a setting that
+    # looks wrong in the file but is overridden by the environment is otherwise
+    # a confusing pre-flight failure.
+    overridden = cfg_mod.env_overrides()
+    if overridden:
+        ok(f"Environment overrides: {', '.join(sorted(overridden))}")
 
     # ── Token ──────────────────────────────────────────────────────────────────
     env_token = os.getenv("DISCORD_TOKEN", "")

@@ -29,6 +29,19 @@ if TYPE_CHECKING:
 log = logging.getLogger("NanoBot.dashboard.auth")
 
 
+def _home(dash: "Dashboard", path: str = "/") -> str:
+    """Where to send the browser after a login attempt.
+
+    Same-origin that is just the path. When the frontend is hosted elsewhere
+    (`dashboard_frontend_url` — GitHub Pages, a CDN), the browser has to be sent
+    *there*: it landed here because only this process can exchange the code, and
+    this host has no page to show once that is done.
+    """
+    if dash.frontend_url:
+        return f"{dash.frontend_url}{path}"
+    return path
+
+
 def routes(dash: "Dashboard") -> list:
     async def login(request: web.Request) -> web.StreamResponse:
         """Bounce the browser to Discord."""
@@ -52,17 +65,17 @@ def routes(dash: "Dashboard") -> list:
         failures go back to `/login` with a reason in the query string.
         """
         if request.query.get("error"):
-            raise web.HTTPFound("/login?error=denied")
+            raise web.HTTPFound(_home(dash, "/login?error=denied"))
 
         state = request.query.get("state") or ""
         if not security.verify_state(state, dash.secret):
             # Also what an expired login looks like: someone left the Discord
             # consent screen open for a while, which is not an attack.
-            raise web.HTTPFound("/login?error=state")
+            raise web.HTTPFound(_home(dash, "/login?error=state"))
 
         code = request.query.get("code") or ""
         if not code:
-            raise web.HTTPFound("/login?error=nocode")
+            raise web.HTTPFound(_home(dash, "/login?error=nocode"))
 
         session = await dash.session()
         try:
@@ -74,17 +87,17 @@ def routes(dash: "Dashboard") -> list:
                 redirect_uri=dash.redirect_uri,
             )
         except oauth.OAuthError:
-            raise web.HTTPFound("/login?error=exchange") from None
+            raise web.HTTPFound(_home(dash, "/login?error=exchange")) from None
 
         access_token = token.get("access_token")
         user = await oauth.fetch_user(session, access_token) if access_token else None
         if not user:
-            raise web.HTTPFound("/login?error=identity")
+            raise web.HTTPFound(_home(dash, "/login?error=identity"))
 
         # Raised rather than returned: aiohttp deprecated returning an
         # HTTPException, and the redirect still carries the Set-Cookie header
         # because the exception *is* the response object.
-        response = web.HTTPFound("/")
+        response = web.HTTPFound(_home(dash))
         dash.issue_session(
             response,
             {

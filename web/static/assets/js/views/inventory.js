@@ -162,7 +162,11 @@ export async function inventory({ guildId }) {
       h(
         "div",
         { class: "row row--between tiny" },
-        item.usable ? ui.pill("Usable", "brand") : h("span", {}),
+        item.usable
+          ? ui.pill("Usable", "brand")
+          : item.container
+            ? ui.pill("Opens", "brand")
+            : h("span", {}),
         item.value
           ? h("span", { class: "tabular muted" }, `${state.currency.emoji} ${fmt.compact(item.value * item.qty)}`)
           : h("span", { class: "dim" }, "no sale value")
@@ -182,6 +186,28 @@ export async function inventory({ guildId }) {
     });
 
     const actions = [];
+    if (item.container) {
+      const keyItem = state.items.find((row) => row.key === item.container.opens_with);
+      const keys = keyItem ? keyItem.qty : 0;
+      actions.push(
+        ui.actionButton(
+          keys ? item.container.verb : "No key",
+          async () => {
+            const result = await api.post(`${base}/open`, {
+              item: item.key,
+              qty: Number(qty.value) || 1,
+            });
+            view.close();
+            ui.ok(
+              `${fmt.plural(result.qty, "chest")} opened — ${fmt.coins(result.coins, state.currency)} inside.`,
+              { title: `${item.emoji} Opened` }
+            );
+            await refresh();
+          },
+          { variant: keys ? "primary" : "", glyph: "🗝️", disabled: !keys }
+        )
+      );
+    }
     if (item.usable) {
       actions.push(
         ui.actionButton(
@@ -226,12 +252,40 @@ export async function inventory({ guildId }) {
             sub: item.value ? "each" : "can't be sold",
           })
         ),
+        item.sources && item.sources.length
+          ? h(
+              "div",
+              { class: "row tiny dim", style: { flexWrap: "wrap" } },
+              h("span", {}, "Comes from"),
+              ...item.sources.map((source) => ui.pill(source))
+            )
+          : null,
         item.effect ? effectExplainer(item.effect) : null,
+        item.container ? containerExplainer(item) : null,
         item.qty > 1 ? ui.field("How many", qty) : qty
       ),
       { actions }
     );
     if (item.qty <= 1) qty.style.display = "none";
+  }
+
+  /**
+   * What opening this takes, said before the tap rather than after it.
+   *
+   * In Discord you find out a chest needs a key by trying to open one without
+   * it. A screen can hold both numbers at once, so it does.
+   */
+  function containerExplainer(item) {
+    const needed = state.items.find((row) => row.key === item.container.opens_with);
+    const have = needed ? needed.qty : 0;
+    const name = needed ? needed.name : "a key";
+    return ui.banner(
+      have
+        ? `Each one takes a ${name}, and you have ${fmt.num(have)}.`
+        : `Each one takes a ${name}, and you don't have any yet. ` +
+          "Mining and exploring turn them up.",
+      { kind: have ? "info" : "warn", glyph: "🗝️" }
+    );
   }
 
   function effectExplainer(effect) {

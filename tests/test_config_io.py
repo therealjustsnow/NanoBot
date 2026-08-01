@@ -11,6 +11,9 @@ import pytest
 from utils.config import (
     DEFAULTS,
     SECTION_MAP,
+    apply_env,
+    env_key,
+    env_overrides,
     _coerce,
     _format,
     assert_no_fatal,
@@ -376,3 +379,85 @@ def test_committed_example_config_covers_every_schema_key():
         "example_config.ini is missing documented keys (add them or remove from "
         f"the schema): {missing}"
     )
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+#  Environment overlay
+#
+#  The overlay exists for hosts where a file is awkward (containers, PaaS, CI).
+#  What matters is that it stays an *overlay*: `load()` must keep returning the
+#  file, so `set_value()` — which loads, edits and saves — can never write an
+#  environment value into config.ini.
+# ══════════════════════════════════════════════════════════════════════════════
+def test_an_env_var_overrides_the_file():
+    cfg = apply_env({"dashboard_port": 1}, {"NANOBOT_DASHBOARD_PORT": "8080"})
+    assert cfg["dashboard_port"] == 8080
+
+
+def test_an_env_value_is_coerced_like_an_ini_value():
+    """A port arrives as an int and a switch as a bool — not as strings, which
+    would make every `if cfg[...]` true and every comparison wrong."""
+    cfg = apply_env({}, {"NANOBOT_DASHBOARD_PLAY_ENABLED": "false"})
+    assert cfg["dashboard_play_enabled"] is False
+    cfg = apply_env({}, {"NANOBOT_DASHBOARD_SESSION_DAYS": "30"})
+    assert cfg["dashboard_session_days"] == 30
+
+
+def test_keys_the_environment_says_nothing_about_are_left_alone():
+    cfg = apply_env({"token": "abc"}, {"NANOBOT_DASHBOARD_PORT": "8080"})
+    assert cfg["token"] == "abc"
+
+
+def test_an_unknown_env_name_is_ignored_rather_than_guessed_at():
+    cfg = apply_env({}, {"NANOBOT_NOT_A_SETTING": "x", "PATH": "/usr/bin"})
+    assert "not_a_setting" not in cfg
+
+
+def test_the_overlay_does_not_mutate_what_it_was_given():
+    original = {"dashboard_port": 1}
+    apply_env(original, {"NANOBOT_DASHBOARD_PORT": "8080"})
+    assert original["dashboard_port"] == 1
+
+
+def test_load_still_returns_the_file_so_set_value_cannot_persist_the_env(
+    tmp_path, monkeypatch
+):
+    """The load/edit/save round trip `!config set` performs must not launder an
+    environment override into config.ini."""
+    path = str(tmp_path / "config.ini")
+    save({"token": "abc", "dashboard_port": 0}, path)
+    monkeypatch.setenv("NANOBOT_DASHBOARD_PORT", "8080")
+
+    assert load(path)["dashboard_port"] == 0
+    set_value("log_level", "DEBUG", path)
+    assert load(path)["dashboard_port"] == 0
+
+
+def test_env_overrides_reports_what_is_being_overridden(monkeypatch):
+    monkeypatch.setenv("NANOBOT_DASHBOARD_PORT", "8080")
+    assert "dashboard_port" in env_overrides()
+
+
+def test_env_key_is_the_documented_shape():
+    assert env_key("dashboard_allowed_origins") == "NANOBOT_DASHBOARD_ALLOWED_ORIGINS"
+
+
+def test_every_env_name_in_the_example_file_is_a_real_setting():
+    """`.env.example` is the only place these names are written down for a user,
+    so a typo there is a setting that silently does nothing."""
+    with open(os.path.join(_REPO_ROOT, ".env.example")) as f:
+        names = {
+            line.split("=", 1)[0].strip()
+            for line in f
+            if line.strip() and not line.startswith("#") and "=" in line
+        }
+    known = {env_key(k) for k in SECTION_MAP}
+    # Two predate the scheme, and two are read by the frontend build rather than
+    # by the bot.
+    known |= {
+        "DISCORD_TOKEN",
+        "NANOBOT_DB_KEY",
+        "NANOBOT_API_BASE",
+        "NANOBOT_BASE_PATH",
+    }
+    assert not (names - known), f"unknown names in .env.example: {names - known}"

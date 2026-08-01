@@ -12,6 +12,7 @@
 
 import { h } from "../core/dom.js";
 import * as store from "../core/store.js";
+import { apiUrl, deploymentLabel, isCrossOrigin } from "../core/config.js";
 
 const REASONS = {
   denied: "You cancelled the Discord sign-in. Nothing was shared.",
@@ -61,7 +62,13 @@ export function login() {
         configured
           ? h(
               "a",
-              { class: "btn btn--primary btn--lg btn--block", href: "/api/auth/login" },
+              {
+                class: "btn btn--primary btn--lg btn--block",
+                // Absolute when the API is elsewhere: this is a real navigation
+                // to Discord's consent screen, so it has to leave for the host
+                // that holds the client secret.
+                href: apiUrl("/api/auth/login"),
+              },
               "Continue with Discord"
             )
           : setupNeeded(missing),
@@ -71,7 +78,16 @@ export function login() {
           { class: "tiny dim" },
           "NanoBot asks Discord only for your name and your server list. " +
             "It never posts as you and can't add you to servers."
-        )
+        ),
+        isCrossOrigin()
+          ? h(
+              "p",
+              { class: "tiny dim" },
+              "Connected to ",
+              h("code", {}, deploymentLabel() || "a separate API host"),
+              "."
+            )
+          : null
       ),
       h(
         "p",

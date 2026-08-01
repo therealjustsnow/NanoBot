@@ -14,6 +14,7 @@
  */
 
 import { swap, announceView } from "./dom.js";
+import { appPath, appUrl } from "./config.js";
 
 const routes = [];
 let host = null;
@@ -37,9 +38,9 @@ export function route(path, view, meta = {}) {
 export function start(mount, { onNavigate: hook = null } = {}) {
   host = mount;
   onNavigate = hook;
-  window.addEventListener("popstate", () => render(location.pathname + location.search));
+  window.addEventListener("popstate", () => render(appPath() + location.search));
   document.addEventListener("click", intercept);
-  render(location.pathname + location.search);
+  render(appPath() + location.search);
 }
 
 /** Turn same-origin anchor clicks into route changes. */
@@ -51,12 +52,15 @@ function intercept(event) {
   if (!href || href.startsWith("http") || href.startsWith("//") || link.target) return;
   if (href.startsWith("/api/") || link.hasAttribute("download")) return;
   event.preventDefault();
-  go(href);
+  go(appPath(href));
 }
 
 export function go(path, { replace = false } = {}) {
-  if (path === location.pathname + location.search) return;
-  history[replace ? "replaceState" : "pushState"]({}, "", path);
+  if (path === appPath() + location.search) return;
+  // The history entry carries the deployment's base path; everything inside the
+  // app talks in app-relative paths, so a subpath deployment needs no other
+  // code to know about it.
+  history[replace ? "replaceState" : "pushState"]({}, "", appUrl(path));
   render(path);
 }
 
@@ -113,7 +117,7 @@ async function render(path) {
 }
 
 /** Re-run the current route — for a "retry" button or after a mutation. */
-export const reload = () => render(location.pathname + location.search);
+export const reload = () => render(appPath() + location.search);
 
 function errorView(error) {
   const div = document.createElement("div");

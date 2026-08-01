@@ -38,6 +38,10 @@ const PAGES = [
   { key: "leveling", label: "Leveling", glyph: "📈", blurb: "Message XP, level-up announcements and role rewards." },
   { key: "economy", label: "Economy", glyph: "🪙", blurb: "Your currency, your shop, and the rewards queue." },
   { key: "games", label: "Games", glyph: "🎮", blurb: "Switch fishing, activities and the casino on or off." },
+  { key: "tickets", label: "Tickets", glyph: "🎫", blurb: "Private-thread support tickets and the panel members open them from." },
+  { key: "birthdays", label: "Birthdays", glyph: "🎂", blurb: "Announce members' birthdays in their server's own timezone." },
+  { key: "gatekeeper", label: "Gatekeeper", glyph: "🚧", blurb: "Hold new or suspicious accounts until they verify." },
+  { key: "music", label: "Music", glyph: "🎵", blurb: "The server playlist, 24/7 mode, and the block lists." },
 ];
 
 export async function settingsIndex({ guildId }) {
@@ -96,6 +100,10 @@ export async function settingsPage({ guildId, feature }) {
     leveling: levelingPage,
     economy: economyPage,
     games: gamesPage,
+    tickets: ticketsPage,
+    birthdays: birthdaysPage,
+    gatekeeper: gatekeeperPage,
+    music: musicPage,
   };
   const view = views[feature];
   if (!view) return ui.empty("No such setting", "Pick one from the settings list.", { glyph: "🤷" });
@@ -1072,6 +1080,643 @@ async function gamesPage(guildId) {
 
   paint();
   return host;
+}
+
+/* ══════════════════════════════════════════════════════════════════════════
+   Tickets
+   ══════════════════════════════════════════════════════════════════════════ */
+async function ticketsPage(guildId) {
+  const path = `/api/guilds/${guildId}/settings/tickets`;
+  let data = await api.get(path);
+  const host = h("div", { class: "stack" });
+  const save = (patch) => api.patch(path, patch);
+
+  function paint() {
+    const config = data.config;
+    const title = h("input", {
+      class: "input",
+      value: config.panel_title || "",
+      placeholder: "Need help?",
+    });
+    const message = h("textarea", {
+      class: "textarea",
+      value: config.panel_message || "",
+      placeholder: "Press the button and tell us what's up.",
+    });
+    ui.autoSave(title, (value) => save({ panel_title: value }));
+    ui.autoSave(message, (value) => save({ panel_message: value }));
+
+    const cap = h("input", {
+      class: "input tabular",
+      type: "number",
+      min: "1",
+      max: "25",
+      value: String(config.max_open),
+    });
+    ui.autoSave(cap, (value) => save({ max_open: Number(value) }));
+
+    fill(
+      host,
+      ui.banner(data.meta.why, { kind: "info", glyph: "🎫" }),
+
+      !data.meta.needs_threads
+        ? ui.banner(
+            "NanoBot is missing Create Private Threads here, so it can't open a " +
+              "ticket at all.",
+            { kind: "bad", glyph: "🔒" }
+          )
+        : null,
+      !data.meta.can_lock
+        ? ui.banner(
+            "Without Manage Threads, a closed ticket is archived but not locked " +
+              "— people can still reply to it.",
+            { kind: "warn", glyph: "⚠️" }
+          )
+        : null,
+
+      ui.card(
+        {},
+        ui.switchRow(
+          "Tickets",
+          config.staff_role_id ? null : "Pick a staff role first.",
+          config.enabled,
+          async (value, input) => {
+            try {
+              await save({ enabled: value });
+              config.enabled = value;
+            } catch (error) {
+              input.checked = !value;
+              throw error;
+            }
+          }
+        )
+      ),
+
+      ui.card(
+        {},
+        ui.cardHead("Who handles them", { glyph: "👮" }),
+        rolePicker(guildId, config.staff_role_id, (value) => save({ staff_role_id: value }),
+          "Mentioned when a ticket opens, and allowed to claim and close."),
+        channelPicker(guildId, config.log_channel_id, (value) => save({ log_channel_id: value }),
+          "Where the transcript is posted when a ticket closes."),
+        ui.field("Open tickets per member", cap, {
+          hint: "Stops one person filling the staff channel.",
+        })
+      ),
+
+      ui.card(
+        {},
+        ui.cardHead("The panel", { glyph: "🔘", sub: "The message members press to open a ticket" }),
+        channelPicker(guildId, config.panel_channel_id, (value) => save({ panel_channel_id: value })),
+        ui.field("Title", title),
+        ui.field("Message", message),
+        ui.banner(
+          "Post the panel itself with /ticket panel in Discord — it has to be " +
+            "sent as a message with a persistent button on it.",
+          { kind: "info", glyph: "💡" }
+        )
+      )
+    );
+  }
+
+  paint();
+  return host;
+}
+
+/* ══════════════════════════════════════════════════════════════════════════
+   Birthdays
+   ══════════════════════════════════════════════════════════════════════════ */
+async function birthdaysPage(guildId) {
+  const path = `/api/guilds/${guildId}/settings/birthdays`;
+  let data = await api.get(path);
+  const host = h("div", { class: "stack" });
+  const save = (patch) => api.patch(path, patch);
+
+  function paint() {
+    const config = data.config;
+    const message = h("textarea", {
+      class: "textarea",
+      value: config.message || "",
+      placeholder: "🎉 Happy birthday {user}!",
+    });
+    ui.autoSave(message, (value) => save({ message: value }));
+
+    const timezone = h(
+      "select",
+      { class: "select" },
+      ...data.meta.timezones.map((tz) =>
+        h("option", { value: tz.value, selected: tz.value === config.timezone },
+          `${tz.emoji || ""} ${tz.label}`.trim())
+      )
+    );
+    ui.autoSave(timezone, (value) => save({ timezone: value }));
+
+    const hour = h(
+      "select",
+      { class: "select" },
+      ...Array.from({ length: 24 }, (_, i) =>
+        h("option", { value: i, selected: i === config.hour }, `${String(i).padStart(2, "0")}:00`)
+      )
+    );
+    ui.autoSave(hour, (value) => save({ hour: Number(value) }));
+
+    fill(
+      host,
+      ui.banner(data.meta.why, { kind: "info", glyph: "🎂" }),
+
+      ui.card(
+        {},
+        ui.switchRow(
+          "Announce birthdays",
+          config.channel_id ? null : "Pick a channel first.",
+          config.enabled,
+          async (value, input) => {
+            try {
+              await save({ enabled: value });
+              config.enabled = value;
+            } catch (error) {
+              input.checked = !value;
+              throw error;
+            }
+          }
+        ),
+        channelPicker(guildId, config.channel_id, (value) => save({ channel_id: value }))
+      ),
+
+      ui.card(
+        {},
+        ui.cardHead("When", { glyph: "🕘" }),
+        ui.field("Timezone", timezone, {
+          hint:
+            data.meta.suggested_timezone && data.meta.suggested_timezone !== config.timezone
+              ? `Your voice regions suggest ${data.meta.suggested_timezone}.`
+              : "Named zones, so daylight saving handles itself.",
+        }),
+        ui.field("Hour", hour, { hint: "Local to the timezone above." })
+      ),
+
+      ui.card(
+        {},
+        ui.cardHead("The message", { glyph: "✍️" }),
+        ui.field("Message", message, { hint: "Tap a variable to insert it." }),
+        h(
+          "div",
+          { class: "row row--wrap" },
+          ...data.meta.variables.map((variable) =>
+            h(
+              "button",
+              {
+                class: "var-token",
+                type: "button",
+                title: variable.means,
+                onClick: () => {
+                  const at = message.selectionStart ?? message.value.length;
+                  message.value =
+                    message.value.slice(0, at) + variable.token + message.value.slice(at);
+                  message.dispatchEvent(new Event("input"));
+                  message.focus();
+                },
+              },
+              variable.token
+            )
+          )
+        ),
+        ui.switchRow("Include a festive GIF", "Checked for reachability first.", config.gif_enabled,
+          (value) => save({ gif_enabled: value })),
+        ui.switchRow("Ping them", null, config.ping_enabled, (value) => save({ ping_enabled: value })),
+        ui.switchRow(
+          "Sing in voice",
+          "If they're in a voice channel that day, once. Needs FFmpeg and PyNaCl.",
+          config.vc_enabled,
+          (value) => save({ vc_enabled: value })
+        )
+      ),
+
+      ui.card(
+        {},
+        ui.cardHead("Registered", {
+          glyph: "📅",
+          sub: `${fmt.plural(data.birthdays.length, "member")}`,
+        }),
+        data.birthdays.length
+          ? h(
+              "div",
+              { class: "stack stack--tight" },
+              ...data.birthdays.map((entry) =>
+                h(
+                  "div",
+                  { class: "row" },
+                  entry.avatar
+                    ? h("img", { class: "avatar avatar--sm", src: entry.avatar, alt: "", loading: "lazy" })
+                    : h("span", { class: "avatar avatar--sm" }),
+                  h("span", { class: "grow" }, entry.name),
+                  h("span", { class: "small dim" }, entry.date)
+                )
+              )
+            )
+          : h(
+              "p",
+              { class: "small dim", style: { marginBottom: 0 } },
+              "Nobody has registered yet — members add themselves with /birthday set."
+            )
+      )
+    );
+  }
+
+  paint();
+  return host;
+}
+
+/* ══════════════════════════════════════════════════════════════════════════
+   Gatekeeper
+   ══════════════════════════════════════════════════════════════════════════ */
+async function gatekeeperPage(guildId) {
+  const path = `/api/guilds/${guildId}/settings/gatekeeper`;
+  let data = await api.get(path);
+  const host = h("div", { class: "stack" });
+  const save = (patch) => api.patch(path, patch);
+
+  const DURATIONS = [
+    { value: 0, label: "No minimum" },
+    { value: 86400, label: "1 day" },
+    { value: 604800, label: "1 week" },
+    { value: 2592000, label: "30 days" },
+    { value: 7776000, label: "90 days" },
+  ];
+
+  function paint() {
+    const config = data.config;
+
+    const duration = (key, options, hint) => {
+      const select = h(
+        "select",
+        { class: "select" },
+        ...options.map((o) =>
+          h("option", { value: o.value, selected: Number(config[key]) === o.value }, o.label)
+        )
+      );
+      ui.autoSave(select, async (value) => {
+        await save({ [key]: Number(value) });
+        config[key] = Number(value);
+      });
+      return select;
+    };
+
+    const sensitivity = h("input", {
+      class: "input tabular",
+      type: "number",
+      min: String(data.meta.sensitivity.min),
+      max: String(data.meta.sensitivity.max),
+      value: String(config.stock_threshold),
+    });
+    ui.autoSave(sensitivity, (value) => save({ stock_threshold: Number(value) }));
+
+    fill(
+      host,
+      ui.banner(data.meta.why, { kind: "info", glyph: "🚧" }),
+      !data.meta.role_ok
+        ? ui.banner(
+            `NanoBot can't apply @${data.meta.role_name} — its own role has to sit above it.`,
+            { kind: "bad", glyph: "🔒" }
+          )
+        : null,
+
+      ui.card(
+        {},
+        ui.switchRow(
+          "Gatekeeper",
+          config.mute_role_id ? null : "Pick the mute role first.",
+          config.enabled,
+          async (value, input) => {
+            try {
+              await save({ enabled: value });
+              config.enabled = value;
+            } catch (error) {
+              input.checked = !value;
+              throw error;
+            }
+          }
+        ),
+        rolePicker(guildId, config.mute_role_id, (value) => save({ mute_role_id: value }),
+          "Applied to a held account. It should deny sending messages everywhere."),
+        channelPicker(guildId, config.quarantine_channel_id, (value) => save({ quarantine_channel_id: value }),
+          "Where the verification prompt goes when a DM won't reach them."),
+        channelPicker(guildId, config.log_channel_id, (value) => save({ log_channel_id: value }),
+          "Mutes, verifications and kicks are reported here.")
+      ),
+
+      ui.card(
+        {},
+        ui.cardHead("What gets held", { glyph: "🔍" }),
+        ui.switchRow("Accounts that are too new", null, config.mute_new_accounts,
+          (value) => save({ mute_new_accounts: value })),
+        ui.field("Too new means younger than", duration("min_account_age", DURATIONS)),
+        ui.switchRow("Accounts with Discord's default avatar", null, config.mute_default_avatar,
+          (value) => save({ mute_default_avatar: value })),
+        ui.switchRow(
+          "Accounts using a known stock avatar",
+          "Matched against a catalogue of avatars raid accounts reuse.",
+          config.mute_stock_avatar,
+          (value) => save({ mute_stock_avatar: value })
+        ),
+        ui.field("Avatar match sensitivity", sensitivity, {
+          hint: data.meta.sensitivity.blurb,
+        })
+      ),
+
+      ui.card(
+        {},
+        ui.cardHead("How the checks combine", { glyph: "🔀" }),
+        h(
+          "div",
+          { class: "stack stack--tight" },
+          ...data.meta.match_modes.map((mode) =>
+            h(
+              "button",
+              {
+                class: "tile row",
+                type: "button",
+                style: {
+                  cursor: "pointer",
+                  textAlign: "left",
+                  borderColor: config.match_mode === mode.key ? "var(--brand)" : null,
+                },
+                onClick: async () => {
+                  await save({ match_mode: mode.key });
+                  config.match_mode = mode.key;
+                  paint();
+                },
+              },
+              h(
+                "div",
+                { class: "grow" },
+                h("strong", {}, mode.label),
+                h("div", { class: "tiny dim" }, mode.blurb)
+              ),
+              config.match_mode === mode.key ? ui.pill("On", "brand") : null
+            )
+          )
+        )
+      ),
+
+      ui.card(
+        {},
+        ui.cardHead("Getting out", { glyph: "🔓" }),
+        ui.switchRow("Let them verify themselves", "A math captcha behind a button.",
+          config.verify_enabled, (value) => save({ verify_enabled: value })),
+        ui.switchRow(
+          "Release age-held accounts automatically",
+          "Once the account is old enough, without them having to do anything.",
+          config.age_unmute_enabled,
+          (value) => save({ age_unmute_enabled: value })
+        ),
+        ui.field("Release at", duration("unmute_age", [
+          { value: 604800, label: "1 week" },
+          { value: 2592000, label: "30 days" },
+          { value: 3024000, label: "35 days" },
+          { value: 7776000, label: "90 days" },
+        ])),
+        ui.field("Kick if never verified after", duration("kick_timeout", [
+          { value: 86400, label: "1 day" },
+          { value: 259200, label: "3 days" },
+          { value: 604800, label: "1 week" },
+          { value: 1209600, label: "2 weeks" },
+        ]))
+      )
+    );
+  }
+
+  paint();
+  return host;
+}
+
+/* ══════════════════════════════════════════════════════════════════════════
+   Music
+   ══════════════════════════════════════════════════════════════════════════ */
+async function musicPage(guildId) {
+  const path = `/api/guilds/${guildId}/settings/music`;
+  let data = await api.get(path);
+  const host = h("div", { class: "stack" });
+
+  async function reload() {
+    data = await api.get(path, { fresh: true });
+    paint();
+  }
+
+  function paint() {
+    fill(
+      host,
+      ui.card(
+        {},
+        ui.switchRow(
+          "Stay in voice (24/7)",
+          "NanoBot keeps the connection open when the queue runs dry.",
+          data.config.stay_connected,
+          (value) => api.patch(path, { stay_connected: value })
+        )
+      ),
+
+      listCard("Server playlist", "playlist", data.playlist, {
+        glyph: "📻",
+        sub: "Played by /music guildplay, and by autoplay when the queue empties",
+        placeholder: "A YouTube or Spotify URL",
+      }),
+      listCard("Blocked songs", "songs", data.blocked_songs, {
+        glyph: "🚫",
+        sub: "Nobody can queue these here",
+        placeholder: "A title or a URL",
+      }),
+      blockedUsersCard(),
+      historyCard(),
+      operatorCard()
+    );
+  }
+
+  function listCard(title, which, values, { glyph, sub, placeholder }) {
+    const input = h("input", { class: "input", placeholder, "aria-label": placeholder });
+    return ui.card(
+      {},
+      ui.cardHead(title, { glyph, sub }),
+      h(
+        "div",
+        { class: "row" },
+        h("span", { class: "grow" }, input),
+        ui.actionButton(
+          "Add",
+          async () => {
+            const value = input.value.trim();
+            if (!value) return;
+            await api.patch(`${path}/lists/${which}`, { value, action: "add" });
+            input.value = "";
+            await reload();
+          },
+          { size: "sm", variant: "primary" }
+        )
+      ),
+      values.length
+        ? h(
+            "div",
+            { class: "stack stack--tight", style: { marginTop: "var(--s-3)" } },
+            ...values.map((value) =>
+              h(
+                "div",
+                { class: "tile row" },
+                h("span", { class: "grow tiny", style: { wordBreak: "break-all" } }, value),
+                ui.actionButton(
+                  "✕",
+                  async () => {
+                    await api.patch(`${path}/lists/${which}`, { value, action: "remove" });
+                    await reload();
+                  },
+                  { size: "sm" }
+                )
+              )
+            )
+          )
+        : h("p", { class: "small dim", style: { marginTop: "var(--s-3)", marginBottom: 0 } }, "Nothing here yet."),
+      which === "playlist"
+        ? h(
+            "p",
+            { class: "tiny dim", style: { marginTop: "var(--s-2)", marginBottom: 0 } },
+            "Entries that fail to play are pruned automatically."
+          )
+        : null
+    );
+  }
+
+  function blockedUsersCard() {
+    return ui.card(
+      {},
+      ui.cardHead("Blocked from queueing", {
+        glyph: "🙅",
+        action: ui.actionButton("Add", pickUser, { size: "sm" }),
+      }),
+      data.blocked_users.length
+        ? h(
+            "div",
+            { class: "stack stack--tight" },
+            ...data.blocked_users.map((user) =>
+              h(
+                "div",
+                { class: "tile row" },
+                h("span", { class: "grow" }, user.name),
+                ui.actionButton(
+                  "Unblock",
+                  async () => {
+                    await api.patch(`${path}/lists/users`, { value: user.id, action: "remove" });
+                    await reload();
+                  },
+                  { size: "sm" }
+                )
+              )
+            )
+          )
+        : h("p", { class: "small dim", style: { marginBottom: 0 } }, "Nobody is blocked.")
+    );
+  }
+
+  async function pickUser() {
+    const { members } = await api.get(`/api/guilds/${guildId}/members`);
+    const view = ui.sheet(
+      "Block somebody from queueing",
+      h(
+        "div",
+        { class: "stack stack--tight" },
+        ...members.map((member) =>
+          h(
+            "div",
+            { class: "row" },
+            h("img", { class: "avatar avatar--sm", src: member.avatar, alt: "", loading: "lazy" }),
+            h("span", { class: "grow" }, member.name),
+            ui.actionButton(
+              "Block",
+              async () => {
+                await api.patch(`${path}/lists/users`, { value: member.id, action: "add" });
+                view.close();
+                await reload();
+              },
+              { size: "sm", variant: "danger" }
+            )
+          )
+        )
+      )
+    );
+  }
+
+  function historyCard() {
+    if (!data.history.length) return null;
+    return ui.card(
+      {},
+      ui.cardHead("Recently played", { glyph: "🕘" }),
+      h(
+        "div",
+        { class: "stack stack--tight" },
+        ...data.history.slice(0, 10).map((track) =>
+          h(
+            "div",
+            { class: "row row--between small" },
+            h("span", { class: "grow", style: { overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" } },
+              track.title || track.url),
+            track.played_at ? h("span", { class: "dim tiny" }, fmt.relative(track.played_at)) : null
+          )
+        )
+      )
+    );
+  }
+
+  function operatorCard() {
+    return ui.card(
+      {},
+      ui.cardHead("Playback settings", { glyph: "🔒", sub: "The bot operator's, not a server's" }),
+      h("p", { class: "small muted" }, data.operator.why),
+      h(
+        "div",
+        { class: "stack stack--tight small" },
+        ...Object.entries(data.operator.values).map(([key, value]) =>
+          h(
+            "div",
+            { class: "row row--between" },
+            h("span", { class: "muted" }, key.replace("music_", "").replace(/_/g, " ")),
+            h("span", { class: "tabular" }, String(value ?? "—"))
+          )
+        )
+      )
+    );
+  }
+
+  paint();
+  return host;
+}
+
+/* ══════════════════════════════════════════════════════════════════════════
+   Shared: the role picker
+   ══════════════════════════════════════════════════════════════════════════ */
+/**
+ * A role picker, with roles NanoBot couldn't apply listed but disabled and
+ * carrying the reason — the same rule the channel picker follows. Hiding them
+ * turns "why isn't my role here?" into a support question.
+ */
+function rolePicker(guildId, current, onPick, hint = null) {
+  const select = h("select", { class: "select" }, h("option", {}, "Loading roles…"));
+  api.get(`/api/guilds/${guildId}/roles`).then(({ roles }) => {
+    fill(
+      select,
+      h("option", { value: "" }, "— none —"),
+      ...roles.map((role) =>
+        h(
+          "option",
+          {
+            value: role.id,
+            selected: String(current || "") === role.id,
+            disabled: !role.assignable,
+          },
+          role.assignable ? role.name : `${role.name} — NanoBot can't apply this`
+        )
+      )
+    );
+    ui.autoSave(select, (value) => onPick(value || null));
+  });
+  return ui.field("Role", select, { hint });
 }
 
 /* ══════════════════════════════════════════════════════════════════════════

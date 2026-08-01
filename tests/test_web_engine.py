@@ -448,6 +448,72 @@ async def test_bulk_sell_with_nothing_sellable_is_a_refusal():
     assert caught.value.code == "empty"
 
 
+# ── Containers ────────────────────────────────────────────────────────────────
+async def test_a_container_says_what_it_needs_before_you_tap_it():
+    """The chest carries its own rule in the payload, so the page can say "you
+    need a key" instead of the member finding out by failing."""
+    await db.add_item(U, "treasure_chest", 1)
+    inventory = await E.inventory(U, G)
+    chest = next(i for i in inventory["items"] if i["key"] == "treasure_chest")
+    assert chest["container"]["opens_with"] == "treasure_key"
+
+    # An ordinary item carries no container rule, so the page shows no opener.
+    await db.add_item(U, "stone", 1)
+    inventory = await E.inventory(U, G)
+    stone = next(i for i in inventory["items"] if i["key"] == "stone")
+    assert stone["container"] is None
+
+
+async def test_an_item_says_where_it_comes_from_when_a_table_says_so():
+    """Derived from the drop tables and the recipe registry, never invented —
+    an item nothing claims gets no line rather than a guess."""
+    await db.add_item(U, "stone", 1)
+    await db.add_item(U, "bait_worm", 1)
+    inventory = await E.inventory(U, G)
+    rows = {i["key"]: i for i in inventory["items"]}
+    assert rows["stone"]["sources"] == ["Mining"]
+    assert "The tackle shop" in rows["bait_worm"]["sources"]
+
+
+async def test_opening_a_chest_spends_the_chest_and_the_key():
+    await db.add_item(U, "treasure_chest", 2)
+    await db.add_item(U, "treasure_key", 2)
+    result = await E.open_container(U, "treasure_chest", 2)
+    assert result["qty"] == 2
+    assert result["coins"] > 0
+    assert await db.get_item_qty(U, "treasure_chest") == 0
+    assert await db.get_item_qty(U, "treasure_key") == 0
+    assert await db.get_balance(U) == result["coins"]
+
+
+async def test_a_chest_without_a_key_costs_nothing():
+    await db.add_item(U, "treasure_chest", 1)
+    with pytest.raises(PlayError) as caught:
+        await E.open_container(U, "treasure_chest", 1)
+    assert caught.value.code == "no_key"
+    assert caught.value.extra["needs"] == "treasure_key"
+    assert await db.get_item_qty(U, "treasure_chest") == 1
+
+
+async def test_opening_more_than_you_can_opens_what_you_can():
+    """Two chests and one key opens one — the same clamp the command applies,
+    rather than refusing the whole thing over the second chest."""
+    await db.add_item(U, "treasure_chest", 2)
+    await db.add_item(U, "treasure_key", 1)
+    result = await E.open_container(U, "treasure_chest", 2)
+    assert result["qty"] == 1
+    assert await db.get_item_qty(U, "treasure_chest") == 1
+    assert await db.get_item_qty(U, "treasure_key") == 0
+
+
+async def test_only_a_container_can_be_opened():
+    await db.add_item(U, "stone", 1)
+    with pytest.raises(PlayError) as caught:
+        await E.open_container(U, "stone", 1)
+    assert caught.value.code == "not_container"
+    assert await db.get_item_qty(U, "stone") == 1
+
+
 async def test_gift_is_atomic_and_refuses_self():
     await db.add_item(U, "stone", 3)
     await E.gift(U, U + 1, "stone", 2)

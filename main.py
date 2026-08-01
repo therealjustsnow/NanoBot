@@ -34,8 +34,11 @@ from utils import sqlite_conn
 from utils.health import health_routes, HEALTH_OWNER
 from utils.webserver import HttpServer
 
-# ── Config (read once at module level so logging init can use it) ──────────────
-_CFG = cfg_mod.load()
+# ── Config (read once at module level so logging init can use it) ─────────────
+# `apply_env` overlays NANOBOT_<KEY> variables for hosts where a file is the
+# awkward way to configure a process. It is an overlay only: `!config set` still
+# reads and writes config.ini, so the two never overwrite each other.
+_CFG = cfg_mod.apply_env(cfg_mod.load())
 
 
 # ── Logging ────────────────────────────────────────────────────────────────────
@@ -504,7 +507,7 @@ class NanoBot(commands.Bot):
         Returns the new flat config dict. Cogs can read ``bot.config`` for any
         key they care about.
         """
-        new_cfg = cfg_mod.load()
+        new_cfg = cfg_mod.apply_env(cfg_mod.load())
         self.config = dict(new_cfg)
         self._apply_config(new_cfg)
 

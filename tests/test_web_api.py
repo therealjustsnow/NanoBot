@@ -17,6 +17,7 @@ import aiosqlite
 import pytest
 
 import utils.db as db
+from web import permissions as perms
 from web import security
 from web.app import Dashboard
 
@@ -35,21 +36,25 @@ GUILD_ID = 555
 class FakePermissions:
     """Stands in for `discord.Permissions`: an int plus the named attributes.
 
-    Named flags are derived from the value rather than hard-coded, so a test
-    granting Administrator gets `manage_roles` for free, exactly as Discord's
-    own object does.
+    The flag names are derived from `web.permissions.PERMISSION_LABELS` rather
+    than typed out, so a feature that starts checking a new permission gets a
+    working fake for free instead of an AttributeError deep in a handler.
+    Administrator implies everything, exactly as Discord's own object does.
     """
 
     _BITS = {
-        "administrator": 1 << 3,
-        "manage_guild": 1 << 5,
-        "manage_roles": 1 << 28,
-        "manage_messages": 1 << 13,
-        "kick_members": 1 << 1,
-        "ban_members": 1 << 2,
-        "send_messages": 1 << 11,
-        "embed_links": 1 << 14,
+        label.lower().replace(" ", "_"): bit
+        for bit, label in perms.PERMISSION_LABELS.items()
     }
+    # A couple the dashboard checks that aren't in the feature map's labels.
+    _BITS.update(
+        {
+            "administrator": perms.ADMINISTRATOR,
+            "manage_guild": perms.MANAGE_GUILD,
+            "timeout_members": perms.MODERATE_MEMBERS,
+            "moderate_members": perms.MODERATE_MEMBERS,
+        }
+    )
 
     def __init__(self, value):
         self.value = value
@@ -59,7 +64,7 @@ class FakePermissions:
         if bit is None:
             raise AttributeError(name)
         value = self.__dict__.get("value", 0)
-        return bool(value & (1 << 3)) or bool(value & bit)
+        return bool(value & perms.ADMINISTRATOR) or bool(value & bit)
 
 
 class FakeRole:
@@ -80,7 +85,7 @@ class FakeRole:
 
 
 class FakeMember:
-    def __init__(self, uid, permissions=0, bot=False):
+    def __init__(self, uid, permissions=0, bot=False, top_role=5):
         self.id = uid
         self.name = f"user{uid}"
         self.display_name = f"User {uid}"
@@ -88,8 +93,19 @@ class FakeMember:
         self.guild_permissions = FakePermissions(permissions)
         self.nick = None
         self.joined_at = None
-        self.top_role = FakeRole("bot", position=5)
+        # Where they sit in the role hierarchy. Moderation is the only thing
+        # that reads it, and it reads it for the actor, the target and the bot
+        # separately.
+        self.top_role = FakeRole("top", position=top_role)
         self.display_avatar = type("A", (), {"url": "https://example.invalid/a.png"})()
+        self.kicked = None
+        self.timed_out = None
+
+    async def kick(self, reason=None):
+        self.kicked = reason
+
+    async def timeout(self, until, reason=None):
+        self.timed_out = (until, reason)
 
 
 class FakeChannel:
@@ -122,10 +138,29 @@ class FakeGuild:
         self.me = FakeMember(99, permissions=(1 << 3))  # bot has Administrator
         self.members = [
             FakeMember(OWNER_ID, permissions=0),
-            FakeMember(ADMIN_ID, permissions=(1 << 5)),  # Manage Server
-            FakeMember(MEMBER_ID, permissions=0),
+            # Manage Server *plus* the moderation permissions, and a role below
+            # the bot's but above the member's — the ordinary shape of a
+            # moderator. They are separate bits on purpose: Manage Server is
+            # what opens the dashboard, and it is deliberately not what lets
+            # anyone ban from it.
+            FakeMember(
+                ADMIN_ID,
+                permissions=(
+                    perms.MANAGE_GUILD
+                    | perms.MANAGE_MESSAGES
+                    | perms.KICK_MEMBERS
+                    | perms.BAN_MEMBERS
+                    | perms.MODERATE_MEMBERS
+                ),
+                top_role=4,
+            ),
+            FakeMember(MEMBER_ID, permissions=0, top_role=1),
         ]
+        self.bans = []
         self.text_channels = [FakeChannel(10, "general")]
+        # The birthday setup guesses a timezone from voice-region hints, so an
+        # empty list is a real state it has to cope with.
+        self.voice_channels = []
         self.roles = [
             FakeRole("@everyone", position=0, default=True),
             FakeRole("member", 1),  # id 901 — below the bot's top role, assignable
@@ -147,6 +182,9 @@ class FakeGuild:
     def get_role(self, rid):
         return next((r for r in self.roles if r.id == rid), None)
 
+    async def ban(self, user, reason=None, delete_message_days=0):
+        self.bans.append((user.id, reason, delete_message_days))
+
 
 class FakeBot:
     def __init__(self):
@@ -161,7 +199,13 @@ class FakeBot:
         self.guild = FakeGuild()
         self.guilds = [self.guild]
         self.user = type(
-            "U", (), {"name": "NanoBot", "display_avatar": type("A", (), {"url": ""})()}
+            "U",
+            (),
+            {
+                "id": 99,
+                "name": "NanoBot",
+                "display_avatar": type("A", (), {"url": ""})(),
+            },
         )()
         self.owner_ids = set()
         self.owner_id = None
@@ -202,6 +246,11 @@ async def server(monkeypatch):
         db._ensure_progression_tables,
         db._ensure_social_tables,
         db._ensure_role_panels_tables,
+        db._ensure_ticket_tables,
+        db._ensure_birthday_tables,
+        db._ensure_gatekeeper_tables,
+        db._ensure_music_tables,
+        db._ensure_warnings_tables,
     ):
         await setup()
 
@@ -778,3 +827,338 @@ async def test_security_headers_are_set_on_the_app_shell(server, http):
     assert "script-src 'self'" in csp
     assert "unsafe-inline" not in csp.split("style-src")[0]
     assert "frame-ancestors 'none'" in csp
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+#  Cross-origin hosting
+#
+#  The GitHub Pages shape: the frontend on one origin, this API on another. The
+#  allow-list is what makes it safe, so what is pinned here is that it is a
+#  list and not a mirror.
+# ══════════════════════════════════════════════════════════════════════════════
+async def test_an_unlisted_origin_gets_no_cors_headers(server, http):
+    async with http.get(
+        f"{BASE}/api/me", headers={"Origin": "https://evil.example"}
+    ) as r:
+        assert "Access-Control-Allow-Origin" not in r.headers
+
+
+async def test_a_listed_origin_may_read_the_answer(server, http):
+    server.allowed_origins = {"https://pages.example"}
+    try:
+        async with await Client(http, MEMBER_ID).get(
+            "/api/me", headers={"Origin": "https://pages.example"}
+        ) as r:
+            assert r.status == 200
+            assert r.headers["Access-Control-Allow-Origin"] == "https://pages.example"
+            # Credentials only ever go with an exact origin, never with "*".
+            assert r.headers["Access-Control-Allow-Credentials"] == "true"
+            assert "Origin" in r.headers.getall("Vary")
+    finally:
+        server.allowed_origins = set()
+
+
+async def test_a_preflight_is_answered_without_a_session(server, http):
+    """A preflight asks about a request that hasn't happened, so refusing it
+    for want of a session would refuse the question rather than the action."""
+    server.allowed_origins = {"https://pages.example"}
+    try:
+        async with http.options(
+            f"{BASE}/api/guilds/{GUILD_ID}/settings/leveling",
+            headers={
+                "Origin": "https://pages.example",
+                "Access-Control-Request-Method": "PATCH",
+                "Access-Control-Request-Headers": "content-type",
+            },
+        ) as r:
+            assert r.status == 204
+            assert "PATCH" in r.headers["Access-Control-Allow-Methods"]
+            assert security.CSRF_HEADER.lower() in (
+                r.headers["Access-Control-Allow-Headers"].lower()
+            )
+    finally:
+        server.allowed_origins = set()
+
+
+async def test_cors_does_not_replace_the_csrf_check(server, http):
+    """CORS decides who may read an answer; CSRF decides who may cause a write.
+    A cross-origin write with no token is still refused."""
+    server.allowed_origins = {"https://pages.example"}
+    try:
+        async with http.patch(
+            f"{BASE}/api/guilds/{GUILD_ID}/settings/leveling",
+            data=json.dumps({"enabled": False}),
+            headers={
+                "Content-Type": "application/json",
+                "Origin": "https://pages.example",
+            },
+            cookies=cookie_for(ADMIN_ID),
+        ) as r:
+            assert r.status == 403
+    finally:
+        server.allowed_origins = set()
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+#  Moderation
+#
+#  The framework's own decisions are unit-tested in test_web_phase2.py. What is
+#  pinned here is that the routes actually *go through* it — a handler that
+#  skipped `authorise` would pass every one of those unit tests.
+# ══════════════════════════════════════════════════════════════════════════════
+async def test_moderation_is_manager_only(server, http):
+    async with await Client(http, MEMBER_ID).get(
+        f"/api/guilds/{GUILD_ID}/moderation"
+    ) as r:
+        assert r.status == 403
+
+
+async def test_capabilities_say_what_you_and_the_bot_can_do(server, http):
+    async with await Client(http, ADMIN_ID).get(
+        f"/api/guilds/{GUILD_ID}/moderation"
+    ) as r:
+        assert r.status == 200
+        body = await r.json()
+    actions = {a["key"]: a for a in body["actions"]}
+    assert set(actions) == {"warn", "timeout", "kick", "ban", "unban", "purge"}
+    # An action nobody could run is reported with the reason rather than hidden.
+    assert all("why_not" in a for a in actions.values())
+    assert body["limits"]["purge_max"] == 100
+
+
+async def test_a_warn_needs_a_reason(server, http):
+    client = Client(http, ADMIN_ID)
+    async with await client.post(
+        f"/api/guilds/{GUILD_ID}/moderation/warn",
+        {"member": str(MEMBER_ID), "reason": " "},
+    ) as r:
+        assert r.status == 400
+    assert await db.get_warnings(GUILD_ID, MEMBER_ID) == []
+
+
+async def test_a_warn_lands_and_reports_the_count(server, http):
+    client = Client(http, ADMIN_ID)
+    async with await client.post(
+        f"/api/guilds/{GUILD_ID}/moderation/warn",
+        {"member": str(MEMBER_ID), "reason": "Spamming in general"},
+    ) as r:
+        assert r.status == 200
+        body = await r.json()
+    assert body["warnings"] == 1
+    stored = await db.get_warnings(GUILD_ID, MEMBER_ID)
+    assert len(stored) == 1
+    assert stored[0]["reason"] == "Spamming in general"
+
+
+async def test_you_cannot_moderate_yourself(server, http):
+    async with await Client(http, ADMIN_ID).post(
+        f"/api/guilds/{GUILD_ID}/moderation/warn",
+        {"member": str(ADMIN_ID), "reason": "testing"},
+    ) as r:
+        assert r.status == 400
+
+
+async def test_nobody_can_moderate_the_server_owner(server, http):
+    async with await Client(http, ADMIN_ID).post(
+        f"/api/guilds/{GUILD_ID}/moderation/kick",
+        {"member": str(OWNER_ID), "reason": "testing"},
+    ) as r:
+        assert r.status == 403
+
+
+async def test_a_member_without_the_permission_is_refused_the_action(server, http):
+    """`require_manager` is not the gate — the action's own Discord permission
+    is, which is what stops Manage Server implying Ban Members."""
+    async with await Client(http, MEMBER_ID).post(
+        f"/api/guilds/{GUILD_ID}/moderation/ban",
+        {"member": str(ADMIN_ID), "reason": "testing"},
+    ) as r:
+        assert r.status == 403
+
+
+async def test_a_timeout_cannot_exceed_discords_own_limit(server, http):
+    async with await Client(http, ADMIN_ID).post(
+        f"/api/guilds/{GUILD_ID}/moderation/timeout",
+        {"member": str(MEMBER_ID), "reason": "testing", "seconds": 40 * 86400},
+    ) as r:
+        assert r.status == 400
+
+
+async def test_a_purge_is_capped_rather_than_silently_doing_less(server, http):
+    async with await Client(http, ADMIN_ID).post(
+        f"/api/guilds/{GUILD_ID}/moderation/purge",
+        {"channel": "10", "amount": 5000, "reason": "testing"},
+    ) as r:
+        assert r.status == 400
+
+
+async def test_a_ban_goes_through_and_records_the_audit_reason(server, http):
+    guild = server.bot.guild
+    async with await Client(http, ADMIN_ID).post(
+        f"/api/guilds/{GUILD_ID}/moderation/ban",
+        {"member": str(MEMBER_ID), "reason": "Repeated harassment"},
+    ) as r:
+        assert r.status == 200
+    assert guild.bans, "the ban never reached Discord"
+    uid, reason, days = guild.bans[-1]
+    assert uid == MEMBER_ID
+    # The audit log has to say where the action came from, not just who did it.
+    assert "dashboard" in reason.lower()
+    assert "Repeated harassment" in reason
+    # Deleting somebody's history is a separate decision, so it defaults to off.
+    assert days == 0
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+#  Analytics
+# ══════════════════════════════════════════════════════════════════════════════
+async def test_analytics_is_manager_only(server, http):
+    async with await Client(http, MEMBER_ID).get(
+        f"/api/guilds/{GUILD_ID}/analytics"
+    ) as r:
+        assert r.status == 403
+
+
+async def test_analytics_answers_for_a_server_with_no_history(server, http):
+    async with await Client(http, ADMIN_ID).get(
+        f"/api/guilds/{GUILD_ID}/analytics?range=30d"
+    ) as r:
+        assert r.status == 200
+        body = await r.json()
+    assert body["range"]["key"] == "30d"
+    assert "economy" in body
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+#  Games
+# ══════════════════════════════════════════════════════════════════════════════
+async def test_the_casino_floor_reads_for_a_member(server, http):
+    async with await Client(http, MEMBER_ID).get(f"/api/guilds/{GUILD_ID}/casino") as r:
+        assert r.status == 200
+        body = await r.json()
+    assert len(body["games"]) == 5
+
+
+async def test_playing_needs_coins_and_says_so_plainly(server, http):
+    async with await Client(http, MEMBER_ID).post(
+        f"/api/guilds/{GUILD_ID}/casino/play/flip", {"bet": 100, "side": "heads"}
+    ) as r:
+        assert r.status == 409
+        body = await r.json()
+    assert body["error"]["message"]
+
+
+async def test_a_game_nobody_offers_is_a_404(server, http):
+    async with await Client(http, MEMBER_ID).post(
+        f"/api/guilds/{GUILD_ID}/casino/play/baccarat", {"bet": 10}
+    ) as r:
+        assert r.status == 404
+
+
+async def test_play_routes_are_off_when_play_is_disabled(server, http):
+    server.play_enabled = False
+    try:
+        await db.add_coins(MEMBER_ID, 1000)
+        async with await Client(http, MEMBER_ID).post(
+            f"/api/guilds/{GUILD_ID}/casino/play/flip", {"bet": 10, "side": "heads"}
+        ) as r:
+            assert r.status == 403
+        # Reading is still fine — the setting makes the dashboard read-only, it
+        # doesn't hide the feature.
+        async with await Client(http, MEMBER_ID).get(
+            f"/api/guilds/{GUILD_ID}/casino"
+        ) as r:
+            assert r.status == 200
+    finally:
+        server.play_enabled = True
+
+
+async def test_crafting_and_progression_and_the_wardrobe_read(server, http):
+    client = Client(http, MEMBER_ID)
+    for path in ("crafting", "progression", "wardrobe"):
+        async with await client.get(f"/api/guilds/{GUILD_ID}/{path}") as r:
+            assert r.status == 200, path
+
+
+async def test_you_cannot_wear_a_cosmetic_you_do_not_own(server, http):
+    async with await Client(http, MEMBER_ID).post(
+        f"/api/guilds/{GUILD_ID}/wardrobe/equip",
+        {"loadout": {"banner": ["banner_prestige"]}},
+    ) as r:
+        assert r.status == 200
+        body = await r.json()
+    assert body["changed"] == []
+    assert body["refused"]
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+#  The four setup-heavy feature pages
+# ══════════════════════════════════════════════════════════════════════════════
+async def test_module_settings_read_and_write(server, http):
+    client = Client(http, ADMIN_ID)
+    for module in ("tickets", "birthdays", "gatekeeper", "music"):
+        async with await client.get(f"/api/guilds/{GUILD_ID}/settings/{module}") as r:
+            assert r.status == 200, module
+
+
+async def test_a_module_setting_is_validated_server_side(server, http):
+    """A timezone the standard library doesn't know would break the announce
+    loop for that server every fifteen minutes, so it never reaches the row."""
+    async with await Client(http, ADMIN_ID).patch(
+        f"/api/guilds/{GUILD_ID}/settings/birthdays", {"timezone": "Mars/Olympus"}
+    ) as r:
+        assert r.status == 400
+
+
+async def test_module_settings_are_manager_only(server, http):
+    async with await Client(http, MEMBER_ID).patch(
+        f"/api/guilds/{GUILD_ID}/settings/tickets", {"enabled": False}
+    ) as r:
+        assert r.status == 403
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+#  Split hosting: the two URLs the login flow needs
+#
+#  The callback has to land on the API (only the API holds the client secret,
+#  so only the API can exchange the code) and the browser has to end up at the
+#  app. Same-origin they are one URL, which is exactly why conflating them is
+#  easy and only breaks in the deployment that has two.
+# ══════════════════════════════════════════════════════════════════════════════
+async def test_the_oauth_redirect_is_always_the_api_not_the_frontend(server, http):
+    server.frontend_url = "https://pages.example/NanoBot"
+    try:
+        async with await Client(http).get(
+            "/api/auth/login", allow_redirects=False
+        ) as response:
+            location = response.headers["Location"]
+        assert "pages.example" not in location
+        assert (
+            f"{BASE}/api/auth/callback".replace(":", "%3A").replace("/", "%2F")
+            in location
+            or f"{BASE}/api/auth/callback" in location
+        )
+    finally:
+        server.frontend_url = ""
+
+
+async def test_a_finished_login_sends_the_browser_to_the_frontend(server, http):
+    """Landing back on the API's own host would be a blank page: it has no app
+    to show when something else is serving one."""
+    server.frontend_url = "https://pages.example/NanoBot"
+    try:
+        async with await Client(http).get(
+            "/api/auth/callback?error=access_denied", allow_redirects=False
+        ) as response:
+            location = response.headers["Location"]
+        assert location.startswith("https://pages.example/NanoBot/login")
+    finally:
+        server.frontend_url = ""
+
+
+async def test_same_origin_keeps_a_plain_path_redirect(server, http):
+    """Nothing about the default deployment changed."""
+    async with await Client(http).get(
+        "/api/auth/callback?error=access_denied", allow_redirects=False
+    ) as response:
+        assert response.headers["Location"].startswith("/login")
