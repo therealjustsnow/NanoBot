@@ -11,11 +11,12 @@ find_recipe`) work. load_extension("cogs.crafting") works via setup().
 from . import recipes as _recipes
 from . import items as _items  # noqa: F401 - registers craft_* ItemDefs
 from . import helpers as _helpers
+from . import views as _views
 from . import cog as _cog
 
 # _cog is last so its Crafting/setup win; every helper/recipe name is lifted
 # too, keeping the flat `from cogs.crafting import RECIPES` API.
-for _mod in (_recipes, _items, _helpers, _cog):
+for _mod in (_recipes, _items, _helpers, _views, _cog):
     for _name in dir(_mod):
         if not _name.startswith("__"):
             globals().setdefault(_name, getattr(_mod, _name))

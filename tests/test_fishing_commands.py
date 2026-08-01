@@ -460,7 +460,58 @@ async def test_trap_command_sets_then_reports_then_pulls(bot):
     )
     await dpytest.message("!fish trap", member=author)
     assert "Basket" in dpytest.get_message().embeds[0].title
-    assert await db.get_trap(author.id) is None
+    assert await db.get_traps(author.id) == []
+
+
+@pytest.mark.cogs("cogs.fishing")
+async def test_a_trap_can_be_set_at_every_spot(bot):
+    """A trap belongs to the water it sits in, so chartering somewhere new
+    gives you somewhere new to leave one — the pond trap is not in the way."""
+    author = config().members[0]
+    await db.add_item(author.id, FISH_TRAP, 2)
+    await db.set_trap(author.id, DEFAULT_SPOT, time.time())
+    reef = SPOT_ORDER[1]
+    await db.unlock_spot(author.id, reef, time.time())
+    await db.set_spot(author.id, reef)
+
+    await dpytest.message("!fish trap", member=author)
+    embed = dpytest.get_message().embeds[0]
+
+    assert "Set" in embed.title
+    assert SPOTS[reef]["name"] in embed.description
+    assert {t["spot"] for t in await db.get_traps(author.id)} == {DEFAULT_SPOT, reef}
+    assert await db.get_item_qty(author.id, FISH_TRAP) == 1
+
+
+@pytest.mark.cogs("cogs.fishing")
+async def test_pulling_collects_every_ready_trap_at_once(bot):
+    """Travel is free and each basket is rolled at the water its trap sat in,
+    so a tour of five places to collect would be busywork rather than a
+    decision."""
+    author = config().members[0]
+    ready = time.time() - TRAP_SOAK - 1
+    await db.set_trap(author.id, DEFAULT_SPOT, ready)
+    await db.set_trap(author.id, SPOT_ORDER[1], ready)
+
+    await dpytest.message("!fish trap", member=author)
+    embed = dpytest.get_message().embeds[0]
+
+    assert "Basket" in embed.title
+    assert SPOTS[DEFAULT_SPOT]["name"] in embed.description
+    assert SPOTS[SPOT_ORDER[1]]["name"] in embed.description
+    assert await db.get_traps(author.id) == []
+
+
+@pytest.mark.cogs("cogs.fishing")
+async def test_a_second_trap_in_one_spot_is_refused_without_eating_it(bot):
+    author = config().members[0]
+    await db.add_item(author.id, FISH_TRAP, 1)
+    await db.set_trap(author.id, DEFAULT_SPOT, time.time())
+
+    await dpytest.message("!fish trap", member=author)
+
+    assert "Soaking" in dpytest.get_message().embeds[0].title
+    assert await db.get_item_qty(author.id, FISH_TRAP) == 1
 
 
 @pytest.mark.cogs("cogs.fishing")

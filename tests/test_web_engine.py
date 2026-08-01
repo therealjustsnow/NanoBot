@@ -14,6 +14,8 @@ game — see also tests/test_web_engine_parity.py, which checks the modules impo
 the shared helpers rather than defining their own.
 """
 
+import time
+
 import aiosqlite
 import pytest
 
@@ -218,6 +220,29 @@ async def test_trap_needs_one_and_pays_out_once():
     with pytest.raises(PlayError) as caught:
         await F.trap(U, G)
     assert caught.value.code == "no_trap"
+
+
+async def test_a_trap_belongs_to_a_spot_not_to_an_angler():
+    """The re-key, from the browser's side: chartering somewhere new gives you
+    somewhere new to leave a trap, and pulling collects the lot."""
+    await db.add_item(U, "fish_trap", 2)
+    await F.trap(U, G)  # set at the starter spot
+    await db.unlock_spot(U, "reef", time.time())
+    await db.set_spot(U, "reef")
+
+    assert (await F.trap(U, G))["action"] == "set"
+    state = await F.trap_state(U)
+    assert len(state["traps"]) == 2
+    assert state["here"] is False  # nowhere left to put one where you're stood
+
+    await db._conn().execute(
+        "UPDATE fishing_traps SET set_at=0 WHERE user_id=?", (str(U),)
+    )
+    pulled = await F.trap(U, G)
+
+    assert len(pulled["baskets"]) == 2
+    assert len(pulled["catches"]) == sum(len(b["catches"]) for b in pulled["baskets"])
+    assert await db.get_traps(U) == []
 
 
 # ══════════════════════════════════════════════════════════════════════════════

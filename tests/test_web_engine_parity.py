@@ -175,7 +175,9 @@ def test_reward_key_map_matches_the_cogs():
         ("fishing", "try_claim_cast"),
         ("fishing", "try_claim_daily_streak"),
         ("fishing", "try_claim_quest_reward"),
-        ("fishing", "claim_trap"),
+        # Traps are one per spot, so the collect claims each of them by its own
+        # conditional DELETE — claim_ready_traps is the loop over claim_trap.
+        ("fishing", "claim_ready_traps"),
         ("fishing", "try_debit_coins"),
         ("activities", "try_claim_activity"),
         ("activities", "try_claim_adventure_streak"),

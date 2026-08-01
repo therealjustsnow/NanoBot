@@ -21,8 +21,12 @@ from cogs.crafting import (
     RECIPES,
     can_craft,
     clamp_craft_qty,
+    craft_all_plan,
     find_recipe,
+    is_craft_all,
+    max_craftable,
     missing_inputs,
+    parse_craft_qty,
     validate_recipes,
 )
 
@@ -130,6 +134,93 @@ def test_clamp_craft_qty_caps_at_max():
 
 def test_clamp_craft_qty_passthrough():
     assert clamp_craft_qty(3) == 3
+
+
+# ── max_craftable ─────────────────────────────────────────────────────────────
+def test_max_craftable_is_the_scarcest_input():
+    recipe = RECIPES["campfire_feast"]  # meat x3, coal x2
+    assert max_craftable(recipe, {"meat": 30, "coal": 4}) == 2
+
+
+def test_max_craftable_is_zero_when_an_input_is_missing():
+    recipe = RECIPES["campfire_feast"]
+    assert max_craftable(recipe, {"meat": 300}) == 0
+    assert max_craftable(recipe, {}) == 0
+
+
+def test_max_craftable_is_uncapped():
+    """The answer to "how many can I make" is a fact about the materials — a
+    screen quoting the per-call cap instead would lie about what you own."""
+    recipe = RECIPES["campfire_feast"]
+    assert max_craftable(recipe, {"meat": 3000, "coal": 3000}) > MAX_CRAFT_QTY
+
+
+def test_max_craftable_agrees_with_missing_inputs():
+    recipe = RECIPES["campfire_feast"]
+    inv = {"meat": 9, "coal": 4}
+    n = max_craftable(recipe, inv)
+    assert missing_inputs(recipe, inv, n) == {}
+    assert missing_inputs(recipe, inv, n + 1) != {}
+
+
+# ── parse_craft_qty ───────────────────────────────────────────────────────────
+def test_parse_craft_qty_reads_numbers():
+    assert parse_craft_qty("3", 100) == 3
+    assert parse_craft_qty(3, 100) == 3
+    assert parse_craft_qty(None, 100) == 1
+    assert parse_craft_qty("", 100) == 1
+
+
+def test_parse_craft_qty_maxes_out_on_a_word():
+    for word in ("max", "MAX", " all ", "everything", "*"):
+        assert parse_craft_qty(word, 7) == 7
+
+
+def test_parse_craft_qty_max_still_respects_the_per_call_cap():
+    assert parse_craft_qty("max", 9999) == MAX_CRAFT_QTY
+
+
+def test_parse_craft_qty_max_of_nothing_is_zero():
+    """Distinct from 1: crafting the wrong amount consumes materials, so a max
+    with nothing behind it must not quietly become "make one"."""
+    assert parse_craft_qty("max", 0) == 0
+
+
+def test_parse_craft_qty_rejects_junk():
+    assert parse_craft_qty("lots", 10) is None
+    assert parse_craft_qty("3.5", 10) is None
+
+
+# ── craft_all_plan ────────────────────────────────────────────────────────────
+def test_craft_all_plan_is_empty_with_nothing_to_work_with():
+    assert craft_all_plan({}) == []
+
+
+def test_craft_all_plan_makes_what_it_can():
+    plan = dict(craft_all_plan({"meat": 9, "coal": 6}))
+    assert plan["campfire_feast"] == 3
+
+
+def test_craft_all_plan_never_promises_one_input_twice():
+    """Two recipes sharing an ore is the whole reason the plan simulates the
+    inventory rather than measuring each recipe against the full stack."""
+    inv = {"gold_ore": 3, "diamond": 1, "bait_glowgrub": 2}
+    plan = dict(craft_all_plan(inv))
+    left = dict(inv)
+    for key, count in plan.items():
+        for item_key, need in RECIPES[key].inputs.items():
+            left[item_key] = left.get(item_key, 0) - need * count
+    assert all(v >= 0 for v in left.values()), left
+
+
+def test_craft_all_plan_is_capped_per_recipe():
+    plan = dict(craft_all_plan({"meat": 9999, "coal": 9999}))
+    assert plan["campfire_feast"] == MAX_CRAFT_QTY
+
+
+def test_is_craft_all_reads_the_bulk_words():
+    assert is_craft_all("all") and is_craft_all(" EVERYTHING ") and is_craft_all("*")
+    assert not is_craft_all("gem_ring")
 
 
 # ── Atomic consume-with-refund-on-partial-failure (db level) ─────────────────

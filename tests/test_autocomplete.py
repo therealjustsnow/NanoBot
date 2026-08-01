@@ -39,6 +39,7 @@ def _option(bot, qualified_name: str, param: str):
 # ── registration guard ────────────────────────────────────────────────────────
 _PICKER_OPTIONS = [
     ("craft make", "recipe"),
+    ("craft make", "qty"),
     ("craft info", "recipe"),
     ("fish sell", "fish"),
     ("fish buy", "item"),
@@ -111,6 +112,81 @@ async def test_craft_recipe_autocomplete_marks_craftable_first(bot):
     choices = await cog._craft_make_ac(interaction, "")
     assert choices[0].value == key
     assert choices[0].name.startswith("✅")
+
+
+@pytest.mark.cogs("cogs.crafting")
+async def test_craft_recipe_autocomplete_says_how_many_you_can_make(bot):
+    """The count is the whole reason the picker was reworked: a ✅ that doesn't
+    say how many still leaves you guessing at the quantity to type."""
+    guild = bot.guilds[0]
+    user = guild.members[0]
+    cog = bot.get_cog("Crafting")
+    from cogs.crafting.recipes import RECIPES
+
+    key = sorted(RECIPES)[0]
+    for item_key, need in RECIPES[key].inputs.items():
+        await db.add_item(user.id, item_key, need * 3)
+
+    choices = await cog._craft_make_ac(_stub_interaction(guild, user), "")
+
+    assert choices[0].name.startswith("✅ ×3 ready")
+
+
+@pytest.mark.cogs("cogs.crafting")
+async def test_craft_recipe_autocomplete_leads_with_everything_when_it_helps(bot):
+    """Offered only past one craftable recipe — at one, "everything" and the
+    row under it would do the same thing, and the bulk row costs a confirm."""
+    guild = bot.guilds[0]
+    user = guild.members[0]
+    cog = bot.get_cog("Crafting")
+    interaction = _stub_interaction(guild, user)
+    from cogs.crafting.recipes import RECIPES
+
+    first, second = sorted(RECIPES)[:2]
+    for item_key, need in RECIPES[first].inputs.items():
+        await db.add_item(user.id, item_key, need)
+    assert [c.value for c in await cog._craft_make_ac(interaction, "")][0] != "all"
+
+    for item_key, need in RECIPES[second].inputs.items():
+        await db.add_item(user.id, item_key, need)
+    choices = await cog._craft_make_ac(interaction, "")
+
+    assert choices[0].value == "all"
+    # Never on the read-only lookup — there is nothing there for it to do.
+    assert "all" not in {c.value for c in await cog._craft_info_ac(interaction, "")}
+
+
+@pytest.mark.cogs("cogs.crafting")
+async def test_craft_qty_autocomplete_leads_with_the_max(bot):
+    guild = bot.guilds[0]
+    user = guild.members[0]
+    cog = bot.get_cog("Crafting")
+    from cogs.crafting.recipes import RECIPES
+
+    key = sorted(RECIPES)[0]
+    for item_key, need in RECIPES[key].inputs.items():
+        await db.add_item(user.id, item_key, need * 4)
+    interaction = _stub_interaction(guild, user)
+    interaction.namespace = types.SimpleNamespace(recipe=key)
+
+    choices = await cog._craft_qty_ac(interaction, "")
+
+    assert choices[0].value == "max"
+    assert "4" in choices[0].name
+    # It never offers a number the craft would then refuse.
+    assert all(int(c.value) <= 4 for c in choices[1:] if c.value.isdigit())
+
+
+@pytest.mark.cogs("cogs.crafting")
+async def test_craft_qty_autocomplete_without_a_recipe_still_offers_numbers(bot):
+    guild = bot.guilds[0]
+    cog = bot.get_cog("Crafting")
+    interaction = _stub_interaction(guild, guild.members[0])
+    interaction.namespace = types.SimpleNamespace(recipe="")
+
+    choices = await cog._craft_qty_ac(interaction, "")
+
+    assert [c.value for c in choices][:1] == ["1"]
 
 
 @pytest.mark.cogs("cogs.crafting")

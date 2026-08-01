@@ -620,3 +620,41 @@ async def drop_per_guild_coin_faucets(conn):
     )
     await conn.execute("DROP TABLE level_config")
     await conn.execute("ALTER TABLE level_config_new RENAME TO level_config")
+
+
+@migration(6)
+async def widen_fishing_traps_to_one_per_spot(conn):
+    """Re-key fishing_traps on (user_id, spot) so a trap belongs to a place.
+
+    A trap is set in particular water and rolls its basket against that water,
+    which made "one trap, anywhere" the wrong shape: the item you bought was
+    the scarce thing rather than the place you put it, so chartering a spot
+    bought you nothing to leave behind there. Keyed by (user, spot) the number
+    of spots is what bounds how many can be soaking, and each one still costs
+    its own trap.
+
+    Every existing row survives — an angler with one trap in the water keeps it,
+    at the spot it was set. Idempotent: skipped once `spot` is part of the
+    primary key.
+    """
+    async with conn.execute("PRAGMA table_info(fishing_traps)") as cur:
+        cols = await cur.fetchall()
+    if not cols:
+        return  # no table yet — init() creates it in the new shape
+    if any(row["name"] == "spot" and row["pk"] for row in cols):
+        return
+    log.info("Re-keying fishing traps to one per spot …")
+    await conn.execute("DROP TABLE IF EXISTS fishing_traps_new")
+    await conn.execute(
+        "CREATE TABLE fishing_traps_new ("
+        "user_id TEXT NOT NULL, "
+        "spot    TEXT NOT NULL DEFAULT '', "
+        "set_at  REAL NOT NULL DEFAULT 0, "
+        "PRIMARY KEY (user_id, spot))"
+    )
+    await conn.execute(
+        "INSERT INTO fishing_traps_new (user_id, spot, set_at) "
+        "SELECT user_id, spot, set_at FROM fishing_traps"
+    )
+    await conn.execute("DROP TABLE fishing_traps")
+    await conn.execute("ALTER TABLE fishing_traps_new RENAME TO fishing_traps")

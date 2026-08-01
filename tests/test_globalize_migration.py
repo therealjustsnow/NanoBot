@@ -539,3 +539,73 @@ async def test_migration_on_a_fresh_database_is_a_noop(legacy):
     await legacy.commit()
     await _migrate()
     assert await db.get_balance(7) == 42
+
+
+# ── Migration 6: one trap per spot ────────────────────────────────────────────
+async def _old_trap_table(conn):
+    """The pre-migration shape: user_id alone as the primary key."""
+    await conn.execute(
+        "CREATE TABLE fishing_traps (user_id TEXT PRIMARY KEY, "
+        "spot TEXT NOT NULL DEFAULT '', set_at REAL NOT NULL DEFAULT 0)"
+    )
+    await conn.commit()
+
+
+async def _migrate_traps():
+    await db._run_migrations([(6, globalize.widen_fishing_traps_to_one_per_spot)])
+
+
+async def test_trap_migration_keeps_every_trap_in_the_water(legacy):
+    """Nobody loses the trap they already paid for and left soaking."""
+    await _old_trap_table(legacy)
+    await legacy.executemany(
+        "INSERT INTO fishing_traps (user_id, spot, set_at) VALUES (?,?,?)",
+        [(str(A), "reef", 1000.0), (str(B), "deep", 2000.0)],
+    )
+    await legacy.commit()
+
+    await _migrate_traps()
+
+    assert await db.get_trap(A, "reef") == {"spot": "reef", "set_at": 1000.0}
+    assert await db.get_trap(B, "deep") == {"spot": "deep", "set_at": 2000.0}
+
+
+async def test_trap_migration_makes_room_for_one_per_spot(legacy):
+    """The point of the re-key: a second trap somewhere else now fits."""
+    await _old_trap_table(legacy)
+    await legacy.execute(
+        "INSERT INTO fishing_traps (user_id, spot, set_at) VALUES (?,?,?)",
+        (str(A), "pond", 1000.0),
+    )
+    await legacy.commit()
+
+    await _migrate_traps()
+
+    assert await db.set_trap(A, "reef", 1100.0) is True
+    assert await db.set_trap(A, "pond", 1200.0) is False  # still one per spot
+    assert len(await db.get_traps(A)) == 2
+
+
+async def test_trap_migration_is_safe_to_re_run(legacy):
+    await _old_trap_table(legacy)
+    await legacy.execute(
+        "INSERT INTO fishing_traps (user_id, spot, set_at) VALUES (?,?,?)",
+        (str(A), "pond", 1000.0),
+    )
+    await legacy.commit()
+
+    await _migrate_traps()
+    await db.set_trap(A, "reef", 1100.0)
+    await _migrate_traps()
+
+    assert len(await db.get_traps(A)) == 2
+
+
+async def test_trap_migration_is_a_no_op_on_a_fresh_database(legacy):
+    """init() creates the table in the new shape before migrations run."""
+    await db._ensure_fishing_tables()
+
+    await _migrate_traps()
+
+    assert await db.set_trap(A, "pond", 1000.0) is True
+    assert await db.set_trap(A, "reef", 1000.0) is True

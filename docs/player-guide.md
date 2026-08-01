@@ -286,7 +286,7 @@ Cast too early you're told privately — your last catch stays on screen.
 - **Fishing spots.** Five places to fish, each with species found nowhere else.
   See below.
 - **Tackle.** A 🕸️ Cast Net pulls three fish from one cast; a 🪤 Fish Trap
-  fishes for you while you're away.
+  fishes for you while you're away — one at every spot you've chartered.
 - **The cast cooldown is a flat 20 seconds for everyone**, everywhere. Since
   your fishing progress is one account, one cooldown is the only thing that
   made sense — and it can't be dodged by hopping servers.
@@ -329,8 +329,14 @@ What you're buying is **time**: the 20-second cooldown is what actually limits
 fishing, and a net beats it while a trap ignores it completely.
 
 A trap is set where you're standing and pays out from *that* water, so a trap
-left at the Trench is worth a lot more than one in the pond. `/fish trap` sets
-one, tells you how long is left, and pulls it when it's ready.
+left at the Trench is worth a lot more than one in the pond. **You can leave
+one at every spot you've chartered** — one per place, so a new charter is
+somewhere new to leave a trap as well as somewhere new to fish.
+
+`/fish trap` does whichever of the two is possible right now: it pulls every
+trap that's finished soaking (wherever they are — you don't have to travel back
+to collect), and otherwise sets one in the water you're standing in. `/fish hub`
+lists what's soaking and when each is up.
 
 ### Rarities
 
@@ -526,9 +532,16 @@ chest` pays 250–750 coins. You need one of each.
 
 ### 🛠️ Crafting
 
-`/craft` lists every recipe with ✅ (you have the materials) or ❌.
-`/craft make <recipe>` builds it — and the recipe option is a pick list that
+`/craft` lists every recipe with **✅ ×N** (how many you can make right now) or
+❌. `/craft make <recipe>` builds it — and the recipe option is a pick list that
 shows what each one costs, so you never have to guess a name.
+
+Two shortcuts, because nobody counts their own ore first:
+
+- `/craft make <recipe> max` — makes as many as your materials allow.
+- `/craft make all` — makes everything you can, across every recipe. It shows
+  you the whole plan first and makes nothing until you press **Craft**, since
+  it will spend material you might have been saving.
 
 Eight recipes turn raw materials into useful things: luck charms, a reinforced
 rob-shield, a golden lure, decorative collectibles worth more than their

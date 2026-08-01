@@ -37,7 +37,8 @@ Commands
   /fish travel [spot]         → the map: charter and move between spots
   /fish shop                  → bait and tackle, one tap each, plus an ⚡ menu
                                 that arms what you own without leaving the shop
-  /fish trap                  → set a fish trap, or pull a soaked one
+  /fish trap                  → set a fish trap here, or pull every soaked one
+                                (one trap per spot you've chartered)
   /fish rod                   → your rod + the next upgrade
   /fish upgrade               → buy the next rod tier with coins
   /fish dex                   → species collection progress
@@ -650,15 +651,16 @@ class Fishing(commands.Cog):
                 inline=False,
             )
 
-        trap = await db.get_trap(member.id)
-        if trap:
-            left = int(TRAP_SOAK - (time.time() - trap["set_at"]))
-            where = spot_info(resolve_spot(trap["spot"]))["name"]
+        traps = await db.get_traps(member.id)
+        if traps:
+            ready = sum(1 for t in traps if time.time() - t["set_at"] >= TRAP_SOAK)
             embed.add_field(
-                name="Trap",
-                value=f"🪤 Soaking at **{where}** — "
+                name="Traps" if len(traps) > 1 else "Trap",
+                value=self._soaking_lines(traps, time.time())
                 + (
-                    "ready to pull" if left <= 0 else f"ready in {h.fmt_duration(left)}"
+                    f"\nPull {'them' if ready > 1 else 'it'} with `/fish trap`."
+                    if ready
+                    else ""
                 ),
                 inline=False,
             )
@@ -1003,33 +1005,36 @@ class Fishing(commands.Cog):
     async def trap_screen(
         self, guild: discord.Guild, member: discord.abc.User
     ) -> "Screen":
-        """One command for both halves: pull a ready trap, else set a new one.
+        """One command for every state: pull whatever is ready, else set one here.
 
         Two commands would mean remembering which state you're in, and the
-        answer is always "do the thing that's possible right now".
+        answer is always "do the thing that's possible right now". Collecting
+        wins over setting when both are possible — a full basket is the payout,
+        and the next press sets the trap the pull just freed up.
+
+        Traps are per *spot*, so pulling collects every ready one wherever it
+        sits: travel is free and the basket is rolled at the water the trap sat
+        in either way, so a tour of five places to collect would be busywork.
+        Setting, in contrast, only ever happens where the angler is standing.
         """
         econ = await db.get_econ_config(guild.id)
         async with self._lock(member.id):
-            trap = await db.get_trap(member.id)
-            if trap is not None:
-                left = int(TRAP_SOAK - (time.time() - trap["set_at"]))
-                if left > 0:
-                    where = spot_info(resolve_spot(trap["spot"]))
-                    return Screen(
-                        h.info(
-                            f"Your trap is still soaking at {where['emoji']} "
-                            f"**{where['name']}** — ready in "
-                            f"**{h.fmt_duration(left)}**.",
-                            "🪤 Soaking",
-                        ),
-                        ok=False,
-                    )
-                pulled = await db.claim_trap(member.id, time.time(), TRAP_SOAK)
-                if pulled is None:
-                    return Screen(
-                        h.warn("That trap was already pulled.", "🪤 Empty"), ok=False
-                    )
-                return await self._pull_trap(guild, member, econ, pulled["spot"])
+            now = time.time()
+            pulled = await db.claim_ready_traps(member.id, now, TRAP_SOAK)
+            if pulled:
+                return await self._pull_traps(
+                    guild, member, econ, [t["spot"] for t in pulled]
+                )
+
+            fisher = await db.get_fisher(member.id)
+            spot = resolve_spot(fisher["spot"])
+            here = await db.get_trap(member.id, spot)
+            if here is not None:
+                soaking = await db.get_traps(member.id)
+                return Screen(
+                    h.info(self._soaking_lines(soaking, now), "🪤 Soaking"),
+                    ok=False,
+                )
 
             if not await db.try_consume_item(member.id, FISH_TRAP, 1):
                 return Screen(
@@ -1040,36 +1045,53 @@ class Fishing(commands.Cog):
                     ),
                     ok=False,
                 )
-            fisher = await db.get_fisher(member.id)
-            spot = resolve_spot(fisher["spot"])
-            if not await db.set_trap(member.id, spot, time.time()):
+            if not await db.set_trap(member.id, spot, now):
                 # Lost a race with another set — give the trap back rather than
-                # eating it, since only one can be in the water.
+                # eating it, since only one fits in this water.
                 await db.add_item(member.id, FISH_TRAP, 1)
                 return Screen(
-                    h.warn("You've already got a trap in the water.", "🪤 Set"),
+                    h.warn("You've already got a trap in the water here.", "🪤 Set"),
                     ok=False,
                 )
             info = spot_info(spot)
-            return Screen(
-                h.ok(
-                    f"Trap set at {info['emoji']} **{info['name']}**. Come back in "
-                    f"**{h.fmt_duration(TRAP_SOAK)}** for a full basket.",
-                    "🪤 Set",
-                )
+            desc = (
+                f"Trap set at {info['emoji']} **{info['name']}**. Come back in "
+                f"**{h.fmt_duration(TRAP_SOAK)}** for a full basket."
             )
+            elsewhere = [t for t in await db.get_traps(member.id) if t["spot"] != spot]
+            if elsewhere:
+                desc += "\n\nAlso soaking:\n" + self._soaking_lines(elsewhere, now)
+            else:
+                desc += "\n\nYou can leave one in every spot you've chartered."
+            return Screen(h.ok(desc, "🪤 Set"))
 
-    async def _pull_trap(
-        self, guild: discord.Guild, member: discord.abc.User, econ: dict, spot: str
+    def _soaking_lines(self, traps: list[dict], now: float) -> str:
+        """One line per trap in the water — where it is and when it's up."""
+        lines = []
+        for trap in traps:
+            info = spot_info(resolve_spot(trap["spot"]))
+            left = int(TRAP_SOAK - (now - trap["set_at"]))
+            when = (
+                "ready to pull" if left <= 0 else f"ready in **{h.fmt_duration(left)}**"
+            )
+            lines.append(f"{info['emoji']} **{info['name']}** — {when}")
+        return "\n".join(lines)
+
+    async def _pull_traps(
+        self,
+        guild: discord.Guild,
+        member: discord.abc.User,
+        econ: dict,
+        spots: list[str],
     ) -> "Screen":
-        """Roll a soaked trap's catch into the bag.
+        """Roll every claimed trap's catch into the bag, one basket per spot.
 
-        Rolled at the spot it was *set* in, not where the angler is standing
-        now — the trap has been sitting in that water for hours, and letting a
-        member set one in the pond and pull it at the Trench would make travel
-        pointless. Rod luck applies; bait doesn't, since nobody was holding it.
+        Each is rolled at the spot it was *set* in, not where the angler is
+        standing now — the trap has been sitting in that water for hours, and
+        letting a member set one in the pond and pull it at the Trench would
+        make travel pointless. Rod luck applies; bait doesn't, since nobody was
+        holding it.
         """
-        spot = resolve_spot(spot)
         fisher = await db.get_fisher(member.id)
         luck = rod_info(fisher["rod_level"])["luck"] + level_luck_bonus(
             fish_level(fisher["xp"])
@@ -1078,41 +1100,50 @@ class Fishing(commands.Cog):
         odds = rarity_odds(luck)
 
         coins = 0
-        counts: dict[str, int] = {}
-        for _ in range(TRAP_CATCHES):
-            rarity = pick_spot_rarity(random.random(), odds, spot)
-            key = pick_spot_fish(rarity, random.random(), spot)
-            counts[key] = counts.get(key, 0) + 1
-            if rarity == "treasure":
-                coins += max(1, treasure_coins(key, random.random()))
-                continue
-            weight = roll_weight(key, random.random())
-            await db.record_catch(
-                member.id,
-                key,
-                weight,
-                catch_value(key, weight),
-                track_best=rarity != "junk",
+        blocks: list[str] = []
+        for raw_spot in spots:
+            spot = resolve_spot(raw_spot)
+            counts: dict[str, int] = {}
+            for _ in range(TRAP_CATCHES):
+                rarity = pick_spot_rarity(random.random(), odds, spot)
+                key = pick_spot_fish(rarity, random.random(), spot)
+                counts[key] = counts.get(key, 0) + 1
+                if rarity == "treasure":
+                    coins += max(1, treasure_coins(key, random.random()))
+                    continue
+                weight = roll_weight(key, random.random())
+                await db.record_catch(
+                    member.id,
+                    key,
+                    weight,
+                    catch_value(key, weight),
+                    track_best=rarity != "junk",
+                )
+            info = spot_info(spot)
+            lines = [
+                f"{FISH[k]['emoji']} **{FISH[k]['name']}**"
+                + (f" ×{n}" if n > 1 else "")
+                for k, n in counts.items()
+            ]
+            blocks.append(
+                f"__{info['emoji']} **{info['name']}**__\n" + "\n".join(lines)
             )
         if coins:
             await db.add_coins(member.id, coins)
             await db.add_fishing_earned(member.id, coins)
 
-        info = spot_info(spot)
-        lines = [
-            f"{FISH[k]['emoji']} **{FISH[k]['name']}**" + (f" ×{n}" if n > 1 else "")
-            for k, n in counts.items()
-        ]
-        desc = (
-            f"You haul the trap up from {info['emoji']} **{info['name']}**:\n"
-            + "\n".join(lines)
+        lead = (
+            "You haul the trap up:"
+            if len(spots) == 1
+            else f"You haul up **{len(spots)}** traps:"
         )
+        desc = lead + "\n" + "\n\n".join(blocks)
         if coins:
             desc += (
                 f"\n\nPlus {self._money(econ, coins)} of treasure, paid on the spot."
             )
         desc += "\n\nSell it with `/fish sell`."
-        return Screen(h.ok(desc, "🪤 Full Basket"))
+        return Screen(h.ok(desc[:4000], "🪤 Full Basket"))
 
     # ══════════════════════════════════════════════════════════════════════════
     #  The tackle shop
