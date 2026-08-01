@@ -34,8 +34,11 @@ from utils import sqlite_conn
 from utils.health import health_routes, HEALTH_OWNER
 from utils.webserver import HttpServer
 
-# ── Config (read once at module level so logging init can use it) ──────────────
-_CFG = cfg_mod.load()
+# ── Config (read once at module level so logging init can use it) ─────────────
+# `apply_env` overlays NANOBOT_<KEY> variables for hosts where a file is the
+# awkward way to configure a process. It is an overlay only: `!config set` still
+# reads and writes config.ini, so the two never overwrite each other.
+_CFG = cfg_mod.apply_env(cfg_mod.load())
 
 
 # ── Logging ────────────────────────────────────────────────────────────────────
@@ -326,6 +329,8 @@ class NanoBot(commands.Bot):
         # Shared HTTP server: the health probe and the vote webhook register
         # their routes here, sharing a port when only one is available.
         self.web: HttpServer = HttpServer()
+        # Set by _start_web_server when [dashboard] dashboard_port is configured.
+        self.dashboard = None
 
     def _spawn_bg(self, coro, *, timeout: float | None = None) -> None:
         """Fire-and-forget a coroutine, keeping a strong ref so it isn't GC'd.
@@ -382,6 +387,14 @@ class NanoBot(commands.Bot):
             await self.web.stop()
         except Exception as exc:
             log.debug("HTTP server shutdown error: %s", exc)
+        # The dashboard holds an aiohttp ClientSession for the Discord API;
+        # closing it here keeps shutdown from warning about an unclosed session.
+        dashboard = getattr(self, "dashboard", None)
+        if dashboard is not None:
+            try:
+                await dashboard.close()
+            except Exception as exc:
+                log.debug("Dashboard shutdown error: %s", exc)
         # Cancel fire-and-forget background tasks on shutdown, then give them a
         # brief window to unwind so an in-flight task isn't torn off mid-write.
         # (Cog-owned tasks are cancelled by cog_unload on reload; on full
@@ -494,7 +507,7 @@ class NanoBot(commands.Bot):
         Returns the new flat config dict. Cogs can read ``bot.config`` for any
         key they care about.
         """
-        new_cfg = cfg_mod.load()
+        new_cfg = cfg_mod.apply_env(cfg_mod.load())
         self.config = dict(new_cfg)
         self._apply_config(new_cfg)
 
@@ -544,6 +557,17 @@ class NanoBot(commands.Bot):
         if port > 0:
             host = str(self.config.get("health_check_host") or "0.0.0.0")
             self.web.register(HEALTH_OWNER, host, port, health_routes(self))
+        # The dashboard registers the same way, so it can share the allocation
+        # with /health and the vote webhook. It's off unless dashboard_port is
+        # set, and mount() returns None in that case.
+        try:
+            from web.app import mount as mount_dashboard
+
+            self.dashboard = mount_dashboard(self)
+        except Exception as exc:
+            # A dashboard that can't start must never stop the bot starting.
+            log.warning(f"⚠️  Dashboard could not be mounted: {exc}")
+            self.dashboard = None
         await self.web.restart()
 
     async def _sync_commands_if_changed(self) -> None:

@@ -580,6 +580,63 @@ async def test_role_panel_entries_ordered_by_position():
     assert labels == ["First", "Second"]
 
 
+async def test_reorder_role_panel_rewrites_the_whole_order():
+    """The dashboard's drag-and-drop save.
+
+    Ordering used to be append-only (add_role_to_panel takes MAX+1), so moving
+    a button meant deleting and re-adding it — losing its label, emoji and
+    style. This says "here is the new order" in one statement per row.
+    """
+    await db.create_role_panel("po", 1, "Order", None, "toggle")
+    for role_id, label in ((1, "A"), (2, "B"), (3, "C")):
+        await db.add_role_to_panel("po", {"role_id": role_id, "label": label})
+
+    moved = await db.reorder_role_panel("po", [3, 1, 2])
+    assert moved == 3
+    panel = await db.get_role_panel("po")
+    assert [e["label"] for e in panel["entries"]] == ["C", "A", "B"]
+    # The move keeps everything else about an entry.
+    assert [e["role_id"] for e in panel["entries"]] == [3, 1, 2]
+
+
+async def test_reorder_keeps_an_entry_the_caller_forgot():
+    """A stale client sending a partial order must not delete a button.
+
+    The ones it didn't mention land after the ones it did, keeping their own
+    relative order.
+    """
+    await db.create_role_panel("pp", 1, "Order", None, "toggle")
+    for role_id in (1, 2, 3):
+        await db.add_role_to_panel("pp", {"role_id": role_id, "label": str(role_id)})
+
+    await db.reorder_role_panel("pp", [3])
+    panel = await db.get_role_panel("pp")
+    assert [e["role_id"] for e in panel["entries"]] == [3, 1, 2]
+
+
+async def test_reorder_ignores_roles_not_on_the_panel():
+    await db.create_role_panel("pq", 1, "Order", None, "toggle")
+    await db.add_role_to_panel("pq", {"role_id": 1, "label": "A"})
+    await db.reorder_role_panel("pq", [999, 1])
+    panel = await db.get_role_panel("pq")
+    assert [e["role_id"] for e in panel["entries"]] == [1]
+
+
+async def test_reorder_an_empty_panel_is_a_no_op():
+    await db.create_role_panel("pr", 1, "Order", None, "toggle")
+    assert await db.reorder_role_panel("pr", [1, 2]) == 0
+
+
+async def test_reorder_is_idempotent():
+    await db.create_role_panel("ps", 1, "Order", None, "toggle")
+    for role_id in (1, 2, 3):
+        await db.add_role_to_panel("ps", {"role_id": role_id, "label": str(role_id)})
+    await db.reorder_role_panel("ps", [2, 3, 1])
+    await db.reorder_role_panel("ps", [2, 3, 1])
+    panel = await db.get_role_panel("ps")
+    assert [e["role_id"] for e in panel["entries"]] == [2, 3, 1]
+
+
 async def test_edit_role_panel():
     await db.create_role_panel("p4", 1, "Old Title", None, "toggle")
     await db.edit_role_panel("p4", "New Title", "desc", "single")

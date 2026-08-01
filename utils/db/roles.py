@@ -282,6 +282,43 @@ async def add_role_to_panel(panel_id: str, entry: dict) -> None:
     await _commit()
 
 
+async def reorder_role_panel(panel_id: str, role_ids: list[int]) -> int:
+    """Rewrite a panel's button order from a full list of its role ids.
+
+    Positions were only ever *appended* before (add_role_to_panel takes
+    MAX+1), so there was no way to move a button without deleting and
+    re-adding it — which loses its label, emoji and style. The dashboard's
+    drag-and-drop needs to say "here is the new order" in one go.
+
+    Renumbering from zero rather than shuffling individual positions is what
+    makes this idempotent and gap-free; ids that aren't on the panel are
+    ignored, and any entry the caller didn't mention keeps its relative order
+    after the ones that were. Returns how many entries were moved.
+    """
+    async with _conn().execute(
+        "SELECT role_id FROM role_panel_entries WHERE panel_id=? ORDER BY position ASC",
+        (panel_id,),
+    ) as cur:
+        existing = [row["role_id"] for row in await cur.fetchall()]
+    if not existing:
+        return 0
+
+    known = set(existing)
+    ordered = [int(r) for r in role_ids if int(r) in known]
+    seen = set(ordered)
+    # An entry the caller forgot about must not be silently dropped from the
+    # panel — it lands after the ones they did order, keeping its own order.
+    ordered += [r for r in existing if r not in seen]
+
+    for position, role_id in enumerate(ordered):
+        await _conn().execute(
+            "UPDATE role_panel_entries SET position=? WHERE panel_id=? AND role_id=?",
+            (position, panel_id, role_id),
+        )
+    await _commit()
+    return len(ordered)
+
+
 async def remove_role_from_panel(panel_id: str, role_id: int) -> None:
     """Remove a single role entry from a panel."""
     await _conn().execute(

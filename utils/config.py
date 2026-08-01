@@ -17,6 +17,9 @@ Sections:
                nekos_per_endpoint, nekosia_per_tag, revalidate_age,
                revalidate_batch, groq_wyr_system
     [music]    playback/queue knobs (music_* keys — see example_config.ini)
+    [dashboard] web dashboard port/host/base URL, OAuth client id + secret,
+               session secret/lifetime, and whether the economy is playable
+               from the browser
 
 Usage:
     from utils import config
@@ -42,7 +45,15 @@ VALID_LOG_LEVELS = {"DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"}
 PLACEHOLDER_TOKENS = {"YOUR_BOT_TOKEN_HERE", "your_token_here", "TOKEN", ""}
 VALID_SEARCH_SERVICES = ("ytsearch", "ytmsearch", "scsearch")
 
-SECTION_ORDER = ("bot", "logging", "votes", "groq", "scraper", "music")
+SECTION_ORDER = (
+    "bot",
+    "logging",
+    "votes",
+    "groq",
+    "scraper",
+    "music",
+    "dashboard",
+)
 
 
 @dataclass
@@ -198,6 +209,133 @@ def _v_log_level(v) -> list[ConfigIssue]:
             ConfigIssue(
                 "log_level",
                 f"'{v}' is not valid. Choose from: {', '.join(sorted(VALID_LOG_LEVELS))}",
+                False,
+            )
+        ]
+    return []
+
+
+def _v_dashboard_base_url(v) -> list[ConfigIssue]:
+    if not v:
+        return []  # blank is fine while the dashboard is off
+    if not isinstance(v, str):
+        return [
+            ConfigIssue(
+                "dashboard_base_url",
+                f"Must be a string, got {type(v).__name__}",
+                False,
+            )
+        ]
+    url = v.strip()
+    if not url.startswith(("http://", "https://")):
+        return [
+            ConfigIssue(
+                "dashboard_base_url",
+                f"'{v}' must start with http:// or https://",
+                False,
+            )
+        ]
+    if url.rstrip("/").count("/") > 2:
+        return [
+            ConfigIssue(
+                "dashboard_base_url",
+                "Should be an origin (scheme + host [+ port]) with no path, "
+                f"e.g. https://nano.example.com — got '{v}'",
+                False,
+            )
+        ]
+    if url.startswith("http://") and not url.startswith(
+        ("http://localhost", "http://127.0.0.1")
+    ):
+        return [
+            ConfigIssue(
+                "dashboard_base_url",
+                "Plain http:// sends the session cookie in the clear. Use https:// "
+                "(or put the dashboard behind a TLS-terminating reverse proxy)",
+                False,
+            )
+        ]
+    return []
+
+
+def _v_dashboard_frontend_url(v) -> list[ConfigIssue]:
+    """The browser app's own URL, when something other than the bot serves it.
+
+    Unlike `dashboard_base_url` this one *may* carry a path: a GitHub Pages
+    project site lives at `https://you.github.io/NanoBot`, and refusing the
+    path would refuse the deployment it exists for. What it may not do is carry
+    a query or a fragment, which would mean the redirect back from a login
+    silently dropped part of itself.
+    """
+    if not v:
+        return []
+    url = str(v).strip()
+    if not url.startswith(("http://", "https://")):
+        return [
+            ConfigIssue(
+                "dashboard_frontend_url",
+                f"'{v}' must start with http:// or https://",
+                False,
+            )
+        ]
+    if "?" in url or "#" in url:
+        return [
+            ConfigIssue(
+                "dashboard_frontend_url",
+                "Should be a URL with no query or fragment, e.g. "
+                f"https://you.github.io/NanoBot — got '{v}'",
+                False,
+            )
+        ]
+    return []
+
+
+def _v_dashboard_origins(v) -> list[ConfigIssue]:
+    if not v:
+        return []
+    issues = []
+    for part in str(v).replace(",", " ").split():
+        entry = part.strip().rstrip("/")
+        if not entry.startswith(("http://", "https://")):
+            issues.append(
+                ConfigIssue(
+                    "dashboard_allowed_origins",
+                    f"'{part}' needs a scheme — origins look like "
+                    "https://you.github.io",
+                    False,
+                )
+            )
+        elif entry.count("/") > 2:
+            issues.append(
+                ConfigIssue(
+                    "dashboard_allowed_origins",
+                    f"'{part}' has a path. An origin is scheme + host only",
+                    False,
+                )
+            )
+        elif entry.startswith("http://") and not entry.startswith(
+            ("http://localhost", "http://127.0.0.1")
+        ):
+            issues.append(
+                ConfigIssue(
+                    "dashboard_allowed_origins",
+                    f"'{part}' is plain http. A cross-origin session cookie has "
+                    "to be Secure, so browsers will drop it — use https",
+                    False,
+                )
+            )
+    return issues
+
+
+def _v_dashboard_session_secret(v) -> list[ConfigIssue]:
+    if not v:
+        return []  # blank = ephemeral random secret, warned about at startup
+    if len(str(v)) < 32:
+        return [
+            ConfigIssue(
+                "dashboard_session_secret",
+                f"Only {len(str(v))} chars — use at least 32. Generate one with: "
+                'python -c "import secrets; print(secrets.token_urlsafe(48))"',
                 False,
             )
         ]
@@ -655,6 +793,100 @@ FIELDS: tuple[Field, ...] = (
         "music_offtopic",
         "Comma/space-separated SponsorBlock categories to remove (sponsor intro outro selfpromo preview filler interaction music_offtopic poi_highlight)",
     ),
+    # ── [dashboard] ──
+    Field(
+        "dashboard_port",
+        "dashboard",
+        "int",
+        0,
+        "Port for the web dashboard. 0 = disabled (rides the shared HTTP server, "
+        "so it can share an allocation with /health and the vote webhook)",
+        minimum=0,
+        maximum=65535,
+    ),
+    Field(
+        "dashboard_host",
+        "dashboard",
+        "str",
+        "0.0.0.0",
+        "Bind address for the dashboard (0.0.0.0 = all interfaces; 127.0.0.1 = "
+        "host-local only, for running behind a reverse proxy)",
+    ),
+    Field(
+        "dashboard_base_url",
+        "dashboard",
+        "str",
+        None,
+        "Public URL this API is reached at, e.g. https://nano.example.com. "
+        "Used to build the OAuth redirect URI — must match the one registered in "
+        "the Discord developer portal",
+        validator=_v_dashboard_base_url,
+    ),
+    Field(
+        "dashboard_frontend_url",
+        "dashboard",
+        "str",
+        None,
+        "Where the browser app is served from, if not by this bot — e.g. "
+        "https://you.github.io/NanoBot. Blank (the default) means the bot serves "
+        "it and the two are the same URL",
+        validator=_v_dashboard_frontend_url,
+    ),
+    Field(
+        "dashboard_client_id",
+        "dashboard",
+        "id",
+        None,
+        "Discord application (client) ID for dashboard OAuth. Blank = the bot's own",
+    ),
+    Field(
+        "dashboard_client_secret",
+        "dashboard",
+        "str",
+        None,
+        "Discord OAuth2 client secret (developer portal → OAuth2 → Client Secret)",
+        sensitive=True,
+    ),
+    Field(
+        "dashboard_session_secret",
+        "dashboard",
+        "str",
+        None,
+        "Secret used to sign session cookies. Blank = a random one is generated "
+        "at startup, which logs everyone out on every restart",
+        sensitive=True,
+        validator=_v_dashboard_session_secret,
+    ),
+    Field(
+        "dashboard_session_days",
+        "dashboard",
+        "int",
+        7,
+        "How long a dashboard login lasts before it must be renewed, in days",
+        minimum=1,
+        maximum=90,
+    ),
+    Field(
+        "dashboard_allowed_origins",
+        "dashboard",
+        "str",
+        None,
+        "Extra origins allowed to call the API from another host, space- or "
+        "comma-separated (e.g. https://you.github.io). Only needed when the "
+        "frontend is hosted separately — leave blank when the bot serves it. "
+        "Setting this switches the session cookie to SameSite=None; Secure, so "
+        "every origin here must be HTTPS",
+        validator=_v_dashboard_origins,
+    ),
+    Field(
+        "dashboard_play_enabled",
+        "dashboard",
+        "bool",
+        True,
+        "Allow playing the economy (fishing/mining/adventure) from the web. "
+        "false = the dashboard is read-only for members and still fully "
+        "configurable for admins",
+    ),
 )
 
 _FIELD: dict[str, Field] = {f.key: f for f in FIELDS}
@@ -782,6 +1014,52 @@ def load(path: str = CONFIG_PATH) -> dict:
         for key in parser[section]:
             flat[key] = _coerce(key, parser[section][key])
     return flat
+
+
+ENV_PREFIX = "NANOBOT_"
+
+
+def env_key(key: str) -> str:
+    """The environment variable that overrides one config key."""
+    return f"{ENV_PREFIX}{key.upper()}"
+
+
+def apply_env(cfg: dict, environ: Optional[dict] = None) -> dict:
+    """Overlay `NANOBOT_<KEY>` environment variables onto a loaded config.
+
+    This exists for hosts where a file is the awkward way to configure a
+    process — a container, a PaaS, a systemd unit with an `EnvironmentFile` —
+    and it is deliberately *only* an overlay:
+
+    * `load()` still returns exactly what is in `config.ini`, so `set_value()`
+      (which loads, edits and saves) can never write an environment value into
+      the file. Editing config from Discord and configuring by environment stay
+      separate systems that don't overwrite each other.
+    * values are coerced by the same `_coerce` the INI parser uses, so
+      `NANOBOT_DASHBOARD_PORT=8080` arrives as an int, not the string "8080".
+    * an unknown `NANOBOT_*` name is ignored rather than guessed at.
+
+    `DISCORD_TOKEN` (read by `main.py`) and `NANOBOT_DB_KEY` (read by
+    `utils/db_crypto.py`) predate this and keep their own names.
+    """
+    env = os.environ if environ is None else environ
+    out = dict(cfg)
+    for field in FIELDS:
+        raw = env.get(env_key(field.key))
+        if raw is None:
+            continue
+        out[field.key] = _coerce(field.key, raw)
+    return out
+
+
+def env_overrides(environ: Optional[dict] = None) -> list[str]:
+    """Which config keys the environment is currently overriding.
+
+    Startup logs this so "I changed config.ini and nothing happened" is one
+    line away from being answered.
+    """
+    env = os.environ if environ is None else environ
+    return [f.key for f in FIELDS if env_key(f.key) in env]
 
 
 def save(cfg: dict, path: str = CONFIG_PATH) -> None:

@@ -1,0 +1,94 @@
+# Publish the dashboard frontend to GitHub Pages.
+#
+# The dashboard is normally served by the bot itself, same-origin, with no build
+# step. This workflow exists for the other case: getting the interface in front
+# of people for testing before a domain and a production host are sorted out.
+#
+# There is nothing to compile — the frontend is plain ES modules, so "building"
+# is copying `web/static/` and writing two files into it:
+#
+#   assets/config.json  the API origin and the base path (see core/config.js)
+#   404.html            a copy of index.html, which is how GitHub Pages serves
+#                       a single-page app: it has no rewrite rules, so a deep
+#                       link like /NanoBot/g/123/fishing 404s, and Pages serves
+#                       404.html for it — the app boots and routes normally.
+#
+# Configure the API origin in the repository's variables (Settings → Secrets and
+# variables → Actions → Variables), not here:
+#
+#   NANOBOT_API_BASE   https://your-bot-host.example   (required)
+#   NANOBOT_BASE_PATH  /NanoBot                        (optional; defaults to
+#                                                       the repository name)
+#
+# The bot end needs two settings for a separately-hosted frontend to work:
+#
+#   dashboard_allowed_origins = https://<you>.github.io
+#   dashboard_base_url        = https://<you>.github.io/<repo>
+#
+# and that same URL + /api/auth/callback registered as an OAuth redirect.
+# docs/deployment.md walks through all of it.
+
+name: Deploy dashboard to Pages
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "web/static/**"
+      - ".github/workflows/pages.yml"
+  # Publish on demand — the usual way to push a preview without a code change.
+  workflow_dispatch:
+    inputs:
+      api_base:
+        description: "API origin to point this build at (overrides the repo variable)"
+        required: false
+        type: string
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+# One deploy at a time, and let a newer push win rather than queueing behind an
+# older one that is about to be superseded anyway.
+concurrency:
+  group: pages
+  cancel-in-progress: true
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      # The assembly itself lives in `scripts/build_dashboard.sh` so a local
+      # build and a deployed one can't drift apart — and so anyone hosting the
+      # frontend somewhere other than Pages runs the same steps.
+      - name: Assemble the site
+        env:
+          NANOBOT_API_BASE: ${{ inputs.api_base || vars.NANOBOT_API_BASE }}
+          # A Pages project site is served from /<repo>, which is the default
+          # when the variable is unset. Set it to "/" for a user site or a
+          # custom domain, both of which serve from the root.
+          NANOBOT_BASE_PATH: ${{ vars.NANOBOT_BASE_PATH || format('/{0}', github.event.repository.name) }}
+        run: |
+          set -euo pipefail
+          if [ -z "${NANOBOT_API_BASE:-}" ]; then
+            echo "::warning::NANOBOT_API_BASE is not set — the deployed site" \
+                 "will load and then say it can't reach the API."
+          fi
+          scripts/build_dashboard.sh _site
+
+      - uses: actions/upload-pages-artifact@v3
+        with:
+          path: _site
+
+  deploy:
+    needs: build
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - id: deployment
+        uses: actions/deploy-pages@v4

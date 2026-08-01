@@ -66,6 +66,25 @@ so there is nothing to keep on top of.
 
 ---
 
+## 🖥️ The website
+
+Some servers run NanoBot's web dashboard. If yours does, the link is in the
+server (ask a mod) — sign in with Discord and everything below is playable in a
+browser: casting, the bag, the map, mining and adventuring, your inventory, the
+shop, the leaderboards and your profile card.
+
+**It's the same account and the same game.** Not a copy of it — literally the
+same cooldowns, the same wallet, the same claims. Cast on the website and your
+`/fish` cooldown in Discord is running. Collect your banked runs there and
+they're collected everywhere. There is no way to get two of anything by using
+both, and nothing you do in one place is worth less than doing it in the other.
+
+A couple of things stay in Discord on purpose: equipping cosmetics
+(`/profile equip`, which can dress a whole card in one go) and the co-op boards
+(`/squad`, `/raid`), which need other people pressing buttons in a channel.
+
+---
+
 ## 📇 Your profile card
 
 `/profile` draws your whole account as an **image you can share** — avatar,
