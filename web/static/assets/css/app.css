@@ -291,6 +291,15 @@ button, input, select, textarea { font: inherit; color: inherit; }
   padding-bottom: var(--s-2); margin: 0 calc(var(--s-4) * -1);
   padding-inline: var(--s-4);
   scrollbar-width: none;
+  /* Content that doesn't fit is clipped at the scroller's own edge, flush
+     against the card border it bleeds to — a hard chop with no gutter.
+     Fading it out instead of slicing it reads as "more to scroll", not broken. */
+  mask-image: linear-gradient(
+    to right, transparent, black var(--s-4), black calc(100% - var(--s-4)), transparent
+  );
+  -webkit-mask-image: linear-gradient(
+    to right, transparent, black var(--s-4), black calc(100% - var(--s-4)), transparent
+  );
 }
 .scroller::-webkit-scrollbar { display: none; }
 .scroller > * { scroll-snap-align: start; flex: 0 0 auto; }
