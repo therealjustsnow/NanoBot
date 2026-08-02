@@ -53,8 +53,11 @@ casual/grinder gap, and turns every ladder price into *days of ordinary play*
 
 Two multipliers ride on top and are deliberately excluded from the figures
 above, because both are earned rather than idle: encounters (`ENCOUNTERS`, a
-follow-up choice on ~8% of runs, worth roughly +8%) and the daily streak
-(`STREAK_*`, up to +25% on coin payouts for showing up seven days running).
+choice — sometimes two — on ~15% of runs) and the daily streak (`STREAK_*`, up
+to +25% on coin payouts for showing up seven days running). What the encounter
+system is worth isn't written down here either: `helpers.encounter_share`
+recomputes it from the same tables the encounters are defined in, and
+tests/test_activities_helpers.py holds it to a band.
 
 Cross-server farming
 ────────────────────
@@ -372,44 +375,119 @@ STREAK_BONUS_PER_DAY = 0.05
 STREAK_BONUS_CAP = 0.25  # reached on day 6, then held
 
 # ══════════════════════════════════════════════════════════════════════════════
-#  Encounters — a second decision inside one run
+#  Encounters — the decisions inside a run
 # ══════════════════════════════════════════════════════════════════════════════
 #
 # A run resolves in one roll, which is honest but flat. An encounter fires on a
-# small share of them and hands the member a choice with no obviously correct
-# answer: a safe option that always pays a little, and a greedy one with real
-# variance. The point isn't the coins (the whole system is worth about +8% of
-# income) — it's that the run stops being something you watch and becomes
-# something you answer.
+# share of them and hands the member a choice with no obviously correct answer.
+# The point isn't the coins — it's that the run stops being something you watch
+# and becomes something you answer.
+#
+# What was wrong with the first version
+# ─────────────────────────────────────
+# It shipped one encounter per activity, two options each, on an 8% chance. All
+# three numbers were too small, and they compounded: a member saw the same Late
+# Shift a couple of times a day, answered the same two buttons, and the safe
+# option was so obviously the safe option that there was nothing to weigh. A
+# "choice" you have already made once is a prompt, not a decision.
+#
+# So all three moved:
+#
+#   variety   — three openers each for work/mine/hunt and two for explore, so
+#               the same scene doesn't come back before you've forgotten it.
+#   width     — three options wherever a third one is genuinely a *different*
+#               plan rather than a worse one. Two is still fine (see work_rush);
+#               a filler third option is worse than none.
+#   depth     — an outcome may carry `next`, naming a follow-up stage. That is
+#               the direct answer to "you only make one choice": pocketing the
+#               till is not the end of the story, it's the start of the one
+#               about the tape. A chain is the same registry entry all the way
+#               down, so it costs no new machinery — see the `stage` note below.
+#
+# The chance went 0.08 → 0.15, which puts an encounter in roughly one run in
+# seven (about four a day across the whole loop). `helpers.encounter_share`
+# recomputes what that is worth against the loop's own income and
+# tests/test_activities_helpers.py holds it to a band, so a generous new
+# encounter can't quietly turn the decorative system into the main faucet.
 #
 # Data-driven the way the item and cosmetic catalogues are: an encounter is a
 # registry entry, its options are entries, and every outcome is a weighted row
 # resolved by an explicit roll in helpers.resolve_encounter. Adding one is a
 # dict, not a branch. /rob has none on purpose — it is already a coin flip with
 # a decision in front of it.
-ENCOUNTER_CHANCE = 0.08
+ENCOUNTER_CHANCE = 0.15
 
 # outcome key → what it hands over. `coins` is a (lo, hi) range rolled
 # uniformly and MAY be negative (that is how an option charges for itself);
-# `item` is a (catalogue key, qty) pair. Either may be absent.
+# `item` is a (catalogue key, qty) pair; `next` names a follow-up stage in
+# ENCOUNTERS. All three may be absent, and `next` may ride alongside a payout —
+# taking the stag pays the antler *and* opens the question of how to get it home.
 ENCOUNTER_OUTCOMES: dict[str, dict] = {
-    # /work — the late shift
+    # ── /work — the late shift ────────────────────────────────────────────────
     "overtime_paid": {
         "text": "The rush never comes, but the hours do. You clock a fat one.",
         "coins": (200, 450),
     },
     "overtime_quiet": {
         "text": "Dead quiet. You restock a shelf, wipe a counter, and go home.",
-        "coins": (0, 40),
+        "coins": (40, 90),
     },
     "overtime_declined": {
         "text": "You hand back the keys and take the small closing bonus.",
         "coins": (80, 140),
     },
-    # /mine — the deep seam
+    "overtime_haggled": {
+        "text": "They blink first. Time and a half, in writing, on a napkin.",
+        "coins": (420, 700),
+    },
+    "overtime_sent_home": {
+        "text": "*Then I'll call someone who wants it.* You get your coat.",
+    },
+    # ── /work — the till ──────────────────────────────────────────────────────
+    "till_reported": {
+        "text": "You count it twice, write it up, and hand the slip over. The "
+        "manager doesn't say much, but they write your name down.",
+        "coins": (120, 200),
+    },
+    "till_pocketed": {
+        "text": "It goes in your back pocket before you've decided to do it.",
+        "coins": (440, 520),
+        "next": "work_till_tape",
+    },
+    "tape_owned": {
+        "text": "You put it on the desk before they ask. Nothing more is said "
+        "about it, then or ever.",
+        "coins": (-520, -440),
+    },
+    "tape_missed": {
+        "text": "The tape is a grey blur at the only minute that matters. They "
+        "give up on it by lunch.",
+    },
+    "tape_caught": {
+        "text": "Frame 4:07. You, the drawer, and your back pocket. Docked and "
+        "written up.",
+        "coins": (-700, -560),
+    },
+    # ── /work — the rush order ────────────────────────────────────────────────
+    "rush_delivered": {
+        "text": "You make it across town with four minutes to spare, and the "
+        "client tips like someone who was expecting to be let down.",
+        "coins": (300, 520),
+    },
+    "rush_ticket": {
+        "text": "You make it. So does the camera on the bridge.",
+        "coins": (-180, -60),
+    },
+    "rush_favour": {
+        "text": "Two phone calls and someone's cousin with a van. It goes out "
+        "on time and you keep the difference.",
+        "coins": (120, 200),
+    },
+    # ── /mine — the deep seam ─────────────────────────────────────────────────
     "seam_struck": {
         "text": "The seam opens into a pocket of gold-flecked rock.",
         "item": ("gold_ore", 2),
+        "next": "mine_seam_pocket",
     },
     "seam_collapse": {
         "text": "The roof groans and comes down. You get out; the props don't.",
@@ -417,43 +495,222 @@ ENCOUNTER_OUTCOMES: dict[str, dict] = {
     },
     "seam_shored": {
         "text": "You brace the tunnel properly and take what's safely reachable.",
-        "item": ("iron_ore", 1),
+        "item": ("iron_ore", 2),
     },
-    # /hunt — the stag
+    "seam_blast_rich": {
+        "text": "The charge takes the whole face out in one go, and the face "
+        "was hiding something.",
+        "coins": (-120, -120),
+        "item": ("gold_ore", 4),
+    },
+    "seam_blast_dud": {
+        "text": "A very loud, very expensive pile of gravel.",
+        "coins": (-120, -120),
+        "item": ("stone", 5),
+    },
+    "pocket_diamond": {
+        "text": "The last of the lamp oil buys you thirty seconds, and thirty "
+        "seconds is enough. Twice.",
+        "item": ("diamond", 2),
+    },
+    "pocket_dark": {
+        "text": "The lamp goes out. You find the way back by hand, and leave "
+        "your kit somewhere behind you.",
+        "coins": (-200, -100),
+    },
+    "pocket_safe": {
+        "text": "You fill what you can carry and climb out while you can still "
+        "see the ladder.",
+        "item": ("iron_ore", 3),
+    },
+    # ── /mine — the runaway cart ──────────────────────────────────────────────
+    "cart_saved": {
+        "text": "You get a boot under the wheel and ride it to a stop. The load "
+        "stays in, and the load is a good one.",
+        "item": ("gold_ore", 2),
+    },
+    "cart_hand": {
+        "text": "The brake lever wins. You keep the cart and lose a fingernail "
+        "and the price of the splint.",
+        "coins": (-140, -60),
+    },
+    "cart_spilled": {
+        "text": "It goes over the edge with a sound you'll remember. You pick "
+        "what spilled out of the dust.",
+        "item": ("stone", 6),
+    },
+    # ── /mine — the gas pocket ────────────────────────────────────────────────
+    "vent_out": {
+        "text": "You back out and let it clear. The dig's a write-off, but you "
+        "grab what's by the entrance on the way past.",
+        "item": ("stone", 3),
+    },
+    "vent_lucky": {
+        "text": "Wet cloth, shallow breaths, six more swings — and the sixth "
+        "one rings off something that isn't rock.",
+        "item": ("diamond", 1),
+    },
+    "vent_sick": {
+        "text": "You wake up on the slope outside with a head like a bell and a "
+        "doctor's bill to match.",
+        "coins": (-260, -140),
+    },
+    # ── /hunt — the stag ──────────────────────────────────────────────────────
     "stag_taken": {
         "text": "One shot, one trophy. You'll be telling this story for years.",
         "item": ("golden_antler", 1),
+        "next": "hunt_stag_haul",
     },
     "stag_lost": {
         "text": "It's gone into the trees before you've finished raising your arm.",
     },
     "stag_tracked": {
-        "text": "You follow it quietly and come out with a full pack instead.",
-        "item": ("pelt", 2),
+        "text": "You let it go and work the trail it came down instead. No "
+        "trophy, but the pack is full and you're home before dark.",
+        "item": ("pelt", 4),
     },
-    # /explore — the hooded trader
+    "haul_whole": {
+        "text": "Two miles, uphill, in the dark. Worth it — you get every bit "
+        "of it back to the road.",
+        "item": ("meat", 8),
+    },
+    "haul_dropped": {
+        "text": "The scree goes out from under you halfway down. You keep the "
+        "antler and pay for the rest in bandages.",
+        "coins": (-120, -40),
+    },
+    "haul_antler": {
+        "text": "You take the antler, thank the stag, and walk out light.",
+    },
+    # ── /hunt — the pack ──────────────────────────────────────────────────────
+    "wolves_driven": {
+        "text": "One burning branch and a great deal of shouting. They leave, "
+        "and two of them leave their winter coats.",
+        "item": ("pelt", 8),
+    },
+    "wolves_bitten": {
+        "text": "They don't scare. You get out with the kill and rather less "
+        "of your left sleeve.",
+        "coins": (-200, -100),
+    },
+    "wolves_shared": {
+        "text": "You cut off a shoulder, put it down, and walk backwards. "
+        "Everyone eats.",
+        "item": ("meat", 2),
+    },
+    "wolves_waited": {
+        "text": "An hour in a pine tree. They get bored before you do.",
+        "item": ("meat", 3),
+    },
+    "wolves_gone": {
+        "text": "You come down to bare ground and a lot of prints.",
+    },
+    # ── /hunt — the old snare ─────────────────────────────────────────────────
+    "snare_freed": {
+        "text": "You cut it loose and coil the wire. Wire's worth something to "
+        "somebody.",
+        "coins": (40, 90),
+    },
+    "snare_taken": {
+        "text": "Not your line, but it's your dinner now — and the line was "
+        "having a very good week.",
+        "item": ("pelt", 6),
+    },
+    "snare_owner": {
+        "text": "The trapper is standing behind you, and has been for a while. "
+        "You settle it in coin.",
+        "coins": (-180, -90),
+    },
+    # ── /explore — the hooded trader ──────────────────────────────────────────
     "trader_chest": {
         "text": "The box is heavier than it looks — and it's a chest.",
-        "coins": (-250, -250),
+        "coins": (-150, -150),
         "item": ("treasure_chest", 1),
     },
     "trader_key": {
         "text": "Inside the box: one key, and a note you can't read.",
-        "coins": (-250, -250),
+        "coins": (-150, -150),
         "item": ("treasure_key", 1),
     },
     "trader_sand": {
         "text": "Inside the box: sand. The trader is already gone.",
-        "coins": (-250, -250),
+        "coins": (-150, -150),
     },
     "trader_walked": {
         "text": "You keep your coin, and they point you at a shortcut home.",
-        "coins": (150, 350),
+        "coins": (60, 140),
+    },
+    "trader_haggled": {
+        "text": "You talk them down to ninety by pointing out there is nobody "
+        "else on this road all day. Inside: a strongbox.",
+        "coins": (-90, -90),
+        "item": ("treasure_chest", 1),
+    },
+    "trader_insulted": {
+        "text": "They fold the cloth over the box without a word and walk off "
+        "in the direction you came from.",
+    },
+    # ── /explore — the sunken door ────────────────────────────────────────────
+    "ruin_hall": {
+        "text": "The door gives on the third shove. Inside: a hall, a great "
+        "deal of dust, and three alcoves in the far wall.",
+        "next": "explore_ruin_hall",
+    },
+    "ruin_shut": {
+        "text": "The slab drops back into its frame the moment you're through, "
+        "and you spend the afternoon on your back with a lever getting out "
+        "again.",
+        "coins": (-200, -100),
+    },
+    "ruin_marked": {
+        "text": "You scratch the lintel, take a bearing, and sell the location "
+        "to the first surveyor you meet.",
+        "coins": (200, 400),
+    },
+    "alcove_dry": {
+        "text": "Dry as a bone, and holding a strongbox that hasn't been opened "
+        "since somebody bricked this place up.",
+        "item": ("treasure_chest", 1),
+    },
+    "alcove_empty": {
+        "text": "A shelf, a stub of candle, and four hundred years of dust. "
+        "You take the brass fittings off the shelf on the way out.",
+        "coins": (100, 200),
+    },
+    "alcove_watched": {
+        "text": "The lamp's owner is standing behind you, and is very clear "
+        "about what the toll is.",
+        "coins": (-250, -150),
+    },
+    "alcove_lit": {
+        "text": "Somebody has been keeping a lamp lit in here. They left in a "
+        "hurry, and they left the purse.",
+        "coins": (500, 900),
+    },
+    "alcove_flooded": {
+        "text": "Chest-deep, freezing, and absolutely stuffed. You make three "
+        "trips and could have made four.",
+        "coins": (1800, 3000),
+    },
+    "alcove_soaked": {
+        "text": "Chest-deep, freezing, and empty. You lose a boot and most of "
+        "your dignity to the silt.",
+        "coins": (-300, -150),
     },
 }
 
+# Every encounter and every follow-up stage, in one registry.
+#
+# `activity` is what a run rolls against: an *opener* names one of
+# ACTIVITY_NAMES, a *stage* has None and is reachable only as some outcome's
+# `next`. helpers.encounters_for filters on that field, so a stage can never be
+# rolled as the thing that greets you — and a stage is otherwise an ordinary
+# encounter, which is why a chain needs no second registry, no second view and
+# no second code path.
+#
 # Each option's outcome weights must sum to 1.0.
 ENCOUNTERS: dict[str, dict] = {
+    # ══ /work ═════════════════════════════════════════════════════════════════
     "work_overtime": {
         "activity": "work",
         "emoji": "🕗",
@@ -465,7 +722,16 @@ ENCOUNTERS: dict[str, dict] = {
                 "key": "stay",
                 "label": "Stay late",
                 "emoji": "🕗",
-                "outcomes": [("overtime_paid", 0.70), ("overtime_quiet", 0.30)],
+                "outcomes": [("overtime_paid", 0.60), ("overtime_quiet", 0.40)],
+            },
+            {
+                "key": "deal",
+                "label": "Ask for time and a half",
+                "emoji": "🤝",
+                "outcomes": [
+                    ("overtime_haggled", 0.40),
+                    ("overtime_sent_home", 0.60),
+                ],
             },
             {
                 "key": "leave",
@@ -475,6 +741,71 @@ ENCOUNTERS: dict[str, dict] = {
             },
         ],
     },
+    "work_till": {
+        "activity": "work",
+        "emoji": "💰",
+        "title": "The Till",
+        "prompt": "The till is a few hundred over at close, and the tape "
+        "hasn't printed yet.",
+        "options": [
+            {
+                "key": "report",
+                "label": "Write it up",
+                "emoji": "📋",
+                "outcomes": [("till_reported", 1.0)],
+            },
+            {
+                "key": "pocket",
+                "label": "Pocket it",
+                "emoji": "🤫",
+                "outcomes": [("till_pocketed", 1.0)],
+            },
+        ],
+    },
+    "work_till_tape": {
+        # A stage: only reachable from till_pocketed.
+        "activity": None,
+        "emoji": "📼",
+        "title": "The Tape",
+        "prompt": "Next morning the manager is running the tape back frame by "
+        "frame, and you are on it somewhere.",
+        "options": [
+            {
+                "key": "own_up",
+                "label": "Own up",
+                "emoji": "🙋",
+                "outcomes": [("tape_owned", 1.0)],
+            },
+            {
+                "key": "sit_tight",
+                "label": "Say nothing",
+                "emoji": "😐",
+                "outcomes": [("tape_missed", 0.55), ("tape_caught", 0.45)],
+            },
+        ],
+    },
+    "work_rush": {
+        "activity": "work",
+        "emoji": "🚚",
+        "title": "The Rush Order",
+        "prompt": "The courier's van won't start and the order has to be across "
+        "town in twenty minutes.",
+        "options": [
+            {
+                "key": "drive",
+                "label": "Drive it yourself",
+                "emoji": "🚗",
+                "outcomes": [("rush_delivered", 0.60), ("rush_ticket", 0.40)],
+            },
+            {
+                "key": "call",
+                "label": "Call in a favour",
+                "emoji": "📞",
+                "outcomes": [("rush_favour", 1.0)],
+            },
+        ],
+    },
+    # ══ /mine ═════════════════════════════════════════════════════════════════
     "mine_deep_seam": {
         "activity": "mine",
         "emoji": "🕯️",
@@ -486,7 +817,13 @@ ENCOUNTERS: dict[str, dict] = {
                 "key": "deeper",
                 "label": "Follow it down",
                 "emoji": "🕯️",
-                "outcomes": [("seam_struck", 0.60), ("seam_collapse", 0.40)],
+                "outcomes": [("seam_struck", 0.55), ("seam_collapse", 0.45)],
+            },
+            {
+                "key": "blast",
+                "label": "Blast it open (120)",
+                "emoji": "🧨",
+                "outcomes": [("seam_blast_rich", 0.50), ("seam_blast_dud", 0.50)],
             },
             {
                 "key": "shore",
@@ -496,6 +833,70 @@ ENCOUNTERS: dict[str, dict] = {
             },
         ],
     },
+    "mine_seam_pocket": {
+        # A stage: only reachable from seam_struck.
+        "activity": None,
+        "emoji": "🔦",
+        "title": "The Pocket",
+        "prompt": "The pocket keeps going past where your light reaches, and "
+        "the lamp is down to its last hour.",
+        "options": [
+            {
+                "key": "press_on",
+                "label": "Press on",
+                "emoji": "🔦",
+                "outcomes": [("pocket_diamond", 0.40), ("pocket_dark", 0.60)],
+            },
+            {
+                "key": "back_out",
+                "label": "Fill up and climb out",
+                "emoji": "🪜",
+                "outcomes": [("pocket_safe", 1.0)],
+            },
+        ],
+    },
+    "mine_cart": {
+        "activity": "mine",
+        "emoji": "🛒",
+        "title": "The Runaway Cart",
+        "prompt": "An ore cart, loaded and unhitched, is picking up speed "
+        "towards the shaft mouth.",
+        "options": [
+            {
+                "key": "grab",
+                "label": "Grab the brake",
+                "emoji": "🤲",
+                "outcomes": [("cart_saved", 0.65), ("cart_hand", 0.35)],
+            },
+            {
+                "key": "clear",
+                "label": "Get clear",
+                "emoji": "🏃",
+                "outcomes": [("cart_spilled", 1.0)],
+            },
+        ],
+    },
+    "mine_gas": {
+        "activity": "mine",
+        "emoji": "🕯️",
+        "title": "The Gas Pocket",
+        "prompt": "Your lamp flame goes long, and blue, and quiet.",
+        "options": [
+            {
+                "key": "mask",
+                "label": "Wet cloth, keep digging",
+                "emoji": "😷",
+                "outcomes": [("vent_lucky", 0.55), ("vent_sick", 0.45)],
+            },
+            {
+                "key": "out",
+                "label": "Back out now",
+                "emoji": "🚪",
+                "outcomes": [("vent_out", 1.0)],
+            },
+        ],
+    },
+    # ══ /hunt ═════════════════════════════════════════════════════════════════
     "hunt_stag": {
         "activity": "hunt",
         "emoji": "🦌",
@@ -513,26 +914,103 @@ ENCOUNTERS: dict[str, dict] = {
                 "key": "track",
                 "label": "Track it quietly",
                 "emoji": "👣",
-                "outcomes": [("stag_tracked", 0.75), ("stag_lost", 0.25)],
+                "outcomes": [("stag_tracked", 1.0)],
             },
         ],
     },
+    "hunt_stag_haul": {
+        # A stage: only reachable from stag_taken.
+        "activity": None,
+        "emoji": "🎒",
+        "title": "The Long Way Back",
+        "prompt": "The stag is down two miles from the road, and the light is "
+        "going.",
+        "options": [
+            {
+                "key": "haul",
+                "label": "Carry it out whole",
+                "emoji": "🎒",
+                "outcomes": [("haul_whole", 0.55), ("haul_dropped", 0.45)],
+            },
+            {
+                "key": "field",
+                "label": "Take the antler and go",
+                "emoji": "🔪",
+                "outcomes": [("haul_antler", 1.0)],
+            },
+        ],
+    },
+    "hunt_wolves": {
+        "activity": "hunt",
+        "emoji": "🐺",
+        "title": "The Pack",
+        "prompt": "Three wolves have come to the same conclusion about your "
+        "kill that you have.",
+        "options": [
+            {
+                "key": "fight",
+                "label": "Drive them off",
+                "emoji": "🔥",
+                "outcomes": [("wolves_driven", 0.55), ("wolves_bitten", 0.45)],
+            },
+            {
+                "key": "climb",
+                "label": "Up a tree and wait",
+                "emoji": "🌲",
+                "outcomes": [("wolves_waited", 0.70), ("wolves_gone", 0.30)],
+            },
+            {
+                "key": "share",
+                "label": "Cut them a share",
+                "emoji": "🥩",
+                "outcomes": [("wolves_shared", 1.0)],
+            },
+        ],
+    },
+    "hunt_snare": {
+        "activity": "hunt",
+        "emoji": "🪤",
+        "title": "The Old Snare",
+        "prompt": "Someone else's snare line, and something in the third one "
+        "still breathing.",
+        "options": [
+            {
+                "key": "take",
+                "label": "Take the catch",
+                "emoji": "🦫",
+                "outcomes": [("snare_taken", 0.70), ("snare_owner", 0.30)],
+            },
+            {
+                "key": "free",
+                "label": "Cut it loose",
+                "emoji": "✋",
+                "outcomes": [("snare_freed", 1.0)],
+            },
+        ],
+    },
+    # ══ /explore ══════════════════════════════════════════════════════════════
     "explore_trader": {
         "activity": "explore",
         "emoji": "🧙",
         "title": "The Hooded Trader",
         "prompt": "Someone is sitting on a milestone with a sealed box. "
-        "*Two hundred and fifty, no questions, no refunds.*",
+        "*A hundred and fifty, no questions, no refunds.*",
         "options": [
             {
                 "key": "buy",
-                "label": "Buy the box (250)",
+                "label": "Buy the box (150)",
                 "emoji": "📦",
                 "outcomes": [
                     ("trader_chest", 0.45),
                     ("trader_key", 0.30),
                     ("trader_sand", 0.25),
                 ],
+            },
+            {
+                "key": "haggle",
+                "label": "Haggle them down",
+                "emoji": "💬",
+                "outcomes": [("trader_haggled", 0.30), ("trader_insulted", 0.70)],
             },
             {
                 "key": "walk",
@@ -542,6 +1020,68 @@ ENCOUNTERS: dict[str, dict] = {
             },
         ],
     },
+    "explore_ruin": {
+        "activity": "explore",
+        "emoji": "🏛️",
+        "title": "The Sunken Door",
+        "prompt": "A stone door in the hillside, half open, with cold air "
+        "coming out of it.",
+        "options": [
+            {
+                "key": "enter",
+                "label": "Go in",
+                "emoji": "🔦",
+                "outcomes": [("ruin_hall", 0.75), ("ruin_shut", 0.25)],
+            },
+            {
+                "key": "mark",
+                "label": "Mark it and move on",
+                "emoji": "📍",
+                "outcomes": [("ruin_marked", 1.0)],
+            },
+        ],
+    },
+    "explore_ruin_hall": {
+        # A stage: only reachable from ruin_hall.
+        "activity": None,
+        "emoji": "🏛️",
+        "title": "The Three Alcoves",
+        "prompt": "One alcove is bone dry, one has a lamp still burning in it, "
+        "and one is under four feet of black water.",
+        "options": [
+            {
+                "key": "dry",
+                "label": "The dry one",
+                "emoji": "🕸️",
+                "outcomes": [("alcove_dry", 0.70), ("alcove_empty", 0.30)],
+            },
+            {
+                "key": "lit",
+                "label": "The lit one",
+                "emoji": "🕯️",
+                "outcomes": [("alcove_lit", 0.75), ("alcove_watched", 0.25)],
+            },
+            {
+                "key": "flooded",
+                "label": "The flooded one",
+                "emoji": "💧",
+                "outcomes": [("alcove_flooded", 0.35), ("alcove_soaked", 0.65)],
+            },
+        ],
+    },
+}
+
+# What an item is worth in coins *for the balance model only* — helpers.py needs
+# to compare an outcome that pays a chest against one that pays 900 coins, and
+# the catalogue can't answer for the two items whose worth isn't a sell price.
+# A chest is its payout midpoint (cogs/inventory/constants.py), and a key is
+# priced at what it unlocks rather than at zero, since a key with no chest is
+# worth nothing and the two supplies are deliberately kept in step. Everything
+# else falls back to the catalogue's own sell value — see helpers.coin_value.
+ENCOUNTER_ITEM_COIN_EQUIV: dict[str, int] = {
+    "treasure_chest": 500,
+    "treasure_key": 200,
+    "lucky_charm": 250,
 }
 
 # How long the /adventure dashboard's buttons stay live. Long enough to burn a
@@ -575,7 +1115,10 @@ ACTIVITY_INFO: dict[str, dict] = {
     },
     "mine": {
         "emoji": "⛏️",
-        "command": "/mine",
+        # The name a member can actually run. A group's bare form is
+        # prefix-only — Discord has no gesture for invoking a group itself —
+        # so anything the bot *prints* has to name the subcommand.
+        "command": "/mine dig",
         "blurb": "Dig a vein of ore to sell. Small cave-in risk.",
         "disabled": "Mining is disabled on this server.",
         "wait_title": "⛏️ Not Yet",

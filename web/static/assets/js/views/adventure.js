@@ -250,7 +250,7 @@ export async function adventure({ guildId }) {
         h(
           "p",
           { class: "tiny dim" },
-          "One choice, one outcome. Walking away pays nothing — that's deliberate."
+          "Answer it or walk away — walking away pays nothing, and that's deliberate."
         )
       ),
       {
@@ -281,6 +281,9 @@ export async function adventure({ guildId }) {
                 { actions: [] }
               );
               await refresh();
+              // Some answers open another question. The follow-up arrives under
+              // the same key a run's encounter does, so it opens the same way.
+              if (result.encounter) openEncounter(result.encounter);
             },
             { glyph: option.emoji, variant: "primary" }
           )

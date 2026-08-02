@@ -38,15 +38,20 @@ from cogs.activities import (
     career_info,
     charge_state,
     effective_cooldown,
+    encounter_share,
+    encounter_value,
     encounters_for,
     find_option,
+    is_stage,
     hunt_injury_fine,
     max_charges,
     mine_odds,
     next_adventure_streak,
     next_career,
     next_pickaxe,
+    option_value,
     outcome_coins,
+    outcome_next,
     pick_explore_outcome,
     pick_hunt_catch,
     pick_ore,
@@ -459,7 +464,9 @@ def test_the_pickaxe_vein_bonus_rides_on_top_of_the_table():
 # ── Encounters ───────────────────────────────────────────────────────────────
 def test_every_encounter_is_well_formed():
     for key, encounter in ENCOUNTERS.items():
-        assert encounter["activity"] in ACTIVITY_NAMES, key
+        # An opener names the activity it fires on; a follow-up stage names
+        # None, which is the only thing keeping it out of the opening roll.
+        assert encounter["activity"] in ACTIVITY_NAMES or is_stage(key), key
         assert encounter["title"] and encounter["prompt"] and encounter["emoji"], key
         assert len(encounter["options"]) >= 2, key
         seen = set()
@@ -472,12 +479,40 @@ def test_every_encounter_is_well_formed():
                 assert outcome_key in ENCOUNTER_OUTCOMES, outcome_key
 
 
+def test_every_stage_is_reachable_and_only_as_a_follow_up():
+    """A stage nobody's `next` points at is dead content, and a stage that
+    somehow opened a run would greet a member mid-story."""
+    named = {
+        outcome["next"] for outcome in ENCOUNTER_OUTCOMES.values() if "next" in outcome
+    }
+    stages = {key for key in ENCOUNTERS if is_stage(key)}
+    assert stages, "chained encounters are the point — there should be some"
+    assert stages == named
+    for activity in ACTIVITY_NAMES:
+        assert not (set(encounters_for(activity)) & stages), activity
+
+
+def test_a_chain_terminates():
+    """A `next` pointing back up its own chain would recurse forever at
+    runtime; encounter_value's cycle guard hides that, so check the shape."""
+    for key in ENCOUNTERS:
+        seen, frontier = {key}, [key]
+        while frontier:
+            for option in ENCOUNTERS[frontier.pop()]["options"]:
+                for outcome_key, _p in option["outcomes"]:
+                    nxt = ENCOUNTER_OUTCOMES[outcome_key].get("next")
+                    assert nxt not in seen, f"{key} loops via {outcome_key}"
+                    if nxt:
+                        seen.add(nxt)
+                        frontier.append(nxt)
+
+
 def test_every_encounter_outcome_is_payable():
-    """An outcome names a coin range and/or a catalogue item, and nothing else
-    — the cog knows how to hand over exactly those two things."""
+    """An outcome names a coin range, a catalogue item, a follow-up stage, or
+    some combination — the cog knows how to hand over exactly those."""
     for key, outcome in ENCOUNTER_OUTCOMES.items():
         assert outcome.get("text"), key
-        assert set(outcome) <= {"text", "coins", "item"}, key
+        assert set(outcome) <= {"text", "coins", "item", "next"}, key
         if "coins" in outcome:
             lo, hi = outcome["coins"]
             assert lo <= hi, key
@@ -485,6 +520,18 @@ def test_every_encounter_outcome_is_payable():
             item_key, qty = outcome["item"]
             assert items.find(item_key) is not None, key
             assert qty >= 1, key
+        if "next" in outcome:
+            assert outcome["next"] in ENCOUNTERS, key
+            assert is_stage(outcome["next"]), key
+
+
+def test_outcome_next_is_safe_on_anything():
+    """Both callers reach it holding something that may be None or stale after
+    a registry change under a live message."""
+    assert outcome_next(None) is None
+    assert outcome_next({}) is None
+    assert outcome_next({"next": "no_such_stage"}) is None
+    assert outcome_next(ENCOUNTER_OUTCOMES["till_pocketed"]) == "work_till_tape"
 
 
 def test_rob_has_no_encounters():
@@ -530,26 +577,119 @@ def test_resolve_encounter_shrugs_at_a_stale_press():
 
 
 def test_outcome_coins_can_charge_as_well_as_pay():
-    assert outcome_coins(ENCOUNTER_OUTCOMES["trader_sand"], 0.5) == -250
+    lo, hi = ENCOUNTER_OUTCOMES["trader_sand"]["coins"]
+    assert outcome_coins(ENCOUNTER_OUTCOMES["trader_sand"], 0.5) == lo == hi < 0
     assert outcome_coins(ENCOUNTER_OUTCOMES["stag_lost"], 0.5) == 0
     paid = outcome_coins(ENCOUNTER_OUTCOMES["overtime_paid"], 0.5)
     lo, hi = ENCOUNTER_OUTCOMES["overtime_paid"]["coins"]
     assert lo <= paid <= hi
 
 
-def test_the_greedy_option_is_a_real_gamble_not_a_free_win():
-    """Every encounter has to be a decision. If the risky option beat the safe
-    one on expectation *and* had no downside, there'd be nothing to choose."""
+def _has_risk(encounter_key, seen=frozenset()):
+    """Whether anything down this encounter's tree is actually a gamble."""
+    if encounter_key in seen:
+        return False
+    seen = seen | {encounter_key}
+    for option in ENCOUNTERS[encounter_key]["options"]:
+        values = [outcome_value_of(o) for o, _p in option["outcomes"]]
+        if max(values) - min(values) > 0:
+            return True
+        for outcome_key, _p in option["outcomes"]:
+            nxt = ENCOUNTER_OUTCOMES[outcome_key].get("next")
+            if nxt and _has_risk(nxt, seen):
+                return True
+    return False
+
+
+def outcome_value_of(outcome_key):
+    from cogs.activities.helpers import outcome_value
+
+    return outcome_value(outcome_key)
+
+
+def _outcome_floor(outcome_key, seen=frozenset()):
+    """The worst this outcome can leave you, chain included.
+
+    Coins at the bottom of their range rather than the middle, and a follow-up
+    counted at *its* floor — because "how bad does this get" is the second
+    reason anyone picks one option over another, and an encounter that hides
+    its whole downside a stage deeper would otherwise read as a certainty.
+    """
+    outcome = ENCOUNTER_OUTCOMES[outcome_key]
+    from cogs.activities.helpers import coin_value
+
+    floor = outcome.get("coins", (0, 0))[0]
+    if "item" in outcome:
+        item_key, qty = outcome["item"]
+        floor += coin_value(item_key) * qty
+    nxt = outcome.get("next")
+    if nxt and nxt not in seen:
+        floor += _encounter_floor(nxt, seen | {nxt})
+    return floor
+
+
+def _encounter_floor(encounter_key, seen=frozenset()):
+    """The floor of the option a member would actually take (the best one)."""
+    options = ENCOUNTERS[encounter_key]["options"]
+    best = max(options, key=lambda o: option_value(encounter_key, o["key"]))
+    return min(_outcome_floor(o, seen) for o, _p in best["outcomes"])
+
+
+def test_every_encounter_is_a_real_gamble_somewhere():
+    """If nothing anywhere in an encounter's tree had a spread, there'd be
+    nothing to weigh — it would be a prompt with buttons.
+
+    Chain-aware on purpose: /work's till is two certainties on the surface
+    (write it up, or pocket it) and the entire risk lives one stage down, in
+    whether the tape catches you.
+    """
     for key, encounter in ENCOUNTERS.items():
-        spreads = []
+        if encounter["activity"] is None:
+            continue  # a stage is checked as part of the opener that reaches it
+        assert _has_risk(key), f"{key} has nothing to gamble on"
+
+
+def test_no_option_is_dominated_by_another():
+    """An option worth less on average *and* less at its worst than some other
+    option is one nobody should ever pick — a decoration on a decision rather
+    than part of one.
+
+    Two axes, because there are exactly two reasons to pick anything here: what
+    it pays on average, and how bad it gets when it goes wrong. An option only
+    has to win on one. This is the guard that keeps a third option off the
+    stag: "how safe is your shot" is a single axis, so whichever two you keep,
+    the third is strictly worse than one of them.
+    """
+    for key, encounter in ENCOUNTERS.items():
+        profile = {}
         for option in encounter["options"]:
-            values = [
-                sum(ENCOUNTER_OUTCOMES[o].get("coins", (0, 0))) / 2
-                + (150 if "item" in ENCOUNTER_OUTCOMES[o] else 0)
-                for o, _p in option["outcomes"]
-            ]
-            spreads.append(max(values) - min(values))
-        assert max(spreads) > 0, f"{key} has no risky option"
+            outcomes = find_option(key, option["key"])["outcomes"]
+            profile[option["key"]] = (
+                option_value(key, option["key"]),
+                min(_outcome_floor(o) for o, _p in outcomes),
+            )
+        for mine, here in profile.items():
+            for theirs, there in profile.items():
+                if mine == theirs or there == here:
+                    continue
+                assert not (
+                    there[0] >= here[0] and there[1] >= here[1]
+                ), f"{key}/{mine} is dominated by {theirs}"
+
+
+def test_the_encounter_system_stays_a_garnish():
+    """What encounters add on top of the loop's own income. They exist to make
+    a run a decision; a registry somebody keeps adding good outcomes to has no
+    natural ceiling, and at some point the decorative system is the faucet."""
+    assert 0.04 < encounter_share() < 0.20
+
+
+def test_a_chain_is_worth_more_than_its_first_step():
+    """The whole point of `next`: taking the stag is not the end of the story,
+    so its value has to include what the story is worth."""
+    assert encounter_value("work_till_tape") != 0
+    bare = sum(ENCOUNTER_OUTCOMES["till_pocketed"]["coins"]) / 2
+    assert option_value("work_till", "pocket") != bare
 
 
 # ── The balance model ────────────────────────────────────────────────────────

@@ -57,6 +57,7 @@ from cogs.activities.helpers import (
     pickaxe_info,
     resolve_encounter,
     outcome_coins,
+    outcome_next,
     rob_steal_amount,
     rob_success,
     roll_cave_in,
@@ -367,6 +368,11 @@ def _maybe_encounter(user_id: int, guild_id: int, activity: str) -> Optional[dic
     key = roll_encounter(activity, random.random(), random.random())
     if not key:
         return None
+    return _open_encounter(user_id, guild_id, key)
+
+
+def _open_encounter(user_id: int, guild_id: int, key: str) -> dict:
+    """Mint a single-use token for one encounter — an opener or a stage."""
     spec = ENCOUNTERS[key]
     token = secrets.token_urlsafe(12)
     _pending.put(token, {"user_id": user_id, "guild_id": guild_id, "encounter": key})
@@ -389,6 +395,11 @@ async def choose(user_id: int, token: str, option_key: str) -> dict:
     The token is popped *before* anything is paid, which is what makes a
     double-tap a miss rather than a second reward — the browser equivalent of
     `EncounterView._taken`.
+
+    An outcome naming a follow-up stage mints a *fresh* token for it and
+    returns it under the same `encounter` key a run does, so the page continues
+    the chain through the code path it already has. Popping first and minting
+    second is what keeps each stage worth exactly one payout.
     """
     pending = _pending.get(token)
     if not pending or int(pending["user_id"]) != int(user_id):
@@ -410,17 +421,25 @@ async def choose(user_id: int, token: str, option_key: str) -> dict:
         coins = h.apply_coin_boost(coins, effects) if coins > 0 else coins
         await db.add_coins(user_id, coins)
     items = []
-    item_key = outcome.get("item")
-    if item_key:
-        await db.add_item(user_id, item_key, 1)
-        items = [{**_item_payload(item_key), "qty": 1}]
+    if "item" in outcome:
+        # A (key, qty) pair, like every other outcome in the registry — reading
+        # it as a bare key put a tuple where an item_key belongs.
+        item_key, qty = outcome["item"]
+        await db.add_item(user_id, item_key, qty)
+        items = [{**_item_payload(item_key), "qty": qty}]
 
-    return {
+    payload = {
         "text": outcome["text"],
         "coins": coins,
         "items": items,
         "balance": await db.get_balance(user_id),
     }
+    next_key = outcome_next(outcome)
+    if next_key:
+        payload["encounter"] = _open_encounter(
+            user_id, int(pending["guild_id"]), next_key
+        )
+    return payload
 
 
 # ══════════════════════════════════════════════════════════════════════════════

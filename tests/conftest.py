@@ -19,6 +19,7 @@ from discord.ext.test import backend as dpy_backend
 
 import main
 import utils.db as db
+from cogs.admin.constants import _ALL_COGS
 from utils.db import _cache, _core
 
 
@@ -84,3 +85,38 @@ async def grant_perms(member: discord.Member, **perms) -> None:
 
 def config():
     return dpytest.get_config()
+
+
+@pytest_asyncio.fixture
+async def tree_bot(tmp_path, monkeypatch):
+    """A NanoBot with every cog loaded, but NO dpytest backend.
+
+    We only inspect the static app-command tree, so we deliberately skip
+    dpytest.configure() — it mutates a module-global fake guild/backend that
+    would bleed permission state into other tests.
+    """
+    monkeypatch.setattr(db, "_DB_PATH", str(tmp_path / "nanobot.db"))
+    await db.init()
+    bot = main.NanoBot({})
+    await bot._async_setup_hook()
+    for ext in _ALL_COGS:
+        await bot.load_extension(ext)
+    try:
+        yield bot
+    finally:
+        # Unload every extension: a Cog shares class-level command objects, and
+        # loading it into a second bot in-process mutates them. Unloading
+        # restores that state so this test can't bleed into the dpytest-backed
+        # command tests.
+        for ext in _ALL_COGS:
+            try:
+                await bot.unload_extension(ext)
+            except Exception:
+                pass
+        for task in list(bot._bg_tasks):
+            task.cancel()
+        try:
+            await bot.http.close()
+        except Exception:
+            pass
+        await db.close()

@@ -45,7 +45,9 @@ class _FishingBase(discord.ui.View):
     async def interaction_check(self, interaction: discord.Interaction) -> bool:
         if interaction.user.id != self.invoker_id:
             await interaction.response.send_message(
-                embed=h.info("Run `/fish` yourself — this one's showing their bag."),
+                embed=h.info(
+                    "Run `/fish cast` yourself — this one's showing their bag."
+                ),
                 ephemeral=True,
             )
             return False

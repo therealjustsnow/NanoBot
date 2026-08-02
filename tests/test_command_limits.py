@@ -8,6 +8,9 @@ bot. discord.py validates some of this at decoration time but NOT description
 length — that only surfaces at sync against the API. This loads every cog into
 the dpytest bot and walks the real app-command tree to catch it in CI instead.
 
+The `tree_bot` fixture (every cog loaded, no dpytest backend) lives in
+conftest.py — tests/test_command_copy.py walks the same tree.
+
 Limits enforced (per Discord's application-command schema):
   • command / group / subcommand name  ≤ 32 chars (and non-empty)
   • command / group description         1–100 chars
@@ -15,51 +18,11 @@ Limits enforced (per Discord's application-command schema):
   • option name ≤ 32, option description 1–100
 """
 
-import pytest_asyncio
 from discord import app_commands
-
-import main
-import utils.db as db
-from cogs.admin.constants import _ALL_COGS
 
 NAME_MAX = 32
 DESC_MAX = 100
 OPTIONS_MAX = 25
-
-
-@pytest_asyncio.fixture
-async def tree_bot(tmp_path, monkeypatch):
-    """A NanoBot with every cog loaded, but NO dpytest backend.
-
-    We only inspect the static app-command tree, so we deliberately skip
-    dpytest.configure() — it mutates a module-global fake guild/backend that
-    would bleed permission state into other tests.
-    """
-    monkeypatch.setattr(db, "_DB_PATH", str(tmp_path / "nanobot.db"))
-    await db.init()
-    bot = main.NanoBot({})
-    await bot._async_setup_hook()
-    for ext in _ALL_COGS:
-        await bot.load_extension(ext)
-    try:
-        yield bot
-    finally:
-        # Unload every extension: a Cog shares class-level command objects, and
-        # loading it into a second bot in-process mutates them. Unloading
-        # restores that state so this test can't bleed into the dpytest-backed
-        # command tests.
-        for ext in _ALL_COGS:
-            try:
-                await bot.unload_extension(ext)
-            except Exception:
-                pass
-        for task in list(bot._bg_tasks):
-            task.cancel()
-        try:
-            await bot.http.close()
-        except Exception:
-            pass
-        await db.close()
 
 
 def _walk(commands):

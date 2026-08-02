@@ -617,7 +617,7 @@ class Identity(commands.Cog):
             f"✅ {rarity_marker(d.rarity)} **{d.name}** ({label})",
             h.ok(
                 f"Equipped {rarity_marker(d.rarity)} **{d.name}**. "
-                "Check it with `/profile`.",
+                "Check it with `/profile card`.",
                 "🎨 Equipped",
             ),
         )

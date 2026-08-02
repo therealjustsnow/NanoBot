@@ -739,7 +739,7 @@ class Recurring(commands.Cog):
             await ctx.reply(
                 embed=h.err(
                     f"No recurring reminder found with ID `{rid}`.\n"
-                    "Use `/recurring` to see your active ones."
+                    "Use `/recurring list` to see your active ones."
                 ),
                 ephemeral=True,
             )

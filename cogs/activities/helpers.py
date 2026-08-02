@@ -15,6 +15,7 @@ from .constants import (
     COOLDOWN_MIN,
     ENCOUNTERS,
     ENCOUNTER_CHANCE,
+    ENCOUNTER_ITEM_COIN_EQUIV,
     ENCOUNTER_OUTCOMES,
     EXPLORE_COINS_BIG,
     EXPLORE_COINS_SMALL,
@@ -323,8 +324,19 @@ def rob_steal_amount(roll: float, target_balance: int) -> int:
 #  Encounters
 # ══════════════════════════════════════════════════════════════════════════════
 def encounters_for(activity: str) -> list[str]:
-    """Encounter keys that can fire on an activity, in registry order."""
+    """Encounter keys that can *open* on an activity, in registry order.
+
+    Follow-up stages carry `activity: None` and so never match, which is the
+    whole mechanism keeping a stage out of the opening roll — see the note above
+    ENCOUNTERS.
+    """
     return [k for k, e in ENCOUNTERS.items() if e["activity"] == activity]
+
+
+def is_stage(encounter_key: str) -> bool:
+    """Whether an encounter is a follow-up rather than something a run opens."""
+    encounter = ENCOUNTERS.get(encounter_key)
+    return encounter is not None and encounter["activity"] is None
 
 
 def roll_encounter(
@@ -375,6 +387,20 @@ def outcome_coins(outcome: dict, roll: float) -> int:
     return round(lo + roll * (hi - lo))
 
 
+def outcome_next(outcome: dict | None) -> str | None:
+    """The follow-up stage an outcome opens, if it opens one.
+
+    Guarded rather than a bare `.get` because the two callers (the cog's view
+    and the web engine) both reach here holding something that may be None after
+    a stale press, and a chain that silently ends is the correct behaviour for a
+    registry that changed underneath a live message.
+    """
+    if not outcome:
+        return None
+    nxt = outcome.get("next")
+    return nxt if nxt in ENCOUNTERS else None
+
+
 # ══════════════════════════════════════════════════════════════════════════════
 #  The balance model
 # ══════════════════════════════════════════════════════════════════════════════
@@ -390,6 +416,74 @@ def outcome_coins(outcome: dict, roll: float) -> int:
 # never misses a day as the baseline.
 def _expected(odds: list[tuple], value_of) -> float:
     return sum(chance * value_of(key) for key, chance in odds)
+
+
+# ── What the encounters are worth ────────────────────────────────────────────
+# The first version of the encounter system was small enough that "about +8%"
+# could be asserted by reading it. Three openers an activity, three options
+# wide and two stages deep is past that, so the figure is computed from the
+# tables instead — the same treatment the ore ladder and the fishing charters
+# get, and for the same reason: the failure mode is a generous new entry that
+# nobody notices has doubled the loop's income.
+def coin_value(item_key: str) -> float:
+    """What an item is worth in coins, for the balance model only.
+
+    Most items answer for themselves — the catalogue holds the sell price the
+    member will actually get. The two that don't are the chest and the key,
+    which sell for nothing and are worth a great deal; ENCOUNTER_ITEM_COIN_EQUIV
+    prices those, with the reasoning beside it.
+    """
+    if item_key in ENCOUNTER_ITEM_COIN_EQUIV:
+        return float(ENCOUNTER_ITEM_COIN_EQUIV[item_key])
+    # Deferred: cogs/activities/items.py registers the ore and hunt defs into
+    # the shared catalogue at import time, and it imports this package.
+    from utils import items as catalogue
+
+    definition = catalogue.get(item_key)
+    return float(definition.value) if definition else 0.0
+
+
+def outcome_value(outcome_key: str, _seen: frozenset = frozenset()) -> float:
+    """Expected coin-equivalent of one outcome, including whatever it opens."""
+    outcome = ENCOUNTER_OUTCOMES.get(outcome_key)
+    if outcome is None:
+        return 0.0
+    lo, hi = outcome.get("coins", (0, 0))
+    value = (lo + hi) / 2
+    if "item" in outcome:
+        item_key, qty = outcome["item"]
+        value += coin_value(item_key) * qty
+    nxt = outcome.get("next")
+    if nxt:
+        value += encounter_value(nxt, _seen)
+    return value
+
+
+def option_value(encounter_key: str, option_key: str, _seen: frozenset = frozenset()):
+    """Expected coin-equivalent of taking one option."""
+    option = find_option(encounter_key, option_key)
+    if option is None:
+        return 0.0
+    return sum(p * outcome_value(o, _seen) for o, p in option["outcomes"])
+
+
+def encounter_value(encounter_key: str, _seen: frozenset = frozenset()) -> float:
+    """What an encounter is worth to someone who picks the best option.
+
+    The *best* rather than the average, because that is the bound worth
+    guarding: an encounter is only as inflationary as its most rewarding
+    answer, and members find that answer quickly. `_seen` breaks a cycle — the
+    registry is a DAG today, and a typo'd `next` pointing back up the chain
+    would otherwise recurse forever rather than fail a test.
+    """
+    encounter = ENCOUNTERS.get(encounter_key)
+    if encounter is None or encounter_key in _seen:
+        return 0.0
+    seen = _seen | {encounter_key}
+    return max(
+        (option_value(encounter_key, o["key"], seen) for o in encounter["options"]),
+        default=0.0,
+    )
 
 
 def activity_coins_per_run(
@@ -466,6 +560,27 @@ def coins_banked_after(hours: float, luck: float = 0.0) -> float:
         * activity_coins_per_run(activity, luck)
         for activity in ACTIVITY_MAX_CHARGES
     )
+
+
+def encounter_share(luck: float = 0.0) -> float:
+    """What the encounter system adds to the loop's income, as a fraction.
+
+    Deliberately *not* folded into `adventure_coins_per_hour`: that figure is
+    what the clock generates whether or not anyone is there, and an encounter
+    only pays a member who was present and answered it. This is the number to
+    keep an eye on instead — encounters are meant to make a run a decision, not
+    to be where the money is, and there is no natural ceiling on a registry
+    somebody keeps adding good outcomes to.
+    """
+    base = extra = 0.0
+    for activity in ACTIVITY_MAX_CHARGES:
+        per_hour = 3600 / ACTIVITY_DEFAULT_COOLDOWNS[activity]
+        base += activity_coins_per_run(activity, luck) * per_hour
+        keys = encounters_for(activity)
+        if keys:
+            mean = sum(encounter_value(k) for k in keys) / len(keys)
+            extra += ENCOUNTER_CHANCE * mean * per_hour
+    return extra / base if base else 0.0
 
 
 def mine_coins_per_day(tier: int) -> float:

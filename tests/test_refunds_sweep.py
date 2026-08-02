@@ -84,11 +84,25 @@ class FakeBot:
 
 
 def make_cog(monkeypatch, bot=None, batches=(BATCH,)):
+    """An Economy cog with the shipped batches swapped for the test's.
+
+    The batches are patched into the *function's own globals* rather than by
+    module path. Loading an extension re-imports its module, and the two ways
+    of naming one then disagree: `monkeypatch.setattr("cogs.economy.cog.X")`
+    walks the package attribute (which unload leaves stale) while
+    `importlib.import_module` reads sys.modules (which unload clears). Either
+    can end up patching a module object these methods don't read from, and the
+    sweep quietly runs against the real shipped batches instead — an
+    order-dependent failure that only appears once some other test has loaded
+    every cog. `__globals__` is the dict the method actually reads, whichever
+    module it came from.
+    """
     cog = Economy.__new__(Economy)
     cog.bot = bot or FakeBot()
-    monkeypatch.setattr("cogs.economy.cog.REFUND_BATCHES", list(batches))
+    module = Economy.sweep_price_refunds.__globals__
+    monkeypatch.setitem(module, "REFUND_BATCHES", list(batches))
     # The DM pacing is real seconds; the tests don't need to live through them.
-    monkeypatch.setattr("cogs.economy.cog.REFUND_DM_INTERVAL", 0)
+    monkeypatch.setitem(module, "REFUND_DM_INTERVAL", 0)
     return cog
 
 
