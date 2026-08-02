@@ -18,9 +18,15 @@ Two cards, one set of buttons
 `AdventureView` is the board `/adventure` opens: no result of its own, so a
 press repaints the card and posts what happened *underneath* it, as a log.
 `RunResultView` is what an individual command (`/work`, `/mine dig`, …) replies
-with: it already has a result on top, so a press replaces that result in place
-rather than starting a new message every three hours. Same buttons, same run
-path — the difference is only whether the card has a slot for an outcome.
+with: it already has a result, so a press replaces that result in place rather
+than starting a new message every three hours. Same buttons, same run path —
+the difference is only whether the card has a slot for an outcome.
+
+One card shows one thing at a time. The run card used to stack a result embed,
+a dashboard embed and up to nine buttons on one message, with an encounter's
+options on the row furthest from the question they answered. Now a live
+decision takes the card on its own — see `RunResultView` — and everything else
+comes back once it's settled.
 """
 
 from __future__ import annotations
@@ -58,9 +64,10 @@ BUTTON_LABELS: dict[str, str] = {
     "explore": "Explore",
 }
 
-# Where an encounter's options sit on a card that also carries the dashboard.
-# Rows 0 and 1 are the activity buttons and the collect/refresh pair.
-ENCOUNTER_ROW = 2
+# Where an encounter's options sit on the run card. Row 0, because while a
+# decision is live it is the only thing on the card: the activity and
+# collect/refresh buttons stand down until it's answered.
+ENCOUNTER_ROW = 0
 
 
 def _view_kwargs(view: Optional[discord.ui.View]) -> dict:
@@ -245,10 +252,6 @@ class AdventureView(_EncounterHost, discord.ui.View):
     card in place and posts the result underneath.
     """
 
-    # Whether the card this view paints is the short form. The board is the
-    # full card; RunResultView overrides this because it sits under a result.
-    compact = False
-
     def __init__(
         self,
         cog: "Activities",
@@ -298,17 +301,19 @@ class AdventureView(_EncounterHost, discord.ui.View):
             return False
         return True
 
-    def _payload(self, dashboard: discord.Embed) -> dict:
-        """What an edit sends. The board is the dashboard and nothing else."""
-        return {"embed": dashboard}
+    async def _render(
+        self, interaction: discord.Interaction
+    ) -> tuple[discord.Embed, dict]:
+        """The card this view paints, and the state its buttons need. The board
+        is the dashboard and nothing else; the run card is a result with the
+        loop folded into it."""
+        return await self.cog.adventure_dashboard(interaction.guild, interaction.user)
 
     async def _repaint(self, interaction: discord.Interaction):
         """Rebuild the card and the buttons from fresh state."""
-        embed, state = await self.cog.adventure_dashboard(
-            interaction.guild, interaction.user, compact=self.compact
-        )
+        embed, state = await self._render(interaction)
         self._build(state)
-        await interaction.edit_original_response(view=self, **self._payload(embed))
+        await interaction.edit_original_response(embed=embed, view=self)
 
     async def refresh(self, interaction: discord.Interaction):
         await interaction.response.defer()
@@ -355,26 +360,43 @@ class AdventureView(_EncounterHost, discord.ui.View):
 
 
 class RunResultView(AdventureView):
-    """The dashboard, riding under one command's result.
+    """One command's result, with the loop's state and buttons under it.
 
     Most members never ran `/adventure`. They typed `/work`, got a paycheck,
     and had no way of knowing there was a card that would have told them three
     hunts were also waiting — so the loop's best feature was the one only
     people who already knew about it used. Every individual activity command
-    now replies with its result *and* the short dashboard, buttons included,
-    which makes the discovery and the shortcut the same thing.
+    now replies with the buttons, which makes the discovery and the shortcut
+    the same thing.
 
     Unlike the board, this card has a slot for an outcome, so a press replaces
-    the result on top rather than posting a new message. Three hours of
-    `/work` should not be three hours of new messages.
+    the result rather than posting a new message. Three hours of `/work` should
+    not be three hours of new messages.
+
+    One card at a time
+    ──────────────────
+    The first version of this shipped the dashboard as a *second embed* under
+    the result and put an encounter's options on a third row of buttons, below
+    the four activity buttons and the collect/refresh pair. So a run that
+    opened a decision showed two headlines, nine buttons, and put the question
+    furthest from the thing that answers it — the one element on the message
+    with a clock running on it was the one hardest to find.
+
+    Now the card shows one thing at a time. While an encounter is live it is
+    the *only* thing pressable: the run buttons aren't mounted and the loop's
+    status field is suppressed (`run_card(pending=True)`), because a question
+    and a list of other things you could be doing are two demands on one
+    screen. Answer it — or open the next stage of a chain, which is the same
+    situation again — and the buttons and the status come back. The sequence a
+    run reads in is what happened → what you decide → what's next, driven by
+    the member settling the decision rather than by a timer that would yank the
+    result out from under whoever was still reading it.
 
     An encounter hosted here lives as long as the card does rather than
     ENCOUNTER_TIMEOUT, which is deliberate: the two timers are on the same
-    message and the shorter one would grey out half its buttons while the rest
-    stayed live. Nothing is owed until a press either way.
+    message and the shorter one would grey out buttons the other still owns.
+    Nothing is owed until a press either way.
     """
-
-    compact = True
 
     def __init__(
         self,
@@ -384,16 +406,29 @@ class RunResultView(AdventureView):
         result: discord.Embed,
         encounter_key: Optional[str] = None,
     ):
-        # Set before super().__init__, which paints the card `_payload` reads.
+        # Set before super().__init__, which paints the card `_render` reads.
         self.result = result
         super().__init__(cog, invoker_id, state, encounter_key=encounter_key)
 
     def _build(self, state: dict):
+        if self.encounter_key is not None:
+            # A live decision owns the card. Nothing else is pressable until
+            # it's answered, so the options sit on the first row — under the
+            # question, where the eye already is.
+            self.clear_items()
+            self._mount_encounter(row=ENCOUNTER_ROW)
+            return
         super()._build(state)
-        self._mount_encounter(row=ENCOUNTER_ROW)
 
-    def _payload(self, dashboard: discord.Embed) -> dict:
-        return {"embeds": [self.result, dashboard]}
+    async def _render(
+        self, interaction: discord.Interaction
+    ) -> tuple[discord.Embed, dict]:
+        return await self.cog.run_card(
+            interaction.guild,
+            interaction.user,
+            self.result,
+            pending=self.encounter_key is not None,
+        )
 
     async def press(self, interaction: discord.Interaction, activity: str):
         await interaction.response.defer()

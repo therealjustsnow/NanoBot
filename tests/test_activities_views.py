@@ -603,10 +603,12 @@ async def test_collect_is_reachable_as_a_command_too(bot, monkeypatch):
 #  The dashboard under an individual command
 # ══════════════════════════════════════════════════════════════════════════════
 async def _run_card(bot, member, guild, embed=None, encounter_key=None):
-    """A live RunResultView over the real compact dashboard state."""
+    """A live RunResultView over the real run-card state."""
     cog = bot.get_cog("Activities")
-    card, state = await cog.adventure_dashboard(guild, member, compact=True)
     result = embed if embed is not None else discord.Embed(title="💼 Result")
+    card, state = await cog.run_card(
+        guild, member, result, pending=encounter_key is not None
+    )
     return (
         cog,
         RunResultView(cog, member.id, state, result, encounter_key=encounter_key),
@@ -614,10 +616,15 @@ async def _run_card(bot, member, guild, embed=None, encounter_key=None):
     )
 
 
+def _adventure_field(embed):
+    """The loop's status field on a run card, or None when it isn't there."""
+    return next((f for f in embed.fields if f.name == "🧭 Adventure"), None)
+
+
 @pytest.mark.cogs("cogs.activities")
 async def test_an_individual_command_replies_with_the_dashboard(bot, monkeypatch):
     """The whole discoverability fix: almost nobody ran /adventure, so /work
-    now shows them the card they never found — buttons included."""
+    now shows them the loop they never found — buttons included."""
     from cogs.activities import cog as activities
 
     author = config().members[0]
@@ -626,29 +633,37 @@ async def test_an_individual_command_replies_with_the_dashboard(bot, monkeypatch
     await dpytest.message("!work", member=author)
     message = dpytest.get_message()
 
-    assert len(message.embeds) == 2
+    # One embed, not two: the result, carrying the loop as a field.
+    assert len(message.embeds) == 1
     assert "💼" in message.embeds[0].title
-    assert message.embeds[1].title == "🧭 Adventure"
-    assert "/adventure" in message.embeds[1].footer.text
+    field = _adventure_field(message.embeds[0])
+    assert field is not None
+    assert "Work" in field.value and "Dig" in field.value
 
 
 @pytest.mark.cogs("cogs.activities")
-async def test_the_card_on_a_run_is_the_short_one(bot, monkeypatch):
+async def test_the_run_card_is_a_field_not_a_second_card(bot, monkeypatch):
     """Eight fields under every paycheck, twenty-six times a day, is how a
-    helpful addition becomes something people want switched off."""
+    helpful addition becomes something people want switched off — and two
+    headlines on one reply is what made a dig confusing to read."""
     from cogs.activities import cog as activities
 
     guild, author = config().guilds[0], config().members[0]
     monkeypatch.setattr(activities.random, "random", lambda: 0.9)
     cog = bot.get_cog("Activities")
 
-    short, _state = await cog.adventure_dashboard(guild, author, compact=True)
+    result = discord.Embed(title="💼 Result", description="You earned coins.")
+    card, _state = await cog.run_card(guild, author, result)
     full, _state = await cog.adventure_dashboard(guild, author)
 
-    assert short.fields == []
+    # The result keeps its own title and body; the loop is one field under it.
+    assert card.title == "💼 Result"
+    assert card.description == "You earned coins."
+    assert len(card.fields) == 1
     assert len(full.fields) > 5
-    # It still answers the question the buttons are there for.
-    assert "Work" in short.description and "Dig" in short.description
+    # …and the result it was built from is never mutated, so repainting the
+    # card on every press can't stack the field up.
+    assert result.fields == []
 
 
 @pytest.mark.cogs("cogs.activities")
@@ -665,7 +680,7 @@ async def test_a_refused_run_gets_the_card_too(bot, monkeypatch):
         message = dpytest.get_message()
 
     assert "Not Yet" in message.embeds[0].title
-    assert message.embeds[1].title == "🧭 Adventure"
+    assert _adventure_field(message.embeds[0]) is not None
 
 
 @pytest.mark.cogs("cogs.activities")
@@ -682,8 +697,8 @@ async def test_a_press_on_a_run_card_replaces_the_result_in_place(bot, monkeypat
     await view.press(interaction, "mine")
 
     assert interaction.followup.sent == []
-    assert "⛏️" in interaction.edited["embeds"][0].title
-    assert interaction.edited["embeds"][1].title == "🧭 Adventure"
+    assert "⛏️" in interaction.edited["embed"].title
+    assert _adventure_field(interaction.edited["embed"]) is not None
 
 
 @pytest.mark.cogs("cogs.activities")
@@ -703,25 +718,31 @@ async def test_a_refusal_on_a_run_card_never_overwrites_the_result(bot, monkeypa
 
     assert "Not Yet" in interaction.followup.sent[0]["embed"].title
     assert interaction.followup.sent[0]["ephemeral"] is True
-    assert interaction.edited["embeds"][0].title == "💼 Result"
+    assert interaction.edited["embed"].title == "💼 Result"
 
 
 @pytest.mark.cogs("cogs.activities")
-async def test_the_run_card_hosts_its_own_encounter(bot, monkeypatch):
-    """A run's choice belongs under the result it came from, not on a second
-    message — so the card carries the options on a row of its own."""
+async def test_a_live_decision_owns_the_run_card(bot, monkeypatch):
+    """The question and the buttons that answer it were the two things
+    furthest apart on the old card. Now a live encounter is the *only* thing
+    pressable, on the first row, and the loop's status stands down."""
     guild, author = config().guilds[0], config().members[0]
-    _cog, view, _card = await _run_card(
+    _cog, view, card = await _run_card(
         bot, author, guild, encounter_key="work_overtime"
     )
 
     options = [c for c in view.children if isinstance(c, _EncounterButton)]
     assert {c.option_key for c in options} == {"stay", "deal", "leave"}
-    assert all(c.row == 2 for c in options)
+    assert all(c.row == 0 for c in options)
+    # Nothing else to press, and nothing else to read.
+    assert len(view.children) == len(options)
+    assert _adventure_field(card) is None
 
 
 @pytest.mark.cogs("cogs.activities")
-async def test_answering_on_the_run_card_puts_the_outcome_on_top(bot, monkeypatch):
+async def test_answering_brings_the_loop_back(bot, monkeypatch):
+    """What happened → what you decide → what's next. The last step arrives
+    when the decision is settled, not on a timer."""
     from cogs.activities import views as activity_views
 
     guild, author = config().guilds[0], config().members[0]
@@ -733,10 +754,31 @@ async def test_answering_on_the_run_card_puts_the_outcome_on_top(bot, monkeypatc
 
     await view.choose(interaction, "leave")
 
-    assert "Late Shift" in interaction.edited["embeds"][0].title
+    assert "Late Shift" in interaction.edited["embed"].title
     assert await db.get_balance(author.id) > 0
-    # Answered, so the options come off the card entirely.
+    # Answered, so the options come off the card and the loop comes back.
     assert not [c for c in view.children if isinstance(c, _EncounterButton)]
+    assert [c for c in view.children if isinstance(c, _ActivityButton)]
+    assert _adventure_field(interaction.edited["embed"]) is not None
+
+
+@pytest.mark.cogs("cogs.activities")
+async def test_a_chained_stage_keeps_the_card_to_itself(bot, monkeypatch):
+    """A follow-up question is the same situation again: still one decision on
+    screen, still nothing else to press."""
+    from cogs.activities import views as activity_views
+
+    guild, author = config().guilds[0], config().members[0]
+    monkeypatch.setattr(activity_views.random, "random", lambda: 0.5)
+    _cog, view, _card = await _run_card(bot, author, guild, encounter_key="work_till")
+    interaction = FakeInteraction(author, guild)
+
+    await view.choose(interaction, "pocket")
+
+    assert view.encounter_key == "work_till_tape"
+    options = [c for c in view.children if isinstance(c, _EncounterButton)]
+    assert options and len(view.children) == len(options)
+    assert _adventure_field(interaction.edited["embed"]) is None
 
 
 # ══════════════════════════════════════════════════════════════════════════════

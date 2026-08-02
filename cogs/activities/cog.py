@@ -44,8 +44,14 @@ button goes through `run_activity`, the same path the commands take.
 It is also the front door nobody found. Members typed /work, took the paycheck
 and never learned the card existed, so the loop's best feature belonged to the
 people who already knew about it. Every individual activity now replies with
-its result *and* the short form of that card, buttons included (`_send_run` →
-`RunResultView`), which makes discovering it and using it the same action.
+those same buttons and one line of the loop's status, folded into the result
+itself (`_send_run` → `run_card` → `RunResultView`), which makes discovering it
+and using it the same action.
+
+One card, one thing at a time. A run's reply is a single embed, and while an
+encounter is waiting on an answer it is the only thing on it — see
+`RunResultView` in views.py for why the two-embeds-and-nine-buttons version
+this replaced was hard to read.
 
 Coins ride the existing economy tables (db.add_coins et al.), and loot rides
 the shared inventory (utils/db/items.py), so earnings from any activity spend
@@ -271,20 +277,12 @@ class Activities(commands.Cog):
             return f"✅ Ready now ×{charges['ready']}"
         return "✅ Ready now"
 
-    def _next_up(self, cfg: dict, activity: str, stats: dict | None = None) -> str:
-        """Footer text telling a member what's left and when more arrives.
-
-        A bare "next in 20m" was the right footer when one run emptied the tank.
-        With charges the more useful half is how many are still banked — that is
-        what decides whether they press the button again right now.
-        """
-        interval = h.fmt_duration(self._cooldown(cfg, activity))
-        if stats is None:
-            return f"Next {activity} in {interval}"
-        charges = self._charges(cfg, stats, activity)
-        if charges["ready"]:
-            return f"{charges['ready']} more ready now · +1 every {interval}"
-        return f"Next {activity} in {h.fmt_duration(charges['next_in'])}"
+    # There is deliberately no per-run "next up" footer any more. Every run now
+    # replies with the loop's own status strip (`run_card`), and the strip
+    # already carries this activity's ready count and countdown — a footer
+    # saying it a third time on the same embed is the clutter that made a dig
+    # hard to read. The *pace* it also carried ("+1 every 3h") is a setting,
+    # and settings live on the card somebody opened deliberately.
 
     # ══════════════════════════════════════════════════════════════════════════
     #  The shared run path — one activity, whatever invoked it
@@ -560,26 +558,27 @@ class Activities(commands.Cog):
         return EncounterStep(embed, next_key)
 
     async def _send_run(self, ctx: commands.Context, run: ActivityRun):
-        """Reply with a finished run — result on top, the dashboard under it.
+        """Reply with a finished run: the result, carrying the loop under it.
 
         The dashboard is the loop's best feature and almost nobody found it:
         members typed `/work`, took the paycheck, and never learned there was a
         card telling them three hunts were also ready. So every individual
-        command now answers with the short dashboard and its buttons, which
-        makes finding out and taking the shortcut the same action.
+        command answers with the loop's state and its buttons, which makes
+        finding out and taking the shortcut the same action — but as one field
+        on the result rather than a second card arguing with it (`run_card`).
 
-        A refused run gets the card too, and that is when it earns its place
-        most: "work is on cooldown" is a dead end, while "work is on cooldown,
-        here are two digs and an explore" is an answer.
+        A refused run gets it too, and that is when it earns its place most:
+        "work is on cooldown" is a dead end, while "work is on cooldown, here
+        are two digs and an explore" is an answer.
         """
-        embed, state = await self.adventure_dashboard(
-            ctx.guild, ctx.author, compact=True
+        embed, state = await self.run_card(
+            ctx.guild, ctx.author, run.embed, pending=run.encounter_key is not None
         )
         view = RunResultView(
             self, ctx.author.id, state, run.embed, encounter_key=run.encounter_key
         )
         view.message = await ctx.reply(
-            embeds=[run.embed, embed], view=view, ephemeral=not run.claimed
+            embed=embed, view=view, ephemeral=not run.claimed
         )
 
     # ══════════════════════════════════════════════════════════════════════════
@@ -626,15 +625,14 @@ class Activities(commands.Cog):
         if promoted:
             desc += f"\n\n🎉 **Promoted!** You're now a {info['title']}."
         embed = h.ok(desc, f"💼 {info['title']}")
+        # The career ladder is the one thing a paycheck knows that the loop's
+        # status strip doesn't, so it keeps the footer to itself.
         nxt = next_career(stats["work_shifts"])
         if nxt:
             embed.set_footer(
                 text=f"Next promotion at {nxt['shifts']:,} shifts "
-                f"({stats['work_shifts']:,} so far) · "
-                f"{self._next_up(cfg, 'work', stats)}"
+                f"({stats['work_shifts']:,} so far)"
             )
-        else:
-            embed.set_footer(text=self._next_up(cfg, "work", stats))
         return embed
 
     # ══════════════════════════════════════════════════════════════════════════
@@ -679,7 +677,6 @@ class Activities(commands.Cog):
                 "The tunnel collapses behind you — you scramble out empty-handed.",
                 "⛏️ Cave-In",
             )
-            embed.set_footer(text=self._next_up(cfg, "mine", stats))
             return embed
 
         pickaxe = pickaxe_info(stats["pickaxe_level"])
@@ -708,9 +705,7 @@ class Activities(commands.Cog):
                 "treasure key!"
             )
         desc += "\n\nSell it with `/inventory sell`."
-        embed = h.ok(desc, "⛏️ Dig")
-        embed.set_footer(text=self._next_up(cfg, "mine", stats))
-        return embed
+        return h.ok(desc, "⛏️ Dig")
 
     # ── /mine upgrade ────────────────────────────────────────────────────────
     @mine.command(name="upgrade", description="Buy the next pickaxe tier with coins.")
@@ -844,103 +839,168 @@ class Activities(commands.Cog):
         view = AdventureView(self, ctx.author.id, state)
         view.message = await ctx.reply(embed=embed, view=view)
 
-    async def adventure_dashboard(
-        self,
-        guild: discord.Guild,
-        member: discord.abc.User,
-        compact: bool = False,
-    ) -> tuple[discord.Embed, dict]:
-        """The member-facing landing card, plus the state its buttons need.
+    async def _adventure_state(
+        self, guild: discord.Guild, member: discord.abc.User
+    ) -> tuple[dict, dict, dict, float]:
+        """The numbers every adventure card paints with, read once.
 
-        Read-only and cheap — two queries (the guild's switches, your stats
-        row); the career tier, the pickaxe tier and every charge bucket are
-        derived from that same row, so nothing here costs an extra round trip.
-        The settings dump stays on /adventure config, and prestige/achievements
-        stay on /progress — this card deliberately doesn't restate them.
-
-        `compact` is the form that rides under an individual command's result
-        (see `_send_run`): the headline, one line of live status, the streak,
-        and nothing else. It exists because the full card is eight fields, and
-        eight fields under every `/work` — twenty-six times a day — is how a
-        helpful addition turns into something people want switched off. The
-        buttons are the same either way, which is the part that matters.
-
-        Returns the embed and a `{"charges": …, "enabled": …}` dict, because
-        the view needs the same numbers the card just rendered and recomputing
-        them would let the two disagree.
+        Cheap — two queries (the guild's switches, your stats row); the career
+        tier, the pickaxe tier and every charge bucket are derived from that
+        same row, so nothing here costs an extra round trip.
         """
         cfg = await self._cfg(guild.id)
         stats = await db.get_activity_stats(member.id)
         now = time.time()
         charges = {a: self._charges(cfg, stats, a, now) for a in ACTIVITY_NAMES}
         enabled = {a: bool(cfg[f"{a}_enabled"]) for a in ACTIVITY_NAMES}
-        state = {"charges": charges, "enabled": enabled}
+        return cfg, stats, {"charges": charges, "enabled": enabled}, now
 
-        # The headline counts *runs* available, not activities: with charges
-        # banked, "4 ready" would badly undersell a bucket holding nine.
+    @staticmethod
+    def _headline(state: dict) -> str:
+        """ "11 runs banked and waiting: …" — the board's opening line.
+
+        Counts *runs*, not activities: with charges banked, "4 ready" would
+        badly undersell a bucket holding nine.
+        """
+        charges, enabled = state["charges"], state["enabled"]
         runs = sum(charges[a]["ready"] for a in ACTIVITY_NAMES if enabled[a])
         if runs:
             ready = [a for a in ACTIVITY_NAMES if enabled[a] and charges[a]["ready"]]
-            headline = (
+            return (
                 f"**{runs}** run{'s' if runs != 1 else ''} banked and waiting: "
                 + ", ".join(f"`{ACTIVITY_INFO[a]['command']}`" for a in ready)
             )
-        else:
-            soonest = min(
-                (charges[a]["next_in"] for a in ACTIVITY_NAMES if enabled[a]),
-                default=0,
+        soonest = min(
+            (charges[a]["next_in"] for a in ACTIVITY_NAMES if enabled[a]), default=0
+        )
+        return (
+            f"Nothing ready yet — next one in **{h.fmt_duration(soonest)}**."
+            if soonest
+            else "Every activity is switched off in this server."
+        )
+
+    @staticmethod
+    def _ready_strip(state: dict) -> str:
+        """One line covering every button on the card: `Work ×2 · Dig 40m · …`.
+
+        This is the whole of the dashboard that rides under a run's result. The
+        board's headline says the same thing in prose and the Collect button
+        says it again as a total, so on the run card the strip is the *only*
+        rendering — three ways of saying "you have eleven runs banked" on one
+        reply was most of what made a dig confusing to read.
+        """
+        charges, enabled = state["charges"], state["enabled"]
+        return " · ".join(
+            f"{ACTIVITY_INFO[a]['emoji']} {BUTTON_LABELS.get(a, a.title())} "
+            + (
+                "❌"
+                if not enabled[a]
+                else (
+                    f"**×{charges[a]['ready']}**"
+                    if charges[a]["ready"]
+                    else h.fmt_duration(charges[a]["next_in"])
+                )
             )
-            headline = (
-                f"Nothing ready yet — next one in **{h.fmt_duration(soonest)}**."
-                if soonest
-                else "Every activity is switched off in this server."
-            )
-        # ── The daily streak ─────────────────────────────────────────────────
-        # Shown whether or not it's live today, because the number a member
-        # wants is "what am I about to lose", not "what did I have".
+            for a in BUTTON_ACTIVITIES
+        )
+
+    @staticmethod
+    def _streak_line(stats: dict, now: float, terse: bool = False) -> str:
+        """The daily streak, shown whether or not it's live today — the number
+        a member wants is "what am I about to lose", not "what did I have".
+
+        `terse` is the run card's form: one line, and only the tail that asks
+        for something. "Comes back tomorrow a little bigger" is flavour worth a
+        line on a card someone opened; under every paycheck it's a third line
+        of something they didn't ask about.
+        """
         streak = stats.get("streak_days") or 0
         today = int(now // 86_400)
         last_day = stats.get("last_day") or 0
-        if streak and last_day >= today - 1:
-            bonus = streak_multiplier(streak) - 1
-            streak_line = f"🔥 **{streak}-day streak** · +{bonus:.0%} on coin rewards"
-            if last_day != today:
-                streak_line += "\n└ Run anything today to keep it going."
-            elif bonus < STREAK_BONUS_CAP:
-                streak_line += "\n└ Comes back tomorrow a little bigger."
-        else:
-            streak_line = (
-                "🔥 **No streak** · run anything today to start one — coin "
-                f"rewards climb to +{STREAK_BONUS_CAP:.0%}"
+        if not (streak and last_day >= today - 1):
+            head = "🔥 **No streak** · run anything today to start one"
+            return (
+                head
+                if terse
+                else f"{head} — coin rewards climb to +{STREAK_BONUS_CAP:.0%}"
             )
 
-        if compact:
-            # One line per activity instead of a field each, and the two
-            # progression tracks left out entirely — they belong on the card
-            # somebody opened deliberately, not under every paycheck.
-            status = " · ".join(
-                f"{ACTIVITY_INFO[a]['emoji']} {BUTTON_LABELS.get(a, a.title())} "
-                + (
-                    "❌"
-                    if not enabled[a]
-                    else (
-                        f"×{charges[a]['ready']}"
-                        if charges[a]["ready"]
-                        else h.fmt_duration(charges[a]["next_in"])
-                    )
-                )
-                for a in BUTTON_ACTIVITIES
+        bonus = streak_multiplier(streak) - 1
+        # Day one pays nothing extra, and "+0% on coin rewards" reads as a bug
+        # rather than as a streak that hasn't earned anything yet. On the run
+        # card it says nothing further at all: the run that started the streak
+        # announces it in its own description, and repeating that two lines
+        # below is how one good line becomes noise.
+        head = f"🔥 **{streak}-day streak**"
+        if bonus:
+            head += f" · +{bonus:.0%} on coin rewards"
+        elif not terse:
+            head += " · the bonus starts tomorrow"
+        if last_day != today:
+            # The only tail that's actually a call to action.
+            return (
+                f"{head} · run today to keep it"
+                if terse
+                else (f"{head}\n└ Run anything today to keep it going.")
             )
-            embed = h.embed(
-                "🧭 Adventure",
-                f"{headline}\n{status}\n{streak_line}",
-                h.BLUE,
-            )
-            embed.set_footer(
-                text="Tap to run another — this is /adventure dashboard, the "
-                "fastest way to work the whole loop."
-            )
-            return embed, state
+        if terse or bonus >= STREAK_BONUS_CAP:
+            return head
+        return f"{head}\n└ Comes back tomorrow a little bigger."
+
+    async def run_card(
+        self,
+        guild: discord.Guild,
+        member: discord.abc.User,
+        result: discord.Embed,
+        pending: bool = False,
+    ) -> tuple[discord.Embed, dict]:
+        """One run, on **one** embed: the result, with the loop's state under it.
+
+        The first version of this replied with two embeds — the result, and the
+        short dashboard beneath it. Two titles, two headlines and two footers
+        for one dig, and no way to tell which of them was the answer to what
+        you typed. So the dashboard stops being a card of its own here and
+        becomes a single field at the bottom of the result: same information,
+        same buttons, a third of the height, one thing to read.
+
+        `pending` drops that field entirely while an encounter is waiting on an
+        answer. A question and a list of other things you could be doing are
+        two demands on one screen, and only one of them has a clock on it — so
+        the run's decision gets the card to itself, and the loop's state comes
+        back the moment it's settled. That is the sequence a run should read
+        in: what happened → what you decide → what's next.
+
+        The result embed is copied rather than mutated, because the card is
+        repainted on every press and an appended field would stack up.
+        """
+        _cfg, stats, state, now = await self._adventure_state(guild, member)
+        if pending:
+            return result.copy(), state
+        embed = result.copy()
+        embed.add_field(
+            name="🧭 Adventure",
+            value=f"{self._ready_strip(state)}\n"
+            f"{self._streak_line(stats, now, terse=True)}",
+            inline=False,
+        )
+        return embed, state
+
+    async def adventure_dashboard(
+        self, guild: discord.Guild, member: discord.abc.User
+    ) -> tuple[discord.Embed, dict]:
+        """The member-facing landing card, plus the state its buttons need.
+
+        The settings dump stays on /adventure config, and prestige/achievements
+        stay on /progress — this card deliberately doesn't restate them.
+
+        Returns the embed and a `{"charges": …, "enabled": …}` dict, because
+        the view needs the same numbers the card just rendered and recomputing
+        them would let the two disagree.
+        """
+        cfg, stats, state, now = await self._adventure_state(guild, member)
+        charges = state["charges"]
+        headline = self._headline(state)
+        streak_line = self._streak_line(stats, now)
 
         embed = h.embed(
             "🧭 Adventure",
@@ -1050,9 +1110,7 @@ class Activities(commands.Cog):
             desc += f"\n{item_catalogue.display('padlock')} You also found a padlock!"
 
         desc += "\n\nSell loot with `/inventory sell`."
-        embed = h.embed("🏹 Hunt", desc, h.BLUE)
-        embed.set_footer(text=self._next_up(cfg, "hunt", stats))
-        return embed
+        return h.embed("🏹 Hunt", desc, h.BLUE)
 
     # ── /adventure explore — long shot ───────────────────────────────────────
     @adventure.command(
@@ -1091,7 +1149,6 @@ class Activities(commands.Cog):
             embed = h.ok(
                 f"{flavor}\nYou found {item_catalogue.display(outcome)}!", "🧭 Explore"
             )
-        embed.set_footer(text=self._next_up(cfg, "explore", stats))
         return embed
 
     # ══════════════════════════════════════════════════════════════════════════
