@@ -33,6 +33,7 @@ from discord.ext import commands
 
 from utils import db
 from utils import helpers as h
+from utils import logfeed
 from utils.checks import has_admin_perms
 from utils.converters import SafeTextChannel
 
@@ -114,11 +115,16 @@ async def _get_log_channel(
 
 
 async def _send_log(ch: discord.TextChannel, embed: discord.Embed) -> None:
-    """Send an embed to the audit log channel, silently ignoring permission errors."""
-    try:
-        await ch.send(embed=embed)
-    except (discord.Forbidden, discord.HTTPException) as exc:
-        log.debug(f"Audit log send failed in #{ch}: {exc}")
+    """Queue an embed for the audit log channel.
+
+    Goes through utils/logfeed rather than `ch.send` because these listeners
+    fire in bursts — a mass-role change, a purge, a wave of joins — and each one
+    runs in its own task, so a dozen events used to become a dozen simultaneous
+    POSTs to one channel and a 429. The feed serializes them, batches up to ten
+    into one message, and spaces the sends. Still a coroutine so every call site
+    reads the same, but it no longer waits on Discord.
+    """
+    logfeed.post(ch, embed)
 
 
 # ── Event-toggle select menu ───────────────────────────────────────────────────
