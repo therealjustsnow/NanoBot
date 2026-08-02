@@ -107,7 +107,28 @@ export const weight = (kg) => {
   return n < 1 ? `${Math.round(n * 1000)}g` : `${n.toFixed(2)}kg`;
 };
 
-export const plural = (count, one, many = `${one}s`) =>
+/**
+ * Pluralise for display.
+ *
+ * The default used to be a bare `one + "s"`, which is fine for "3 runs" and
+ * wrong for most of what fishing passes it: species names come straight out of
+ * the catalogue, so the bag said "2 fishs" and a sale said "2 Basss",
+ * "2 Catfishs", "2 Perchs". English needs three rules here and no more —
+ * anything genuinely irregular can still be passed explicitly as `many`.
+ */
+const pluralise = (one) => {
+  const word = String(one);
+  const lower = word.toLowerCase();
+  // Invariant: "fish" and everything built on it (catfish, anglerfish…).
+  if (lower === "fish" || lower.endsWith("fish")) return word;
+  // Sibilants take -es: bass → basses, perch → perches, octopus → octopuses.
+  if (/(?:s|sh|ch|x|z)$/.test(lower)) return `${word}es`;
+  // Consonant + y takes -ies: penny → pennies (but "day" stays "days").
+  if (/[^aeiou]y$/.test(lower)) return `${word.slice(0, -1)}ies`;
+  return `${word}s`;
+};
+
+export const plural = (count, one, many = pluralise(one)) =>
   `${num(count)} ${Math.abs(Number(count)) === 1 ? one : many}`;
 
 /**

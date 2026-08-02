@@ -465,6 +465,43 @@ async def test_wallet_reports_the_daily_countdown():
     assert wallet["daily"]["ready_in"] > 0
 
 
+# ══════════════════════════════════════════════════════════════════════════════
+#  Ranks are a position, not the (position, value) pair the accessor returns
+#
+#  `get_econ_rank` and friends answer a tuple. Handing that straight to the
+#  payload serialised it as a two-element array, which the card rendered as
+#  "#0 richest" — and, worse, `_rank_title` was then asked to compare a tuple
+#  against an int, which took the whole profile endpoint down with a TypeError.
+#  Both halves are asserted here because the display bug is the visible one and
+#  the crash is the expensive one.
+# ══════════════════════════════════════════════════════════════════════════════
+async def test_wallet_ranks_are_plain_positions():
+    await db.add_coins(U, 5_000)
+    wallet = await E.wallet(U, G)
+    assert wallet["rank"] == 1
+    assert isinstance(wallet["rank"], int)
+    assert not isinstance(wallet["rank"], (tuple, list))
+
+
+async def test_wallet_survives_having_contribution_points():
+    """The contribution title is derived from the rank, so a tuple there raised
+    rather than rendering — every /profile view 500'd for anyone who had ever
+    run /squad."""
+    await db.add_coins(U, 100)
+    await db.add_contribution(U, 250)
+    wallet = await E.wallet(U, G)
+    assert wallet["contribution"]["rank"] == 1
+    assert isinstance(wallet["contribution"]["rank"], int)
+    assert isinstance(wallet["contribution"]["title"], str)
+
+
+async def test_an_unranked_account_reports_no_rank_rather_than_zero():
+    """No wallet row at all is "unranked", which the card words for itself."""
+    wallet = await E.wallet(U + 99, G)
+    assert wallet["contribution"]["rank"] is None
+    assert wallet["contribution"]["title"] is None
+
+
 async def test_pay_moves_coins_and_refuses_when_short():
     await db.add_coins(U, 500)
     result = await E.pay(U, G, U + 1, 200)

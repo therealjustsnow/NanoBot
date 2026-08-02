@@ -267,7 +267,14 @@ async def security_headers(
             "font-src 'self'; "
             "form-action 'self' https://discord.com; "
             "frame-ancestors 'none'; "
-            "base-uri 'none'",
+            # 'self', not 'none': index.html carries a <base href> (rewritten at
+            # deploy time for subpath hosting) and every asset URL is relative to
+            # it. 'none' blocks the tag outright, so a deep link like
+            # /g/123/fishing resolves `assets/…` against /g/123/, gets the SPA
+            # fallback's HTML back instead of CSS and JS, and the whole app fails
+            # to boot — visibly, on every reload. 'self' still forbids pointing
+            # the base at another origin, which is what the directive is for.
+            "base-uri 'self'",
         )
     return response
 

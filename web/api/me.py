@@ -215,7 +215,16 @@ def routes(dash: "Dashboard") -> list:
                 }
             )
         rows.sort(key=lambda r: (r["slot"], not r["owned"], r["name"]))
-        return H.ok({"cosmetics": rows, "equipped": equipped})
+        # The balance rides along so a listing can say whether a price is
+        # actually reachable. A row marked only with its price reads as an
+        # offer, and half of them aren't one.
+        return H.ok(
+            {
+                "cosmetics": rows,
+                "equipped": equipped,
+                "balance": await db.get_balance(user_id),
+            }
+        )
 
     @H.require_session
     async def me_summary(request: web.Request) -> web.Response:
@@ -227,6 +236,8 @@ def routes(dash: "Dashboard") -> list:
         user_id = H.user_id_of(request)
         gxp = await db.get_global_xp(user_id)
         level, into, need = globalxp.level_progress(gxp)
+        # (position, coins) — the card wants the position on its own.
+        econ_rank = await db.get_econ_rank(user_id)
         return H.ok(
             {
                 "level": level,
@@ -234,7 +245,7 @@ def routes(dash: "Dashboard") -> list:
                 "into": into,
                 "need": need,
                 "balance": await db.get_balance(user_id),
-                "rank": await db.get_econ_rank(user_id),
+                "rank": econ_rank[0] if econ_rank else None,
                 "achievements": len(await db.get_earned_achievements(user_id)),
                 "prestige": (await db.get_progression(user_id)).get("prestige", 0),
                 "items": sum(r["qty"] for r in await db.get_inventory(user_id)),

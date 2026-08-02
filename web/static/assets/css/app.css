@@ -448,9 +448,11 @@ button, input, select, textarea { font: inherit; color: inherit; }
   border-bottom: 1px solid var(--line);
 }
 .setting:last-child { border-bottom: 0; }
-.setting__text { min-width: 0; }
+/* Both halves are spans, so without a column they run together on one line —
+   "Stay in voice (24/7)NanoBot keeps the connection open…". */
+.setting__text { min-width: 0; display: flex; flex-direction: column; gap: 2px; }
 .setting__name { font-weight: 600; }
-.setting__why { font-size: 0.8rem; color: var(--ink-3); }
+.setting__why { font-size: 0.8rem; color: var(--ink-3); line-height: 1.4; }
 .setting__control { flex: 0 0 auto; }
 @media (max-width: 480px) {
   .setting--stack { flex-direction: column; align-items: stretch; }
@@ -664,6 +666,9 @@ button, input, select, textarea { font: inherit; color: inherit; }
   content: ""; position: absolute; inset: auto 0 0 0; height: 62%;
   background: radial-gradient(120% 60% at 50% 100%, rgb(88 101 242 / 0.28), transparent 70%);
   animation: swell 7s ease-in-out infinite;
+  /* Decoration only. `::after` paints over the pond's real children, so without
+     this the water swallows every tap aimed at the Cast button underneath it. */
+  pointer-events: none;
 }
 .pond::after { animation-duration: 11s; animation-direction: reverse; opacity: 0.6; }
 @keyframes swell {

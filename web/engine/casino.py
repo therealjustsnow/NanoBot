@@ -483,7 +483,8 @@ async def state(user_id: int, guild_id: int) -> dict:
         "stats": {
             **stats,
             "net": stats["won"] - stats["wagered"],
-            "rank": await db.get_casino_rank(user_id),
+            # (position, net) — the stats card wants the position on its own.
+            "rank": (await db.get_casino_rank(user_id) or (None,))[0],
             "of": await db.count_casino_players(),
         },
         "challenges": challenges,

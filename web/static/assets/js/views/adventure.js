@@ -73,9 +73,7 @@ export async function adventure({ guildId }) {
             `Collect all ${ready} runs`,
             async () => {
               const result = await api.post(`${base}/collect`);
-              last = result;
-              paintResult(result);
-              await refresh();
+              await paintResult(result);
             },
             { variant: "hero", glyph: "📥", block: true }
           )
@@ -91,12 +89,15 @@ export async function adventure({ guildId }) {
     );
   }
 
-  function paintResult(result) {
+  async function paintResult(result) {
     last = result;
-    // Repaint everything: a run changes the balance, the charges, and possibly
-    // the career or the pickaxe. Refreshing piecemeal is how a dashboard ends up
-    // showing two different truths at once.
-    paint();
+    // Re-read before repainting: a run changes the balance, the charges, and
+    // possibly the career or the pickaxe, and none of that is in the result
+    // payload. Painting from the state we already had left the card showing the
+    // charges as they were *before* the run — so running Work four times still
+    // read "4 of 4 ready". Refreshing piecemeal is how a dashboard ends up
+    // showing two different truths at once, so this re-reads the lot.
+    await refresh();
     if (result.encounter) openEncounter(result.encounter);
   }
 
@@ -151,7 +152,7 @@ export async function adventure({ guildId }) {
         `Run · ${activity.ready} ready`,
         async () => {
           const result = await api.post(`${base}/run/${activity.activity}`);
-          paintResult(result);
+          await paintResult(result);
         },
         { variant: "primary", block: true }
       );
@@ -294,6 +295,12 @@ export async function adventure({ guildId }) {
 
   /* ── Rob ──────────────────────────────────────────────────────────────── */
   async function openRob() {
+    // /members is the generic picker feed, so it includes the person looking at
+    // it. Robbing yourself is refused by the engine, and a row whose only
+    // outcome is a refusal has no business being offered.
+    const robbable = (rows) =>
+      rows.filter((member) => String(member.id) !== String(store.state.user?.id));
+
     const { members } = await api.get(`/api/guilds/${guildId}/members`);
     const list = h("div", { class: "stack stack--tight" });
     const search = h("input", {
@@ -304,7 +311,13 @@ export async function adventure({ guildId }) {
         const found = await api.get(
           `/api/guilds/${guildId}/members?q=${encodeURIComponent(search.value)}`
         );
-        fill(list, ...found.members.map(memberRow));
+        const rows = robbable(found.members);
+        fill(
+          list,
+          ...(rows.length
+            ? rows.map(memberRow)
+            : [h("p", { class: "small dim" }, "Nobody here by that name.")])
+        );
       },
     });
 
@@ -346,7 +359,7 @@ export async function adventure({ guildId }) {
       );
     }
 
-    fill(list, ...members.map(memberRow));
+    fill(list, ...robbable(members).map(memberRow));
   }
 
   /* ── Progression ──────────────────────────────────────────────────────── */

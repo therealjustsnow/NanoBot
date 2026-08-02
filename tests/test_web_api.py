@@ -546,6 +546,43 @@ async def test_the_wardrobe_lists_locked_cosmetics_too(server, http):
         assert row["unlock"], f"{row['key']} doesn't say how to get it"
 
 
+async def test_the_wardrobe_says_what_you_can_afford(server, http):
+    """A row marked only with its price reads as an offer, and most of them
+    aren't one — the balance is what lets the listing tell those apart."""
+    async with await Client(http, MEMBER_ID).get("/api/me/cosmetics") as r:
+        body = await r.json()
+    assert "balance" in body
+    assert isinstance(body["balance"], int)
+    assert any(row["for_sale"] and row["price"] > 0 for row in body["cosmetics"])
+
+
+async def test_account_summary_rank_is_a_position(server, http):
+    """`get_econ_rank` answers (position, coins). The summary card prints the
+    rank straight, so the pair came out as "#0 richest"."""
+    await db.add_coins(MEMBER_ID, 1234)
+    async with await Client(http, MEMBER_ID).get("/api/me") as r:
+        body = await r.json()
+    assert body["rank"] == 1
+    assert isinstance(body["rank"], int)
+
+
+async def test_the_profile_survives_a_member_with_contribution(server, http):
+    """The contribution title is derived from the rank, so the leaked tuple
+    didn't just render wrong — it took the whole endpoint down for anyone who
+    had ever run /squad."""
+    await db.add_coins(MEMBER_ID, 500)
+    await db.add_contribution(MEMBER_ID, 300)
+    async with await Client(http, MEMBER_ID).get(
+        f"/api/guilds/{GUILD_ID}/me/profile"
+    ) as r:
+        assert r.status == 200
+        body = await r.json()
+    wallet = body["wallet"]
+    assert isinstance(wallet["rank"], int)
+    assert isinstance(wallet["contribution"]["rank"], int)
+    assert isinstance(wallet["contribution"]["title"], str)
+
+
 async def test_state_reads_work_on_a_brand_new_account(server, http):
     member = Client(http, MEMBER_ID)
     for path in ("fishing", "adventure", "inventory", "wallet", "shop"):
@@ -827,6 +864,37 @@ async def test_security_headers_are_set_on_the_app_shell(server, http):
     assert "script-src 'self'" in csp
     assert "unsafe-inline" not in csp.split("style-src")[0]
     assert "frame-ancestors 'none'" in csp
+
+
+async def test_the_csp_still_allows_the_shell_its_own_base_tag(server, http):
+    """`base-uri 'none'` breaks every deep link, silently and completely.
+
+    index.html carries a `<base href>` (rewritten at deploy time for subpath
+    hosting) and every asset URL is relative to it. Forbidding the tag outright
+    means a reload on /g/123/fishing resolves `assets/css/app.css` against
+    /g/123/, gets the SPA fallback's HTML back instead of CSS and JS, and the
+    app never boots — which reads to a user as "the site is broken", because it
+    is. 'self' still stops anyone pointing the base at another origin, which is
+    the whole purpose of the directive.
+    """
+    async with http.get(f"{BASE}/") as r:
+        csp = r.headers["Content-Security-Policy"]
+        shell = await r.text()
+    assert "base-uri 'none'" not in csp
+    assert "base-uri 'self'" in csp
+    # The directive only matters because the shell really does carry the tag.
+    assert "<base href=" in shell
+
+
+async def test_a_deep_link_serves_the_shell_and_its_assets(server, http):
+    """The reload case end to end: the app shell at a nested path, and the
+    stylesheet still reachable at the root-relative URL the base tag produces."""
+    async with http.get(f"{BASE}/g/{GUILD_ID}/fishing") as r:
+        assert r.status == 200
+        assert r.headers["Content-Type"].startswith("text/html")
+    async with http.get(f"{BASE}/assets/js/app.js") as r:
+        assert r.status == 200
+        assert "html" not in r.headers["Content-Type"]
 
 
 # ══════════════════════════════════════════════════════════════════════════════

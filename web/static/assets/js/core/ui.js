@@ -366,6 +366,17 @@ export function sheet(title, body, { actions = [], onClose = null } = {}) {
     panel
   );
 
+  // An in-app link inside a sheet is handled by the router, which swaps the
+  // view underneath without touching this dialog — leaving it stranded over the
+  // new page with the body still scroll-locked. Close on the way out.
+  panel.addEventListener("click", (event) => {
+    const link = event.target.closest?.("a[href]");
+    if (!link || link.target || link.hasAttribute("download")) return;
+    const href = link.getAttribute("href") || "";
+    if (!href.startsWith("/") || href.startsWith("//") || href.startsWith("/api/")) return;
+    close();
+  });
+
   function close() {
     document.removeEventListener("keydown", onKey);
     scrim.remove();

@@ -185,9 +185,44 @@ export async function wardrobe({ guildId }) {
   }
 
   /* ── The grid ─────────────────────────────────────────────────────────── */
+  /**
+   * What you can act on, first.
+   *
+   * A slot holds up to 47 cosmetics, and in catalogue order that is an
+   * alphabetical wall with the four you own, the two you can afford and the
+   * forty you can't all shuffled together — so the page answers "what's in the
+   * catalogue" when the question is "what can I do right now". This is the same
+   * affordability ordering the bot's own `/shop` picker uses.
+   *
+   * Nothing is hidden: an unaffordable or play-locked row is still listed, with
+   * its price or its unlock line, because that list *is* the discovery UI. It
+   * just sorts below the rows a tap would actually do something on.
+   */
+  const RANK = { owned: 0, affordable: 1, expensive: 2, locked: 3 };
+
+  const bucket = (c) => {
+    if (c.owned) return "owned";
+    if (!c.for_sale) return "locked";
+    return state.balance >= c.price ? "affordable" : "expensive";
+  };
+
+  function ordered(rows) {
+    return [...rows].sort((a, b) => {
+      const ra = RANK[bucket(a)];
+      const rb = RANK[bucket(b)];
+      if (ra !== rb) return ra - rb;
+      // Within the two priced buckets, cheapest first — that is the order
+      // someone saving up reads them in.
+      if ((ra === RANK.affordable || ra === RANK.expensive) && a.price !== b.price) {
+        return a.price - b.price;
+      }
+      return a.name.localeCompare(b.name);
+    });
+  }
+
   function grid(slotSpec) {
-    const rows = state.cosmetics.filter(
-      (c) => c.slot === slotSpec.key && (showLocked || c.owned)
+    const rows = ordered(
+      state.cosmetics.filter((c) => c.slot === slotSpec.key && (showLocked || c.owned))
     );
     if (!rows.length) {
       return ui.empty("Nothing here yet", "Play a little, or check the shop.", { glyph: "🎨" });
