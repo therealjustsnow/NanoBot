@@ -1115,7 +1115,10 @@ ACTIVITY_INFO: dict[str, dict] = {
     },
     "mine": {
         "emoji": "⛏️",
-        "command": "/mine",
+        # The name a member can actually run. A group's bare form is
+        # prefix-only — Discord has no gesture for invoking a group itself —
+        # so anything the bot *prints* has to name the subcommand.
+        "command": "/mine dig",
         "blurb": "Dig a vein of ore to sell. Small cave-in risk.",
         "disabled": "Mining is disabled on this server.",
         "wait_title": "⛏️ Not Yet",

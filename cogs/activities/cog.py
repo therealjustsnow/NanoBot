@@ -883,7 +883,7 @@ class Activities(commands.Cog):
             ready = [a for a in ACTIVITY_NAMES if enabled[a] and charges[a]["ready"]]
             headline = (
                 f"**{runs}** run{'s' if runs != 1 else ''} banked and waiting: "
-                + ", ".join(f"`/{a}`" for a in ready)
+                + ", ".join(f"`{ACTIVITY_INFO[a]['command']}`" for a in ready)
             )
         else:
             soonest = min(
@@ -937,7 +937,7 @@ class Activities(commands.Cog):
                 h.BLUE,
             )
             embed.set_footer(
-                text="Tap to run another — this is /adventure, and it's the "
+                text="Tap to run another — this is /adventure dashboard, the "
                 "fastest way to work the whole loop."
             )
             return embed, state
@@ -1240,7 +1240,9 @@ class Activities(commands.Cog):
         enabled = not cfg[key]
         await db.set_activities_config(ctx.guild.id, **{key: enabled})
         state = "enabled" if enabled else "disabled"
-        await ctx.reply(embed=h.ok(f"`/{activity}` is now **{state}**."))
+        await ctx.reply(
+            embed=h.ok(f"`{ACTIVITY_INFO[activity]['command']}` is now **{state}**.")
+        )
 
     @activities_toggle.autocomplete("activity")
     async def _toggle_activity_ac(self, interaction: discord.Interaction, current: str):

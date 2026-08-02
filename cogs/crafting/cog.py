@@ -253,8 +253,9 @@ class Crafting(commands.Cog):
         if r is None:
             return await ctx.reply(
                 embed=h.err(
-                    f"I don't know a recipe called **{recipe}**. Run `/craft` to "
-                    f"see them all — e.g. {self._recipe_hint()}."
+                    f"I don't know a recipe called **{recipe}**. Run "
+                    f"`/craft list` to see them all — e.g. "
+                    f"{self._recipe_hint()}."
                 ),
                 ephemeral=True,
             )
@@ -322,8 +323,9 @@ class Crafting(commands.Cog):
         if r is None:
             return await ctx.reply(
                 embed=h.err(
-                    f"I don't know a recipe called **{recipe}**. Run `/craft` to "
-                    f"see them all — e.g. {self._recipe_hint()} — or make "
+                    f"I don't know a recipe called **{recipe}**. Run "
+                    f"`/craft list` to see them all — e.g. "
+                    f"{self._recipe_hint()} — or make "
                     "everything you can with `/craft make all`."
                 ),
                 ephemeral=True,
@@ -462,8 +464,8 @@ class Crafting(commands.Cog):
             return await ctx.reply(
                 embed=h.warn(
                     "You haven't got the materials for any recipe yet. Run "
-                    "`/craft` to see what each one takes — ore comes from "
-                    "`/mine`, pelts and meat from `/adventure hunt`.",
+                    "`/craft list` to see what each one takes — ore comes "
+                    "from `/mine dig`, pelts and meat from `/adventure hunt`.",
                     "🛠️ Nothing to Craft",
                 ),
                 ephemeral=True,

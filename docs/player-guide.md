@@ -7,6 +7,12 @@ section, read the next one.
 > **Slash or prefix, your choice.** Every command works as `/fish` or as
 > `n!fish` (the `n!` prefix can be changed per server). On mobile, use the
 > slash commands: most options now pop up a list you tap instead of typing.
+>
+> One quirk worth knowing: where a command has subcommands, Discord's slash
+> picker can't run the bare name — `/fish` is a folder there, and casting is
+> `/fish cast`. So this guide names features by their short name (`/fish`,
+> `/shop`, `/progress`) but the tables and step-by-steps give you the exact
+> thing to tap. Typing `n!fish` on the prefix side always works.
 
 ---
 
@@ -56,10 +62,10 @@ was kept, and anything you'd already claimed stayed claimed.
 ## 🚀 Start here (your first five minutes)
 
 1. `/daily` — free coins, once every 24 hours. **The amount is a roll** — most days are ordinary, some are great, and roughly one in a hundred is a jackpot. Claiming on consecutive days adds a streak bonus on top.
-2. `/fish` — cast a line. You can cast again every **20 seconds**.
+2. `/fish cast` — cast a line. You can cast again every **20 seconds**.
 3. `/fish sell` — turn your catch into coins (pick "Everything in your bag").
-4. `/adventure` — see everything that's waiting and hit **Collect all**.
-5. `/profile` — see everything you've built so far.
+4. `/adventure dashboard` — see everything that's waiting and hit **Collect all**.
+5. `/profile card` — see everything you've built so far.
 
 Then come back later today, or tomorrow. Everything banks up for twelve hours,
 so there is nothing to keep on top of.
@@ -412,7 +418,7 @@ On a phone, tap `/adventure dashboard` — Discord can't run a command group by
 itself, so that's the same card under a name slash can reach.
 
 **You don't have to go looking for it.** Every individual activity — `/work`,
-`/mine`, `/adventure hunt`, `/adventure explore` — answers with its result
+`/mine dig`, `/adventure hunt`, `/adventure explore` — answers with its result
 *and* a short version of the dashboard underneath, buttons included. So a
 paycheck also tells you two digs and a hunt are waiting, and you can run them
 from the same message. Press one and the result on top is replaced by the new
@@ -423,7 +429,7 @@ cooldown" on its own is a dead end.
 | Command | Comes back | Banks | Risk | Reward |
 |---|---|---|---|---|
 | `/work` | 3 hours | 4 (12h) | none | 200–360 coins + a 10-step career ladder |
-| `/mine` | 3 hours | 4 (12h) | 8% cave-in (nothing) | A vein of 4–14 ore, rare bonus treasure key |
+| `/mine dig` | 3 hours | 4 (12h) | 8% cave-in (nothing) | A vein of 4–14 ore, rare bonus treasure key |
 | `/adventure hunt` | 4 hours | 3 (12h) | 12% injury fine | A bag of 4–9 pelts/meat, rare 🏆 Golden Antler, rare padlock |
 | `/adventure explore` | 6 hours | 2 (12h) | wasted trip | Nothing → coins → keys/chests/charms → a big find |
 | `/rob <member>` | 4 hours | 1 | 200 coin fine | 10–20% of their wallet (capped 1,000) |
@@ -519,7 +525,7 @@ Everything you own that isn't coins or bagged fish lives in `/inventory`
 
 | Command | What it does |
 |---|---|
-| `/inventory` | Your items grouped by category, with totals and active buffs |
+| `/inventory view` | Your items grouped by category, with totals and active buffs |
 | `/inventory view [category]` | The same view, slash-reachable; add a category (`bait`, `material`, …) to show just that one |
 | `/inventory use [item] [qty]` | Use a consumable — this is how bait and charms are armed. Name several, separated by commas, or run it bare and tap them from a menu |
 | `/inventory sell <item> [qty]` | Sell items for coins |
@@ -787,7 +793,7 @@ Your personal rank on `/balance`, `/fish stats` and `/casino stats` is your
 
 ## 💡 Tips
 
-- **Open `/adventure` and hit Collect all.** Everything banks for twelve hours,
+- **Open `/adventure dashboard` and hit Collect all.** Everything banks for twelve hours,
   so two visits a day loses you nothing and one press collects the lot.
 - **Run something every day.** Even one activity keeps your streak alive, and
   the streak is worth up to +25% on every coin reward.

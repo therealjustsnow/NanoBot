@@ -228,7 +228,7 @@ class Inventory(commands.Cog):
             return await ctx.reply(
                 embed=h.info(
                     "Your inventory is empty. Items come from fishing, "
-                    "activities like `/mine` and `/adventure hunt`, and economy "
+                    "activities like `/mine dig` and `/adventure hunt`, and economy "
                     "events. Anything you find shows up here.",
                     "🎒 Inventory",
                 ),
@@ -256,7 +256,9 @@ class Inventory(commands.Cog):
             summary += f" · worth **{total_value:,}** if you sold the lot"
         if wanted:
             label = item_catalog.CATEGORY_LABELS.get(wanted, wanted.title())
-            summary += f"\nShowing **{label}** only — run `/inventory` for everything."
+            summary += (
+                f"\nShowing **{label}** only — run `/inventory view` for everything."
+            )
         embed = h.embed(f"🎒 {ctx.author.display_name}'s Inventory", summary, ACCENT)
 
         for cat in item_catalog.CATEGORY_ORDER:
@@ -469,8 +471,8 @@ class Inventory(commands.Cog):
                 False,
                 f"❔ No item called **{target}**.",
                 h.err(
-                    f"I don't know any item called **{target}**. Run `/inventory` "
-                    "to see what you own."
+                    f"I don't know any item called **{target}**. Run "
+                    "`/inventory view` to see what you own."
                 ),
             )
         label = item_catalog.display(d.key)
@@ -565,8 +567,8 @@ class Inventory(commands.Cog):
                 return await self._sell_bulk(ctx, category, qty)
             return await ctx.reply(
                 embed=h.err(
-                    f"I don't know any item called **{item}**. Run `/inventory` to "
-                    "see what you own, or sell everything at once with "
+                    f"I don't know any item called **{item}**. Run `/inventory view` "
+                    "to see what you own, or sell everything at once with "
                     "`/inventory sell all`."
                 ),
                 ephemeral=True,
@@ -849,7 +851,7 @@ class Inventory(commands.Cog):
             return await ctx.reply(
                 embed=h.err(
                     f"I don't know any item called **{item}**. Pick one from the "
-                    "list, or run `/inventory` to see what you own."
+                    "list, or run `/inventory view` to see what you own."
                 ),
                 ephemeral=True,
             )

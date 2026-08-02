@@ -1718,7 +1718,7 @@ class Economy(commands.Cog):
                 + (
                     " and check it on `/balance`."
                     if d.category == "wallet"
-                    else " and check it on `/profile`."
+                    else " and check it on `/profile card`."
                 )
                 + f"\nBalance: {self._money(cfg, balance)}",
                 "🛍️ Unlocked",

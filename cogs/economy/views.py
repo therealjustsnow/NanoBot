@@ -869,7 +869,7 @@ class ShopView(discord.ui.View):
     async def interaction_check(self, interaction: discord.Interaction) -> bool:
         if interaction.user.id != self.invoker_id:
             await interaction.response.send_message(
-                embed=h.info("Run `/shop` yourself to browse — it shows your coins."),
+                embed=h.info("Run `/shop browse` yourself — it shows your own coins."),
                 ephemeral=True,
             )
             return False

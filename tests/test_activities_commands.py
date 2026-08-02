@@ -12,6 +12,7 @@ from discord.ext import test as dpytest
 import utils.db as db
 from cogs.activities import (
     ACTIVITY_DEFAULT_COOLDOWNS,
+    ACTIVITY_INFO,
     ACTIVITY_MAX_CHARGES,
     EXPLORE_COINS_SMALL,
     EXPLORE_OUTCOMES,
@@ -431,12 +432,10 @@ async def test_adventure_bare_shows_member_overview(bot):
     sent = dpytest.get_message()
     embed = sent.embeds[0]
     assert "Adventure" in embed.title
+    # Named from the registry, because the card prints the command a member can
+    # actually run — a bare `/mine` is a group Discord won't invoke.
     activity_fields = {
-        "💼 /work",
-        "⛏️ /mine",
-        "🏹 /adventure hunt",
-        "🧭 /adventure explore",
-        "🥷 /rob",
+        f"{info['emoji']} {info['command']}" for info in ACTIVITY_INFO.values()
     }
     names = {f.name for f in embed.fields}
     assert activity_fields <= names
@@ -495,7 +494,8 @@ async def test_a_partly_spent_bucket_still_shows_what_is_left(bot):
 
     await dpytest.message("!adventure", member=author)
     embed = dpytest.get_message().embeds[0]
-    mine = {f.name: f.value for f in embed.fields}["⛏️ /mine"]
+    mine_field = f"⛏️ {ACTIVITY_INFO['mine']['command']}"
+    mine = {f.name: f.value for f in embed.fields}[mine_field]
     assert f"Ready now ×{ACTIVITY_MAX_CHARGES['mine'] - 1}" in mine
     assert f"up to {ACTIVITY_MAX_CHARGES['mine']} banked" in mine
 

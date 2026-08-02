@@ -289,7 +289,10 @@ class AdventureView(_EncounterHost, discord.ui.View):
     async def interaction_check(self, interaction: discord.Interaction) -> bool:
         if interaction.user.id != self.invoker_id:
             await interaction.response.send_message(
-                embed=h.info("Run `/adventure` yourself — it shows your own charges."),
+                embed=h.info(
+                    "Run `/adventure dashboard` yourself — it shows your own "
+                    "charges."
+                ),
                 ephemeral=True,
             )
             return False

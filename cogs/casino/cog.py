@@ -951,7 +951,7 @@ class Casino(commands.Cog):
             offset = (page - 1) * per
         if total == 0:
             return paginator.Page(
-                h.info("No one has played yet. Try `/casino`!", "🎰 Players")
+                h.info("No one has played yet. Try `/casino overview`!", "🎰 Players")
             )
 
         medals = {1: "🥇", 2: "🥈", 3: "🥉"}

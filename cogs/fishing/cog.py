@@ -1472,7 +1472,9 @@ class Fishing(commands.Cog):
             offset = (page - 1) * per
         if total == 0:
             return paginator.Page(
-                h.info("No one has earned anything yet. Try `/fish`!", "🎣 Anglers")
+                h.info(
+                    "No one has earned anything yet. Try `/fish cast`!", "🎣 Anglers"
+                )
             )
 
         medals = {1: "🥇", 2: "🥈", 3: "🥉"}
