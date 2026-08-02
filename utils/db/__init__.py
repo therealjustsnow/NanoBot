@@ -50,6 +50,9 @@ _DOMAIN_ORDER = (
     # Account-level social counters (rep, cookies) — user-keyed like identity,
     # but worth no coins, so they sit outside the economy entirely.
     "social",
+    # Live /fun wyr poll boards. A board, not a balance: guild-scoped, deleted
+    # the moment it announces, and tied to no other domain's tables.
+    "polls",
     # Bot-wide, owner-owned knobs (the activity cooldowns, the coin faucet
     # amounts) — no guild id, no user id, so it stands apart from every domain
     # above.

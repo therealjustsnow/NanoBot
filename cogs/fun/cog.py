@@ -27,11 +27,16 @@ Slash (1 top-level slot, 9 subcommands):
 Prefix (flat):
   !hug, !slap, !cry, !dance, !ship, !8ball, !fml, !thigh, !wyr, !rps, !cookie, etc.
 
-Cookies are the one thing in here that persists. They are stored per *account*
-(utils/db/social.py), like everything else a member owns, and are worth no
-coins — so they are neither a faucet nor a sink, just a tally. Running
-`/fun cookie` with nobody tagged renders a dashboard card via
-utils/cookie_card.py, the second user of the profile-card renderer.
+Cookies are stored per *account* (utils/db/social.py), like everything else a
+member owns, and are worth no coins — so they are neither a faucet nor a sink,
+just a tally. Running `/fun cookie` with nobody tagged renders a dashboard card
+via utils/cookie_card.py, the second user of the profile-card renderer.
+
+WYR polls persist too, for a different reason: a poll can be set to run for 24
+hours, so it outlives the process it was started in. Its votes and its closing
+time live in `wyr_polls` (utils/db/polls.py) and its buttons carry per-poll
+custom_ids, so a restart mid-poll keeps the votes, keeps the buttons alive, and
+still announces a winner — see the WYR lifecycle section below.
 """
 
 import asyncio
@@ -112,6 +117,11 @@ class Fun(commands.Cog):
         # Cookie-card rendering is CPU work; cap it the same way the profile
         # card does so a burst can't starve the event loop's thread pool.
         self._cookie_render_lock = asyncio.Semaphore(2)
+        # Live WYR polls + the timers that close them. The view is persistent
+        # and the votes are in SQLite, so these two dicts are only ever a cache
+        # of what a restart rebuilds from `wyr_polls`.
+        self._polls: dict[int, WyrView] = {}
+        self._poll_tasks: dict[int, asyncio.Task] = {}
 
     async def cog_load(self):
         self._session = aiohttp.ClientSession()
@@ -120,14 +130,106 @@ class Fun(commands.Cog):
         self._register_prefix_commands()
         self._scrape_loop.start()
         self._revalidate_loop.start()
+        # restore_schedules only fires from on_ready, so a hot-reload after the
+        # bot is up would bring the open polls back with no closing timers.
+        if self.bot.is_ready():
+            self.bot.loop.create_task(self.on_restore_schedules())
 
     async def cog_unload(self):
         self._scrape_loop.cancel()
         self._revalidate_loop.cancel()
+        for task in self._poll_tasks.values():
+            task.cancel()
         for cmd in self._dynamic_cmds:
             self.bot.remove_command(cmd.name)
         if self._session and not self._session.closed:
             await self._session.close()
+
+    # ══════════════════════════════════════════════════════════════════════════
+    #  WYR poll persistence / lifecycle
+    #
+    #  A poll can run for 24 hours, so it will normally outlive the process it
+    #  was started in. Everything that decides its outcome therefore lives in
+    #  SQLite: the votes, and the timestamp voting closes at. What is rebuilt on
+    #  restart is only the view (re-registered against its message id so the
+    #  buttons keep working) and the timer that announces the result.
+    # ══════════════════════════════════════════════════════════════════════════
+
+    async def _make_poll(
+        self,
+        guild_id: int | None,
+        channel_id: int,
+        option_a: str,
+        option_b: str,
+        duration: int,
+    ) -> WyrView:
+        """Persist a new poll and build its (unsent) view."""
+        end_ts = time.time() + duration
+        poll_id = await db.create_wyr_poll(
+            guild_id, channel_id, option_a, option_b, end_ts
+        )
+        return WyrView(self, poll_id, option_a, option_b, end_ts)
+
+    def _arm_poll(self, view: WyrView) -> None:
+        """Track a live poll and schedule the announcement of its result."""
+        self._polls[view.poll_id] = view
+        delay = max(0.0, view.end_ts - time.time())
+        h.spawn_tracked(self._poll_tasks, view.poll_id, self._poll_expiry(view, delay))
+
+    async def _poll_expiry(self, view: WyrView, delay: float) -> None:
+        try:
+            await asyncio.sleep(delay)
+        except asyncio.CancelledError:
+            return
+        try:
+            await view.finish()
+        except Exception:
+            # One poll failing to announce must not take the loop's task with it.
+            log.exception("WYR poll %s failed to close", view.poll_id)
+
+    async def _end_poll(self, poll_id: int) -> None:
+        """Drop a finished poll: cancel its timer + delete the row."""
+        task = self._poll_tasks.pop(poll_id, None)
+        if task is not None and task is not asyncio.current_task():
+            task.cancel()
+        self._polls.pop(poll_id, None)
+        await db.delete_wyr_poll(poll_id)
+
+    async def _send_poll(self, view: WyrView, message: discord.Message) -> None:
+        """Bind a freshly-sent poll message to its row and start its timer."""
+        view.message = message
+        await db.set_wyr_message(view.poll_id, message.id)
+        self._arm_poll(view)
+
+    @commands.Cog.listener()
+    async def on_restore_schedules(self):
+        """Rebuild open WYR polls after a restart."""
+        for row in await db.get_open_wyr_polls():
+            poll_id = row["poll_id"]
+            if poll_id in self._polls:
+                # on_ready re-fired (gateway re-identify) — this poll is already
+                # live; rebuilding it would leak the old closing timer.
+                continue
+            if row["message_id"] is None:
+                # Crash beat the message-id write — nothing to bind buttons to.
+                await db.delete_wyr_poll(poll_id)
+                continue
+            view = WyrView(
+                self,
+                poll_id,
+                row["option_a"],
+                row["option_b"],
+                row["end_ts"],
+                votes=row["votes"],
+            )
+            self.bot.add_view(view, message_id=row["message_id"])
+            channel = self.bot.get_channel(row["channel_id"])
+            if channel is not None:
+                view.message = channel.get_partial_message(row["message_id"])
+            # A poll whose end passed while the bot was down is armed with a
+            # zero delay, so the result goes out on the next tick rather than
+            # being lost — which is the whole bug this table exists to fix.
+            self._arm_poll(view)
 
     # ══════════════════════════════════════════════════════════════════════════
     #  Daily content scraper -- fills cache_db
@@ -562,9 +664,11 @@ class Fun(commands.Cog):
                 ephemeral=True,
             )
         opt_a, opt_b = _split_wyr(question)
-        view = WyrView(opt_a, opt_b, duration=secs)
+        view = await self._make_poll(
+            i.guild.id if i.guild else None, i.channel.id, opt_a, opt_b, secs
+        )
         await i.response.send_message(embed=view._voting_embed(), view=view)
-        view.message = await i.original_response()
+        await self._send_poll(view, await i.original_response())
 
     # ── /fun rps ───────────────────────────────────────────────────────────
 
@@ -892,9 +996,11 @@ class Fun(commands.Cog):
                 "No WYR questions cached yet -- try again in a few minutes!"
             )
         opt_a, opt_b = _split_wyr(question)
-        view = WyrView(opt_a, opt_b, duration=secs)
+        view = await self._make_poll(
+            ctx.guild.id if ctx.guild else None, ctx.channel.id, opt_a, opt_b, secs
+        )
         msg = await ctx.reply(embed=view._voting_embed(), view=view)
-        view.message = msg
+        await self._send_poll(view, msg)
 
     @commands.command(
         name="cookie",
