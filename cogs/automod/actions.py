@@ -12,6 +12,7 @@ from discord.ext import commands
 
 from utils import db
 from utils import helpers as h
+from utils import logfeed
 
 from .constants import ACTION_LABELS, RULE_LABELS, TIMEOUT_SECONDS
 
@@ -75,10 +76,12 @@ async def _send_action_log(
     e.add_field(name="Moderator", value="NanoBot (automated)", inline=True)
     e.set_footer(text=f"NanoBot AutoMod  •  User ID: {member.id}")
     e.timestamp = discord.utils.utcnow()
-    try:
-        await ch.send(embed=e)
-    except (discord.Forbidden, discord.HTTPException) as exc:
-        log.debug("AutoMod log send failed in #%s: %s", ch, exc)
+    # Through the shared feed, not ch.send: AutoMod's busiest moment is a
+    # spammer flooding a channel, which is precisely when it would post one
+    # message per caught message and rate-limit itself. It also shares a channel
+    # with the audit log whenever no dedicated logchannel is set, so the two
+    # have to be spaced together rather than each on its own.
+    logfeed.post(ch, e)
 
 
 # ── Action executor ────────────────────────────────────────────────────────────

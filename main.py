@@ -29,6 +29,7 @@ from utils import config as cfg_mod
 from utils import db
 from utils import db_crypto
 from utils import helpers as h
+from utils import logfeed
 from utils import obs
 from utils import sqlite_conn
 from utils.health import health_routes, HEALTH_OWNER
@@ -395,6 +396,13 @@ class NanoBot(commands.Bot):
                 await dashboard.close()
             except Exception as exc:
                 log.debug("Dashboard shutdown error: %s", exc)
+        # The log-channel feeds hold one worker task per active channel. They
+        # own no state worth saving — a queued audit-log line is a courtesy, not
+        # a record — so they are cancelled outright rather than drained.
+        try:
+            logfeed.shutdown()
+        except Exception as exc:
+            log.debug("Log feed shutdown error: %s", exc)
         # Cancel fire-and-forget background tasks on shutdown, then give them a
         # brief window to unwind so an in-flight task isn't torn off mid-write.
         # (Cog-owned tasks are cancelled by cog_unload on reload; on full

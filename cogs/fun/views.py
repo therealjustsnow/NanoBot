@@ -2,25 +2,75 @@
 
 import random
 import time
+from typing import TYPE_CHECKING, Optional
 
 import discord
 
+from utils import db
 from utils import helpers as h
 
 from .actions import _RPS_CHOICES, _RPS_WINS, _RPS_COLOR
 
+if TYPE_CHECKING:  # pragma: no cover - import cycle guard, typing only
+    from .cog import Fun
+
+
+def _wyr_cid(poll_id: int, choice: str) -> str:
+    return f"wyr:{poll_id}:{choice}"
+
+
+class WyrButton(discord.ui.Button):
+    """A vote button carrying a per-poll custom_id so it survives restarts."""
+
+    def __init__(self, poll_id: int, choice: str, emoji: str):
+        super().__init__(
+            label=f"Option {choice}",
+            style=discord.ButtonStyle.blurple,
+            emoji=emoji,
+            custom_id=_wyr_cid(poll_id, choice),
+        )
+        self.choice = choice
+
+    async def callback(self, interaction: discord.Interaction):
+        await self.view._handle_vote(interaction, self.choice)
+
 
 class WyrView(discord.ui.View):
-    """Two-button vote view for Would You Rather. Edits itself on expiry."""
+    """Two-button vote view for Would You Rather.
 
-    def __init__(self, option_a: str, option_b: str, duration: int = 3600):
-        super().__init__(timeout=duration)
+    A poll runs for up to 24 hours, so it long outlives the average gap between
+    restarts — which is why nothing here is held in the process. Every vote is
+    written to `wyr_polls` (utils/db/polls.py), the buttons carry per-poll
+    custom_ids so they are still live after a restart, and the closing time is a
+    timestamp the cog re-arms a timer against rather than a `View` timeout that
+    dies with the process. The view is persistent (timeout=None) for exactly
+    that reason: the cog owns the clock, and `finish()` is the one path that
+    announces a winner, whether it is reached by the timer or by a late click.
+    """
+
+    def __init__(
+        self,
+        cog: "Fun",
+        poll_id: int,
+        option_a: str,
+        option_b: str,
+        end_ts: float,
+        votes: Optional[dict[int, str]] = None,
+    ):
+        super().__init__(timeout=None)
+        self.cog = cog
+        self.poll_id = poll_id
         self.option_a = option_a
         self.option_b = option_b
-        self.votes: dict[int, str] = {}
+        self.votes: dict[int, str] = dict(votes or {})
         self.ended = False
-        self.message: discord.Message | None = None
-        self.end_ts = int(time.time() + duration)
+        self.message: discord.abc.Message | None = None
+        self.end_ts = int(end_ts)
+        for choice, emoji in (("A", "\U0001f1e6"), ("B", "\U0001f1e7")):
+            self.add_item(WyrButton(poll_id, choice, emoji))
+
+    def _expired(self) -> bool:
+        return time.time() >= self.end_ts
 
     def _tally(self) -> tuple[int, int]:
         a = sum(1 for v in self.votes.values() if v == "A")
@@ -34,8 +84,17 @@ class WyrView(discord.ui.View):
         pct_b = 100 - pct_a if total else 0
         bar_a = "\u2593" * round(pct_a / 10) + "\u2591" * (10 - round(pct_a / 10))
         bar_b = "\u2593" * round(pct_b / 10) + "\u2591" * (10 - round(pct_b / 10))
+        if total == 0:
+            verdict = "Nobody voted!"
+        elif a > b:
+            verdict = f"\U0001f3c6 **{self.option_a}** wins!"
+        elif b > a:
+            verdict = f"\U0001f3c6 **{self.option_b}** wins!"
+        else:
+            verdict = "\U0001f91d It's a tie!"
         e = discord.Embed(
             title="\U0001f914 Would You Rather -- Results!",
+            description=verdict,
             color=0x5865F2,
         )
         e.add_field(
@@ -69,21 +128,38 @@ class WyrView(discord.ui.View):
         e.set_footer(text="NanoBot Fun \u00b7 Tap a button to vote!")
         return e
 
-    async def on_timeout(self):
+    async def finish(self):
+        """Close voting: announce the winner, disable the buttons, drop the row.
+
+        The one place results are published, so a poll that ends by its timer and
+        one that ends because somebody clicked a minute late read identically.
+        Idempotent — the cog's timer and a late click can both reach it.
+        """
+        if self.ended:
+            return
         self.ended = True
         for item in self.children:
             item.disabled = True
-        if self.message:
+        if self.message is not None:
             try:
                 await self.message.edit(embed=self._results_embed(), view=self)
             except discord.HTTPException:
+                # A deleted message costs the announcement, never the cleanup.
                 pass
+        await self.cog._end_poll(self.poll_id)
+        self.stop()
 
     async def _handle_vote(self, interaction: discord.Interaction, choice: str):
         if self.ended:
             return await interaction.response.send_message(
                 "Voting has ended!", ephemeral=True
             )
+        if self._expired():
+            # The clock beat the timer here (a restart during the poll, a very
+            # late click). Close it now rather than counting a vote the results
+            # would have to contradict.
+            await interaction.response.send_message("Voting has ended!", ephemeral=True)
+            return await self.finish()
         uid = interaction.user.id
         previous = self.votes.get(uid)
         if previous == choice:
@@ -92,6 +168,7 @@ class WyrView(discord.ui.View):
                 ephemeral=True,
             )
         self.votes[uid] = choice
+        await db.set_wyr_votes(self.poll_id, self.votes)
         label = self.option_a if choice == "A" else self.option_b
         if previous:
             msg = f"Changed your vote to **{label}**!"
@@ -102,18 +179,6 @@ class WyrView(discord.ui.View):
             await interaction.message.edit(embed=self._voting_embed())
         except discord.HTTPException:
             pass
-
-    @discord.ui.button(
-        label="Option A", style=discord.ButtonStyle.blurple, emoji="\U0001f1e6"
-    )
-    async def btn_a(self, interaction: discord.Interaction, button: discord.ui.Button):
-        await self._handle_vote(interaction, "A")
-
-    @discord.ui.button(
-        label="Option B", style=discord.ButtonStyle.blurple, emoji="\U0001f1e7"
-    )
-    async def btn_b(self, interaction: discord.Interaction, button: discord.ui.Button):
-        await self._handle_vote(interaction, "B")
 
 
 # ── RPS view ─────────────────────────────────────────────────────────────────
