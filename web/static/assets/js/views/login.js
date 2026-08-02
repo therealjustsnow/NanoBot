@@ -18,10 +18,13 @@ const REASONS = {
   denied: "You cancelled the Discord sign-in. Nothing was shared.",
   state: "That sign-in took too long and expired. Try again — it should be quick.",
   nocode: "Discord didn't send an authorisation code back. Try again.",
+  // Deliberately does not guess at the cause: by this point Discord has already
+  // accepted the redirect URL and the client id, so the usual advice to go and
+  // re-read them sends the operator to check something that just worked. The
+  // bot's log carries Discord's actual reason and what to do about it.
   exchange:
-    "Discord rejected the sign-in. The redirect URL in config.ini has to match " +
-    "the one registered in the developer portal exactly, including https and " +
-    "any port.",
+    "Discord rejected the sign-in at the last step. Whoever runs this bot can " +
+    "see why in its log — it's usually the dashboard's client secret.",
   identity: "Discord wouldn't tell us who you are. Try again in a moment.",
 };
 

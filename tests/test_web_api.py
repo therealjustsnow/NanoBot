@@ -1162,3 +1162,40 @@ async def test_same_origin_keeps_a_plain_path_redirect(server, http):
         "/api/auth/callback?error=access_denied", allow_redirects=False
     ) as response:
         assert response.headers["Location"].startswith("/login")
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+#  What a failed token exchange says
+#
+#  Discord validates the redirect URI and the client id at the *authorize* step,
+#  so by the time an exchange fails it has already accepted both. Blaming the
+#  redirect URL here — which is what this used to do for every failure — sends
+#  the operator to re-read something that just worked.
+# ══════════════════════════════════════════════════════════════════════════════
+def test_a_rejected_secret_says_to_check_the_secret():
+    from web import oauth
+
+    hint = oauth._exchange_hint('{"error": "invalid_client"}')
+    assert "client_secret" in hint
+    assert "redirect" not in hint.lower()
+
+
+def test_a_stale_code_says_to_try_again():
+    from web import oauth
+
+    assert "again" in oauth._exchange_hint('{"error": "invalid_grant"}')
+
+
+def test_a_malformed_request_is_the_one_that_names_the_redirect():
+    from web import oauth
+
+    assert "redirect" in oauth._exchange_hint('{"error": "invalid_request"}').lower()
+
+
+def test_an_unreadable_error_body_guesses_at_nothing():
+    from web import oauth
+
+    for body in ("", "not json", "{}", '{"error": "something_new"}'):
+        hint = oauth._exchange_hint(body)
+        assert "log" in hint
+        assert "client_secret" not in hint

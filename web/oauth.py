@@ -58,6 +58,43 @@ def authorize_url(client_id: str, redirect_uri: str, state: str) -> str:
     )
 
 
+# Discord's own error codes, turned into the thing to go and check. The default
+# used to blame the redirect URL for every failure, which is the wrong advice
+# most of the time: a redirect mismatch is rejected at the *authorize* step, so
+# by the time an exchange fails, Discord has already accepted the redirect and
+# the client id. Sending someone to re-read a URL that just worked is worse than
+# saying nothing.
+_EXCHANGE_HINTS = {
+    "invalid_client": (
+        "Discord rejected the dashboard's credentials. Check "
+        "dashboard_client_secret against OAuth2 → Client Secret in the developer "
+        "portal — it is not the bot token and not the public key, and resetting "
+        "the secret invalidates the old one."
+    ),
+    "invalid_grant": (
+        "Discord rejected the login code. It is single-use and short-lived, so "
+        "this usually means the login was retried or took too long. Try again."
+    ),
+    "invalid_request": (
+        "Discord rejected the request itself. Check that dashboard_base_url plus "
+        "/api/auth/callback exactly matches a redirect registered in the "
+        "developer portal."
+    ),
+}
+_EXCHANGE_FALLBACK = "Discord rejected the login. The bot's log has the reason it gave."
+
+
+def _exchange_hint(body: str) -> str:
+    """Turn Discord's error body into the one thing worth checking."""
+    import json
+
+    try:
+        code = str(json.loads(body).get("error", ""))
+    except (ValueError, AttributeError):
+        code = ""
+    return _EXCHANGE_HINTS.get(code, _EXCHANGE_FALLBACK)
+
+
 async def exchange_code(
     session: aiohttp.ClientSession,
     *,
@@ -81,12 +118,13 @@ async def exchange_code(
     ) as resp:
         body = await resp.text()
         if resp.status != 200:
-            log.warning("OAuth token exchange failed (%s): %s", resp.status, body[:300])
-            raise OAuthError(
-                "Discord rejected the login. This usually means the redirect URL "
-                "in config.ini doesn't exactly match the one registered in the "
-                "developer portal."
+            log.warning(
+                "OAuth token exchange failed (%s): %s — %s",
+                resp.status,
+                body[:300],
+                _exchange_hint(body),
             )
+            raise OAuthError(_exchange_hint(body))
         try:
             return await _json(resp, body)
         except ValueError as exc:
