@@ -263,17 +263,39 @@ export async function profile({ guildId }) {
   }
 
   async function openWardrobe() {
-    const { cosmetics } = await api.get("/api/me/cosmetics");
+    const { cosmetics, balance = 0 } = await api.get("/api/me/cosmetics");
     const slots = [...new Set(cosmetics.map((c) => c.slot))];
     let slot = slots[0];
     const list = h("div", { class: "stack stack--tight" });
 
+    // Same affordability order the wardrobe page and the bot's own /shop picker
+    // use: what you own, then what you can buy now (cheapest first), then what
+    // you're saving for, then what you have to play for. Catalogue order put a
+    // 150,000-coin banner above the one you could afford.
+    const RANK = { owned: 0, affordable: 1, expensive: 2, locked: 3 };
+    const bucket = (c) => {
+      if (c.owned) return "owned";
+      if (!c.for_sale) return "locked";
+      return balance >= c.price ? "affordable" : "expensive";
+    };
+    const ordered = (rows) =>
+      [...rows].sort((a, b) => {
+        const ra = RANK[bucket(a)];
+        const rb = RANK[bucket(b)];
+        if (ra !== rb) return ra - rb;
+        if ((ra === RANK.affordable || ra === RANK.expensive) && a.price !== b.price) {
+          return a.price - b.price;
+        }
+        return a.name.localeCompare(b.name);
+      });
+
     const render = () => {
-      const rows = cosmetics.filter((c) => c.slot === slot);
+      const rows = ordered(cosmetics.filter((c) => c.slot === slot));
       fill(
         list,
-        ...rows.map((cosmetic) =>
-          h(
+        ...rows.map((cosmetic) => {
+          const state = bucket(cosmetic);
+          return h(
             "div",
             { class: "tile row" },
             h(
@@ -286,15 +308,26 @@ export async function profile({ guildId }) {
                 cosmetic.worn ? ui.pill("Worn", "brand") : null,
                 cosmetic.earned_not_claimed ? ui.pill("Earned", "ok") : null
               ),
-              h("div", { class: "tiny dim" }, cosmetic.owned ? cosmetic.description || "Yours" : cosmetic.unlock)
+              h(
+                "div",
+                { class: "tiny dim" },
+                cosmetic.owned
+                  ? cosmetic.description || "Yours"
+                  : state === "expensive"
+                    ? `${cosmetic.unlock} · ${fmt.num(cosmetic.price - balance)} more to go`
+                    : cosmetic.unlock
+              )
             ),
-            cosmetic.owned
+            state === "owned"
               ? ui.pill("Owned", "ok")
-              : cosmetic.for_sale
-                ? ui.pill(`🪙 ${fmt.num(cosmetic.price)}`)
-                : ui.pill("Locked")
-          )
-        )
+              : state === "affordable"
+                ? ui.pill(`🪙 ${fmt.num(cosmetic.price)}`, "brand")
+                : state === "expensive"
+                  ? // A bare price reads as an offer. This one isn't.
+                    ui.pill(`🪙 ${fmt.num(cosmetic.price)}`, "warn")
+                  : ui.pill("Locked")
+          );
+        })
       );
     };
 
@@ -325,10 +358,21 @@ export async function profile({ guildId }) {
             )
           )
         ),
+        // This sheet is the read-only catalogue; the Wardrobe page is where you
+        // actually dress the card. Sending people to Discord for that was
+        // wrong — the site has done it since the wardrobe page shipped.
         ui.banner(
-          "Equip and unequip from Discord with /profile equip — the wardrobe here " +
-            "is for seeing what's out there and how to get it.",
-          { kind: "info", glyph: "💡" }
+          "This is the whole catalogue and how to get each one. To actually wear " +
+            "something, open the Wardrobe — it previews your card before you apply.",
+          {
+            kind: "info",
+            glyph: "💡",
+            action: h(
+              "a",
+              { class: "btn btn--sm", href: `/g/${guildId}/wardrobe` },
+              "Wardrobe"
+            ),
+          }
         ),
         list
       )

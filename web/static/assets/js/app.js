@@ -390,7 +390,9 @@ function accountSheet(user) {
             type: "button",
             onClick: async () => {
               await api.post("/api/auth/logout");
-              location.href = "/login";
+              // appUrl, not a bare path: a subpath deployment would otherwise
+              // sign you out to the host's root and 404.
+              location.href = appUrl("/login");
             },
           },
           "Sign out"

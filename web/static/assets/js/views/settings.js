@@ -202,7 +202,9 @@ async function automodPage(guildId) {
 
     const paintBody = () => {
       if (!enabled) {
-        fill(body, h("p", { class: "small dim" }, spec.summary));
+        // The switch row already carries the summary as its `why` while the
+        // rule is off — repeating it here printed the same sentence twice.
+        fill(body);
         return;
       }
       fill(
@@ -310,26 +312,33 @@ async function automodPage(guildId) {
         ? h(
             "div",
             { class: "row row--wrap" },
-            ...values.map((value) =>
-              h(
+            // badwords and attachment_words come back as plain strings; the
+            // regex list comes back as {id, pattern, label}. Rendering the row
+            // itself printed [object Object] and then sent the whole object as
+            // the value to delete, so nothing was ever removed.
+            ...values.map((value) => {
+              const pattern = typeof value === "string" ? value : value.pattern;
+              const label = typeof value === "string" ? null : value.label;
+              return h(
                 "button",
                 {
                   class: "chip",
                   type: "button",
-                  title: "Remove",
+                  title: label ? `${label} — remove` : "Remove",
                   onClick: async () => {
                     const result = await api.patch(api_listPath(guildId, which), {
-                      value,
+                      value: pattern,
                       action: "remove",
                     });
                     data.lists[which] = result.values;
                     paint();
                   },
                 },
-                which === "regex" ? h("code", { class: "tiny" }, value) : value,
+                which === "regex" ? h("code", { class: "tiny" }, pattern) : pattern,
+                label ? h("span", { class: "tiny dim" }, ` · ${label}`) : null,
                 h("span", { class: "dim" }, "✕")
-              )
-            )
+              );
+            })
           )
         : h("p", { class: "tiny dim" }, "Nothing here yet — the rule won't catch anything until you add one."),
       which === "regex"
@@ -1532,6 +1541,13 @@ async function musicPage(guildId) {
     );
   }
 
+  /* The playlist comes back as {url, title, added_by} rows while the block
+     lists are plain strings. Both land here, so normalise to "what to show" and
+     "what to send back" — printing the row itself rendered [object Object]. */
+  const entryLabel = (value) =>
+    typeof value === "string" ? value : value.title || value.url || "";
+  const entryValue = (value) => (typeof value === "string" ? value : value.url);
+
   function listCard(title, which, values, { glyph, sub, placeholder }) {
     const input = h("input", { class: "input", placeholder, "aria-label": placeholder });
     return ui.card(
@@ -1557,21 +1573,33 @@ async function musicPage(guildId) {
         ? h(
             "div",
             { class: "stack stack--tight", style: { marginTop: "var(--s-3)" } },
-            ...values.map((value) =>
-              h(
+            ...values.map((value) => {
+              const label = entryLabel(value);
+              const key = entryValue(value);
+              const sameAsLabel = label === key;
+              return h(
                 "div",
                 { class: "tile row" },
-                h("span", { class: "grow tiny", style: { wordBreak: "break-all" } }, value),
+                h(
+                  "div",
+                  { class: "grow", style: { minWidth: 0 } },
+                  h("div", { class: "small", style: { wordBreak: "break-all" } }, label),
+                  // A titled entry keeps its URL underneath, so a playlist row
+                  // still says which link it is.
+                  sameAsLabel
+                    ? null
+                    : h("div", { class: "tiny dim", style: { wordBreak: "break-all" } }, key)
+                ),
                 ui.actionButton(
                   "✕",
                   async () => {
-                    await api.patch(`${path}/lists/${which}`, { value, action: "remove" });
+                    await api.patch(`${path}/lists/${which}`, { value: key, action: "remove" });
                     await reload();
                   },
-                  { size: "sm" }
+                  { size: "sm", title: `Remove ${label}` }
                 )
-              )
-            )
+              );
+            })
           )
         : h("p", { class: "small dim", style: { marginTop: "var(--s-3)", marginBottom: 0 } }, "Nothing here yet."),
       which === "playlist"

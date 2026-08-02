@@ -57,8 +57,13 @@ async def wallet(user_id: int, guild_id: int) -> dict:
     balance = await db.get_balance(user_id)
     last_daily, streak = await db.get_daily_state(user_id)
     contribution = await db.get_contribution(user_id)
-    coin_rank = await db.get_econ_rank(user_id)
-    contrib_rank = await db.get_contrib_rank(user_id)
+    # Both accessors answer (position, value) — the payload wants the position.
+    # Handing the pair over serialised it as a JSON array, which rendered as
+    # "#0 richest" on the home card and crashed `_rank_title` outright.
+    coin_res = await db.get_econ_rank(user_id)
+    coin_rank = coin_res[0] if coin_res else None
+    contrib_res = await db.get_contrib_rank(user_id)
+    contrib_rank = contrib_res[0] if contrib_res else None
     preview = compute_daily(
         time.time(), last_daily, streak, cfg["daily_amount"], cfg["streak_bonus"]
     )

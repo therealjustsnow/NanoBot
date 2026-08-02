@@ -348,9 +348,13 @@ export async function casino({ guildId }) {
     announce(outcome);
     // The jackpot and the challenge rows both moved; re-read quietly so the
     // cards below are right without blocking the result the player is reading.
+    // The repaint is the point — storing the fresh state without painting it
+    // left the jackpot and the challenge progress showing pre-bet numbers.
+    // `result` is kept in scope, so the outcome the player is reading survives.
     api.get(base, { fresh: true }).then((fresh) => {
       state = { ...fresh };
       hand = fresh.open_hand;
+      paint();
     });
   }
 

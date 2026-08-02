@@ -131,13 +131,17 @@ export async function fishing({ guildId }) {
         for (const note of result.notes || []) {
           ui.ok(note.text + (note.coins ? ` +${fmt.num(note.coins)}` : ""), { title: "🔥" });
         }
-        // The cast changed the bag, the wallet and possibly the quest; re-read
-        // in the background so the other tabs are right when they're opened.
+        paintPond(result.cooldown);
+        // The cast changed the bag, the wallet, the quest, the streak and
+        // possibly an event; re-read in the background and repaint the lot.
+        // Refilling only the status bar left the quest bar, the luck stack and
+        // the events card showing pre-cast numbers — and wrote into `bar` even
+        // after a tab change had detached it. `lastCast` is kept, so the catch
+        // stays on screen through the repaint.
         api.get(base, { fresh: true }).then((fresh) => {
           state = fresh;
-          fill(bar, ...statusBar(state));
+          paint();
         });
-        paintPond(result.cooldown);
       } catch (error) {
         if (error.retryAfter) paintPond(error.retryAfter);
         throw error;

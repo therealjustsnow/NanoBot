@@ -117,6 +117,21 @@ async def test_every_game_records_a_played_game():
     assert (await db.get_casino_stats(U))["games"] == 4
 
 
+async def test_the_casino_rank_is_a_position_not_a_pair():
+    """`get_casino_rank` answers (position, net); the stats card wants the
+    position. Shipping the pair rendered the player's rank as "#0" — the same
+    leak the wallet had."""
+    await db.add_coins(U, 10_000)
+    await C.flip(U, G, 50, "heads")
+    rank = (await C.state(U, G))["stats"]["rank"]
+    assert rank == 1
+    assert isinstance(rank, int) and not isinstance(rank, (tuple, list))
+
+
+async def test_a_player_who_has_never_bet_has_no_rank():
+    assert (await C.state(U, G))["stats"]["rank"] is None
+
+
 async def test_roulette_refuses_a_space_that_is_not_one():
     await db.add_coins(U, 1000)
     with pytest.raises(PlayError) as caught:
