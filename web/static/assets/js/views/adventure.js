@@ -29,9 +29,15 @@ export async function adventure({ guildId }) {
   let state = await api.get(base);
   const host = h("div", { class: "stack" });
   let last = null;
+  // When the state in hand was measured. Every `next_in` is a duration the
+  // server measured then, so a repaint that isn't preceded by a fetch has to
+  // subtract the time since — otherwise opening an encounter or running one
+  // activity restarts every other activity's countdown at its old number.
+  let stateAt = Date.now();
 
   async function refresh() {
     state = await api.get(base, { fresh: true });
+    stateAt = Date.now();
     paint();
   }
 
@@ -145,7 +151,7 @@ export async function adventure({ guildId }) {
       });
       if (!activity.ready) {
         control = h("div", { class: "cooldown muted small", style: { marginTop: "var(--s-3)" } },
-          "Lying low · ", ui.countdown(activity.next_in, refresh));
+          "Lying low · ", ui.countdownUntil(stateAt + activity.next_in * 1000, refresh));
       }
     } else if (activity.ready) {
       control = ui.actionButton(
@@ -161,7 +167,7 @@ export async function adventure({ guildId }) {
         "div",
         { class: "cooldown muted small", style: { marginTop: "var(--s-3)" } },
         "Next in ",
-        ui.countdown(activity.next_in, refresh)
+        ui.countdownUntil(stateAt + activity.next_in * 1000, refresh)
       );
     }
 
