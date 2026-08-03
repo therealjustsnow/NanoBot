@@ -73,6 +73,32 @@ def test_no_sellable_output_exceeds_value_cap():
         )
 
 
+def test_every_sellable_output_is_worth_more_than_its_inputs():
+    """The floor under the 1.5x cap, and the half that actually bit.
+
+    A collectible recipe has no effect and no use — crafting it and selling
+    it *is* the feature — so an output worth less than the materials it eats
+    isn't a balance choice, it's a recipe nobody should ever run. All three
+    went underwater silently when the ore/pelt tables were raised ~1.5x and
+    these were not: fur_coat cost 150 and sold for 145. A ceiling can't catch
+    that, because a ratio that falls never trips one. Assert the band.
+    """
+    for key, r in RECIPES.items():
+        out = item_catalog.get(r.output_item)
+        if out is None or out.value <= 0:
+            continue
+        input_value = sum(
+            (item_catalog.get(item_key).value or 0) * qty
+            for item_key, qty in r.inputs.items()
+        )
+        assert out.value > input_value, (
+            f"{key}: crafting is a net loss — output value {out.value} is "
+            f"below the {input_value} of materials it consumes. Reprice the "
+            f"output (cogs/crafting/items.py) whenever an input's sell value "
+            f"moves."
+        )
+
+
 # ── find_recipe ───────────────────────────────────────────────────────────────
 def test_find_recipe_by_key():
     assert find_recipe("fur_coat") is RECIPES["fur_coat"]

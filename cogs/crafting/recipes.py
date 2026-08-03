@@ -10,30 +10,35 @@ don't care who registered them.
 ── Value math (checked against utils/items.py / cogs/activities/constants.py /
    cogs/fishing/items.py sell prices at the time these were written) ──────────
 
-Material sell values in play: stone=5, coal=12, iron_ore=25, gold_ore=60,
-diamond=200, pelt=20, meat=15, golden_antler=300. padlock and bait_glowgrub
+Material sell values in play: stone=8, coal=18, iron_ore=38, gold_ore=90,
+diamond=300, pelt=30, meat=22, golden_antler=450. padlock and bait_glowgrub
 have value=0 (not sellable) so they don't factor into an input-value sum.
 
-The rule: a crafted item's sell `value` (utils/items.py) stays well below the
-combined sell value of its inputs — crafting buys convenience/effects, not
-free coins. Effect-only consumables are priced at value=0 (can't be
-re-sold at all, so there's no exploit surface). Collectible outputs (misc/
-treasure) may sit modestly above the input sum as a *time* sink, capped at
-1.5x the summed input value:
+The rule has **two** sides, and the floor is the one that is easy to lose.
+Effect-only consumables are priced at value=0 (can't be re-sold at all, so
+there's no exploit surface regardless of input cost). A *collectible* output
+(misc/treasure) exists to be crafted and sold, so its sell `value` must land
+in a band: strictly **above** the summed sell value of its inputs, or the
+recipe is a coin shredder and nobody with a calculator would ever run it —
+and at or under **1.5x** that sum, so crafting stays a modest time sink
+rather than a faucet. The band is 1.3x–1.5x in practice:
 
-  campfire_feast     meat×3 (45) + coal×2 (24)          = 69   → output value 0 (consumable)
-  iron_pick_charm    iron_ore×5 (125) + stone×10 (50)   = 175  → output value 0 (consumable)
-  reinforced_padlock padlock×1 (0) + iron_ore×3 (75)    = 75   → output value 0 (consumable)
-  golden_lure        gold_ore×2 (120) + bait_glowgrub×2 (0) = 120 → output value 0 (consumable)
-  fur_coat           pelt×5 (100)                        = 100  → output value 145  (1.45x, < 1.5x cap)
-  trophy_mount       golden_antler×1 (300) + iron_ore×2 (50) = 350 → output value 500  (1.43x, < 1.5x cap)
-  gem_ring           gold_ore×2 (120) + diamond×1 (200)  = 320  → output value 450  (1.41x, < 1.5x cap)
-  treasure_key       gold_ore×3 (180) + diamond×1 (200)  = 380  → output value 0    (treasure_key itself
+  campfire_feast     meat×3 (66) + coal×2 (36)           = 102 → output value 0 (consumable)
+  iron_pick_charm    iron_ore×5 (190) + stone×10 (80)    = 270 → output value 0 (consumable)
+  reinforced_padlock padlock×1 (0) + iron_ore×3 (114)    = 114 → output value 0 (consumable)
+  golden_lure        gold_ore×2 (180) + bait_glowgrub×2 (0) = 180 → output value 0 (consumable)
+  fur_coat           pelt×5 (150)                        = 150 → output value 215  (1.43x)
+  trophy_mount       golden_antler×1 (450) + iron_ore×2 (76) = 526 → output value 750  (1.43x)
+  gem_ring           gold_ore×2 (180) + diamond×1 (300)  = 480 → output value 675  (1.41x)
+  treasure_key       gold_ore×3 (270) + diamond×1 (300)  = 570 → output value 0    (treasure_key itself
                                                                     isn't sellable — see utils/items.py)
 
-All ratios above stay at or under the 1.5x collectible cap called for in the
-design brief; consumables never carry a sell value at all, so there's nothing
-to arbitrage there regardless of input cost.
+**Repricing a material means repricing every collectible made from it.** The
+ore/pelt tables were raised ~1.5x when the economy was paced for two visits a
+day, and these three outputs were not, which quietly inverted all of them:
+fur_coat cost 150 to make and sold for 145. The cap test passed the whole
+time because a ratio that *falls* never trips a ceiling — so the floor is
+asserted too now, in tests/test_crafting_helpers.py.
 """
 
 from dataclasses import dataclass, field
