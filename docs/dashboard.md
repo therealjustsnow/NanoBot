@@ -233,6 +233,17 @@ to a side rail at 900px. 44px minimum touch targets, focus rings kept, a skip
 link, `prefers-reduced-motion` honoured wholesale, and status never conveyed by
 colour alone.
 
+**No build step means no content hash, which means nothing may be cached by
+age.** The modules import each other by relative path, so the graph is only
+correct as a *set* — and a browser expires each file on its own clock. Cached
+for an hour, an upgrade lands the new `views/adventure.js` next to the previous
+deploy's `core/ui.js`, the view calls a helper that version doesn't export, and
+the page dies on load (`ui.countdownUntil is not a function`) for anyone who had
+opened the dashboard before the upgrade. So `/assets/*` is served `no-cache` —
+kept in the cache, but revalidated, which aiohttp answers as a bodiless 304 from
+the file's ETag. If a bundler with hashed filenames ever lands here, that is the
+point at which long `max-age` becomes correct, and not before.
+
 ---
 
 ## Security notes

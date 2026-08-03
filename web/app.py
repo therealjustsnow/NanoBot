@@ -242,9 +242,52 @@ class Dashboard:
         routes: list = list(api_routes(self))
         routes.append(web.get("/api/{tail:.*}", _api_not_found))
         if os.path.isdir(STATIC_DIR):
-            routes.append(web.static("/assets", os.path.join(STATIC_DIR, "assets")))
+            routes.append(web.get("/assets/{tail:.*}", self._asset))
             routes.append(web.get("/{tail:.*}", self._spa))
         return routes
+
+    def _file(self, rel: str) -> Optional[str]:
+        """The real path `rel` names inside the static directory, or None.
+
+        normpath collapses `..`, so the prefix check is what keeps a crafted
+        path from escaping the static directory.
+        """
+        if not rel:
+            return None
+        candidate = os.path.normpath(os.path.join(STATIC_DIR, rel))
+        if not candidate.startswith(STATIC_DIR + os.sep):
+            return None
+        return candidate if os.path.isfile(candidate) else None
+
+    async def _asset(self, request: web.Request) -> web.StreamResponse:
+        """Serve one file out of `assets/`, revalidated on every load.
+
+        The frontend ships as plain ES modules that import each other by
+        relative path, with no build step and therefore no content hash in any
+        URL. That is the whole reason this can't be cached by age: a module
+        graph is only correct as a *set*, and a browser expires each file on
+        its own clock. Cache `views/adventure.js` for an hour and an upgrade
+        lands the new view next to the old `core/ui.js` still sitting in the
+        cache — the new view calls a helper the old core doesn't export, and the
+        page dies on load with `ui.countdownUntil is not a function`. It reads
+        as a broken deploy, it clears itself an hour later, and nothing in the
+        logs mentions it, which is the worst combination of properties a bug
+        can have.
+
+        `no-cache` is not `no-store`: the copy is kept and re-used, it just has
+        to be revalidated first, which aiohttp answers from the file's ETag and
+        mtime as a 304 carrying no body. For 29 small text files that is a
+        handful of conditional requests on a page load, against a class of bug
+        that can only ever be diagnosed by someone thinking to hard-refresh.
+
+        A miss here is a 404 rather than the app shell: `import`ing a path that
+        doesn't exist should say so, not hand back HTML and fail later inside
+        the module loader with a MIME-type error naming neither file.
+        """
+        path = self._file("assets/" + request.match_info.get("tail", "").strip("/"))
+        if not path:
+            raise H.not_found("No such file.")
+        return web.FileResponse(path, headers={"Cache-Control": "no-cache"})
 
     async def _spa(self, request: web.Request) -> web.StreamResponse:
         """Serve a static file if one matches, else the app shell.
@@ -252,22 +295,9 @@ class Dashboard:
         The shell fallback is what makes `/g/123/fishing` survive a reload; the
         static check comes first so `/app.css` isn't answered with HTML.
         """
-        rel = request.match_info.get("tail", "").strip("/")
-        if rel:
-            candidate = os.path.normpath(os.path.join(STATIC_DIR, rel))
-            # normpath collapses `..`, so this comparison is what keeps a
-            # crafted path from escaping the static directory.
-            if candidate.startswith(STATIC_DIR + os.sep) and os.path.isfile(candidate):
-                return web.FileResponse(
-                    candidate,
-                    headers={
-                        "Cache-Control": (
-                            "public, max-age=3600"
-                            if rel.startswith("assets/")
-                            else "no-cache"
-                        )
-                    },
-                )
+        path = self._file(request.match_info.get("tail", "").strip("/"))
+        if path:
+            return web.FileResponse(path, headers={"Cache-Control": "no-cache"})
         index = os.path.join(STATIC_DIR, "index.html")
         if not os.path.isfile(index):
             raise H.not_found("The dashboard's files aren't installed.")
