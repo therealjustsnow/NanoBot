@@ -447,22 +447,43 @@ export function confirm(title, message, { danger = false, confirmLabel = "Confir
 }
 
 /* ── Live countdown ─────────────────────────────────────────────────────── */
+/** The wall-clock instant `seconds` from now — a duration pinned to when it
+    was learned, which is the thing views should hold on to. */
+export function deadline(seconds) {
+  return Date.now() + Math.max(0, Number(seconds) || 0) * 1000;
+}
+
+/** Whole seconds left until `until`, never negative. */
+export function remaining(until) {
+  return Math.max(0, Math.ceil((until - Date.now()) / 1000));
+}
+
 /**
- * A span that counts down once a second and calls `onDone` at zero.
+ * A span that counts down to `until` once a second and calls `onDone` at zero.
+ *
+ * Anchored to a deadline rather than decrementing a counter, for two reasons.
+ * A background tab has its timers throttled to about one tick a minute, so a
+ * subtract-one-per-tick clock reads minutes behind the moment someone comes
+ * back to it. And a payload's `ready_in`/`next_in` is a duration measured when
+ * the *server* answered: re-mounting a countdown built straight from one — on
+ * a tab switch, say, which repaints from state already in hand — restarts the
+ * clock at whatever it said then. That was the fishing cast timer jumping back
+ * to 19s every time you looked at your bag and came back. Views therefore keep
+ * `deadline(seconds)` from the moment they learn it and hand that here, so a
+ * repaint can only ever show less time, never more.
  *
  * Cleans itself up when removed from the document, so a view swap mid-countdown
  * doesn't leave an interval running against a detached node — the leak that
  * makes a long-lived tab slowly get worse.
  */
-export function countdown(seconds, onDone = null, { prefix = "" } = {}) {
-  const node = h("span", { class: "tabular" }, prefix + fmt.clock(seconds));
-  let left = Math.max(0, Math.round(seconds));
+export function countdownUntil(until, onDone = null, { prefix = "" } = {}) {
+  const node = h("span", { class: "tabular" }, prefix + fmt.clock(remaining(until)));
   const timer = setInterval(() => {
     if (!node.isConnected) {
       clearInterval(timer);
       return;
     }
-    left -= 1;
+    const left = remaining(until);
     if (left <= 0) {
       clearInterval(timer);
       node.textContent = prefix + "ready";
@@ -472,6 +493,12 @@ export function countdown(seconds, onDone = null, { prefix = "" } = {}) {
     node.textContent = prefix + fmt.clock(left);
   }, 1000);
   return node;
+}
+
+/** `countdownUntil` for a duration that starts *now* — the right call only when
+    the caller has this second's number, not one that came with a payload. */
+export function countdown(seconds, onDone = null, options = {}) {
+  return countdownUntil(deadline(seconds), onDone, options);
 }
 
 /* ── Loot ───────────────────────────────────────────────────────────────── */

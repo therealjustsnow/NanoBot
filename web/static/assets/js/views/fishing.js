@@ -23,6 +23,13 @@
  * The cooldown ticks locally but is never trusted: every cast asks the server,
  * and a refusal comes back with the real `retry_after`, which resets the timer.
  * The client-side countdown is a courtesy, not a gate.
+ *
+ * It is held as a *deadline* (`castReadyAt`), never as the `ready_in` duration
+ * the payload carries. A duration is only true at the instant the server
+ * measured it, and this page repaints from state it already has every time a
+ * tab changes — so painting a countdown straight from `ready_in` handed the
+ * member the full twenty seconds back each time they looked at their bag and
+ * came back to the pond.
  */
 
 import { h, fill } from "../core/dom.js";
@@ -55,11 +62,26 @@ export async function fishing({ guildId }) {
   const host = h("div", { class: "stack" });
   let tab = router.query("tab", "cast");
   let lastCast = null;
+  // When the state in hand was measured, and the instant the line comes free.
+  // Both are *deadlines* rather than the durations the payload carries, because
+  // a repaint (a tab switch, most obviously) happens long after the fetch and
+  // would otherwise restart every countdown at the number the server gave.
+  let stateAt = Date.now();
+  let castReadyAt = ui.deadline(state.ready_in);
+
+  /** Take a freshly-fetched payload, stamping when it arrived. Every
+      assignment to `state` goes through here so nothing can hold a duration
+      without also knowing what it was measured from. */
+  function adopt(fresh) {
+    state = fresh;
+    stateAt = Date.now();
+    castReadyAt = ui.deadline(fresh.ready_in);
+  }
 
   /** Re-read the whole state and repaint. One request, because the page is
       useless with half of it. */
   async function refresh() {
-    state = await api.get(base, { fresh: true });
+    adopt(await api.get(base, { fresh: true }));
     paint();
   }
 
@@ -94,18 +116,20 @@ export async function fishing({ guildId }) {
     const readout = h("div", { class: "stack" });
     const pond = h("div", { class: "pond stack" });
 
-    const paintPond = (cooldownLeft) => {
+    // Reads `castReadyAt` rather than taking a number, so every repaint asks
+    // the clock instead of trusting whatever the last payload said.
+    const paintPond = () => {
       fill(
         pond,
         h("div", { style: { fontSize: "2.4rem" } }, state.spot.emoji),
         h("h2", {}, state.spot.name),
         h("p", { class: "small", style: { color: "#9fb4c9" } }, state.spot.blurb),
-        cooldownLeft > 0
+        ui.remaining(castReadyAt) > 0
           ? h(
               "div",
               { class: "cooldown muted" },
               "Line's in the water · ",
-              ui.countdown(cooldownLeft, () => paintPond(0))
+              ui.countdownUntil(castReadyAt, paintPond)
             )
           : ui.actionButton("Cast your line", cast, {
               variant: "hero",
@@ -114,7 +138,7 @@ export async function fishing({ guildId }) {
             })
       );
     };
-    paintPond(state.ready_in);
+    paintPond();
 
     async function cast() {
       pond.classList.add("pond--casting");
@@ -131,7 +155,8 @@ export async function fishing({ guildId }) {
         for (const note of result.notes || []) {
           ui.ok(note.text + (note.coins ? ` +${fmt.num(note.coins)}` : ""), { title: "🔥" });
         }
-        paintPond(result.cooldown);
+        castReadyAt = ui.deadline(result.cooldown);
+        paintPond();
         // The cast changed the bag, the wallet, the quest, the streak and
         // possibly an event; re-read in the background and repaint the lot.
         // Refilling only the status bar left the quest bar, the luck stack and
@@ -139,11 +164,14 @@ export async function fishing({ guildId }) {
         // after a tab change had detached it. `lastCast` is kept, so the catch
         // stays on screen through the repaint.
         api.get(base, { fresh: true }).then((fresh) => {
-          state = fresh;
+          adopt(fresh);
           paint();
         });
       } catch (error) {
-        if (error.retryAfter) paintPond(error.retryAfter);
+        if (error.retryAfter) {
+          castReadyAt = ui.deadline(error.retryAfter);
+          paintPond();
+        }
         throw error;
       } finally {
         pond.classList.remove("pond--casting");
@@ -538,7 +566,13 @@ export async function fishing({ guildId }) {
         ui.bar(t.soaked, trap.soak, { success: t.ready }),
         t.ready
           ? h("div", { class: "small dim" }, "Ready to pull")
-          : h("div", { class: "cooldown muted" }, "Ready in ", ui.countdown(t.ready_in, refresh))
+          : h(
+              "div",
+              { class: "cooldown muted" },
+              "Ready in ",
+              // Measured from when the state arrived, not from this repaint.
+              ui.countdownUntil(stateAt + t.ready_in * 1000, refresh)
+            )
       )
     );
     const actions = [];
