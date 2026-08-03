@@ -78,6 +78,12 @@
   --s-6: 32px;
   --s-7: 48px;
 
+  /* How far a loot card's rarity pill sits above the card's own top edge.
+     A token rather than a literal because two rules have to agree about it:
+     the pill's offset, and the top gutter every scroller reserves so an
+     overflow container doesn't slice the pill in half. */
+  --loot-rise: 8px;
+
   /* 44px is Apple's minimum comfortable touch target and the floor every
      interactive element here respects. */
   --tap: 44px;
@@ -283,23 +289,57 @@ button, input, select, textarea { font: inherit; color: inherit; }
 }
 .section__head h2 { display: flex; align-items: center; gap: var(--s-2); }
 
+/* The scroller's fade widths are custom properties so a scroll timeline can
+   drive them. Registering them is what makes them animatable at all — an
+   unregistered custom property is a string and can't interpolate. Both start
+   at 0, so a browser without @property or scroll timelines gets no mask
+   rather than a permanently-faded one. */
+@property --fade-start { syntax: "<length>"; inherits: false; initial-value: 0px; }
+@property --fade-end { syntax: "<length>"; inherits: false; initial-value: 0px; }
+
 /* A horizontally scrolling strip. Wide content scrolls inside its own
    container so the page body never scrolls sideways. */
 .scroller {
   display: flex; gap: var(--s-3);
   overflow-x: auto; scroll-snap-type: x proximity;
-  padding-bottom: var(--s-2); margin: 0 calc(var(--s-4) * -1);
+  margin: 0 calc(var(--s-4) * -1);
   padding-inline: var(--s-4);
+  /* `overflow-x: auto` computes `overflow-y` to `auto` as well, so this clips
+     vertically too — and a loot card's rarity pill deliberately overhangs its
+     own top edge. Without this gutter every pill in every scroller is sliced
+     in half. Sized off the same token the pill is raised by. */
+  padding-top: calc(var(--loot-rise) + 2px);
+  padding-bottom: var(--s-2);
   scrollbar-width: none;
   /* Content that doesn't fit is clipped at the scroller's own edge, flush
      against the card border it bleeds to — a hard chop with no gutter.
      Fading it out instead of slicing it reads as "more to scroll", not broken. */
   mask-image: linear-gradient(
-    to right, transparent, black var(--s-4), black calc(100% - var(--s-4)), transparent
+    to right, transparent, black var(--fade-start),
+    black calc(100% - var(--fade-end)), transparent
   );
   -webkit-mask-image: linear-gradient(
-    to right, transparent, black var(--s-4), black calc(100% - var(--s-4)), transparent
+    to right, transparent, black var(--fade-start),
+    black calc(100% - var(--fade-end)), transparent
   );
+}
+/* A fade is only honest where there is something hidden behind it. Tying each
+   edge to the scroll position means a row that fits keeps its outer borders
+   (its timeline is inactive, so the fades stay at 0) and a row scrolled to its
+   end stops pretending there is more. */
+@supports (animation-timeline: scroll(self inline)) {
+  .scroller {
+    animation: scroller-fade-start linear both, scroller-fade-end linear both;
+    animation-timeline: scroll(self inline), scroll(self inline);
+  }
+  @keyframes scroller-fade-start {
+    from { --fade-start: 0px; }
+    8%, to { --fade-start: var(--s-4); }
+  }
+  @keyframes scroller-fade-end {
+    from, 92% { --fade-end: var(--s-4); }
+    to { --fade-end: 0px; }
+  }
 }
 .scroller::-webkit-scrollbar { display: none; }
 .scroller > * { scroll-snap-align: start; flex: 0 0 auto; }
@@ -640,7 +680,7 @@ button, input, select, textarea { font: inherit; color: inherit; }
 .loot__name { font-weight: 620; font-size: 0.88rem; }
 .loot__meta { font-size: 0.74rem; color: var(--ink-2); font-variant-numeric: tabular-nums; }
 .loot__rarity {
-  position: absolute; top: -8px; left: 50%; transform: translateX(-50%);
+  position: absolute; top: calc(var(--loot-rise) * -1); left: 50%; transform: translateX(-50%);
   padding: 1px 8px; border-radius: var(--r-full);
   background: var(--rarity); color: #0c0d12;
   font-size: 0.63rem; font-weight: 750; text-transform: uppercase; letter-spacing: 0.05em;
