@@ -834,6 +834,32 @@ async def test_static_assets_are_served_with_their_own_type(server, http):
         assert "text/css" in r.headers["Content-Type"]
 
 
+async def test_modules_are_revalidated_rather_than_cached_by_age(server, http):
+    """A module graph is only correct as a set, and there is no content hash.
+
+    Nothing in the frontend's URLs identifies a build, so caching a file by age
+    lets one deploy's `views/adventure.js` load beside the previous deploy's
+    `core/ui.js` — which is exactly how the Adventure page died on load with
+    `ui.countdownUntil is not a function`, an hour at a time, for anyone who had
+    opened the dashboard before the upgrade.
+    """
+    for path in ("/assets/js/core/ui.js", "/assets/js/views/adventure.js", "/"):
+        async with http.get(f"{BASE}{path}") as r:
+            assert r.status == 200
+            cache = r.headers.get("Cache-Control", "")
+        assert "no-cache" in cache, path
+        assert "max-age" not in cache, path
+
+
+async def test_a_missing_asset_is_a_404_not_the_app_shell(server, http):
+    """An import of a path that doesn't exist has to say so. Answering with the
+    shell hands the module loader HTML and fails later with a MIME-type error
+    naming neither the importer nor the file it wanted."""
+    async with http.get(f"{BASE}/assets/js/core/nope.js") as r:
+        assert r.status == 404
+        assert "html" not in r.headers["Content-Type"]
+
+
 async def test_the_static_route_cannot_escape_its_directory(server, http):
     """normpath collapses the `..`, and the prefix check is what stops the
     collapsed path from pointing outside the static directory."""
