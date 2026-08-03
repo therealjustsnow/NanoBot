@@ -58,7 +58,7 @@ items.register(
         category="misc",
         description="A warm coat stitched together from cured pelts. A "
         "collectible with no use besides selling or showing off.",
-        value=145,
+        value=215,
     ),
     items.ItemDef(
         key="craft_trophy_mount",
@@ -67,7 +67,7 @@ items.register(
         category="misc",
         description="A golden antler polished and mounted on a plaque. A "
         "prized hunting collectible.",
-        value=500,
+        value=750,
     ),
     items.ItemDef(
         key="craft_gem_ring",
@@ -75,6 +75,6 @@ items.register(
         emoji="💍",
         category="treasure",
         description="A gold band set with a mined diamond. A dazzling " "collectible.",
-        value=450,
+        value=675,
     ),
 )
