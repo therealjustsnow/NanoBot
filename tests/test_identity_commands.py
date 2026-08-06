@@ -148,6 +148,24 @@ async def test_chat_awards_global_xp_once_per_cooldown(bot):
 
 
 @pytest.mark.cogs("cogs.identity")
+async def test_global_xp_disabled_guilds_earn_nothing_from_chat(bot):
+    """`/level globalxp off` is the whole-system opt-out: a server that barely
+    uses the bot (automod/tags only) shouldn't have its members quietly
+    farming global XP just by chatting."""
+    author = config().members[0]
+    guild = config().guilds[0]
+    await db.set_level_config(guild.id, global_xp_enabled=False)
+
+    await dpytest.message("hello", member=author)
+    assert await db.get_global_xp(author.id) == 0
+
+    # Flipping it back on resumes ordinary earning.
+    await db.set_level_config(guild.id, global_xp_enabled=True)
+    await dpytest.message("hello again", member=author)
+    assert await db.get_global_xp(author.id) == globalxp.XP_AWARDS["message"]
+
+
+@pytest.mark.cogs("cogs.identity")
 async def test_earned_cosmetics_unlock_when_you_open_your_card(bot):
     """Unlocks are evaluated lazily, exactly like achievements."""
     author = config().members[0]

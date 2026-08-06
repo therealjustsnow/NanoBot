@@ -119,17 +119,21 @@ def announce_channel_id(
     The level is account-wide but a channel isn't, so each server decides where
     a stray "level up!" is allowed to land in *its* channels:
 
-      1. `global_announce` off → nowhere here (the member still gets a DM).
-      2. `/level globalannounce #channel` → that channel, always.
-      3. otherwise the server's own level-up channel (`/level announce`), so a
+      1. `global_xp_enabled` off → nowhere here (the whole global system is
+         opted out of in this server; the member still gets a DM).
+      2. `global_announce` off → nowhere here (the member still gets a DM).
+      3. `/level globalannounce #channel` → that channel, always.
+      4. otherwise the server's own level-up channel (`/level announce`), so a
          server that already routed level-ups doesn't have to say it twice.
-      4. otherwise wherever they were talking — unless that channel earns no
+      5. otherwise wherever they were talking — unless that channel earns no
          XP (`/level ignore`), which is how a venting channel opts out.
 
     Returns an id rather than a channel so this stays Discord-free; the caller
     resolves it and falls through to the DM when it can't (a configured channel
     that's been deleted means "not in here", never "in place instead").
     """
+    if not cfg.get("global_xp_enabled", True):
+        return None
     if not cfg.get("global_announce", True):
         return None
     explicit = cfg.get("global_announce_channel") or cfg.get("announce_channel")

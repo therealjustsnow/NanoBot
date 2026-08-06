@@ -149,7 +149,12 @@ server's level-up channel instead of where you were typing. Channels a server
 excluded from XP never get one.
 
 A server running 5× XP doesn't earn you global levels any faster, and a server
-with leveling switched off doesn't stop your global progress.
+with leveling switched off doesn't stop your global progress. Some servers
+(a support server that's only there for moderation, say) opt out of the
+global level system entirely — chatting there won't earn you global XP and
+you won't see level-ups posted there, though `/rank` and `/profile` still show
+your real level and anything you explicitly run (`/daily`, `/fish`, …) still
+counts.
 
 ---
 
