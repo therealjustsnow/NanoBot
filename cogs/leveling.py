@@ -24,6 +24,9 @@ Commands
   /level globalannounce [channel] [on|off]
                                  → where *global* level-ups land in this server
                                    (Manage Server)
+  /level globalxp <on|off>       → opt this server in/out of the whole global
+                                   level system (earning + announcements)
+                                   (Manage Server)
   /level reward <add|remove|list> [level] [role]            (Manage Server)
   /level ignore <add|remove|list> [channel]                 (Manage Server)
   /level config                  → show current settings    (Manage Server)
@@ -32,12 +35,17 @@ Deliberately per-guild: this is the *server's* XP, with the server's rate,
 cooldown, role rewards and announcements. It is not the account-wide level —
 that one is hard-coded and lives in utils/globalxp.py, shown next to this one
 on /rank and on /profile. Neither feeds the other: a 5x-XP server grants no
-extra global XP, and switching this system off doesn't stop global progress.
+extra global XP, and switching *this* system off (`/level toggle off`) doesn't
+stop global progress — global XP still comes from chatting, and from every
+other action across the bot. The only way to stop that is the separate
+whole-system opt-out, `/level globalxp off` (see below), for a server that
+doesn't want any part of it.
 
-The one thing the two systems share is *where the message goes*. A global
-level can be earned anywhere, but it still has to be announced in some
-server's channel, and that choice is the server's — so `/level globalannounce`
-lives here beside `/level announce` rather than under /profile, and both are
+The two systems share two things: *where the message goes*, and whether the
+global one is wanted here at all. A global level can be earned anywhere, but
+it still has to be announced in some server's channel, and that choice is the
+server's — so `/level globalannounce` lives here beside `/level announce`
+rather than under /profile, and both are
 stored in level_config. cogs/identity delivers global level-ups by reading
 that config (see cogs/identity/helpers.announce_channel_id); guild XP settings
 — the rate, the cooldown, the enabled flag — never touch it.
@@ -571,6 +579,48 @@ class Leveling(commands.Cog):
             )
         )
 
+    # ── /level globalxp ──────────────────────────────────────────────────────────
+    @level.command(
+        name="globalxp",
+        description="Opt this server in or out of the account-wide level system.",
+    )
+    @app_commands.describe(
+        state="on or off — off stops members earning global XP by chatting "
+        "here and keeps global level-up messages out of this server"
+    )
+    @app_commands.choices(state=_ON_OFF)
+    @commands.has_permissions(manage_guild=True)
+    async def level_globalxp(self, ctx: commands.Context, state: str):
+        """Whole-system opt-out for a server that barely uses the bot.
+
+        `/level globalannounce off` only reroutes the *message* — chatting here
+        still earns global XP. This is the bigger switch: off means this
+        server's messages stop earning global XP at all, and any pending
+        global level-up skips this server entirely (still delivered by DM).
+        For something like a support server running only automod and tags,
+        where the global level system is just noise.
+        """
+        s = state.strip().lower()
+        if s not in ("on", "off", "enable", "disable", "true", "false"):
+            return await ctx.reply(embed=h.err("Use `on` or `off`."), ephemeral=True)
+        enabled = s in ("on", "enable", "true")
+        await db.set_level_config(ctx.guild.id, global_xp_enabled=enabled)
+        if enabled:
+            await ctx.reply(
+                embed=h.ok(
+                    "This server is back in the global level system — "
+                    "chatting here earns global XP again."
+                )
+            )
+        else:
+            await ctx.reply(
+                embed=h.ok(
+                    "This server is opted out of the global level system. "
+                    "Messages here won't earn global XP, and global level-ups "
+                    "won't be announced here (members still get them by DM)."
+                )
+            )
+
     # ── /level reward ───────────────────────────────────────────────────────────
     @level.command(
         name="reward",
@@ -740,6 +790,11 @@ class Leveling(commands.Cog):
         )
         embed.add_field(name="Cooldown", value=f"{cfg['cooldown']}s", inline=True)
         embed.add_field(name="Announce", value=announce, inline=True)
+        embed.add_field(
+            name="Global XP system",
+            value="**On**" if cfg["global_xp_enabled"] else "**Off**",
+            inline=True,
+        )
         embed.add_field(name="Global level-ups", value=global_announce, inline=True)
         embed.add_field(name="Role rewards", value=str(len(rewards)), inline=True)
         embed.add_field(name="Ignored channels", value=str(len(ignored)), inline=True)

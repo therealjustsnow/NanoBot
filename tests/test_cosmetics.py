@@ -209,6 +209,19 @@ def test_global_levelup_defaults_hold_for_a_config_without_the_keys():
     assert announce_channel_id({}, set(), 42) == 42
 
 
+def test_global_xp_disabled_skips_the_guild_even_with_a_pinned_channel():
+    """The whole-system opt-out wins over everything else `/level
+    globalannounce` can configure — a pinned channel included."""
+    cfg = _cfg(global_xp_enabled=False, global_announce_channel=99)
+    assert announce_channel_id(cfg, set(), 42) is None
+
+
+def test_global_xp_enabled_defaults_true_for_a_config_without_the_key():
+    """An old cached/config dict predates this key and must not opt a guild
+    out by accident."""
+    assert announce_channel_id({}, set(), 42) == 42
+
+
 # ── JSON extension ────────────────────────────────────────────────────────────
 def test_cosmetics_can_be_added_from_a_json_file(tmp_path):
     """The 'no code change' path: a seasonal badge is one JSON entry."""

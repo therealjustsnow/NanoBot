@@ -55,6 +55,15 @@ async def _ensure_leveling_tables():
             "global_announce_channel": "TEXT",
         },
     )
+    # Whether this guild participates in the account-wide level system at
+    # all. Default on — most servers want it. Off means messages sent here
+    # earn no global XP and a pending global level-up never posts in this
+    # guild (still delivered by DM) — for a server where the bot is barely
+    # used (e.g. automod/tags only) and a stray "level up!" would be noise.
+    await _ensure_columns(
+        "level_config",
+        {"global_xp_enabled": "INTEGER NOT NULL DEFAULT 1"},
+    )
     await _conn().execute("""
         CREATE TABLE IF NOT EXISTS level_rewards (
             guild_id  TEXT NOT NULL,
@@ -172,7 +181,7 @@ async def get_level_config(guild_id: int) -> dict:
         return cached
     async with _conn().execute(
         "SELECT enabled, xp_min, xp_max, cooldown, announce_channel, announce, "
-        "global_announce, global_announce_channel "
+        "global_announce, global_announce_channel, global_xp_enabled "
         "FROM level_config WHERE guild_id=?",
         (str(guild_id),),
     ) as cur:
@@ -196,6 +205,7 @@ async def get_level_config(guild_id: int) -> dict:
                     if row["global_announce_channel"]
                     else None
                 ),
+                "global_xp_enabled": bool(row["global_xp_enabled"]),
             },
         )
     return _cache.put(
@@ -210,6 +220,7 @@ async def get_level_config(guild_id: int) -> dict:
             "announce": True,
             "global_announce": True,
             "global_announce_channel": None,
+            "global_xp_enabled": True,
         },
     )
 
@@ -221,13 +232,14 @@ async def set_level_config(guild_id: int, **kwargs) -> None:
     await _conn().execute(
         "INSERT INTO level_config "
         "(guild_id, enabled, xp_min, xp_max, cooldown, announce_channel, announce, "
-        "global_announce, global_announce_channel) "
-        "VALUES (?,?,?,?,?,?,?,?,?) "
+        "global_announce, global_announce_channel, global_xp_enabled) "
+        "VALUES (?,?,?,?,?,?,?,?,?,?) "
         "ON CONFLICT(guild_id) DO UPDATE SET enabled=excluded.enabled, "
         "xp_min=excluded.xp_min, xp_max=excluded.xp_max, cooldown=excluded.cooldown, "
         "announce_channel=excluded.announce_channel, announce=excluded.announce, "
         "global_announce=excluded.global_announce, "
-        "global_announce_channel=excluded.global_announce_channel",
+        "global_announce_channel=excluded.global_announce_channel, "
+        "global_xp_enabled=excluded.global_xp_enabled",
         (
             str(guild_id),
             1 if current["enabled"] else 0,
@@ -242,6 +254,7 @@ async def set_level_config(guild_id: int, **kwargs) -> None:
                 if current["global_announce_channel"]
                 else None
             ),
+            1 if current["global_xp_enabled"] else 0,
         ),
     )
     await _commit()

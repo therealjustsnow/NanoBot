@@ -105,6 +105,52 @@ async def test_level_config_reports_the_global_announce_setting(bot):
 
 
 @pytest.mark.cogs("cogs.leveling")
+async def test_globalxp_needs_manage_guild(bot):
+    author = config().members[0]
+    with pytest.raises(commands.MissingPermissions):
+        await dpytest.message("!level globalxp off", member=author)
+
+
+@pytest.mark.cogs("cogs.leveling")
+async def test_globalxp_toggle_round_trips(bot):
+    """The whole-system opt-out, distinct from `globalannounce`."""
+    guild = config().guilds[0]
+    author = config().members[0]
+    await grant_perms(author, manage_guild=True)
+
+    await dpytest.message("!level globalxp off", member=author)
+    dpytest.get_message()
+    cfg = await db.get_level_config(guild.id)
+    assert cfg["global_xp_enabled"] is False
+    assert cfg["global_announce"] is True  # untouched by this switch
+
+    await dpytest.message("!level globalxp on", member=author)
+    dpytest.get_message()
+    assert (await db.get_level_config(guild.id))["global_xp_enabled"] is True
+
+
+@pytest.mark.cogs("cogs.leveling")
+async def test_globalxp_rejects_junk_state(bot):
+    author = config().members[0]
+    await grant_perms(author, manage_guild=True)
+    await dpytest.message("!level globalxp maybe", member=author)
+    assert dpytest.get_message().embeds[0].title.startswith("❌")
+
+
+@pytest.mark.cogs("cogs.leveling")
+async def test_level_config_reports_the_global_xp_setting(bot):
+    guild = config().guilds[0]
+    author = config().members[0]
+    await grant_perms(author, manage_guild=True)
+    await db.set_level_config(guild.id, global_xp_enabled=False)
+
+    await dpytest.message("!level config", member=author)
+    embed = dpytest.get_message().embeds[0]
+    field = next(f for f in embed.fields if f.name == "Global XP system")
+    assert "Off" in field.value
+
+
+@pytest.mark.cogs("cogs.leveling")
 async def test_a_server_cannot_set_the_level_up_coin_rate(bot):
     """The payout lands in a global wallet, so the rate is the owner's (!econ
     level_coin). /level keeps every knob that stays inside the server."""
