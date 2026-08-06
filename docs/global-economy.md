@@ -157,9 +157,16 @@ everyone pays, exactly the failure mode that moved the faucets to `!econ`.
 So the rule generalises past "faucet or sink?": ask **who the thing it hands
 over can reach**. Guild-scoped reward → guild-scoped price. Account-scoped
 reward → bot-wide price, in code, next to the rod ladder and the item values.
-The one thing a guild still owns about a global system remains a *channel id*
-(where a global level-up is announced), because a channel cannot reach past the
-server it belongs to.
+The things a guild still owns about a global system are a *channel id* (where
+a global level-up is announced, `level_config.global_announce_channel`) and,
+now, *whether it participates at all* (`level_config.global_xp_enabled`,
+`/level globalxp`) — both because they describe that one server's own
+experience of the system rather than the system itself: a channel cannot reach
+past the server it belongs to, and opting a support server's chat out of
+ambient global XP doesn't change what the global level means anywhere else.
+
+See `docs/identity-and-levels.md` § "Opting a server out entirely" for the
+mechanics.
 
 ## 3. Migration (`utils/db/globalize.py`, migration 1)
 

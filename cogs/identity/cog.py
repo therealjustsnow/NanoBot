@@ -12,8 +12,12 @@ Two level systems live side by side on purpose (see utils/globalxp.py):
     server's own rate, cooldown, role rewards and announcements. Admins own it.
   * **Global level** — this cog's `on_message` listener plus award calls from
     the feature cogs. One hard-coded curve, one flat XP value per *normalized*
-    action, no per-guild configuration, so a 5x-XP server can't inflate it and
-    a server with leveling switched off can't stall it.
+    action, no per-guild rate/curve configuration, so a 5x-XP server can't
+    inflate it and a server with leveling switched off can't stall it. The one
+    per-guild knob is a whole-system opt-out (`/level globalxp off`) for a
+    server that barely uses the bot (e.g. automod/tags only) and doesn't want
+    ambient global XP or level-up messages from it — see
+    `cogs/identity/helpers.announce_channel_id`.
 
 Both appear on the card, and `/rank` shows them together too.
 
@@ -159,13 +163,19 @@ class Identity(commands.Cog):
 
         Deliberately independent of the per-guild leveling cog: it doesn't read
         that guild's rate, cooldown, enabled flag, or ignored channels, because
-        global XP must mean the same thing in every server. The only gate is
-        the fixed per-user cooldown in utils/globalxp.py.
+        global XP must mean the same thing in every server. The only per-guild
+        gate is whether the server wants the global system in it at all
+        (`/level globalxp off`, `level_config.global_xp_enabled`) — a support
+        server that barely uses the bot can opt all of it out, not just tune
+        the rate. Everything else — the fixed per-user cooldown, the flat award
+        values in utils/globalxp.py — stays untouched.
         """
         if message.author.bot or not message.guild:
             return
         try:
-            await globalxp.award_message(message.author.id)
+            cfg = await db.get_level_config(message.guild.id)
+            if cfg.get("global_xp_enabled", True):
+                await globalxp.award_message(message.author.id)
             await self.deliver_levelup(message.author, message.channel)
         except Exception:  # pragma: no cover - never break message handling
             log.exception("global XP award failed for %s", message.author.id)

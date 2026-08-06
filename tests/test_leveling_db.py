@@ -151,6 +151,23 @@ async def test_global_announce_defaults_on_and_round_trips():
     assert cfg["global_announce_channel"] is None
 
 
+async def test_global_xp_enabled_defaults_on_and_round_trips():
+    """The whole-system opt-out — independent of global_announce and of the
+    per-guild leveling `enabled` flag, both of which already default to
+    something else (`enabled` defaults False, this defaults True)."""
+    cfg = await db.get_level_config(G)
+    assert cfg["global_xp_enabled"] is True
+
+    await db.set_level_config(G, global_xp_enabled=False)
+    cfg = await db.get_level_config(G)
+    assert cfg["global_xp_enabled"] is False
+    # Untouched keys survive the partial update.
+    assert cfg["global_announce"] is True
+
+    await db.set_level_config(G, global_xp_enabled=True)
+    assert (await db.get_level_config(G))["global_xp_enabled"] is True
+
+
 async def test_rewards_add_list_remove():
     await db.add_level_reward(G, 5, 900)
     await db.add_level_reward(G, 10, 901)

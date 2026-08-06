@@ -108,6 +108,33 @@ falls through to the DM rather than back to the member's current channel —
 The message names any cosmetic that unlocks at exactly that level, which is
 what makes the milestones feel like rewards rather than a number going up.
 
+### Opting a server out entirely
+
+`/level globalannounce off` only reroutes the *message* to DM — members in
+that server still earn global XP by chatting, they just never see it posted.
+That's the wrong shape for a server where the global system itself is unwanted
+noise (a support server running only automod and tags, say): its members
+would still be quietly farming global XP by talking about tickets.
+
+`/level globalxp <on|off>` (also `level_config.global_xp_enabled`, default on)
+is the bigger switch. Off:
+
+* the identity cog's `on_message` listener stops calling
+  `globalxp.award_message` for messages sent in that guild — no ambient global
+  XP from chatting there;
+* `announce_channel_id()` returns `None` before it even looks at
+  `global_announce`, so a level-up earned elsewhere (another server, a command)
+  never posts in this one either — the member still gets it by DM.
+
+Nothing else changes: `/rank` and `/profile` still show the member's real
+global level in that server (it's their account, not the server's), and
+anything they explicitly run there — `/daily`, `/fish`, `/work` — still earns
+global XP the normal way, because that's a deliberate action, not ambient
+chat. Only the two *passive* paths (earning from ordinary messages, and
+level-ups showing up unprompted) are gated. The curve and every award value
+stay exactly as hard-coded as ever — this is an on/off switch for a guild's
+participation, never a rate knob.
+
 ## Cosmetics
 
 Definitions live in `utils/cosmetics.py`; the database stores keys only
