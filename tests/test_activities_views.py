@@ -564,6 +564,28 @@ async def test_at_most_one_encounter_survives_a_collect(bot, monkeypatch):
 
 
 @pytest.mark.cogs("cogs.activities")
+async def test_a_surviving_encounter_still_asks_its_question(bot, monkeypatch):
+    """A collect throws away every run's embed — including the one carrying the
+    encounter's scene and question — so keeping the view without re-prompting
+    left the member a row of unlabelled buttons under a total."""
+    from cogs.activities import cog as activities
+    from cogs.activities.constants import ENCOUNTERS
+
+    guild, author = config().guilds[0], config().members[0]
+    monkeypatch.setattr(activities.random, "random", lambda: 0.0)
+    cog = bot.get_cog("Activities")
+
+    run = await cog.collect_all(guild, author)
+
+    encounter = ENCOUNTERS[run.encounter_key]
+    field = next(f for f in run.embed.fields if encounter["title"] in f.name)
+    assert field.value == encounter["prompt"]
+    # The buttons on screen are the options the question just described.
+    labels = {o["label"] for o in encounter["options"]}
+    assert labels <= {c.label for c in run.view.children}
+
+
+@pytest.mark.cogs("cogs.activities")
 async def test_the_collect_button_counts_what_is_banked(bot, monkeypatch):
     from cogs.activities import cog as activities
     from cogs.activities.views import _CollectButton
