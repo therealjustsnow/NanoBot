@@ -450,6 +450,13 @@ class Activities(commands.Cog):
         desc.append(f"\nBalance: {self._money(econ, after_coins)}")
         embed = h.ok("\n".join(desc), "🧭 Collected")
         embed.set_footer(text="Sell what you found with /inventory sell")
+        if encounter_key:
+            # An encounter's scene and question are written onto the *run's*
+            # embed by `_maybe_encounter`, and a collect replaces every one of
+            # those embeds with this summary — so keeping the view without
+            # re-prompting left a row of unlabelled buttons under a total, with
+            # nothing on screen saying what was being decided.
+            self._prompt_encounter(embed, encounter_key)
         return ActivityRun(embed, view, encounter_key=encounter_key)
 
     async def _touch_streak(self, user_id: int, stats: dict) -> tuple[int, bool]:
