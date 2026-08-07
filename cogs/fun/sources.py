@@ -4,7 +4,6 @@ the Kaggle WYR seed, and Groq WYR generation. All cached via cache_db."""
 import asyncio
 import csv
 import io
-import json
 import logging
 import re
 from html import unescape
@@ -22,11 +21,13 @@ from .constants import (
     _GROQ_API_URL,
     _GROQ_MODEL,
     _GROQ_WYR_COUNT,
+    _GROQ_MAX_TOKENS,
     _WYR_RATINGS,
     _FML_RE,
     _FML_TAG_RE,
     _MAX_CONSEC_FAILS,
 )
+from .helpers import parse_wyr_json
 
 log = logging.getLogger("NanoBot.fun")
 
@@ -276,7 +277,7 @@ async def _generate_wyr_groq(
                 },
             ],
             "temperature": 1.0,
-            "max_tokens": 2048,
+            "max_tokens": _GROQ_MAX_TOKENS,
         }
         async with session.post(
             _GROQ_API_URL,
@@ -295,31 +296,23 @@ async def _generate_wyr_groq(
                 return []
             data = await resp.json()
 
-        text = data["choices"][0]["message"]["content"].strip()
-        # Strip markdown fences if present
-        text = re.sub(r"^```(?:json)?\s*", "", text)
-        text = re.sub(r"\s*```$", "", text)
+        choice = data["choices"][0]
+        text = (choice["message"].get("content") or "").strip()
+        truncated = choice.get("finish_reason") == "length"
 
-        raw_list = json.loads(text)
-        if not isinstance(raw_list, list):
-            log.warning("Groq WYR: response was not a JSON array")
+        questions = parse_wyr_json(text)
+        if not questions:
+            why = "reply was cut off" if truncated else "no usable questions"
+            log.warning(f"Groq WYR: {why} ({len(text)} chars, none salvaged)")
             return []
-
-        # Validate format
-        questions: list[str] = []
-        for item in raw_list:
-            if (
-                isinstance(item, str)
-                and item.lower().startswith("would you rather")
-                and " or " in item.lower()
-            ):
-                q = item.strip().rstrip("?") + "?"
-                questions.append(q)
+        if truncated:
+            # Expected now and then; the point is that it costs a couple of
+            # questions rather than the whole batch.
+            log.info(
+                f"Groq WYR: reply was cut off, kept {len(questions)}/{count} questions"
+            )
         return questions
 
-    except json.JSONDecodeError as exc:
-        log.warning(f"Groq WYR: failed to parse JSON: {exc}")
-        return []
     except Exception as exc:
         log.warning(f"Groq WYR generation error: {exc}")
         return []
