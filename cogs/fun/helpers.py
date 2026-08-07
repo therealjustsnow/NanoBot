@@ -1,6 +1,7 @@
 """Pure helpers for the fun cog (ship math, WYR parsing, duration formatting)."""
 
 import hashlib
+import json
 import re
 
 from .constants import _SCRAPER_DEFAULTS, _WYR_SPLIT_RE, _DURATION_RE
@@ -43,6 +44,81 @@ def _ship_verdict(pct: int) -> str:
     if pct >= 21:
         return "\U0001f62c It's... complicated."
     return "\U0001f494 Not meant to be."
+
+
+# A complete JSON string literal: opening quote, escape-aware body, closing
+# quote. A truncated one has no closing quote, so it simply doesn't match --
+# which is what makes the salvage below safe on a half-written array.
+_JSON_STRING_RE = re.compile(r'"(?:[^"\\]|\\.)*"')
+_FENCE_OPEN_RE = re.compile(r"^```[a-zA-Z]*\s*")
+_FENCE_CLOSE_RE = re.compile(r"\s*```$")
+
+
+def _strip_code_fence(text: str) -> str:
+    """Drop a markdown fence the model wrapped its JSON in."""
+    text = _FENCE_OPEN_RE.sub("", text.strip())
+    return _FENCE_CLOSE_RE.sub("", text).strip()
+
+
+def _clean_wyr(item) -> str | None:
+    """Normalise one candidate question, or None if it isn't one."""
+    if not isinstance(item, str):
+        return None
+    q = " ".join(item.split())
+    low = q.lower()
+    if not low.startswith("would you rather") or " or " not in low:
+        return None
+    return q.rstrip("?").rstrip() + "?"
+
+
+def _iter_strings(node):
+    """Yield every string anywhere in a decoded JSON value."""
+    if isinstance(node, str):
+        yield node
+    elif isinstance(node, list):
+        for child in node:
+            yield from _iter_strings(child)
+    elif isinstance(node, dict):
+        for child in node.values():
+            yield from _iter_strings(child)
+
+
+def parse_wyr_json(text: str) -> list[str]:
+    """Read WYR questions out of an LLM reply, surviving a truncated array.
+
+    The happy path is a plain JSON array of strings. Two things go wrong often
+    enough to design for: the model wraps the array in a fence or an object
+    (handled by walking whatever decodes), and the reply is cut off mid-string
+    because the completion hit its token ceiling. In the second case the array
+    never closes, so json.loads gives up on the whole thing and every question
+    that *did* arrive is thrown away -- so a failed decode falls back to reading
+    the complete string literals out of the text.
+
+    Returns the questions in order, de-duplicated, normalised to end in "?".
+    """
+    text = _strip_code_fence(text)
+    if not text:
+        return []
+
+    candidates: list[str] = []
+    try:
+        candidates = list(_iter_strings(json.loads(text)))
+    except ValueError:
+        # Truncated (or otherwise malformed): take the literals that are whole.
+        for match in _JSON_STRING_RE.findall(text):
+            try:
+                candidates.append(json.loads(match))
+            except ValueError:
+                continue
+
+    questions: list[str] = []
+    seen: set[str] = set()
+    for item in candidates:
+        q = _clean_wyr(item)
+        if q and q.lower() not in seen:
+            seen.add(q.lower())
+            questions.append(q)
+    return questions
 
 
 def _split_wyr(question: str) -> tuple[str, str]:

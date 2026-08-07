@@ -25,6 +25,13 @@ _KAGGLE_WYR_URL = (
 _GROQ_API_URL = "https://api.groq.com/openai/v1/chat/completions"
 _GROQ_MODEL = "openai/gpt-oss-20b"
 _GROQ_WYR_COUNT = 20  # questions to generate per daily scrape
+# gpt-oss is a reasoning model: its thinking tokens are billed against the same
+# max_tokens budget as the answer, so a ceiling sized for "20 short strings"
+# (2048) ran out mid-array and truncated the JSON. Sized for the reasoning too.
+_GROQ_MAX_TOKENS = 8192
+# ...and truncation still has to be survivable, because a longer ceiling only
+# makes it rarer. A cut-off array is read for the questions that did land.
+_GROQ_MIN_SALVAGE = 1
 
 # ── WYR API ratings to scrape (separate question pools) ──────────────────────
 _WYR_RATINGS = ("pg", "pg13")
