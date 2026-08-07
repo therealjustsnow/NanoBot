@@ -13,7 +13,7 @@ import aiosqlite
 import pytest
 
 import utils.db as db
-from utils.db import globalize
+from utils.db import globalize, leveling
 
 pytestmark = pytest.mark.asyncio
 
@@ -116,6 +116,11 @@ async def legacy(monkeypatch):
 async def _migrate():
     """Run just migration 1, the way init() would on an existing database."""
     await db._run_migrations([(1, globalize.globalize_economy)])
+
+
+async def _columns(conn, table: str) -> set[str]:
+    async with conn.execute(f"PRAGMA table_info({table})") as cur:
+        return {row["name"] for row in await cur.fetchall()}
 
 
 # ── Wallet ────────────────────────────────────────────────────────────────────
@@ -435,10 +440,16 @@ async def test_coin_faucet_settings_are_dropped(legacy):
 async def test_the_faucet_migration_keeps_columns_added_after_it(legacy):
     """Migration 5 REBUILDS level_config, so it has to carry later columns.
 
-    The global level-up channel is added by _ensure_columns during init() —
-    which runs *before* the migrations on the same start. Rebuilding the table
-    from a column list that predates it would drop it again and leave every
-    read of level_config failing for that whole run.
+    The global level-up channel and the global-XP switch are added by
+    _ensure_columns during init() — which runs *before* the migrations on the
+    same start. Rebuilding the table from a column list that predates them
+    drops them again and leaves every read of level_config failing for that
+    whole run, because get_level_config names its columns.
+
+    The ensure below is the leveling domain's own, not a hand-copied subset:
+    that list grows, and a column added to it after this migration is exactly
+    the thing the rebuild has to keep up with. Copying two of them into the
+    test is what let the third ship broken.
     """
     await legacy.execute(
         "CREATE TABLE level_config (guild_id TEXT PRIMARY KEY, "
@@ -453,14 +464,13 @@ async def test_the_faucet_migration_keeps_columns_added_after_it(legacy):
     )
     await legacy.commit()
     # What init() does on a start that also has migration 5 pending.
-    await db._ensure_columns(
-        "level_config",
-        {
-            "global_announce": "INTEGER NOT NULL DEFAULT 1",
-            "global_announce_channel": "TEXT",
-        },
-    )
+    await leveling._ensure_leveling_tables()
+    before = await _columns(legacy, "level_config")
     await db._run_migrations([(5, globalize.drop_per_guild_coin_faucets)])
+
+    # coin_reward is the one column this migration is meant to remove; every
+    # other column that existed going in has to still be there coming out.
+    assert before - {"coin_reward"} <= await _columns(legacy, "level_config")
 
     cfg = await db.get_level_config(G1)
     assert cfg["global_announce"] is True  # default, nothing switched off
