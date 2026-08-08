@@ -60,3 +60,52 @@ async def test_note_roundtrip_persists_and_lists(bot):
     listing = dpytest.get_message()
     assert listing.embeds
     assert "first note" in (listing.embeds[0].description or "")
+
+
+# ── /unban picker ban-list cache ────────────────────────────────────────────
+# The cache is keyed by guild and holds up to _BAN_FETCH_LIMIT user tuples.
+# Entries were only ever added: every guild where anyone had once opened the
+# picker kept its ban list alive for the life of the process, long after the
+# few-second TTL made it unservable.
+
+
+def _mod_cog():
+    """A Moderation instance without a bot — the prune is pure dict work."""
+    from cogs.moderation.cog import Moderation
+
+    cog = Moderation.__new__(Moderation)
+    cog._ban_cache = {}
+    return cog
+
+
+def test_ban_cache_prune_evicts_entries_past_their_usefulness():
+    cog = _mod_cog()
+    now = 1_000_000.0
+    cog._ban_cache[1] = (now - cog._BAN_CACHE_PRUNE_AFTER - 1, [(5, "old")])
+    cog._ban_cache[2] = (now - 1, [(6, "fresh")])
+    cog._prune_ban_cache(now)
+    assert 1 not in cog._ban_cache
+    assert 2 in cog._ban_cache
+
+
+def test_ban_cache_prune_keeps_anything_still_within_the_ttl():
+    """A prune that dropped a servable entry would turn every keystroke of the
+    autocomplete back into an HTTP fetch — the thing the cache exists to stop."""
+    cog = _mod_cog()
+    now = 1_000_000.0
+    cog._ban_cache[9] = (now - cog._BAN_CACHE_TTL / 2, [(1, "a")])
+    cog._prune_ban_cache(now)
+    assert 9 in cog._ban_cache
+
+
+def test_ban_cache_prune_handles_an_empty_cache():
+    cog = _mod_cog()
+    cog._prune_ban_cache(1_000_000.0)
+    assert cog._ban_cache == {}
+
+
+def test_ban_cache_prune_after_exceeds_the_ttl():
+    """Sweeping sooner than the TTL would evict entries that could still be
+    served, so the two constants have to stay ordered."""
+    cog = _mod_cog()
+    assert cog._BAN_CACHE_PRUNE_AFTER > cog._BAN_CACHE_TTL

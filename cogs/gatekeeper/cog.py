@@ -110,6 +110,27 @@ class Gatekeeper(commands.Cog):
         self._verify_attempts: dict[int, int] = {}
         self._verify_blocked_until: dict[int, float] = {}
 
+    def _prune_verify_throttle(self) -> None:
+        """Drop lockouts that have expired.
+
+        `_clear_verify_throttle` only fires when someone *passes* the captcha,
+        so a member who is locked out and then never comes back — which is the
+        common case, since the throttle exists to stop exactly those accounts —
+        leaves an entry behind forever. An expired lockout answers 0 seconds
+        anyway, so removing it changes nothing but the size of the dict.
+
+        `_verify_attempts` is left alone: an entry only exists between a first
+        wrong answer and either a pass or a lockout, both of which remove it,
+        and it is capped at `_MAX_VERIFY_ATTEMPTS` entries per user regardless.
+        """
+        now = time.time()
+        expired = [
+            uid for uid, until in self._verify_blocked_until.items() if until <= now
+        ]
+        for uid in expired:
+            self._verify_blocked_until.pop(uid, None)
+            self._verify_attempts.pop(uid, None)
+
     def _verify_lockout_remaining(self, user_id: int) -> int:
         """Seconds left on a captcha lockout for this user (0 if not locked)."""
         remaining = self._verify_blocked_until.get(user_id, 0.0) - time.time()
@@ -117,6 +138,9 @@ class Gatekeeper(commands.Cog):
 
     def _register_wrong_answer(self, user_id: int) -> bool:
         """Count a wrong captcha answer. Returns True if it triggers a lockout."""
+        # Cheap here and nowhere else: a wrong answer is the only event that can
+        # grow either dict, so sweeping on it keeps them bounded without a timer.
+        self._prune_verify_throttle()
         attempts = self._verify_attempts.get(user_id, 0) + 1
         if attempts >= _MAX_VERIFY_ATTEMPTS:
             self._verify_blocked_until[user_id] = time.time() + _VERIFY_LOCKOUT_SECONDS

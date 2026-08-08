@@ -72,6 +72,11 @@ from cogs.economy.constants import REWARD_DEFAULTS
 
 log = logging.getLogger("NanoBot.leveling")
 
+# How often the in-memory XP cooldown map is swept, and how old a stamp must be
+# to be dropped. See Leveling._prune_cooldowns for why the age is flat.
+_COOLDOWN_PRUNE_INTERVAL = 600  # seconds between sweeps
+_COOLDOWN_MAX_AGE = 86_400  # drop stamps older than a day
+
 # Two- and three-value options are static choices rather than an autocomplete:
 # the set never changes, so Discord can render them as buttons. Prefix users
 # keep the wider vocabulary the commands already accept (enable/true/…).
@@ -137,8 +142,39 @@ class Leveling(commands.Cog):
 
     def __init__(self, bot: commands.Bot):
         self.bot = bot
-        # (guild_id, user_id) → monotonic timestamp of last XP grant
+        # (guild_id, user_id) → monotonic timestamp of last XP grant.
+        #
+        # Pruned, because this is per *chatter* rather than per guild: left
+        # alone it gains an entry for every member who has ever spoken and
+        # never loses one, so it grows for as long as the process lives. An
+        # entry older than the guild's cooldown can't suppress anything — the
+        # next message re-adds it — so dropping it is free.
         self._cooldowns: dict[tuple[int, int], float] = {}
+        self._last_prune: float = time.monotonic()
+
+    def _prune_cooldowns(self, now: float) -> None:
+        """Drop cooldown stamps that can no longer suppress anything.
+
+        Runs on a grant rather than on a timer: a grant is already rate-limited
+        to once per member per cooldown, so this is cheap, and a bot with no
+        traffic has nothing to prune anyway.
+
+        The cutoff is a flat 24h rather than each guild's own cooldown, because
+        the sweep is sync and the configs are not. `/level rate` has no upper
+        bound, so a guild *could* set a cooldown longer than the cutoff — the
+        only consequence is that a member there earns XP once a day instead of
+        once per configured interval, which is a better trade than holding
+        every chatter's stamp forever to be exact about a setting nobody uses.
+        """
+        if now - self._last_prune < _COOLDOWN_PRUNE_INTERVAL:
+            return
+        self._last_prune = now
+        cutoff = now - _COOLDOWN_MAX_AGE
+        stale = [k for k, stamp in self._cooldowns.items() if stamp < cutoff]
+        for key in stale:
+            self._cooldowns.pop(key, None)
+        if stale:
+            log.debug("leveling: pruned %d stale XP cooldown entries", len(stale))
 
     # ── XP granting ─────────────────────────────────────────────────────────────
     @commands.Cog.listener("on_message")
@@ -161,6 +197,7 @@ class Leveling(commands.Cog):
         if now - self._cooldowns.get(key, 0.0) < cfg["cooldown"]:
             return
         self._cooldowns[key] = now
+        self._prune_cooldowns(now)
 
         gain = random.randint(cfg["xp_min"], cfg["xp_max"])
         new_xp = await db.add_xp(message.guild.id, message.author.id, gain)
