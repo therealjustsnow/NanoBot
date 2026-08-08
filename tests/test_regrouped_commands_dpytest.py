@@ -11,6 +11,8 @@ regrouped command whose shared helper was wired up wrong is still registered,
 still fails CI nowhere, and still 500s the first time someone types it.
 """
 
+import asyncio
+
 import pytest
 from discord.ext import test as dpytest
 
@@ -18,6 +20,19 @@ import utils.db as db
 from discord.ext import commands
 
 from tests.conftest import config, grant_perms
+
+
+def _skip_confirm_wait(monkeypatch, bot):
+    """Make the slow-purge confirmation time out immediately.
+
+    The command posts its confirm embed *before* awaiting the code, so a test
+    that only asserts the prompt still sees it — but without this the coroutine
+    sits in `bot.wait_for(..., timeout=30)` for the full 30s before returning."""
+
+    async def _timeout(*_a, **_k):
+        raise asyncio.TimeoutError
+
+    monkeypatch.setattr(bot, "wait_for", _timeout)
 
 
 # ── /remind → /reminders user (prefix name: !remind) ────────────────────────
@@ -254,9 +269,13 @@ async def test_purge_rejects_an_unknown_filter_and_names_both_option_sets(bot):
 
 
 @pytest.mark.cogs("cogs.moderation")
-async def test_slow_mode_allows_an_amount_fast_mode_would_reject(bot):
+async def test_slow_mode_allows_an_amount_fast_mode_would_reject(bot, monkeypatch):
     """The two modes have different caps — 100 for a bulk delete, 500 for the
     one-by-one path. Picking slow must apply slow's cap, not fast's."""
+    # Slow purge posts its confirm prompt, then blocks on bot.wait_for for the
+    # code (30s). This test only checks the prompt, so short-circuit the wait —
+    # otherwise the assertion is instant and the test still takes 30s.
+    _skip_confirm_wait(monkeypatch, bot)
     author = config().members[0]
     await grant_perms(author, manage_messages=True)
     await grant_perms(config().guilds[0].me, manage_messages=True)
@@ -285,9 +304,10 @@ async def test_slow_purge_still_bounds_its_amount(bot):
 
 
 @pytest.mark.cogs("cogs.moderation")
-async def test_snailpurge_prefix_shorthand_still_asks_to_confirm(bot):
+async def test_snailpurge_prefix_shorthand_still_asks_to_confirm(bot, monkeypatch):
     """n!snailpurge is a shim onto the shared slow body now — it must still
     reach the confirmation step rather than deleting straight away."""
+    _skip_confirm_wait(monkeypatch, bot)
     author = config().members[0]
     await grant_perms(author, manage_messages=True)
     await grant_perms(config().guilds[0].me, manage_messages=True)
