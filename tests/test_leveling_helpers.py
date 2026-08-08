@@ -3,6 +3,9 @@ Tests for the pure level-math helpers in cogs/leveling.py (no Discord deps).
 """
 
 from cogs.leveling import (
+    _COOLDOWN_MAX_AGE,
+    _COOLDOWN_PRUNE_INTERVAL,
+    Leveling,
     level_for_xp,
     level_progress,
     render_bar,
@@ -58,3 +61,68 @@ def test_render_bar_fill():
 def test_render_bar_zero_span_is_full():
     # A zero/negative span shouldn't divide-by-zero; treat as complete.
     assert render_bar(0, 0, width=8) == "█" * 8
+
+
+# ── in-memory XP cooldown pruning ────────────────────────────────────────────
+# The XP cooldown map is keyed per *chatter*, not per guild: without a sweep it
+# gains an entry for everyone who has ever spoken and never loses one, which is
+# a leak that grows for as long as the process lives.
+
+
+def _leveling_cog():
+    """A Leveling instance without a bot — the prune is pure dict work."""
+    return Leveling.__new__(Leveling)
+
+
+def _armed(now: float, entries: dict):
+    cog = _leveling_cog()
+    cog._cooldowns = dict(entries)
+    cog._last_prune = now - _COOLDOWN_PRUNE_INTERVAL - 1  # due for a sweep
+    return cog
+
+
+def test_prune_drops_stamps_too_old_to_suppress_anything():
+    now = 1_000_000.0
+    cog = _armed(
+        now,
+        {
+            (1, 1): now - _COOLDOWN_MAX_AGE - 1,  # stale
+            (1, 2): now - 30,  # fresh
+        },
+    )
+    cog._prune_cooldowns(now)
+    assert (1, 1) not in cog._cooldowns
+    assert (1, 2) in cog._cooldowns
+
+
+def test_prune_is_rate_limited_so_a_busy_guild_does_not_sweep_per_message():
+    now = 1_000_000.0
+    cog = _leveling_cog()
+    cog._cooldowns = {(1, 1): now - _COOLDOWN_MAX_AGE - 1}
+    cog._last_prune = now  # just swept
+    cog._prune_cooldowns(now)
+    assert (1, 1) in cog._cooldowns, "a sweep inside the interval must be a no-op"
+
+
+def test_prune_advances_its_own_clock():
+    now = 1_000_000.0
+    cog = _armed(now, {})
+    cog._prune_cooldowns(now)
+    assert cog._last_prune == now
+
+
+def test_prune_keeps_a_stamp_that_is_still_inside_a_normal_cooldown():
+    """The whole point of the map: a member who spoke a minute ago must still
+    be suppressed after a sweep."""
+    now = 1_000_000.0
+    cog = _armed(now, {(7, 7): now - 60})
+    cog._prune_cooldowns(now)
+    assert cog._cooldowns[(7, 7)] == now - 60
+
+
+def test_prune_empties_a_map_of_nothing_but_stale_entries():
+    now = 1_000_000.0
+    old = now - _COOLDOWN_MAX_AGE - 1
+    cog = _armed(now, {(g, u): old for g in range(5) for u in range(20)})
+    cog._prune_cooldowns(now)
+    assert cog._cooldowns == {}

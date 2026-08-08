@@ -6,6 +6,15 @@ Commands:
   sh      [--disable-timeout] <command>  — run a shell command, get stdout/stderr back
   shkill                                 — kill the active --disable-timeout shell process
   py      [--disable-timeout] <code>     — evaluate Python in the bot process (supports await)
+  mem                                    — memory overview: RSS, Python heap, GC, verdict
+  mem trace                              — arm tracemalloc and store a baseline
+  mem diff [n]                           — what grew since the baseline (finds the leak)
+  mem where [i]                          — full call stack behind the Nth growth entry
+  mem top [n]                            — largest live allocations right now
+  mem objects [n]                        — live object counts by type (no tracing needed)
+  mem registries [n]                     — every in-memory container the bot holds
+  mem caches                             — discord.py's own cache sizes
+  mem stop                               — disarm tracing and drop the baseline
 
 When output is too long for the embed it's truncated to the tail there and the
 full, untruncated log is attached as a .txt file.
@@ -22,6 +31,7 @@ import discord
 from discord.ext import commands
 
 from utils import helpers as h
+from utils import memdiag
 
 log = logging.getLogger("NanoBot.debug")
 
@@ -292,6 +302,180 @@ class Debug(commands.Cog):
         )
         e.set_footer(text="NanoBot Debug")
         await ctx.reply(embed=e, **({"file": attachment} if attachment else {}))
+
+    # ══════════════════════════════════════════════════════════════════════════
+    #  mem
+    # ══════════════════════════════════════════════════════════════════════════
+    async def _mem_reply(
+        self, ctx: commands.Context, title: str, lines: list[str], note: str = ""
+    ) -> None:
+        """Render a diagnostic listing, attaching the full version when it spills.
+
+        Listings here are long by nature — the point of `registries` is to show
+        everything, and truncating it at the embed cap would hide the entry at
+        the bottom that is the actual leak.
+        """
+        body = "\n".join(lines) if lines else "(nothing to report)"
+        block = f"```\n{_trim(body)}\n```"
+        desc = f"{note}\n{block}" if note else block
+        attachment = None
+        if _overflows(body):
+            attachment = _as_file([(title, body)], "memdiag.txt")
+        e = h.embed(title=f"🧠 {title}", description=desc, color=h.BLUE)
+        e.set_footer(text="NanoBot Debug")
+        await ctx.reply(embed=e, **({"file": attachment} if attachment else {}))
+
+    @commands.group(
+        name="mem",
+        aliases=["memory"],
+        invoke_without_command=True,
+        help=(
+            "Live memory diagnostics for hunting a leak.\n\n"
+            "Owner-only. Bare `!mem` is a read-only overview and is always safe "
+            "to run. Tracing is off until you arm it — it costs 15-30% CPU, so "
+            "it is a deliberate switch, not something the bot always pays for.\n\n"
+            "Workflow that actually finds a leak:\n"
+            "  1. !mem trace     — arm it and store a baseline\n"
+            "  2. (wait hours)   — a leak is only visible as growth over time\n"
+            "  3. !mem diff      — the lines that grew, biggest first\n"
+            "  4. !mem where 0   — the full call stack behind the top one\n\n"
+            "Subcommands: trace, diff, where, top, objects, registries, caches, stop"
+        ),
+    )
+    async def mem(self, ctx: commands.Context):
+        data = memdiag.overview(self.bot)
+        gc_state = data["gc"]
+        rss = data["rss"]
+        traced = data["traced_current"]
+
+        lines = [
+            f"RSS (what the OS sees)   {memdiag.fmt_bytes(rss)}",
+            f"Python heap (traced)     {memdiag.fmt_bytes(traced)}"
+            + ("" if data["tracing"] else "   [tracing off]"),
+            f"Python heap peak         {memdiag.fmt_bytes(data['traced_peak'])}",
+            f"Threads                  {data['threads']}",
+            f"GC tracked (gen 0/1/2)   {'/'.join(str(c) for c in gc_state['counts'])}",
+            f"GC uncollectable         {gc_state['uncollectable']}",
+            f"gc.garbage               {gc_state['garbage']}",
+        ]
+        if rss and traced:
+            lines.append(f"RSS / heap ratio         {rss / traced:.1f}x")
+        age = data["baseline_age"]
+        if age is not None:
+            lines.append(f"Baseline age             {age / 3600:.1f} h")
+
+        await self._mem_reply(ctx, "Memory Overview", lines, note=data["verdict"])
+
+    @mem.command(
+        name="trace", help="Arm tracemalloc and store a baseline to diff against."
+    )
+    async def mem_trace(self, ctx: commands.Context):
+        already = memdiag.is_tracing()
+        memdiag.start()
+        verb = "Baseline reset" if already else "Tracing armed, baseline stored"
+        await ctx.reply(
+            embed=h.ok(
+                f"{verb}.\n\nLeave it running — a leak is only visible as growth "
+                "between two points. Come back in a few hours and run `!mem diff`.",
+                title="🧠 Memory Tracing",
+            )
+        )
+
+    @mem.command(name="stop", help="Disarm tracemalloc and drop the baseline.")
+    async def mem_stop(self, ctx: commands.Context):
+        memdiag.stop()
+        await ctx.reply(embed=h.ok("Tracing disarmed, baseline dropped."))
+
+    @mem.command(
+        name="diff",
+        help="What grew since the baseline, biggest growth first. The leak-finder.",
+    )
+    async def mem_diff(self, ctx: commands.Context, limit: int = 15):
+        if not memdiag.is_tracing():
+            return await ctx.reply(
+                embed=h.warn("Tracing is off. Run `!mem trace` first, then wait.")
+            )
+        lines = memdiag.diff(max(1, min(limit, 60)))
+        age = memdiag.baseline_age()
+        note = (
+            f"Growth over the last {age / 3600:.1f}h. "
+            "Columns: size delta, object delta, source line."
+            if age
+            else ""
+        )
+        if not lines:
+            note = "Nothing grew since the baseline — if RSS is still climbing, the growth is outside Python's heap (see `!mem` verdict)."
+        await self._mem_reply(ctx, "Growth Since Baseline", lines, note=note)
+
+    @mem.command(
+        name="where",
+        help="Full call stack behind the Nth entry in `!mem diff` (default 0, the biggest).",
+    )
+    async def mem_where(self, ctx: commands.Context, index: int = 0):
+        if not memdiag.is_tracing():
+            return await ctx.reply(
+                embed=h.warn("Tracing is off. Run `!mem trace` first, then wait.")
+            )
+        lines = memdiag.traceback_for(max(0, index))
+        if not lines:
+            return await ctx.reply(
+                embed=h.warn(
+                    f"No growth entry at index {index}. Try `!mem diff` first."
+                )
+            )
+        await self._mem_reply(ctx, f"Allocation Stack #{index}", lines)
+
+    @mem.command(name="top", help="Largest live allocations right now, by source line.")
+    async def mem_top(self, ctx: commands.Context, limit: int = 15):
+        if not memdiag.is_tracing():
+            return await ctx.reply(
+                embed=h.warn("Tracing is off. Run `!mem trace` first.")
+            )
+        lines = memdiag.top(max(1, min(limit, 60)))
+        await self._mem_reply(
+            ctx,
+            "Largest Live Allocations",
+            lines,
+            note="Snapshot of what is allocated. For finding a *leak* use `!mem diff` — this is dominated by legitimately-large structures.",
+        )
+
+    @mem.command(
+        name="objects",
+        aliases=["gc"],
+        help="Live object counts by type. Works without tracing — run this first.",
+    )
+    async def mem_objects(self, ctx: commands.Context, limit: int = 25):
+        lines = await asyncio.to_thread(memdiag.gc_histogram, max(1, min(limit, 60)))
+        await self._mem_reply(
+            ctx,
+            "Live Objects By Type",
+            lines,
+            note="An absurd count names the subsystem even when tracing was never armed.",
+        )
+
+    @mem.command(
+        name="registries",
+        aliases=["containers"],
+        help="Every in-memory container the bot holds (cog attributes + module globals).",
+    )
+    async def mem_registries(self, ctx: commands.Context, limit: int = 30):
+        lines = memdiag.registry_sizes(self.bot)[: max(1, min(limit, 80))]
+        await self._mem_reply(
+            ctx,
+            "In-Memory Registries",
+            lines,
+            note="Anything here that grows without bound between two runs is a leak.",
+        )
+
+    @mem.command(name="caches", help="discord.py's own cache sizes.")
+    async def mem_caches(self, ctx: commands.Context):
+        lines = memdiag.discord_caches(self.bot)
+        await self._mem_reply(
+            ctx,
+            "discord.py Caches",
+            lines,
+            note="Member/user caches scale with guilds joined and are expected to be large. The view store is the one that leaks if a persistent view is registered per message and never stopped.",
+        )
 
 
 # ── Registration ───────────────────────────────────────────────────────────────

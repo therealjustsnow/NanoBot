@@ -252,3 +252,59 @@ async def test_evaluate_min_age_boundary():
     member = _FakeMember(at_threshold, avatar=object())
     reasons = await cog._evaluate(member, _cfg())
     assert "new account" not in reasons
+
+
+# ── Captcha throttle pruning ─────────────────────────────────────────────────
+# _clear_verify_throttle only fires when someone *passes* the captcha, so a
+# locked-out account that never comes back — the exact case the throttle exists
+# to stop — used to leave its entry behind for the life of the process.
+
+
+def _throttled() -> gk.Gatekeeper:
+    cog = _cog()
+    cog._verify_attempts = {}
+    cog._verify_blocked_until = {}
+    return cog
+
+
+def test_prune_drops_an_expired_lockout():
+    cog = _throttled()
+    cog._verify_blocked_until[111] = time_module.time() - 1
+    cog._prune_verify_throttle()
+    assert 111 not in cog._verify_blocked_until
+
+
+def test_prune_keeps_a_live_lockout():
+    """Pruning must never hand a brute-forcer their attempts back."""
+    cog = _throttled()
+    cog._verify_blocked_until[222] = time_module.time() + 600
+    cog._prune_verify_throttle()
+    assert cog._verify_lockout_remaining(222) > 0
+
+
+def test_prune_clears_the_attempt_count_alongside_the_lockout():
+    cog = _throttled()
+    cog._verify_blocked_until[333] = time_module.time() - 1
+    cog._verify_attempts[333] = 2
+    cog._prune_verify_throttle()
+    assert 333 not in cog._verify_attempts
+
+
+def test_a_wrong_answer_sweeps_expired_lockouts():
+    """The sweep rides the only event that can grow either dict, so the maps
+    stay bounded without a timer."""
+    cog = _throttled()
+    cog._verify_blocked_until[444] = time_module.time() - 1
+    cog._register_wrong_answer(555)
+    assert 444 not in cog._verify_blocked_until
+
+
+def test_lockout_still_triggers_after_the_configured_attempts():
+    """The regression guard: the sweep must not disturb the counting itself."""
+    cog = _throttled()
+    locked = False
+    for _ in range(gk._MAX_VERIFY_ATTEMPTS):
+        locked = cog._register_wrong_answer(999)
+    assert locked
+    assert cog._verify_lockout_remaining(999) > 0
+    assert 999 not in cog._verify_attempts

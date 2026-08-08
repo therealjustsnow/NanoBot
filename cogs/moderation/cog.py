@@ -598,6 +598,26 @@ class Moderation(TimedActionsMixin, commands.Cog):
     # ── Tap-to-pick: who's actually banned ───────────────────────────────────
     _BAN_CACHE_TTL = 20.0
     _BAN_FETCH_LIMIT = 200
+    # A cached ban list is only useful for _BAN_CACHE_TTL seconds, but nothing
+    # ever removed the entry afterwards — so every guild where anyone has once
+    # opened the /unban picker kept up to _BAN_FETCH_LIMIT user tuples alive for
+    # the life of the process. Sweep anything well past its TTL.
+    _BAN_CACHE_PRUNE_AFTER = 300
+
+    def _prune_ban_cache(self, now: float) -> None:
+        """Evict ban lists nobody can still be served from.
+
+        Called on a miss rather than on a timer: a miss is the only path that
+        adds an entry, so sweeping there bounds the dict by how many guilds are
+        actively using the picker instead of by how many ever have.
+        """
+        stale = [
+            gid
+            for gid, (fetched_at, _entries) in self._ban_cache.items()
+            if now - fetched_at > self._BAN_CACHE_PRUNE_AFTER
+        ]
+        for gid in stale:
+            self._ban_cache.pop(gid, None)
 
     async def _banned_users(self, guild) -> list[tuple[int, str]]:
         """This guild's ban list as (user_id, label), cached for a few seconds.
@@ -612,6 +632,7 @@ class Moderation(TimedActionsMixin, commands.Cog):
         cached = self._ban_cache.get(guild.id)
         if cached and now - cached[0] < self._BAN_CACHE_TTL:
             return cached[1]
+        self._prune_ban_cache(now)
         entries: list[tuple[int, str]] = []
         try:
 
