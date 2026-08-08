@@ -97,7 +97,7 @@ owner-only admin cog.
 import logging
 import random
 import time
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Optional
 
 import discord
@@ -188,6 +188,12 @@ class ActivityRun:
     # for. Carried separately because a caller that hosts the choice on its own
     # card (RunResultView) wants the key and not the view.
     encounter_key: Optional[str] = None
+    # Any *further* encounters banked by the same reply, beyond the first. A
+    # single run never fills this, but a Collect all can empty a dozen buckets
+    # at once and several of them may roll an encounter — the first rides
+    # `encounter_key`, the rest queue here and are asked one after another on
+    # the same message. See `_EncounterHost.choose` in views.py.
+    encounter_queue: list[str] = field(default_factory=list)
 
 
 @dataclass
@@ -370,9 +376,12 @@ class Activities(commands.Cog):
         describes what actually landed, including the streak multiplier, an
         injury fine, or a cave-in that paid nothing.
 
-        At most one encounter survives a collect. They fire per run, so a full
-        bucket would otherwise stack a pile of two-button choices on one
-        message; the first is kept and the rest are dropped unrolled.
+        Every encounter a collect rolls is asked, not just the first — but one
+        at a time, on this one message: the first rides the reply and each is
+        followed by the next as it's answered, so a Collect all that opened
+        three decisions is three questions in sequence rather than three rows of
+        buttons stacked on a single total. The first is kept on `encounter_key`
+        and the rest queue on `encounter_queue`.
         """
         before_coins = await db.get_balance(member.id)
         before_items = {
@@ -380,8 +389,7 @@ class Activities(commands.Cog):
         }
 
         ran: dict[str, int] = {}
-        view: Optional[discord.ui.View] = None
-        encounter_key: Optional[str] = None
+        encounter_keys: list[str] = []
         for activity in BUTTON_ACTIVITIES:
             # Bounded by the cap as well as by the claim, so a bug in the
             # bucket arithmetic can't turn this into an infinite payout loop.
@@ -390,8 +398,8 @@ class Activities(commands.Cog):
                 if not run.claimed:
                     break
                 ran[activity] = ran.get(activity, 0) + 1
-                if view is None and run.view is not None:
-                    view, encounter_key = run.view, run.encounter_key
+                if run.encounter_key is not None:
+                    encounter_keys.append(run.encounter_key)
 
         if not ran:
             cfg = await self._cfg(guild.id)
@@ -450,14 +458,23 @@ class Activities(commands.Cog):
         desc.append(f"\nBalance: {self._money(econ, after_coins)}")
         embed = h.ok("\n".join(desc), "🧭 Collected")
         embed.set_footer(text="Sell what you found with /inventory sell")
+        encounter_key = encounter_keys[0] if encounter_keys else None
+        encounter_queue = encounter_keys[1:]
+        view: Optional[discord.ui.View] = None
         if encounter_key:
             # An encounter's scene and question are written onto the *run's*
             # embed by `_maybe_encounter`, and a collect replaces every one of
             # those embeds with this summary — so keeping the view without
             # re-prompting left a row of unlabelled buttons under a total, with
-            # nothing on screen saying what was being decided.
+            # nothing on screen saying what was being decided. The queue is
+            # asked one stage at a time, so only the first prompt goes on now.
             self._prompt_encounter(embed, encounter_key)
-        return ActivityRun(embed, view, encounter_key=encounter_key)
+            view = EncounterView(
+                self, member.id, guild.id, encounter_key, queue=encounter_queue
+            )
+        return ActivityRun(
+            embed, view, encounter_key=encounter_key, encounter_queue=encounter_queue
+        )
 
     async def _touch_streak(self, user_id: int, stats: dict) -> tuple[int, bool]:
         """Advance the adventure daily streak, once per day.
@@ -582,7 +599,12 @@ class Activities(commands.Cog):
             ctx.guild, ctx.author, run.embed, pending=run.encounter_key is not None
         )
         view = RunResultView(
-            self, ctx.author.id, state, run.embed, encounter_key=run.encounter_key
+            self,
+            ctx.author.id,
+            state,
+            run.embed,
+            encounter_key=run.encounter_key,
+            encounter_queue=run.encounter_queue,
         )
         view.message = await ctx.reply(
             embed=embed, view=view, ephemeral=not run.claimed

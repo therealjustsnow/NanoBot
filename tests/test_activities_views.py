@@ -548,9 +548,10 @@ async def test_collect_all_skips_a_disabled_activity(bot, monkeypatch):
 
 
 @pytest.mark.cogs("cogs.activities")
-async def test_at_most_one_encounter_survives_a_collect(bot, monkeypatch):
-    """Encounters fire per run, so a full bucket would otherwise stack a dozen
-    two-button choices onto one message."""
+async def test_every_encounter_a_collect_rolls_is_queued(bot, monkeypatch):
+    """Encounters fire per run, so a full bucket rolls several — they are all
+    asked, one at a time on the one message: the first rides the view and the
+    rest queue behind it rather than being dropped unrolled."""
     from cogs.activities import cog as activities
 
     guild, author = config().guilds[0], config().members[0]
@@ -561,6 +562,11 @@ async def test_at_most_one_encounter_survives_a_collect(bot, monkeypatch):
     run = await cog.collect_all(guild, author)
 
     assert isinstance(run.view, EncounterView)
+    # One per banked run: the first is armed, the rest wait their turn.
+    banked = sum(ACTIVITY_MAX_CHARGES[a] for a in BUTTON_ACTIVITIES)
+    assert run.encounter_key is not None
+    assert len(run.encounter_queue) == banked - 1
+    assert run.view._pending_encounters == run.encounter_queue
 
 
 @pytest.mark.cogs("cogs.activities")

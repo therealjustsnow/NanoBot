@@ -181,6 +181,14 @@ class _EncounterHost:
     instead of ending the encounter, which is what lets one decision open
     another without a second view, a second message, or a second code path.
 
+    A `Collect all` can bank several encounters at once. They ride the same one
+    message rather than a pile of stacked button rows: the first is armed, and
+    `_pending_encounters` holds the rest, each asked once the previous is
+    settled. A chain (`next`) always takes precedence over the queue, so a
+    story finishes before the next banked decision begins. It is the same
+    "one decision at a time" shape as a chain, only sourced from a list instead
+    of from the last outcome.
+
     Single-use per stage: `_taken` is set before the first await inside
     `choose`, so a double-tap (or a tap racing the timeout) can't resolve the
     same stage twice and pay twice. That guard is the whole reason this isn't
@@ -189,6 +197,11 @@ class _EncounterHost:
 
     cog: "Activities"
     encounter_key: Optional[str]
+    # Further banked encounters waiting their turn (a Collect all opens these).
+    # Always assigned an instance list by the concrete view's constructor; the
+    # class-level default is a read-only empty sentinel for a host that never
+    # queues one.
+    _pending_encounters: list[str] = []
 
     def _arm_encounter(self, encounter_key: Optional[str]):
         """Point the host at an encounter (or at nothing) and unlock it."""
@@ -229,9 +242,20 @@ class _EncounterHost:
             random.random(),
             random.random(),
         )
-        # Re-arm *before* the subclass repaints, so a rebuild picks up the
-        # follow-up stage's buttons rather than the ones just answered.
-        self._arm_encounter(step.next_key)
+        # Re-arm *before* the subclass repaints, so a rebuild picks up the next
+        # stage's buttons rather than the ones just answered. A chain comes
+        # first; when it ends, fall through to any other encounters this reply
+        # banked (a Collect all can open several) — and since those didn't come
+        # from `resolve_encounter`, their scene/question has to be written onto
+        # the outcome embed here, the way a chained stage's already is.
+        if step.next_key:
+            self._arm_encounter(step.next_key)
+        elif self._pending_encounters:
+            self._arm_encounter(self._pending_encounters.pop(0))
+            if self.encounter_key is not None:
+                self.cog._prompt_encounter(step.embed, self.encounter_key)
+        else:
+            self._arm_encounter(None)
         await self._show_encounter(interaction, step, option_key)
 
     async def _show_encounter(self, interaction, step, chosen: str):
@@ -258,13 +282,15 @@ class AdventureView(_EncounterHost, discord.ui.View):
         invoker_id: int,
         state: dict,
         encounter_key: Optional[str] = None,
+        encounter_queue: Optional[list[str]] = None,
     ):
         super().__init__(timeout=ADVENTURE_VIEW_TIMEOUT)
         self.cog = cog
         self.invoker_id = invoker_id
         self.message: Optional[discord.Message] = None
         # Armed before `_build`, which mounts whatever is armed. The board
-        # never passes one; the run card does.
+        # never passes one; the run card does, and a collect may bank several.
+        self._pending_encounters = list(encounter_queue or [])
         self._arm_encounter(encounter_key)
         self._build(state)
 
@@ -405,10 +431,17 @@ class RunResultView(AdventureView):
         state: dict,
         result: discord.Embed,
         encounter_key: Optional[str] = None,
+        encounter_queue: Optional[list[str]] = None,
     ):
         # Set before super().__init__, which paints the card `_render` reads.
         self.result = result
-        super().__init__(cog, invoker_id, state, encounter_key=encounter_key)
+        super().__init__(
+            cog,
+            invoker_id,
+            state,
+            encounter_key=encounter_key,
+            encounter_queue=encounter_queue,
+        )
 
     def _build(self, state: dict):
         if self.encounter_key is not None:
@@ -454,11 +487,12 @@ class RunResultView(AdventureView):
     def _adopt(self, run):
         """Take over a finished run: its result becomes the card's top embed.
 
-        The run's own EncounterView is discarded and only its key is kept —
-        the choice belongs on this message, under the dashboard, not on a
-        second one.
+        The run's own EncounterView is discarded and only its key (plus any
+        queued behind it, from a collect) is kept — the choices belong on this
+        message, under the dashboard, not on a second one.
         """
         self.result = run.embed
+        self._pending_encounters = list(run.encounter_queue)
         self._arm_encounter(run.encounter_key)
 
     async def _show_encounter(self, interaction, step, chosen: str):
@@ -481,13 +515,20 @@ class EncounterView(_EncounterHost, discord.ui.View):
     """
 
     def __init__(
-        self, cog: "Activities", invoker_id: int, guild_id: int, encounter_key: str
+        self,
+        cog: "Activities",
+        invoker_id: int,
+        guild_id: int,
+        encounter_key: str,
+        queue: Optional[list[str]] = None,
     ):
         super().__init__(timeout=ENCOUNTER_TIMEOUT)
         self.cog = cog
         self.invoker_id = invoker_id
         self.guild_id = guild_id
         self.message: Optional[discord.Message] = None
+        # A collect can hand this several at once; they're asked one at a time.
+        self._pending_encounters = list(queue or [])
         self._arm_encounter(encounter_key)
         self._mount_encounter()
 
@@ -501,15 +542,17 @@ class EncounterView(_EncounterHost, discord.ui.View):
         return True
 
     async def _show_encounter(self, interaction, step, chosen: str):
-        if step.next_key:
-            # One decision opened another: swap in the new stage's options and
-            # restart the clock, since the member is being asked something new.
+        # `choose` has already re-armed the host: a live `encounter_key` means
+        # another decision is due (a chain's next stage, or the next one a
+        # collect banked), so swap in its options and restart the clock instead
+        # of settling. `step.embed` already carries the new prompt either way.
+        if self.encounter_key is not None:
             self.clear_items()
             self._mount_encounter()
         else:
             self._settle_encounter(chosen)
         await interaction.edit_original_response(embed=step.embed, view=self)
-        if not step.next_key:
+        if self.encounter_key is None:
             self.stop()
 
     async def on_timeout(self):
