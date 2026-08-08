@@ -11,7 +11,6 @@ everything here is a plain dict in and bytes out.
 
 import io
 
-import pytest
 from PIL import Image, ImageStat
 
 from cogs.progression.constants import TROPHY_TIER_LABELS, TROPHY_TIER_POINTS
@@ -279,9 +278,6 @@ def test_group_labels_carry_no_emoji_the_card_font_cant_draw():
         assert group["label"].isascii()
 
 
-@pytest.mark.parametrize("earned", [True, False])
-def test_a_case_from_the_real_registry_renders(earned):
-    """The registry is what actually gets drawn, so render it both ways: forty
-    plaques of real names is where a layout runs out of room."""
-    groups = _groups(earned=earned)
-    assert _render(dict(FULL, groups=groups)).size == trophy_card.case_size(groups)
+# Rendering the real registry both earned and fresh is already covered by
+# test_renders_a_full_case / test_renders_a_brand_new_account above (both use
+# _groups(), i.e. the real ACHIEVEMENTS) — this used to repeat it.
