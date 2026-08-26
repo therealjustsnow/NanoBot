@@ -13,7 +13,7 @@ yt-dlp[default]>=2026.7.4
 # yt-dlp plugin: fetches YouTube GVS PO tokens to avoid "format not available" /
 # HTTP 403 on gated formats. Needs a running provider server (Docker, or Node/Deno
 # via `music_pot_provider_url`) — see example_config.ini + the Configuration wiki.
-bgutil-ytdlp-pot-provider>=1.3.1
+bgutil-ytdlp-pot-provider>=1.3.2
 
 # Optional: database encryption at rest (only needed when db_encryption_key /
 # NANOBOT_DB_KEY is set — see example_config.ini)
